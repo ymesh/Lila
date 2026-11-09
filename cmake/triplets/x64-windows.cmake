@@ -5,3 +5,7 @@ set(VCPKG_LIBRARY_LINKAGE dynamic)
 # CMakePresets.json (toolset version) read or match it; mixing toolsets breaks at link time.
 set(VCPKG_PLATFORM_TOOLSET v143)
 set(VCPKG_PLATFORM_TOOLSET_VERSION 14.44)
+# Avoid NASM being misidentified as MSVC because its path contains "Microsoft".
+list(APPEND VCPKG_CMAKE_CONFIGURE_OPTIONS
+    "-DCMAKE_ASM_NASM_COMPILER_ID=NASM"
+)
