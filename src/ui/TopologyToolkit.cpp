@@ -1,6 +1,7 @@
 #include "ui/TopologyToolkit.h"
 
 #include "ops/Command.h"
+#include "ops/Undo.h"
 #include "core/Log.h"
 #include "core/PrefStore.h"
 #include "retopo/Retopo.h"
@@ -22,6 +23,7 @@
 #include "ui/UiCommon.h"
 #include "ui/ViewportTool.h"
 
+#include <QApplication>
 #include <QCheckBox>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
@@ -29,11 +31,14 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QScrollArea>
+#include <QShortcut>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 
 #include <cmath>
+#include <functional>
+#include <memory>
 
 namespace lila::ui
 {
@@ -43,16 +48,20 @@ using retopo::ConstructKind;
 
 constexpr const char* kTopologyCollapsed = "/topologyToolkit/collapsed";
 
-/** The retopo mesh the toolkit shows: the running tool's, else the one the selection resolves to. */
+/** The reference and retopo mesh name the toolkit shows: the running tool's, else the ones the selection resolves to. */
+std::optional<retopo::RetopoDrawTargets> toolkitTargets()
+{
+    if (TopologyTool* tool = activeTopologyTool())
+        return retopo::RetopoDrawTargets{tool->reference(), tool->retopoName()};
+    if (RetopoDrawTool* draw = activeRetopoDraw())
+        return retopo::RetopoDrawTargets{draw->reference(), draw->retopoName()};
+    return retopo::resolveRetopoDraw(scene::Graph::current(), scene::Graph::current().selection());
+}
+
+/** The retopo mesh the toolkit shows, null until it exists. */
 scene::Node* sessionRetopo(scene::NodeId* reference = nullptr)
 {
-    std::optional<retopo::RetopoDrawTargets> t;
-    if (TopologyTool* tool = activeTopologyTool())
-        t = retopo::RetopoDrawTargets{tool->reference(), tool->retopoName()};
-    else if (RetopoDrawTool* draw = activeRetopoDraw())
-        t = retopo::RetopoDrawTargets{draw->reference(), draw->retopoName()};
-    else
-        t = retopo::resolveRetopoDraw(scene::Graph::current(), scene::Graph::current().selection());
+    std::optional<retopo::RetopoDrawTargets> t = toolkitTargets();
     if (!t)
         return nullptr;
     if (reference)
@@ -81,7 +90,7 @@ std::vector<Field> fieldsFor(ConstructKind k)
     {
     case ConstructKind::Patch:
         return {{"padding", "Padding", 'i', -1, 50, -1, -1, "Loops of quads kept along the whole border before the pattern; -1 uses the fewest that fit.", "", true},
-                {"variant", "Variant", 'i', 0, 999, 0, -1, "Which pattern fills the border; Ctrl-wheel over the patch cycles them."}};
+                {"variant", "Variant", 'i', 0, 999, 0, -1, "Which pattern fills the border; Ctrl+Alt-wheel over the patch cycles them."}};
     case ConstructKind::Strip:
         return {{"divisions", "Along", 'i', 0, 999, 0, 0, "Quads along the strip; 0 keeps them near square."},
                 {"rows", "Across", 'i', 1, 50, 1, -1, "Quads across the strip.", "", true},
@@ -100,9 +109,24 @@ std::vector<Field> fieldsFor(ConstructKind k)
                 {"rowDensity", "Row Density", 'd', 0.1, 10, 1, -1, "Rows between rings; 1 keeps quads near square.", "", true},
                 {"capStart", "Cap Start", 'b', 0, 1, 0, -1, "Fill the first ring with a patch."},
                 {"capEnd", "Cap End", 'b', 0, 1, 0, -1, "Fill the last ring with a patch."}};
-    case ConstructKind::Region: return {{"edgeLength", "Edge Length", 'd', 0.01, 1e5, 1, -1, "Edge length the auto retopo aims for.", "cm"}};
+    case ConstructKind::Region:
+        return {{"targetFaces", "Faces", 'i', 0, 50000, 0, 0, "Faces the region aims for (Ctrl-wheel over it to step); editing Edge Length switches back to that."},
+                {"edgeLength", "Edge Length", 'd', 0.01, 1e5, 1, -1, "Edge length the region aims for while Faces is on auto.", "cm"}};
     }
     return {};
+}
+
+/** The value a construct's field shows: the spec's, else its generated count while the spec leaves it on auto. */
+double fieldValue(const retopo::ConstructRecord& r, const Field& f)
+{
+    double value = f.fallback;
+    if (r.spec.contains(f.key) && r.spec[f.key].is_number())
+        value = r.spec[f.key].get<double>();
+    else if (r.spec.contains(f.key) && r.spec[f.key].is_boolean())
+        value = r.spec[f.key].get<bool>() ? 1.0 : 0.0;
+    if (value == 0.0 && f.countIndex >= 0 && size_t(f.countIndex) < r.counts.size())
+        value = r.counts[f.countIndex];
+    return value;
 }
 
 /** A label for a value, dim, for read-outs and empty states. */
@@ -189,12 +213,19 @@ TopologyToolkit::TopologyToolkit(QWidget* parent) : QWidget(parent)
         mSymmetry->add(text, {}, id ? QString("Mirror the retopo mesh across its %1 plane: every topology tool builds both halves").arg(text)
                                     : QString("No mirroring"),
                        id);
-    connect(mSymmetry, &controls::Segmented::picked, this, [](int i) {
-        if (scene::Node* n = sessionRetopo())
-        {
-            static const char* axes[] = {"off", "x", "y", "z"};
-            runUi("setSymmetry", {{"args", {n->path()}}, {"axis", axes[std::clamp(i, 0, 3)]}});
-        }
+    connect(mSymmetry, &controls::Segmented::picked, this, [this](int i) {
+        std::optional<retopo::RetopoDrawTargets> t = toolkitTargets();
+        scene::Node* ref = t ? scene::Graph::current().node(t->reference) : nullptr;
+        if (!ref)
+            return;
+        static const char* axes[] = {"off", "x", "y", "z"};
+        // Picking symmetry before the first edit makes the retopo mesh, so the choice has somewhere to live.
+        UndoChunk chunk("Retopo Symmetry");
+        if (!findNode(t->retopo))
+            runUi("retopoDrawSetReference", {{"mesh", t->retopo}, {"reference", ref->path()}, {"create", true}});
+        if (findNode(t->retopo))
+            runUi("setSymmetry", {{"args", {t->retopo}}, {"axis", axes[std::clamp(i, 0, 3)]}});
+        mRefresh->start();
     });
     session->addRow("Symmetry", mSymmetry);
     if (QToolButton* b = push("retopo.setReference", "Set Reference", sessionBox))
@@ -203,7 +234,8 @@ TopologyToolkit::TopologyToolkit(QWidget* parent) : QWidget(parent)
 
     add("Draw", topologyGroup({tile("retopo.draw", "pencil", "Draw", body), tile("topo.patch", "square-plus", "Patch", body),
                                tile("topo.strip", "road", "Strip", body), tile("topo.stroke", "line", "Stroke", body),
-                               tile("topo.cylinder", "cylinder", "Cylinder", body), tile("topo.pencil", "pencil-plus", "Pencil", body),
+                               tile("topo.cylinder", "cylinder", "Cylinder", body), tile("topo.cap", "grid-pattern", "Cap", body),
+                               tile("topo.pencil", "pencil-plus", "Pencil", body),
                                tile("topo.handles", "hand-move", "Handles", body), tile("topo.relax", "wave-sine", "Relax", body)},
                               {}, kToolkitColumns, body));
 
@@ -216,6 +248,10 @@ TopologyToolkit::TopologyToolkit(QWidget* parent) : QWidget(parent)
                                           "Edge length new constructs aim for; 0 matches the retopo mesh's own", settingsBox));
     form->addRow("Strip Rows", prefField("/topology/stripRows", 1, 1, 50, 0, {}, true, "Quads across a new strip", settingsBox));
     form->addRow("Cylinder Points", prefField("/topology/cylinderPoints", 8, 3, 512, 0, {}, true, "Points around a new cylinder's rings", settingsBox));
+    form->addRow("Lazy Radius", prefField("/topology/pencil/lazy", 10.0, 0.0, 200.0, 0, "px", true,
+                                          "Pencil: the line trails the cursor by this much, steadying it; 0 draws at the cursor", settingsBox));
+    form->addRow("Smoothing", prefField("/topology/pencil/smoothing", 0.3, 0.0, 1.0, 2, {}, true,
+                                        "Pencil: how much a finished stroke is smoothed", settingsBox));
     form->addRow("Even Size", prefField("/topology/relax/evenSize", 0.5, 0.0, 1.0, 2, {}, true,
                                         "Relax: 0 keeps each face's size, 1 evens every face to one size", settingsBox));
     form->addRow("Squareness", prefField("/topology/relax/squareness", 0.7, 0.0, 1.0, 2, {}, true,
@@ -242,12 +278,8 @@ TopologyToolkit::TopologyToolkit(QWidget* parent) : QWidget(parent)
         if (t && t->activeConstruct())
             runUi("retopoConstructFreeze", {{"mesh", t->retopoName()}, {"ids", {t->activeConstruct()}}});
     });
-    QToolButton* remove = topologyPush("Delete", "Delete: remove the active construct and its faces", activeBox);
-    connect(remove, &QToolButton::clicked, this, [] {
-        TopologyTool* t = activeTopologyTool();
-        if (t && t->activeConstruct())
-            runUi("retopoConstructDelete", {{"mesh", t->retopoName()}, {"ids", {t->activeConstruct()}}});
-    });
+    QToolButton* remove = topologyPush("Delete", "Delete: remove the active construct and its faces; the next one up becomes active (Delete in the list)", activeBox);
+    connect(remove, &QToolButton::clicked, this, [this] { deleteActiveConstruct(); });
     freeze->setObjectName("topologyFreeze");
     remove->setObjectName("topologyDelete");
     activeLayout->addWidget(controls::grid({freeze, remove}, 2, activeBox));
@@ -268,6 +300,8 @@ TopologyToolkit::TopologyToolkit(QWidget* parent) : QWidget(parent)
         mRefresh->start();
     });
     listLayout->addWidget(mList);
+    auto* del = new QShortcut(QKeySequence::Delete, mList, nullptr, nullptr, Qt::WidgetShortcut);
+    connect(del, &QShortcut::activated, this, [this] { deleteActiveConstruct(); });
     QToolButton* clearGuides = topologyPush("Clear Guides", "Clear Guides: remove every guide drawn with the Pencil", listBox);
     connect(clearGuides, &QToolButton::clicked, this, [] {
         if (scene::Node* n = sessionRetopo())
@@ -358,6 +392,25 @@ QDoubleSpinBox* TopologyToolkit::prefField(const char* key, double def, double l
     return s;
 }
 
+void TopologyToolkit::deleteActiveConstruct()
+{
+    TopologyTool* t = activeTopologyTool();
+    scene::Node* retopo = sessionRetopo();
+    if (!t || !retopo || !t->activeConstruct())
+        return;
+    // The one listed above becomes active (or below, for the first), so a run of deletes needs no clicking in between.
+    const int id = t->activeConstruct();
+    std::vector<retopo::ConstructRecord> records = retopo::retopoConstructs(scene::Graph::current(), *retopo);
+    int next = 0;
+    for (size_t i = 0; i < records.size(); ++i)
+        if (records[i].id == id)
+            next = i > 0 ? records[i - 1].id : i + 1 < records.size() ? records[i + 1].id : 0;
+    runUi("retopoConstructDelete", {{"mesh", t->retopoName()}, {"ids", {id}}});
+    if (TopologyTool* still = activeTopologyTool())
+        still->setActiveConstruct(next);
+    mRefresh->start();
+}
+
 void TopologyToolkit::showEvent(QShowEvent* e)
 {
     QWidget::showEvent(e);
@@ -388,11 +441,13 @@ void TopologyToolkit::refreshState()
     scene::Node* retopo = sessionRetopo(&refId);
     scene::Node* ref = scene::Graph::current().node(refId);
     mReference->setText(ref ? QString::fromStdString(ref->path()) : QString("None. Select a mesh and click Set Reference."));
-    mRetopo->setText(retopo ? QString::fromStdString(retopo->path()) : QString("Made on the first edit"));
+    mRetopo->setText(retopo ? QString::fromStdString(retopo->path()) : QString("None yet"));
     {
+        // Until the retopo mesh exists it will take the reference's symmetry, so that is what shows.
+        const scene::Node* symmetrySource = retopo ? retopo : ref;
         QSignalBlocker block(mSymmetry);
-        mSymmetry->setEnabled(retopo != nullptr);
-        mSymmetry->setCurrent(retopo ? int(std::clamp<int64_t>(retopo->as<int64_t>(scene::MeshNode::kSymmetry), 0, 3)) : 0);
+        mSymmetry->setEnabled(ref != nullptr);
+        mSymmetry->setCurrent(symmetrySource ? int(std::clamp<int64_t>(symmetrySource->as<int64_t>(scene::MeshNode::kSymmetry), 0, 3)) : 0);
     }
     for (QDoubleSpinBox* s : findChildren<QDoubleSpinBox*>())
         if (s->objectName().startsWith("/topology/") && !s->hasFocus())
@@ -455,9 +510,24 @@ void TopologyToolkit::rebuildConstructPanel()
         b->setEnabled(active != nullptr);
     if (QToolButton* b = findChild<QToolButton*>("topologyDelete"))
         b->setEnabled(active != nullptr);
-    std::string key = active ? std::to_string(active->id) + active->spec.dump() + std::to_string(active->live) : tool ? "tool" : "none";
+    // Rebuilt only when the construct changes, so a field being dragged or typed in keeps its focus; values update in place.
+    std::string key = active ? std::to_string(active->id) + std::to_string(active->live) : tool ? "tool" : "none";
     if (key == mPanelKey)
+    {
+        if (active)
+            for (const Field& f : fieldsFor(active->kind))
+            {
+                QWidget* w = mConstructPanel->findChild<QWidget*>(QString("construct/") + f.key);
+                if (!w || w->hasFocus() || w->isAncestorOf(QApplication::focusWidget()))
+                    continue;
+                QSignalBlocker block(w);
+                if (auto* c = qobject_cast<QCheckBox*>(w))
+                    c->setChecked(fieldValue(*active, f) != 0.0);
+                else if (auto* sp = qobject_cast<QDoubleSpinBox*>(w))
+                    sp->setValue(fieldValue(*active, f));
+            }
         return;
+    }
     mPanelKey = key;
     while (QLayoutItem* item = mConstructLayout->takeAt(0))
     {
@@ -476,17 +546,29 @@ void TopologyToolkit::rebuildConstructPanel()
     for (const Field& f : fieldsFor(active->kind))
     {
         std::string fieldKey = f.key;
-        double value = f.fallback;
-        if (active->spec.contains(f.key) && active->spec[f.key].is_number())
-            value = active->spec[f.key].get<double>();
-        else if (active->spec.contains(f.key) && active->spec[f.key].is_boolean())
-            value = active->spec[f.key].get<bool>() ? 1.0 : 0.0;
-        if (value == 0.0 && f.countIndex >= 0 && size_t(f.countIndex) < active->counts.size())
-            value = active->counts[f.countIndex];
-        auto apply = [id, fieldKey](json v) {
+        const double value = fieldValue(*active, f);
+        auto edit = [id, fieldKey](json v) {
             if (TopologyTool* t = activeTopologyTool())
-                t->editConstruct(id, [&](json& spec) { spec[fieldKey] = v; });
+                t->editConstruct(id, [&](json& spec) {
+                    spec[fieldKey] = v;
+                    if (fieldKey == "edgeLength")
+                        spec.erase("targetFaces");
+                });
         };
+        // An auto region takes seconds to remesh, so a scrub applies once it settles rather than at every step.
+        std::function<void(json)> apply = edit;
+        if (active->kind == ConstructKind::Region)
+        {
+            auto* settle = new QTimer(form);
+            settle->setSingleShot(true);
+            settle->setInterval(400);
+            auto pending = std::make_shared<json>();
+            connect(settle, &QTimer::timeout, form, [edit, pending] { edit(*pending); });
+            apply = [settle, pending](json v) {
+                *pending = std::move(v);
+                settle->start();
+            };
+        }
         QWidget* w = nullptr;
         if (f.type == 'b')
         {
@@ -511,6 +593,8 @@ void TopologyToolkit::rebuildConstructPanel()
             else
                 s = controls::valueField(f.min, f.max, decimals, f.unit, form);
             s->setValue(value);
+            // Typing applies on Enter, not per keystroke: every change regenerates the construct.
+            s->setKeyboardTracking(false);
             setSpinDefault(s, f.fallback);
             if (f.type == 'i')
                 connect(s, &QDoubleSpinBox::valueChanged, form, [apply](double v) { apply(int(std::lround(v))); });
@@ -519,6 +603,7 @@ void TopologyToolkit::rebuildConstructPanel()
             w = s;
         }
         w->setToolTip(f.tip);
+        w->setObjectName(QString("construct/") + f.key);
         layout->addRow(f.label, w);
     }
     if (active->kind == ConstructKind::Patch)

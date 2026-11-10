@@ -1533,4 +1533,684 @@ DisplayGeometry rachisGeometry(const StrandSet& strands, const std::array<float,
     return g;
 }
 
+// ---- Builder ----------------------------------------------------------------------------------
+
+namespace {
+
+// `more` appended to `g`, a surface of the same streams (positions, normals, tangents,
+// bitangents, uvs, colors).
+void appendSurface(DisplayGeometry& g, DisplayGeometry more) {
+    if (more.indices.empty()) return;
+    if (g.indices.empty()) {
+        g = std::move(more);
+        return;
+    }
+    const auto base = static_cast<std::uint32_t>(g.positions.size() / 3);
+    for (const auto& [to, from] : {std::pair{&g.positions, &more.positions}, std::pair{&g.normals, &more.normals},
+                                   std::pair{&g.tangents, &more.tangents}, std::pair{&g.bitangents, &more.bitangents},
+                                   std::pair{&g.uvs, &more.uvs}, std::pair{&g.colors, &more.colors}}) {
+        to->insert(to->end(), from->begin(), from->end());
+    }
+    for (const std::uint32_t i : more.indices) g.indices.push_back(base + i);
+}
+
+struct ItemSpec {
+    DisplayItemId id;
+    DisplayPart part;
+    const char* name;
+    DisplayLayer layer;
+};
+
+constexpr ItemSpec kItems[kDisplayItemCount] = {
+    {DisplayItemId::DimStrands, DisplayPart::Strands, "dimStrands", DisplayLayer::DormantWire},
+    {DisplayItemId::Strands, DisplayPart::Strands, "strands", DisplayLayer::DormantWire},
+    {DisplayItemId::ColoredStrands, DisplayPart::Strands, "coloredStrands", DisplayLayer::DormantWire},
+    {DisplayItemId::Ribbons, DisplayPart::Strands, "ribbons", DisplayLayer::DormantFilled},
+    {DisplayItemId::InstanceMarkers, DisplayPart::Instances, "instanceMarkers", DisplayLayer::DormantWire},
+    {DisplayItemId::InstanceMeshes, DisplayPart::Instances, "instanceMeshes", DisplayLayer::DormantFilled},
+    {DisplayItemId::Scales, DisplayPart::Instances, "scales", DisplayLayer::DormantFilled},
+    {DisplayItemId::Guides, DisplayPart::Guides, "guides", DisplayLayer::ActiveWire},
+    {DisplayItemId::Tubes, DisplayPart::Guides, "tubes", DisplayLayer::DormantFilled},
+    {DisplayItemId::Selected, DisplayPart::Selection, "selectedGuides", DisplayLayer::Selection},
+    {DisplayItemId::SoftSelected, DisplayPart::Selection, "softSelectedGuides", DisplayLayer::Selection},
+    {DisplayItemId::Parts, DisplayPart::Parts, "parts", DisplayLayer::Selection},
+    {DisplayItemId::Flow, DisplayPart::Flow, "flowArrows", DisplayLayer::Selection},
+    {DisplayItemId::FlowField, DisplayPart::Flow, "flowField", DisplayLayer::ActiveWire},
+    {DisplayItemId::Cards, DisplayPart::Cards, "cards", DisplayLayer::DormantFilled},
+    {DisplayItemId::ScalpMap, DisplayPart::ScalpMap, "scalpMap", DisplayLayer::DormantFilled},
+    {DisplayItemId::StrandMesh, DisplayPart::StrandMesh, "strandMesh", DisplayLayer::DormantFilled},
+};
+
+std::array<float, 4> rgba(const std::array<float, 3>& c, float scale = 1.0f) {
+    return {c[0] * scale, c[1] * scale, c[2] * scale, 1.0f};
+}
+
+// The strands of `strands` an instance sits on, in order.
+std::vector<std::size_t> instancedStrands(const StrandSet& strands) {
+    std::vector<std::size_t> out;
+    if (!strands.instances()) return out;
+    std::unordered_set<std::uint64_t> held;
+    held.reserve(strands.instances()->size());
+    for (const InstanceSet::Instance& i : strands.instances()->instances) held.insert(i.strand);
+    for (std::size_t s = 0; s < strands.strandCount(); ++s) {
+        if (held.count(strands.ids()[s])) out.push_back(s);
+    }
+    return out;
+}
+
+// How the hair shows now: 0 as ever, 1 dimmed and flat for a stroke, 2 hidden (for a stroke,
+// sculptDisplay 2, or the hair hidden: DisplaySettings::hair).
+int hairDisplay(const DisplayInputs& in, const DisplaySettings& s) {
+    if (!s.hair) return 2;
+    return in.stroke ? s.sculptDisplay : 0;
+}
+
+}  // namespace
+
+DisplayBuilder::DisplayBuilder() {
+    keys_.fill(~std::uint64_t{0});
+    for (std::size_t i = 0; i < kDisplayItemCount; ++i) {
+        DisplayItem& it = frame_.items[i];
+        it.id = kItems[i].id;
+        it.part = kItems[i].part;
+        it.name = kItems[i].name;
+        it.layer = kItems[i].layer;
+    }
+}
+
+void DisplayBuilder::invalidate(DisplayPart part) {
+    keys_[static_cast<std::size_t>(part)] = ~std::uint64_t{0};
+    if (part == DisplayPart::Strands) strandShape_ = ~std::uint64_t{0};
+    for (std::size_t i = 0; i < kDisplayItemCount; ++i) {
+        if (kItems[i].part == part) held_[i] = Held{};  // its host holds nothing now
+    }
+}
+
+bool DisplayBuilder::forgetKept(DisplayItemId id) {
+    Held& held = held_[static_cast<std::size_t>(id)];
+    if (!held.hidden || held.serial == 0) return false;
+    held = Held{};
+    return true;
+}
+
+void DisplayBuilder::invalidateAll() {
+    for (std::size_t p = 0; p < kDisplayPartCount; ++p) invalidate(static_cast<DisplayPart>(p));
+}
+
+bool DisplayBuilder::rebuild(DisplayPart part, std::uint64_t key) {
+    std::uint64_t& drawn = keys_[static_cast<std::size_t>(part)];
+    if (drawn == key) return false;
+    drawn = key;
+    frame_.rebuilt[static_cast<std::size_t>(part)] = true;
+    return true;
+}
+
+void DisplayBuilder::put(DisplayItemId id, DisplayGeometry&& geometry) {
+    DisplayItem& it = item(id);
+    it.vertexCount = geometry.vertexCount();
+    it.shown = !geometry.empty();
+    it.geometry = std::make_shared<const DisplayGeometry>(std::move(geometry));
+    it.recolored.reset();
+    it.geometryVersion = it.colorVersion = ++counter_;
+    it.rebuilt = true;
+    it.updated.reset();
+    it.keep = false;
+    held_[static_cast<std::size_t>(id)] = Held{};
+}
+
+const DisplayFrame& DisplayBuilder::update(const DisplayInputs& in, const DisplaySettings& s) {
+    frame_.rebuilt.fill(false);
+    for (DisplayItem& it : frame_.items) {
+        it.rebuilt = it.recolor = it.keep = false;
+        it.updated.reset();
+        if (!retain_) it.geometry.reset(), it.recolored.reset();
+    }
+    buildStrands(in, s);
+    // How deep the hair is (the overlays' pull): the longest strand.
+    if (in.strandsVersion != pullVersion_) {
+        pullVersion_ = in.strandsVersion;
+        // overlayPullDistance's: the longest strand, from the strands' extent (the session's bounds
+        // pass keeps it on them).
+        frame_.overlayPull = in.strands ? in.strands->extent().longestStrand * 1.05f : 0.0f;
+    }
+    buildInstances(in, s);
+    buildGuides(in, s);
+    buildSelection(in, s);
+    buildOverlays(in, s);
+    buildCards(in, s);
+    buildStrandMesh(in, s);
+    buildScalpMap(in, s);
+    return frame_;
+}
+
+void DisplayBuilder::buildStrands(const DisplayInputs& in, const DisplaySettings& s) {
+    const StrandsPtr& strands = in.strands;
+    const ScalpMesh* scalp = in.scalp.get();
+    const std::array<float, 4> solid = rgba(s.hairColor), dim = rgba(s.hairColor, 0.35f);
+    item(DisplayItemId::DimStrands).color = dim;
+    for (const DisplayItemId id : {DisplayItemId::Strands, DisplayItemId::ColoredStrands, DisplayItemId::Ribbons}) item(id).color = solid;
+    // Sculpting: while a stroke is live, strands step back so the guides read.
+    const int sculpt = hairDisplay(in, s);
+    const int colorMode = s.colorMode;
+    // Solid color mode draws lit (the look); the color modes are for reading data and stay flat.
+    const bool lit = colorMode == kSolidColors && s.lighting;
+    const bool rootDots = in.viewedRoots;
+    // The cards, or the StrandMesh nodes' meshes, instead of the strands.
+    const bool cardsView = s.cardsView || (s.strandMeshView && !in.strandMeshes.empty());
+    // Strands that only lay scales out (InstanceSet::hidesStrands): the scales draw instead.
+    const bool scaleLayout = strands && strands->instances() && strands->instances()->hidesStrands;
+    // What the strands' geometry depends on, then what only their colors do (the range and source).
+    std::uint64_t strandShape = hashCombine(hash64(in.strandsVersion), static_cast<std::uint64_t>(colorMode * 4 + sculpt));
+    strandShape = hashFloat(strandShape, s.ribbonWidthScale);
+    strandShape = hashCombine(strandShape, (s.ribbons ? 1u : 0u) + (lit ? 2u : 0u) + (rootDots ? 4u : 0u) + (cardsView ? 8u : 0u) +
+                                               (s.strandLookColors ? 16u : 0u) + (scaleLayout ? 32u : 0u) + (s.appearanceColors ? 64u : 0u));
+    std::uint64_t strandKey = hashChars(strandShape, s.colorSource);
+    strandKey = hashFloat(hashFloat(strandKey, s.colorMin), s.colorMax);
+    // Flat ribbons in the solid color carry it per strand (the lines take it as the item's color).
+    if (s.ribbons && !lit && colorMode == kSolidColors) {
+        for (const float c : s.hairColor) strandKey = hashFloat(strandKey, c);
+    }
+    // Colored lines only (no ribbons, dots or cards; not hidden for a stroke): a new color range
+    // or source takes new colors, not new lines.
+    const bool colorLinesOnly = strands && !cardsView && !rootDots && !s.ribbons && !lit && colorMode != kSolidColors && sculpt != 2;
+    DisplayItem& colored = item(DisplayItemId::ColoredStrands);
+    const std::size_t strandsPart = static_cast<std::size_t>(DisplayPart::Strands);
+    if (colorLinesOnly && strandShape_ == strandShape && keys_[strandsPart] != strandKey && in.recolorable && colored.shown &&
+        colored.vertexCount == strands->pointCount() && colored.vertexCount > 0) {
+        keys_[strandsPart] = strandKey;
+        colored.recolored = std::make_shared<const StrandColors>(
+            StrandColors{strands, strandColors(*strands, scalp, colorMode, s.colorSource, s.colorMin, s.colorMax)});
+        colored.colorVersion = ++counter_;
+        colored.recolor = true;
+        if (!retain_) colored.geometry.reset();
+        return;
+    }
+    if (!rebuild(DisplayPart::Strands, strandKey)) return;
+    strandShape_ = strandShape;
+    // Strands hidden (for a stroke, sculptDisplay 2, or the hair: hairDisplay), by the cards or by
+    // scales: nothing to build.
+    const StrandSet* shown = cardsView || scaleLayout || sculpt == 2 ? nullptr : strands.get();
+    std::vector<std::array<float, 3>> colors;
+    if (shown && !rootDots && (colorMode != kSolidColors || s.ribbons)) {
+        // (Ribbons in the solid color: the plain lines' one color, each strand.)
+        colors = colorMode == kSolidColors ? std::vector<std::array<float, 3>>(shown->strandCount(), s.hairColor)
+                                           : strandColors(*shown, scalp, colorMode, s.colorSource, s.colorMin, s.colorMax);
+    }
+    // Lit, each strand in its own color (HairColor's) where the strands' colors vary: lines (not
+    // dimmed for a stroke: those draw flat) and ribbons. Uniform, none: the item's color.
+    const bool ownColors = shown && lit && s.strandLookColors && !rootDots && (s.ribbons || sculpt != 1);
+    std::shared_ptr<const StrandColors> look = ownColors ? strandLookColors(strands, s.appearanceColors) : nullptr;
+    // Wet's wetness, where no colors of the strands' own carry it: the item's color for every
+    // strand, the wetness with it (the hair shading darkens and shines it).
+    if (!look && shown && lit && !rootDots && (s.ribbons || sculpt != 1)) look = wetLookColors(strands, s.hairColor);
+    DisplayGeometry strandBatch, coloredBatch, ribbonBatch, dimBatch;
+    // Plain lines (not colored per point, not ribbons, root dots or cards): the strands item, or
+    // the dimmed one for a stroke, each kept hidden while the other shows.
+    const bool plainLines = shown && !rootDots && !s.ribbons && colorMode == kSolidColors;
+    if (!shown) {
+        // hidden: nothing
+    } else if (rootDots) {
+        // A Scatter shown alone: its roots draw as dots with the guides' (a viewed Clump's
+        // centers' design: buildGuides), the strands themselves not drawn.
+    } else if (s.ribbons && writeLines_ && ribbonLines_) {
+        // As lines the host expands into ribbons (materialized(): strandRibbons' triangles): lit in
+        // the strands' own colors where they vary, unlit in one color a strand (keyed, so a host
+        // keeps those it holds while they stay).
+        std::shared_ptr<const StrandColors> ribbonColors = look;
+        if (!lit) {
+            StrandColors byStrand{strands, std::move(colors)};
+            if (!byStrand.colors.empty()) {
+                byStrand.key = hashCombine(5u, parallelDigest(byStrand.colors.front().data(), byStrand.colors.size() * 3)) | 1u;
+            }
+            ribbonColors = std::make_shared<const StrandColors>(std::move(byStrand));
+        }
+        ribbonBatch.triangles = true;
+        ribbonBatch.uvFloats = 1;
+        ribbonBatch.ribbons = true;
+        ribbonBatch.ribbonWidthScale = s.ribbonWidthScale;
+        ribbonBatch.lines = std::make_shared<const StrandLines>(strands, in.scalp, lit, std::move(ribbonColors));
+    } else if (s.ribbons) {
+        ribbonBatch = strandRibbons(*shown, scalp, colors, s.ribbonWidthScale, lit, look.get());
+    } else {
+        // Lines: colored per point in a color mode; else lit (the look), or flat with lighting
+        // off. Dimmed for a stroke they draw flat (no frames), so the guides read over them.
+        const bool perPoint = colorMode != kSolidColors;
+        std::shared_ptr<const StrandColors> pointColors = look;
+        if (perPoint) {
+            StrandColors byStrand{strands, std::move(colors)};
+            // Keyed by a hash of the colors (one a strand), so a host keeps those it holds while
+            // they stay (a tweak moving the strands alone).
+            if (!byStrand.colors.empty()) {
+                byStrand.key = hashCombine(4u, parallelDigest(byStrand.colors.front().data(), byStrand.colors.size() * 3)) | 1u;
+            }
+            pointColors = std::make_shared<const StrandColors>(std::move(byStrand));
+        }
+        DisplayGeometry lines;
+        lines.uvFloats = 1;  // u alone (writeUvs)
+        lines.lines = std::make_shared<const StrandLines>(strands, in.scalp, lit && sculpt != 1, std::move(pointColors));
+        if (!writeLines_) lines = lines.materialized();
+        (perPoint ? coloredBatch : sculpt == 1 ? dimBatch : strandBatch) = std::move(lines);
+    }
+    putLines(DisplayItemId::DimStrands, std::move(dimBatch), in, plainLines && sculpt != 1);
+    putLines(DisplayItemId::Strands, std::move(strandBatch), in, plainLines && sculpt == 1);
+    put(DisplayItemId::ColoredStrands, std::move(coloredBatch));
+    put(DisplayItemId::Ribbons, std::move(ribbonBatch));
+}
+
+void DisplayBuilder::putLines(DisplayItemId id, DisplayGeometry&& geometry, const DisplayInputs& in, bool hidden) {
+    Held held = held_[static_cast<std::size_t>(id)];
+    const StrandLines* lines = geometry.lines.get();
+    if (geometry.empty() && hidden && held.serial != 0) {
+        // Stepping back for a stroke (or the dimmed strands after it): hidden, the host's buffers
+        // kept (said once: while it stays hidden, nothing changes for it).
+        if (held.hidden) return;
+        put(id, std::move(geometry));
+        item(id).keep = true;
+        held.hidden = true;
+        held_[static_cast<std::size_t>(id)] = held;
+        return;
+    }
+    if (!lines || in.strandsSerial == 0) {
+        put(id, std::move(geometry));
+        return;
+    }
+    // How the lines are written: lit ones lean out of the scalp (their frames), flat ones do not;
+    // colored ones have colors to write too.
+    const std::uint64_t shape = hashCombine((lines->lit ? 2u : 1u) + (lines->colors ? 4u : 0u),
+                                            lines->lit && lines->scalp ? lines->scalp->surfaceHash() : 0);
+    const std::uint64_t layout = lines->layoutKey();
+    const bool asHeld = held.serial != 0 && held.shape == shape && held.layout == layout;
+    ChangesPtr updated;
+    if (asHeld && held.serial == in.strandsSerial) {
+        updated = std::make_shared<const StrandChanges>(StrandChanges::listed({}));  // the very strands held
+    } else if (asHeld && held.serial == in.changesBase && in.strandsChanges && !in.strandsChanges->all) {
+        updated = in.strandsChanges;
+    }
+    put(id, std::move(geometry));
+    item(id).updated = std::move(updated);
+    held_[static_cast<std::size_t>(id)] = Held{in.strandsSerial, shape, layout};
+}
+
+void DisplayBuilder::buildInstances(const DisplayInputs& in, const DisplaySettings& s) {
+    for (const DisplayItemId id : {DisplayItemId::InstanceMarkers, DisplayItemId::InstanceMeshes}) item(id).color = s.theme.instances;
+    // Each instance its prototype mesh (by name, from the host's scene), shaded in the instance
+    // color; a small wire octahedron where the mesh is missing or past the triangle budget.
+    const int sculpt = hairDisplay(in, s);
+    const bool showInstances = sculpt != 2 && s.instances;
+    const InstanceSet* instances = in.strands && showInstances ? in.strands->instances().get() : nullptr;
+    auto prototypeOf = [&](const std::string& name) -> const InstancePrototype* {
+        if (!in.prototypes) return nullptr;
+        auto it = in.prototypes->find(name);
+        return it == in.prototypes->end() ? nullptr : &it->second;
+    };
+    // The strands they sit on: their points as at the last build (the same strands, or later ones
+    // holding the very same points: a Width or HairColor edit, StrandChanges::pointsKept) keep the
+    // instances as built; with instances scaled by their strand's width, its widths too. Strands
+    // of no known serial (a host's own, or at rest while it carries them) key by their version.
+    const std::shared_ptr<const InstanceSet>& set = in.strands ? in.strands->instances() : instancesOf_;
+    std::uint64_t points = hashCombine(hash64(in.strandsVersion), 0x1A5u);
+    if (instances && in.strandsSerial != 0) {
+        const bool samePoints = set == instancesOf_ && instancesSerial_ != 0 &&
+                                ((in.strandsSerial == instancesSerial_ && in.strandsVersion == instancesVersion_) ||
+                                 (in.changesBase == instancesSerial_ && in.strandsChanges && in.strandsChanges->pointsKept));
+        const bool byWidth = std::any_of(instances->instances.begin(), instances->instances.end(),
+                                         [](const InstanceSet::Instance& i) { return i.scaleByWidth; });
+        const std::vector<float>& widths = in.strands->widths();
+        const std::uint64_t widthsDigest =
+            byWidth && in.strandsSerial != instancesSerial_ ? parallelDigest(widths.data(), widths.size()) : instancesWidths_;
+        points = samePoints && widthsDigest == instancesWidths_ ? instancesPoints_ : hashCombine(0x5E7u, ++counter_);
+        instancesWidths_ = widthsDigest;
+    }
+    instancesOf_ = instances ? set : nullptr;
+    instancesSerial_ = instances ? in.strandsSerial : 0;
+    instancesVersion_ = in.strandsVersion;
+    instancesPoints_ = points;
+    // Following the scalp, the strands at rest (the host carries them): the instances placed on
+    // their strands carried to the scalp now (carriesPointsAndInstances).
+    const FollowCarry* carry = instances && in.follow ? in.follow.get() : nullptr;
+    std::uint64_t key = hashCombine(points, showInstances ? 1u : 0u);
+    if (instances) {
+        // The meshes as they are now: a changed one changes the key.
+        for (const std::string& name : instances->prototypes) {
+            const InstancePrototype* mesh = prototypeOf(name);
+            key = hashCombine(key, mesh ? mesh->signature : 0);
+        }
+        if (instances->hasMeshes()) key = hashCombine(key, in.scalp ? in.scalp->surfaceHash() : 0);  // the skin they bend onto
+        if (carry) key = hashCombine(hashCombine(key, carry->from()->surfaceHash()), carry->to()->surfaceHash());
+    }
+    if (!carry) instancedFrom_.reset(), instancedRest_.reset();
+    if (!rebuild(DisplayPart::Instances, key)) return;
+    DisplayGeometry markers, meshes, scales;
+    if (instances) {
+        std::vector<const InstancePrototype*> prototypes;
+        prototypes.reserve(instances->prototypes.size());
+        for (const std::string& name : instances->prototypes) {
+            const InstancePrototype* mesh = builtinPrototype(name);
+            if (!mesh) mesh = prototypeOf(name);
+            prototypes.push_back(mesh && mesh->found ? mesh : nullptr);
+        }
+        StrandsPtr placedOn = in.strands;
+        if (carry) {
+            // The strands holding an instance (once per set at rest), carried as carryStrands carries
+            // all of them: each instance placed where it is placed on all the strands carried.
+            if (instancedFrom_ != in.strands) {
+                instancedFrom_ = in.strands;
+                instancedRest_ = std::make_shared<const StrandSet>(in.strands->subset(instancedStrands(*in.strands)));
+            }
+            placedOn = carryStrands(instancedRest_, *carry->from(), *carry->to());
+        }
+        std::vector<InstanceSet::Placed> placed = (placedOn->instances() ? *placedOn->instances() : *instances).resolve(*placedOn, in.scalp.get());
+        placed.erase(std::remove_if(placed.begin(), placed.end(), [](const InstanceSet::Placed& p) { return p.meshed; }),
+                     placed.end());
+        appendInstances(markers, meshes, placed, prototypes);
+        // Scales: bent onto the skin (each kept while its inputs stay), flat quads past the budget.
+        ScaleMeshOptions options;
+        options.preview = true;
+        options.triangleBudget = kInstanceTriangleBudget;
+        if (auto mesh = scales_.build(*in.strands, in.scalp, prototypeOf, options)) scales = scaleGeometry(*mesh);
+    } else {
+        scales_.clear();
+    }
+    put(DisplayItemId::InstanceMarkers, std::move(markers));
+    put(DisplayItemId::InstanceMeshes, std::move(meshes));
+    put(DisplayItemId::Scales, std::move(scales));
+}
+
+void DisplayBuilder::buildGuides(const DisplayInputs& in, const DisplaySettings& s) {
+    const DisplayTheme& theme = s.theme;
+    const HierarchyPtr& hierarchy = in.hierarchy;
+    // Guides are colored per vertex; dots wider than the curve (by the theme's size), so they
+    // read as beads on it.
+    item(DisplayItemId::Guides).color = {1.0f, 1.0f, 1.0f, 1.0f};
+    item(DisplayItemId::Guides).lineWidth = s.guideWidth;
+    item(DisplayItemId::Tubes).color = theme.tubes;
+    frame_.pointSize = theme.pointSize + s.guideWidth;
+    const bool byLayer = s.guideColorMode == 1;
+    const int smoothing = std::clamp(s.guideSmoothing, 1, 16);
+    const int pointMode = s.guidePoints;
+    std::uint64_t key = hashCombine(hash64(in.hierarchyVersion), (s.guides ? 1u : 0u) + (s.tubes ? 2u : 0u) + (byLayer ? 4u : 0u) +
+                                                                     32u * static_cast<unsigned>(pointMode));
+    key = hashCombine(key, theme.version);
+    key = hashCombine(key, static_cast<std::uint64_t>(smoothing));
+    key = hashChars(key, s.hiddenGuideGroups);
+    key = hashChars(key, s.guideGroupColors);
+    key = hashChars(key, s.isolateGroup);
+    key = hashChars(key, s.guideColorLayer);
+    key = hashChars(key, s.guideColorSeed);
+    if (in.clumpCenters) {
+        // Hashed once per set of centers (the same pointer: the same centers, held here so no
+        // other set takes its address), not on every update.
+        if (in.clumpCenters != clumpCentersHashed_) {
+            std::uint64_t centers = hash64(in.clumpCenters->size() + 1);
+            for (const Vec3f& p : *in.clumpCenters) centers = hashFloat(hashFloat(hashFloat(centers, p.x), p.y), p.z);
+            clumpCentersHashed_ = in.clumpCenters;
+            clumpCentersHash_ = centers;
+        }
+        key = hashCombine(key, clumpCentersHash_);
+        for (const float c : theme.clumpCenters) key = hashFloat(key, c);
+    }
+    // A Scatter viewed alone: its roots as dots, the clump centers' design (and color).
+    const StrandSet* viewedRoots = in.viewedRoots && in.strands ? in.strands.get() : nullptr;
+    if (viewedRoots) {
+        key = hashCombine(hashCombine(key, 0x5ca77e5u), hash64(in.strandsVersion));
+        for (const float c : theme.clumpCenters) key = hashFloat(key, c);
+    }
+    const GuideSet* moving = s.guides && s.movingGuides && in.movingGuides && !in.movingGuides->empty() ? in.movingGuides.get() : nullptr;
+    if (moving) {
+        key = hashCombine(key, in.movingGuides->contentHash());
+        for (const float c : theme.movingGuides) key = hashFloat(key, c);
+    }
+    if (!rebuild(DisplayPart::Guides, key)) return;
+    // By group (or by a layer, black to white), other levels dimmed when one is isolated, frozen
+    // ones in the theme's color. Each group in its automatic color; its own (the host's, or a
+    // ToGuides node's) wins.
+    const std::map<std::string, std::array<float, 3>> groupColors = parseGuideGroupColors(s.guideGroupColors);
+    const std::set<std::string> hiddenNames = parseHiddenGuideGroups(s.hiddenGuideGroups);
+    auto hiddenGuide = [&](const HierarchyGuide& g) {
+        if (hiddenNames.empty() || !hierarchy) return false;
+        const GuideGroup* grp = hierarchy->group(g.group);
+        return grp && hiddenNames.count(grp->name) > 0;
+    };
+    DisplayGeometry guides, tubes;
+    tubes.triangles = true;  // shaded tubes
+    tubes.surface = true;
+    GuideDots& dots = frame_.dots;
+    dots.points.clear();
+    dots.colors.clear();
+    // The automatic colors start from the groom's own hue (guideColorSeed: two grooms' first groups differ).
+    const std::map<GroupId, std::array<float, 3>> autoColors =
+        hierarchy ? autoGuideColors(*hierarchy, guideHueSeed(s.guideColorSeed)) : std::map<GroupId, std::array<float, 3>>{};
+    // "all" points on many guides would be noise: every stride-th point, roots and tips always.
+    constexpr std::size_t kPointBudget = 2500;
+    std::size_t stride = 1;
+    if (hierarchy && s.guides && pointMode == 2) {
+        std::size_t total = 0;
+        for (const HierarchyGuide& g : hierarchy->guides()) {
+            total += g.points.size();
+        }
+        stride = std::max<std::size_t>(1, (total + kPointBudget - 1) / kPointBudget);
+    }
+    if (hierarchy && (s.guides || s.tubes)) {
+        const bool attributes = hierarchy->hasAttributes();
+        // Isolate: the group and its child groups at full color, the rest dimmed (none dimmed when
+        // the groom has no such group).
+        const GroupId isolated = s.isolateGroup.empty() ? kNoGroup : hierarchy->findGroup(s.isolateGroup);
+        const auto inIsolated = [&](GroupId id) {
+            for (int steps = 0; id != kNoGroup && steps < 64; ++steps) {
+                if (id == isolated) return true;
+                const GuideGroup* grp = hierarchy->group(id);
+                id = grp ? grp->parent : kNoGroup;
+            }
+            return false;
+        };
+        for (const HierarchyGuide& g : hierarchy->guides()) {
+            const int level = hierarchy->groupDepth(g.group);
+            if (level < 0 || level >= kMaxDrawnGuideLevels || hiddenGuide(g)) continue;
+            if (s.tubes) appendTubeSurface(tubes, g, hierarchy->scale());
+            if (!s.guides || g.points.size() < 2) continue;
+            const auto automatic = autoColors.find(g.group);
+            std::array<float, 3> c = automatic != autoColors.end() ? automatic->second : std::array<float, 3>{0.5f, 0.5f, 0.5f};
+            const GuideGroup* grp = hierarchy->group(g.group);
+            if (grp && grp->hasColor) c = grp->color;  // its own (a ToGuides node's), whatever the mode
+            if (!groupColors.empty()) {  // the host's color for the group, over everything
+                auto own = grp ? groupColors.find(grp->name) : groupColors.end();
+                if (own != groupColors.end()) c = own->second;
+            }
+            if (attributes) {
+                if (byLayer) {
+                    float v = 0.0f;
+                    hierarchy->effectiveAttribute(g, s.guideColorLayer, &v);
+                    v = std::clamp(v, 0.0f, 1.0f);
+                    c = {0.08f + 0.92f * v, 0.08f + 0.92f * v, 0.08f + 0.92f * v};
+                }
+                float frozen = 0.0f;
+                if (hierarchy->effectiveAttribute(g, "freeze", &frozen) && frozen >= 0.5f) c = theme.frozen;
+            } else if (byLayer) {
+                c = {0.08f, 0.08f, 0.08f};
+            }
+            const bool dimmed = isolated != kNoGroup && !inIsolated(g.group);
+            if (dimmed) c = {c[0] * 0.25f, c[1] * 0.25f, c[2] * 0.25f};
+            if (moving) c = {c[0] * 0.4f, c[1] * 0.4f, c[2] * 0.4f};  // the groomed pose, under the moving guides
+            const std::size_t first = guides.positions.size() / 3;
+            const std::size_t drawn = appendGuideCurve(guides, g.points, smoothing);
+            guides.colors.resize((first + drawn) * 4);
+            for (float* out = guides.colors.data() + first * 4; out < guides.colors.data() + guides.colors.size(); out += 4) {
+                out[0] = c[0];
+                out[1] = c[1];
+                out[2] = c[2];
+                out[3] = 1.0f;
+            }
+            if (pointMode == 0) continue;
+            // Dots on the guide's own points, in the curve's color (dimmed, frozen or by map with it).
+            const std::vector<Vec3f>& points = g.points;
+            const std::size_t n = points.size();
+            for (std::size_t k = 0; k < n; ++k) {
+                const bool end = k == 0 || k + 1 == n;
+                if (pointMode == 1 ? !end : !(end || k % stride == 0)) continue;
+                dots.points.push_back(points[k]);
+                dots.colors.push_back(c);
+            }
+        }
+    }
+    // The moving guides over the groomed ones, in their own color with a dot at the tip (the
+    // groups hidden in the viewport hidden here too).
+    if (moving) {
+        for (const Guide& g : moving->guides()) {
+            if (g.points.size() < 2) continue;
+            if (hierarchy && !hiddenNames.empty()) {
+                const HierarchyGuide* own = hierarchy->guide(g.id);
+                if (own && hiddenGuide(*own)) continue;
+            }
+            const std::size_t first = guides.positions.size() / 3;
+            const std::size_t drawn = appendGuideCurve(guides, g.points, smoothing);
+            guides.colors.resize((first + drawn) * 4);
+            for (float* out = guides.colors.data() + first * 4; out < guides.colors.data() + guides.colors.size(); out += 4) {
+                out[0] = theme.movingGuides[0];
+                out[1] = theme.movingGuides[1];
+                out[2] = theme.movingGuides[2];
+                out[3] = 1.0f;
+            }
+            if (pointMode != 0) {
+                dots.points.push_back(g.points.back());
+                dots.colors.push_back(theme.movingGuides);
+            }
+        }
+    }
+    // A viewed Clump's centers: a dot at each one's root, whether guides show or not.
+    if (in.clumpCenters) {
+        for (const Vec3f& p : *in.clumpCenters) {
+            dots.points.push_back(p);
+            dots.colors.push_back(theme.clumpCenters);
+        }
+    }
+    // A viewed Scatter's roots: the same dots, one at each strand's root.
+    if (viewedRoots) {
+        const std::size_t count = viewedRoots->strandCount();
+        dots.points.reserve(dots.points.size() + count);
+        dots.colors.reserve(dots.colors.size() + count);
+        for (std::size_t k = 0; k < count; ++k) {
+            if (viewedRoots->strandPointCount(k) == 0) continue;
+            dots.points.push_back(viewedRoots->strandPoints(k)[0]);
+            dots.colors.push_back(theme.clumpCenters);
+        }
+    }
+    guides.overlay = true;  // over the hair (the overlay pull)
+    put(DisplayItemId::Guides, std::move(guides));
+    put(DisplayItemId::Tubes, std::move(tubes));
+}
+
+void DisplayBuilder::buildSelection(const DisplayInputs& in, const DisplaySettings& s) {
+    // Selected guides over the rest: the theme's selected color, soft-selected its own.
+    item(DisplayItemId::Selected).color = s.theme.selected;
+    item(DisplayItemId::SoftSelected).color = s.theme.softSelected;
+    item(DisplayItemId::Selected).lineWidth = item(DisplayItemId::SoftSelected).lineWidth = s.guideWidth + 1.0f;
+    const int smoothing = std::clamp(s.guideSmoothing, 1, 16);
+    std::uint64_t key = hashCombine(hashCombine(hash64(in.hierarchyVersion), in.selectionHash),
+                                    (s.guides ? 1u : 0u) + 2u * static_cast<unsigned>(smoothing));
+    key = hashChars(key, s.hiddenGuideGroups);
+    if (!rebuild(DisplayPart::Selection, key)) return;
+    DisplayGeometry selected, soft;
+    const HierarchyPtr& hierarchy = in.hierarchy;
+    if (hierarchy && s.guides && in.selection) {
+        const std::set<std::string> hiddenNames = parseHiddenGuideGroups(s.hiddenGuideGroups);
+        for (const auto& [id, weight] : in.selection()) {
+            const HierarchyGuide* g = hierarchy->guide(id);
+            if (!g) continue;
+            const GuideGroup* grp = hiddenNames.empty() ? nullptr : hierarchy->group(g->group);
+            if (grp && hiddenNames.count(grp->name) > 0) continue;
+            appendGuideCurve(weight >= 0.999f ? selected : soft, g->points, smoothing);
+        }
+    }
+    selected.overlay = soft.overlay = true;
+    put(DisplayItemId::Selected, std::move(selected));
+    put(DisplayItemId::SoftSelected, std::move(soft));
+}
+
+void DisplayBuilder::buildOverlays(const DisplayInputs& in, const DisplaySettings& s) {
+    // Parts with the guides.
+    item(DisplayItemId::Parts).color = s.theme.parts;
+    item(DisplayItemId::Parts).lineWidth = 2.0f;
+    if (rebuild(DisplayPart::Parts, hashCombine(in.parts ? in.parts->contentHash() : 0, s.guides ? 1u : 0u))) {
+        DisplayGeometry lines;
+        if (in.parts && s.guides) appendPartLines(lines, *in.parts);
+        lines.overlay = true;
+        put(DisplayItemId::Parts, std::move(lines));
+    }
+    // Flow arrows and the field they make over the scalp: kept while the arrows and the scalp
+    // stay the same.
+    item(DisplayItemId::Flow).color = s.theme.flow;
+    item(DisplayItemId::Flow).lineWidth = 2.5f;
+    item(DisplayItemId::FlowField).color = s.theme.flowField;
+    const MeshPtr& scalp = in.scalp;
+    const std::uint64_t flowKey =
+        hashCombine(hashCombine(in.flow ? in.flow->contentHash() : 0, scalp ? scalp->contentHash() : 0), s.flow ? 1u : 0u);
+    if (rebuild(DisplayPart::Flow, flowKey)) {
+        DisplayGeometry arrows, field;
+        if (in.flow && scalp && scalp->pointCount() > 0 && s.flow) buildFlowOverlay(*in.flow, *scalp, arrows, field);
+        arrows.overlay = field.overlay = true;
+        put(DisplayItemId::Flow, std::move(arrows));
+        put(DisplayItemId::FlowField, std::move(field));
+    }
+}
+
+void DisplayBuilder::buildCards(const DisplayInputs& in, const DisplaySettings& s) {
+    // The Cards nodes' cards in cards view (where no card mesh shows them): hair shading with
+    // their baked maps, or solid in the theme's card color without them.
+    item(DisplayItemId::Cards).color = s.theme.cards;
+    const int sculpt = hairDisplay(in, s);
+    const bool textured = s.drawCards && s.cardTextures;
+    const std::uint64_t key =
+        hashCombine(hash64(in.cardsVersion), (sculpt == 2 ? 1u : 0u) + (s.drawCards ? 2u : 0u) + (textured ? 4u : 0u));
+    if (!rebuild(DisplayPart::Cards, key)) return;
+    DisplayGeometry cards;
+    if (in.cards && s.drawCards && sculpt != 2) cards = cardGeometry(*in.cards, textured);
+    put(DisplayItemId::Cards, std::move(cards));
+}
+
+void DisplayBuilder::buildStrandMesh(const DisplayInputs& in, const DisplaySettings& s) {
+    // The StrandMesh nodes' meshes, lit in the strands' own colors (hidden for a stroke as the
+    // strands are, sculptDisplay 2).
+    item(DisplayItemId::StrandMesh).color = rgba(s.hairColor);
+    const int sculpt = hairDisplay(in, s);
+    const bool draw = s.strandMeshView && s.drawStrandMesh && sculpt != 2;
+    // The feathers' rachis tubes (a Propagate node's shaftWidth: its FeatherLayer), as exported
+    // and baked: as strand lines a shaft stays a hairline however wide (the barbs leave it the room).
+    // (Only with the strands: not instead of them, cards or the StrandMesh nodes' meshes.)
+    const bool strandsShown = !(s.cardsView || (s.strandMeshView && !in.strandMeshes.empty()));
+    const bool shafts = sculpt != 2 && strandsShown && in.strands && hasRachis(in.strands->featherLayers());
+    std::uint64_t key = hashCombine(hash64(in.strandMeshVersion), (draw ? 1u : 0u) + (shafts ? 2u : 0u));
+    if (shafts) key = hashCombine(key, in.strandsVersion);
+    if ((draw && !in.strandMeshes.empty()) || shafts) {  // (the color of strands without their own: in the vertices)
+        for (const float c : s.hairColor) key = hashFloat(key, c);
+    }
+    if (!rebuild(DisplayPart::StrandMesh, key)) return;
+    DisplayGeometry mesh;
+    if (draw && !in.strandMeshes.empty()) {
+        // The instances' prototypes the host read (its scene meshes), by name.
+        const PrototypeLookup prototypes = [&in](const std::string& name) -> const InstancePrototype* {
+            if (!in.prototypes) return nullptr;
+            const auto it = in.prototypes->find(name);
+            return it != in.prototypes->end() && it->second.found ? &it->second : nullptr;
+        };
+        mesh = strandMeshGeometry(in.strandMeshes, in.scalp.get(), s.hairColor, prototypes);
+    }
+    if (shafts) appendSurface(mesh, rachisGeometry(*in.strands, s.hairColor));
+    put(DisplayItemId::StrandMesh, std::move(mesh));
+}
+
+void DisplayBuilder::buildScalpMap(const DisplayInputs& in, const DisplaySettings&) {
+    // A vertex map or guide layer as gray (or its color) per vertex, a texture map on the scalp's
+    // uvs through the host's texture of its image; the scalp lifted a hair off the mesh. A
+    // texture map's geometry is built again for another scalp or texture, not for its image
+    // changing in the texture.
+    const ScalpMapView& view = in.scalpMap;
+    const MeshPtr scalp = view.kind.empty() ? nullptr : in.scalp;
+    const bool texture = scalp && view.kind == "texture" && in.scalpMapTexture;
+    const std::uint64_t shownKey = texture ? hashCombine(hash64(0x5CA1E), in.scalpMapTextureGeneration) : view.version;
+    const std::uint64_t key =
+        hashCombine(hashCombine(hash64(0x5CA1D), shownKey), hashCombine(scalp ? scalp->contentHash() : 0, texture ? 1u : 0u));
+    if (!rebuild(DisplayPart::ScalpMap, key)) return;
+    put(DisplayItemId::ScalpMap, scalpMapGeometry(scalp.get(), view, texture && scalp->hasUVs()));
+}
+
 }  // namespace groomlab

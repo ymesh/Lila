@@ -197,7 +197,7 @@ void registerPathCommands()
         .name = "selectPathBetween",
         .doc = "Select the components between two of a mesh's vertices, edges or faces: the shorter way along a loop or ring "
                "they share, else the shortest path across the surface. Neighbours (vertices on one edge, edges along a loop or across "
-               "a quad, faces sharing an edge) select the whole loop or ring through both instead. Adds to the selection unless replace or deselect. Returns the ids in order.",
+               "a quad, faces sharing an edge) select the whole loop or ring through both instead, unless deselecting. Adds to the selection unless replace or deselect. Returns the ids in order.",
         .positionalDoc = "mesh",
         .flags = {
             {"kind", "", T::String, "edge", "vertex | edge | face", {"vertex", "edge", "face"}},
@@ -223,14 +223,15 @@ void registerPathCommands()
             geo::Index from = geo::Index(a.get<int64_t>("from")), to = geo::Index(a.get<int64_t>("to"));
             if (kind == ComponentMode::Object)
                 throw CommandError("selectPathBetween: kind must be vertex, edge or face");
-            Ids path = neighbourLoop(*t.mesh, isolation::activeVisibility(t.node, *t.mesh), kind, from, to);
+            const bool deselect = a.get<bool>("deselect");
+            Ids path = deselect ? Ids{} : neighbourLoop(*t.mesh, isolation::activeVisibility(t.node, *t.mesh), kind, from, to);
             if (path.empty())
                 path = kind == ComponentMode::Vertex ? geo::pointPathBetween(*t.mesh, from, to)
                        : kind == ComponentMode::Edge ? geo::edgePathBetween(*t.mesh, from, to)
                                                      : geo::facePathBetween(*t.mesh, from, to);
             if (path.empty())
                 throw CommandError("selectPathBetween: no path between " + std::to_string(from) + " and " + std::to_string(to));
-            Op op = a.get<bool>("deselect") ? Op::Remove : a.get<bool>("replace") ? Op::Replace : Op::Add;
+            Op op = deselect ? Op::Remove : a.get<bool>("replace") ? Op::Replace : Op::Add;
             UndoChunk chunk("Select Path");
             selectAndShow(t.node, kind, path, op, a);
             return path;

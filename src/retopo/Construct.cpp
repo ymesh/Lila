@@ -6,6 +6,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <set>
+#include <map>
+#include <limits>
 
 namespace lila::retopo
 {
@@ -64,6 +67,47 @@ Index addOriented(geo::Mesh& m, std::vector<Index> pts)
     }
     return m.addFace(pts);
 }
+/** Moves the generated border points (of the faces in use) onto open border points of the mesh within snap, one each. */
+void snapToBorder(const geo::Mesh& mesh, const GenResult& gen, const std::vector<uint8_t>& used, std::vector<glm::dvec3>& pos, double snap)
+{
+    std::map<std::pair<Index, Index>, int> edgeUse;
+    for (const std::vector<Index>& face : gen.faces)
+        for (size_t k = 0; k < face.size(); ++k)
+        {
+            Index a = face[k], b = face[(k + 1) % face.size()];
+            ++edgeUse[{std::min(a, b), std::max(a, b)}];
+        }
+    std::vector<uint8_t> genBorder(pos.size(), 0);
+    for (const auto& [e, n] : edgeUse)
+        if (n == 1)
+            genBorder[e.first] = genBorder[e.second] = 1;
+    std::vector<Index> meshBorder;
+    for (Index p = 0; p < mesh.pointCapacity(); ++p)
+        if (mesh.pointValid(p) && mesh.isBoundaryPoint(p))
+            meshBorder.push_back(p);
+    struct Pair
+    {
+        double d;
+        size_t gen;
+        Index mesh;
+    };
+    std::vector<Pair> pairs;
+    for (size_t i = 0; i < pos.size(); ++i)
+        if (used[i] && genBorder[i] && !(i < gen.fixed.size() && gen.fixed[i]))
+            for (Index p : meshBorder)
+                if (double d = glm::length(mesh.position(p) - pos[i]); d < snap)
+                    pairs.push_back({d, i, p});
+    std::sort(pairs.begin(), pairs.end(), [](const Pair& a, const Pair& b) { return a.d < b.d; });
+    std::vector<uint8_t> genTaken(pos.size(), 0);
+    std::set<Index> meshTaken;
+    for (const Pair& pr : pairs)
+        if (!genTaken[pr.gen] && !meshTaken.contains(pr.mesh))
+        {
+            genTaken[pr.gen] = 1;
+            meshTaken.insert(pr.mesh);
+            pos[pr.gen] = mesh.position(pr.mesh);
+        }
+}
 } // namespace
 
 const char* constructKindName(ConstructKind k) { return kKindNames[size_t(k)]; }
@@ -81,22 +125,51 @@ bool constructKindFromName(std::string_view name, ConstructKind& out)
 
 ConstructKind constructKind(const ConstructSpec& spec) { return ConstructKind(spec.index()); }
 
-StitchResult stitchConstruct(geo::Mesh& mesh, const GenResult& gen, int id, double weld, const std::optional<geo::SymmetryPlane>& symmetry)
+StitchResult stitchConstruct(geo::Mesh& mesh, const GenResult& gen, int id, double weld, const std::optional<geo::SymmetryPlane>& symmetry,
+                             double snap)
 {
     LILA_ZONE();
 
     StitchResult out;
     std::vector<glm::dvec3> pos = gen.positions;
+    // With symmetry the construct keeps the half most of it lies in, clamped to the plane, and the mirror builds the other.
+    std::vector<uint8_t> beyond(pos.size(), 0);
     if (symmetry)
-        for (glm::dvec3& p : pos)
-            if (std::abs(symmetry->distance(p)) < std::max(weld, 1e-9))
-                p = symmetry->project(p);
+    {
+        double ahead = 0.0, behind = 0.0;
+        for (const glm::dvec3& p : pos)
+            (symmetry->distance(p) > 0.0 ? ahead : behind) += std::abs(symmetry->distance(p));
+        const double side = ahead >= behind ? 1.0 : -1.0;
+        const double tol = std::max(weld, 1e-9);
+        const double planeSnap = std::max(tol, snap);
+        for (size_t i = 0; i < pos.size(); ++i)
+        {
+            const double d = symmetry->distance(pos[i]) * side;
+            beyond[i] = d <= -tol;
+            if (d < planeSnap)
+                pos[i] = symmetry->project(pos[i]);
+        }
+    }
+
+    auto dropped = [&](const std::vector<Index>& face) {
+        return std::all_of(face.begin(), face.end(), [&](Index i) { return beyond[i] != 0; });
+    };
+    std::vector<uint8_t> used(pos.size(), 0);
+    for (const std::vector<Index>& face : gen.faces)
+        if (!dropped(face))
+            for (Index i : face)
+                used[i] = 1;
+
+    if (snap > 0.0)
+        snapToBorder(mesh, gen, used, pos, snap);
 
     const Index before = mesh.pointCapacity();
     auto place = [&](const std::vector<glm::dvec3>& ps) {
         std::vector<Index> ids(ps.size(), geo::kInvalid);
         for (size_t i = 0; i < ps.size(); ++i)
         {
+            if (!used[i])
+                continue;
             bool fixed = i < gen.fixed.size() && gen.fixed[i];
             ids[i] = pointNear(mesh, ps[i], fixed ? std::max(weld, 1e-6) : weld);
         }
@@ -114,6 +187,8 @@ StitchResult stitchConstruct(geo::Mesh& mesh, const GenResult& gen, int id, doub
 
     mesh.faceAttrs().getOrAdd<int32_t>(kConstructAttr);
     auto add = [&](const std::vector<Index>& local, const std::vector<Index>& map) {
+        if (dropped(local))
+            return;
         std::vector<Index> pts;
         for (Index i : local)
             pts.push_back(map[i]);
@@ -165,8 +240,15 @@ void untagConstruct(geo::Mesh& mesh, int id)
 uint64_t constructHash(const geo::Mesh& mesh, int id)
 {
     std::vector<Index> faces = constructFaces(mesh, id);
-    geo::Bounds b = mesh.bounds();
-    double size = glm::length(b.max - b.min);
+    // Scaled by the construct's own extent, so geometry added elsewhere doesn't change it.
+    glm::dvec3 lo(std::numeric_limits<double>::max()), hi(std::numeric_limits<double>::lowest());
+    for (Index f : faces)
+        for (Index p : mesh.facePoints(f))
+        {
+            lo = glm::min(lo, mesh.position(p));
+            hi = glm::max(hi, mesh.position(p));
+        }
+    double size = faces.empty() ? 1.0 : glm::length(hi - lo);
     double quantum = std::max(1e-9, (std::isfinite(size) ? size : 1.0) * 1e-6);
     uint64_t h = 1469598103934665603ull;
     auto mix = [&](int64_t v) {

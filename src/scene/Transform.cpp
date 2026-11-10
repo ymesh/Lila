@@ -222,6 +222,10 @@ NodeType Transform::makeType()
         {.name = "linkId", .shortName = "lid", .type = PlugType::String, .defaultValue = std::string(),
          .flags = AttrInput | AttrStorable | AttrHidden | AttrUnique,
          .doc = "Identity Unreal placements are matched by, given on the first send. Saved with the scene; duplicates don't inherit it."},
+        {.name = "offsetParentMatrix", .shortName = "opm", .type = PlugType::Matrix, .defaultValue = glm::dmat4(1.0),
+         .flags = AttrInput | AttrStorable | AttrHidden,
+         .doc = "Maya's offset parent matrix: a frame between the parent and translate, rotate and scale, so parentMatrix is the "
+                "parent's world matrix times it."},
     };
     t.create = [] { return std::make_unique<Transform>(); };
     return t;

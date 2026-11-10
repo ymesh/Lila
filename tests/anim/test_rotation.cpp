@@ -346,3 +346,22 @@ TEST_CASE("eulerKeysFor writes the rotation curve's own keys where Euler curves 
         CHECK(angleBetween(poseOf(e, RotateOrder::XYZ), two.evaluateQuat(f)) < 0.011);
     }
 }
+
+TEST_CASE("setting rotationInterpolation converts the keyed rotate curves, and undo puts them back")
+{
+    run("newScene");
+    run("spaceLocator", {{"name", "A"}});
+    for (auto [t, ry] : {std::pair{0.0, 0.0}, {10.0, 90.0}, {20.0, 180.0}})
+    {
+        run("currentTime", {{"args", {t}}});
+        run("setAttr", {{"args", {"A.rotate", json::array({30.0, ry, 0.0})}}});
+        run("setKeyframe", {{"args", {"A.rotate"}}});
+    }
+    REQUIRE(run("nodeType", {{"args", {"A_rotateX"}}}) == "animCurveTA");
+    run("setAttr", {{"args", {"A.rotationInterpolation", 1}}});
+    CHECK(run("nodeType", {{"args", {"A_rotate"}}}) == "animCurveRQ");
+    CHECK(Graph::current().find("A")->as<int64_t>(Transform::kRotationInterpolation) == 1);
+    run("undo");
+    CHECK(run("nodeType", {{"args", {"A_rotateX"}}}) == "animCurveTA");
+    CHECK(Graph::current().find("A")->as<int64_t>(Transform::kRotationInterpolation) == 0);
+}

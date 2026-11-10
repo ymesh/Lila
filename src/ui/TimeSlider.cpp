@@ -14,6 +14,7 @@
 #include "ui/Deletion.h"
 #include "ui/Ghosting.h"
 #include "ui/Icons.h"
+#include "ui/Menus.h"
 #include "ui/SpinScrub.h"
 #include "ui/UiCommands.h"
 #include "ui/UiCommon.h"
@@ -238,6 +239,8 @@ protected:
             }
         }
 
+        drawSelection(p, first, last);
+
         int cur = frameOf(Graph::current().time());
         double cx = xOf(cur);
         double cw = std::max(3.0, ppf);
@@ -254,6 +257,19 @@ protected:
 
     void mousePressEvent(QMouseEvent* e) override
     {
+        // Shift + drag selects a range for edits across frames; a plain click drops it.
+        if (e->button() == Qt::LeftButton && e->modifiers().testFlag(Qt::ShiftModifier))
+        {
+            mSelecting = true;
+            mSelectFrom = frameAt(e->position().x());
+            selectTo(e->position().x());
+            return;
+        }
+        if (e->button() == Qt::LeftButton && anim::timeSelection().active)
+        {
+            anim::timeSelection().active = false;
+            anim::playbackChanged();
+        }
         // MMB moves the time but holds the pose, so a key set next copies it there (Maya's MMB drag).
         if (e->button() == Qt::LeftButton || e->button() == Qt::MiddleButton)
         {
@@ -267,11 +283,17 @@ protected:
 
     void mouseMoveEvent(QMouseEvent* e) override
     {
-        if (mScrubbing)
+        if (mSelecting)
+            selectTo(e->position().x());
+        else if (mScrubbing)
             scrubTo(e->position().x());
     }
 
-    void mouseReleaseEvent(QMouseEvent*) override { mScrubbing = false; }
+    void mouseReleaseEvent(QMouseEvent*) override
+    {
+        mScrubbing = false;
+        mSelecting = false;
+    }
 
 private:
     double pxPerFrame() const
@@ -281,6 +303,47 @@ private:
         return (width() - 2.0 * kMargin) / span;
     }
     double xOf(double frame) const { return kMargin + (frame - frameOf(anim::playback().minTime)) * pxPerFrame(); }
+
+    int frameAt(double x) const
+    {
+        const anim::Playback& pb = anim::playback();
+        const int fr = int(std::lround((x - kMargin) / pxPerFrame())) + frameOf(pb.minTime);
+        return std::clamp(fr, frameOf(pb.minTime), frameOf(pb.maxTime));
+    }
+
+    void selectTo(double x)
+    {
+        const int to = frameAt(x);
+        anim::TimeSelection& sel = anim::timeSelection();
+        sel.active = true;
+        sel.start = anim::secondsOf(std::min(mSelectFrom, to));
+        sel.end = anim::secondsOf(std::max(mSelectFrom, to));
+        anim::playbackChanged();
+        update();
+    }
+
+    /** The selected range as a light band over its frames, fading out across the falloff on each side. */
+    void drawSelection(QPainter& p, int first, int last)
+    {
+        const anim::TimeSelection& sel = anim::timeSelection();
+        if (!sel.active)
+            return;
+        const double from = anim::frameOf(sel.start), to = anim::frameOf(sel.end);
+        const int h = height();
+        const double ppf = pxPerFrame();
+        for (int fr = int(std::floor(from - sel.falloff)); fr <= int(std::ceil(to + sel.falloff)); ++fr)
+        {
+            if (fr < first || fr > last)
+                continue;
+            const double w = anim::timeSelectionWeight(sel, anim::secondsOf(fr));
+            if (w <= 0.0)
+                continue;
+            p.fillRect(QRectF(xOf(fr) - ppf / 2, 0, ppf, h), gray(230, int(70 * w)));
+        }
+        p.setPen(gray(230, 160));
+        p.drawLine(QPointF(xOf(from) - ppf / 2, 0), QPointF(xOf(from) - ppf / 2, h));
+        p.drawLine(QPointF(xOf(to) + ppf / 2, 0), QPointF(xOf(to) + ppf / 2, h));
+    }
 
     void scrubTo(double x)
     {
@@ -306,6 +369,28 @@ private:
         menu.addAction("Cut", [now] { runUi("cutKey", {{"time", now}}); });
         menu.addAction("Paste", [] { runUi("pasteKey"); });
         menu.addSeparator();
+        if (anim::timeSelection().active)
+        {
+            QMenu* falloff = menu.addMenu("Range Falloff");
+            for (int frames : {0, 2, 5, 10, 20})
+            {
+                QAction* item = falloff->addAction(frames ? QString("%1 frames").arg(frames) : QString("None"),
+                                                   [frames] { runUi("timeRange", {{"falloff", double(frames)}}); });
+                item->setCheckable(true);
+                item->setChecked(std::abs(anim::timeSelection().falloff - frames) < 1e-9);
+            }
+            menu.addAction("Clear Range", [] { runUi("timeRange", {{"clear", true}}); });
+            menu.addSeparator();
+            if (!menus::itemsIn(menus::kTimeSliderRange).empty())
+            {
+                for (const menus::Item* item : menus::itemsIn(menus::kTimeSliderRange))
+                    if (item->kind == menus::Kind::Separator)
+                        menu.addSeparator();
+                    else if (item->kind == menus::Kind::Action)
+                        menus::addActionRow(&menu, item->action);
+                menu.addSeparator();
+            }
+        }
         audio::fillMenu(menu.addMenu("Audio"));
         QMenu* speed = menu.addMenu("Playback Speed");
         for (anim::PlaybackSpeed s : anim::kPlaybackSpeeds)
@@ -326,6 +411,8 @@ private:
     bool mKeysValid = false;
     bool mScrubbing = false;
     bool mHoldPose = false;
+    bool mSelecting = false;
+    int mSelectFrom = 0;
     int mPrefListener = 0;
 
 public:

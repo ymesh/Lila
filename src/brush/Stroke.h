@@ -48,7 +48,7 @@ public:
     /** Starts a stroke; freehand strokes put their first dab at the press. radiusPx sets the spacing and jitter scale. */
     void begin(const BrushSettings& s, const StrokeInput& in, double radiusPx);
     void move(const StrokeInput& in);
-    /** Line strokes lay their dabs here, from the press to the last position. */
+    /** Line strokes lay their dabs here, from the press to the last position; curve strokes along their smoothed path. */
     void end();
     void cancel();
     /** The radius the spacing follows, e.g. a world radius seen at a new depth. */
@@ -64,6 +64,10 @@ public:
     glm::dvec2 cursor() const { return mCursor; }
     glm::dvec2 start() const { return mStart; }
     double spacingPx() const { return mStep; }
+    /** A curve stroke's path so far, as drawn, for its preview. */
+    const std::vector<glm::dvec2>& path() const { return mPath; }
+    /** A curve stroke's path as it will be laid down: smoothed and evenly spaced. */
+    std::vector<glm::dvec2> smoothedPath() const;
 
 private:
     void stepTo(glm::dvec2 target, double pressure);
@@ -86,6 +90,8 @@ private:
     double mDistance = 0.0;
     uint32_t mIndex = 0;
     std::vector<StrokeSample> mOut;
+    std::vector<glm::dvec2> mPath;
+    std::vector<double> mPathPressure;
 };
 
 /** What a surface query returns for a screen position, in the painted mesh's object space. */

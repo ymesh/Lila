@@ -63,6 +63,7 @@ lila_add_shaders(lila_render FILES
     shaders/rtbevel.slang
     shaders/rtshadow.slang
     shaders/points.slang
+    shaders/strands.slang
     shaders/points_cull.slang
     shaders/mesh.slang
     shaders/mesh_bindless.slang

@@ -156,7 +156,11 @@ void LevelToolkit::rebuild()
         auto* boxLayout = new QVBoxLayout(box);
         boxLayout->setContentsMargins(0, 0, 0, 4);
         boxLayout->setSpacing(4);
+        if (s->create && s->createFirst)
+            if (QWidget* extra = s->create(box))
+                boxLayout->addWidget(extra);
         std::vector<QToolButton*> tiles;
+        std::vector<std::pair<std::string, std::vector<QToolButton*>>> groups;
         std::vector<QToolButton*> pushes;
         std::vector<std::string> more;
         for (const levelToolkit::Item& item : s->items)
@@ -164,7 +168,16 @@ void LevelToolkit::rebuild()
             if (item.action.empty() || !actions::find(item.action))
                 continue;
             const QString label = QString::fromStdString(item.text);
-            if (!item.shelf.empty())
+            if (item.rare)
+                more.push_back(item.action);
+            else if (!item.group.empty())
+            {
+                auto g = std::ranges::find(groups, item.group, &std::pair<std::string, std::vector<QToolButton*>>::first);
+                if (g == groups.end())
+                    g = groups.insert(groups.end(), {item.group, {}});
+                g->second.push_back(tile(item.action, item.icon, label, box));
+            }
+            else if (!item.shelf.empty())
                 tiles.push_back(tile(item.action, item.icon, label, box));
             else if (pushes.size() < 6)
                 pushes.push_back(push(item.action, label, box));
@@ -173,9 +186,17 @@ void LevelToolkit::rebuild()
         }
         if (!tiles.empty())
             boxLayout->addWidget(levelGroup(tiles, {}, kToolkitColumns, box));
+        for (const auto& [title, buttons] : groups)
+        {
+            auto* heading = new QLabel(QString::fromStdString(title), box);
+            heading->setContentsMargins(2, 4, 0, 0);
+            controls::setRole(heading, "dim");
+            boxLayout->addWidget(heading);
+            boxLayout->addWidget(levelGroup(buttons, {}, kToolkitColumns, box));
+        }
         if (!pushes.empty() || !more.empty())
             boxLayout->addWidget(levelGroup(pushes, more, 2, box));
-        if (s->create)
+        if (s->create && !s->createFirst)
             if (QWidget* extra = s->create(box))
                 boxLayout->addWidget(extra);
         if (boxLayout->count() == 0)

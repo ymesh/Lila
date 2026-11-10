@@ -25,6 +25,7 @@ namespace
 {
 constexpr const char* kTwoBone = "ik2BoneSolver";
 constexpr const char* kFabrik = "ikFabrikSolver";
+constexpr const char* kSpline = "ikSplineSolver";
 
 glm::dvec3 translationOf(const glm::dmat4& m) { return glm::dvec3(m[3]); }
 
@@ -348,6 +349,93 @@ ik::Solution solveFabrik(const ik::Problem& p)
     return toLocal(p, limited(p) ? solveLimited(p, world) : world);
 }
 
+/** The point at arc length s along a polyline (cumulative lengths in cum), continuing straight past its ends. */
+glm::dvec3 alongPolyline(const std::vector<glm::dvec3>& pts, const std::vector<double>& cum, double s)
+{
+    if (pts.size() == 1)
+        return pts[0];
+    size_t k = size_t(std::upper_bound(cum.begin(), cum.end(), s) - cum.begin());
+    k = std::clamp<size_t>(k, 1, pts.size() - 1);
+    const double seg = cum[k] - cum[k - 1];
+    const double t = seg > 1e-12 ? (s - cum[k - 1]) / seg : 0.0;
+    return pts[k - 1] + (pts[k] - pts[k - 1]) * t;
+}
+
+/**
+ * Spline IK: the chain laid along a curve from the start joint, each joint where the curve is a bone's length (chord)
+ * from the one before, or with stretch every bone scaled so the chain spans the curve. Bones turn by the shortest arc
+ * from their rest direction, then roll about themselves by roll plus the twist spread from start to end.
+ */
+ik::Solution solveSpline(const ik::Problem& p)
+{
+    LILA_ZONE();
+
+    const size_t n = p.world.size();
+    if (p.curve.size() < 2)
+        return solveFabrik(p);
+    std::vector<double> cum(p.curve.size(), 0.0);
+    for (size_t i = 1; i < p.curve.size(); ++i)
+        cum[i] = cum[i - 1] + glm::length(p.curve[i] - p.curve[i - 1]);
+    std::vector<double> len(n - 1);
+    double chain = 0.0;
+    for (size_t i = 0; i + 1 < n; ++i)
+        chain += len[i] = glm::length(translationOf(p.world[i + 1]) - translationOf(p.world[i]));
+
+    std::vector<glm::dvec3> pos(n);
+    pos[0] = translationOf(p.world[0]);
+    if (p.fitCurve && chain > 1e-12)
+    {
+        double s = 0.0;
+        for (size_t i = 0; i + 1 < n; ++i)
+            pos[i + 1] = alongPolyline(p.curve, cum, s += len[i] * cum.back() / chain);
+    }
+    else
+    {
+        // March along the curve to where it leaves a sphere of the bone's length around the joint before.
+        double s = 0.0;
+        const double step = std::max(cum.back() / double(p.curve.size() * 4), 1e-6);
+        for (size_t i = 0; i + 1 < n; ++i)
+        {
+            double lo = s, hi = s;
+            while (glm::length(alongPolyline(p.curve, cum, hi) - pos[i]) < len[i] && hi - s < len[i] * 4.0 + cum.back())
+            {
+                lo = hi;
+                hi += step;
+            }
+            for (int it = 0; it < 60; ++it)
+            {
+                const double mid = 0.5 * (lo + hi);
+                (glm::length(alongPolyline(p.curve, cum, mid) - pos[i]) < len[i] ? lo : hi) = mid;
+            }
+            s = hi;
+            const glm::dvec3 d = alongPolyline(p.curve, cum, s) - pos[i];
+            pos[i + 1] = glm::length(d) > 1e-12 ? pos[i] + glm::normalize(d) * len[i] : pos[i];
+        }
+    }
+
+    std::vector<glm::dmat3> world = followPositions(p.world, pos);
+    for (size_t i = 0; i + 1 < n; ++i)
+    {
+        const glm::dvec3 bone = pos[i + 1] - pos[i];
+        const double share = n > 2 ? double(i) / double(n - 2) : 1.0;
+        const double angle = p.roll + p.twist * share;
+        if (std::abs(angle) > 1e-15 && glm::length(bone) > 1e-12)
+            world[i] = axisAngle(bone, angle) * world[i];
+    }
+    return toLocal(p, world);
+}
+
+AttrDef vec3Attr(std::string name, std::string shortName, glm::dvec3 def, uint32_t flags, std::string doc)
+{
+    AttrDef a{.name = name, .shortName = shortName, .type = PlugType::Vec3, .defaultValue = def, .flags = flags, .doc = std::move(doc)};
+    for (int i = 0; i < 3; ++i)
+    {
+        a.childNames[i] = name + char('X' + i);
+        a.childShort[i] = shortName.empty() ? "" : shortName + char('x' + i);
+    }
+    return a;
+}
+
 NodeType makeHandleType(const NodeType& base)
 {
     const uint32_t hiddenStored = AttrInput | AttrStorable | AttrHidden;
@@ -376,11 +464,15 @@ NodeType makeHandleType(const NodeType& base)
          .doc = "Soft IK, cm: over this much of the chain's reach the end eases toward full extension instead of snapping straight.",
          .minValue = 0.0},
         {.name = "stretch", .shortName = "str", .type = PlugType::Bool, .defaultValue = false, .flags = keyable,
-         .doc = "Lengthen the bones to reach a handle beyond the chain's length."},
+         .doc = "Lengthen the bones to reach a handle beyond the chain's length. ikSplineSolver: spread the joints over the whole curve."},
         {.name = "maxStretch", .shortName = "mxs", .type = PlugType::Float, .defaultValue = 1.5, .flags = keyable,
          .doc = "The longest the chain stretches, as a multiple of its length.", .minValue = 1.0},
         {.name = "stretchFactor", .shortName = "sfc", .type = PlugType::Float, .defaultValue = 1.0, .flags = AttrOutput | AttrHidden,
          .doc = "What the bones' lengths are multiplied by, blended by ikBlend; drives the joints' ikStretch."},
+        {.name = "inCurve", .shortName = "ic", .type = PlugType::Data, .defaultValue = DataPtr(), .flags = AttrInput | AttrHidden,
+         .doc = "ikSplineSolver: the curve the chain follows, as world points (a curveToPoints node's output)."},
+        {.name = "roll", .shortName = "rol", .type = PlugType::Float, .defaultValue = 0.0, .flags = keyable,
+         .doc = "ikSplineSolver: turn of the whole chain about its bones, degrees. poleAngle twists the end past the start."},
     };
     for (int i = 0; i < IkHandle::kMaxJoints; ++i)
     {
@@ -480,6 +572,10 @@ void IkHandle::compute(const EvalContext& ctx)
     if (glm::length(pv) > 1e-12)
         p.pole = translationOf(p.world[0]) + pv;
     p.twist = glm::radians(as<double>(kPoleAngle));
+    if (const auto* c = dynamic_cast<const ik::CurvePoints*>(as<DataPtr>(kInCurve).get()))
+        p.curve = c->points;
+    p.roll = glm::radians(as<double>(kRoll));
+    p.fitCurve = as<bool>(kStretch);
     p.tolerance = 1e-9;
     p.maxIterations = 256;
     p.softness = std::max(0.0, as<double>(kSoftness));
@@ -495,6 +591,9 @@ void IkHandle::compute(const EvalContext& ctx)
         solver = ik::findSolver(kFabrik);
     if (!solver)
         return;
+    // A spline chain stretches along its curve, not toward the handle.
+    if (solver->name == kSpline)
+        p.maxStretch = 1.0;
     const ik::Result result = ik::solve(*solver, p);
     const ik::Solution& sol = result.rotation;
     setOutput(kStretchFactor, 1.0 + (result.stretch - 1.0) * std::clamp(as<double>(kIkBlend), 0.0, 1.0));
@@ -914,6 +1013,11 @@ void registerIkTypes()
     if (!ik::findSolver(kTwoBone))
         ik::registerSolver({.name = kTwoBone, .doc = "Exact two-bone solve for limbs (three joints), bending toward the pole vector.",
                             .minJoints = 3, .maxJoints = 3, .solve = solveTwoBone});
+    if (!ik::findSolver(kSpline))
+        ik::registerSolver({.name = kSpline,
+                            .doc = "Lays the chain along the handle's inCurve, bones keeping their length (or stretched over the curve), rolled "
+                                   "by roll and twisted toward the end by poleAngle.",
+                            .minJoints = 2, .solve = solveSpline});
     if (!ik::findSolver(kFabrik))
         ik::registerSolver({.name = kFabrik, .doc = "Iterative FABRIK solve for chains of any length; the bend swings toward the pole vector.",
                             .minJoints = 2, .solve = solveFabrik});

@@ -7,6 +7,7 @@
 #include "core/Progress.h"
 #include "geo/Mesh.h"
 #include "geo/ObjIO.h"
+#include "geo/Ops.h"
 #include "geo/Primitives.h"
 #include "math/MathCore.h"
 #include "scene/AttrBuilders.h"
@@ -238,7 +239,16 @@ uint64_t stashPoints(std::vector<glm::dvec3> points)
 void MeshNode::compute(const EvalContext& ctx)
 {
     Transform::compute(ctx);
-    setOutput(kOutMesh, as<MeshPtr>(kInMesh));
+    const MeshPtr& in = as<MeshPtr>(kInMesh);
+    // A stack whose subdivision is off or gone hands on the spacing layers its first modifier added.
+    if (in && geo::hasFitSpacing(*in))
+    {
+        auto m = std::make_shared<geo::Mesh>(*in);
+        geo::removeFitSpacing(*m);
+        setOutput(kOutMesh, MeshPtr(std::move(m)));
+        return;
+    }
+    setOutput(kOutMesh, in);
 }
 
 NodeType MeshNode::makeType(const NodeType& base)

@@ -399,7 +399,12 @@ json finishRegion(Node& proxy, const json& info, bool keep, bool cancel, bool ke
     const std::string proxyPath = proxy.path();
     // The proxy's sculpt session closes first, so its last strokes are in the mesh.
     if (auto s = sculpt::active(); s && s->node == proxy.id() && ops::find("sculptExit"))
+    {
+        // The bake reads the proxy's grid, which is its level 0.
+        if (!cancel && s->level > 0)
+            ops::execute("sculptLevel", {{"level", 0}});
         ops::execute(cancel ? "sculptCancel" : "sculptExit", json::object());
+    }
     const Target t = findTarget(terrain, cmd);
     const int x0 = info.value("x0", 0), z0 = info.value("z0", 0), step = std::max(1, info.value("step", 1));
     const int nx = info.value("nx", 0), nz = info.value("nz", 0);
@@ -868,7 +873,7 @@ void registerLandformCommands(ext::Context& ctx)
         .name = "terrainSculptRegion",
         .doc = "Sculpt part of a terrain with the mesh sculpt brushes.\n\n"
                "Copies the patch around center= (size= cm square) to a mesh, <terrain>_region, hides the terrain and enters "
-               "sculpt mode on it (direct). Sculpt with any brush, then finish=True (or Exit Sculpt in the app) bakes it back: "
+               "sculpt mode on it. Sculpt with any brush, then finish=True (or Exit Sculpt in the app) bakes it back: "
                "the change in height goes into a patch stroke in the terrain's sculpt layer (stage final by default, so after "
                "erosion), faded at the patch rim, and the proxy is deleted. Where the sculpt folds under itself (an overhang a "
                "heightfield can't hold) the cells are listed in the result's overhangs, and the hollow under them is carved from "
@@ -955,7 +960,7 @@ void registerLandformCommands(ext::Context& ctx)
                 if (ops::find("sculptEnter"))
                 {
                     ops::execute("select", {{"args", {path}}});
-                    ops::execute("sculptEnter", {{"args", {path}}, {"mode", "direct"}});
+                    ops::execute("sculptEnter", {{"args", {path}}});
                     sculpting = true;
                 }
                 else

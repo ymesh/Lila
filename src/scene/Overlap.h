@@ -24,7 +24,8 @@ public:
     virtual ~Session() = default;
     /**
      * How far, cm, the convex hull of these points must move along out (unit) to clear the ground, both in the ground's
-     * own space; 0 when clear. The ground counts as solid below its surface.
+     * own space; 0 when clear. The ground counts as solid below its surface. The first clear pose counts: a hull still in
+     * the ground at twice its own extent along out (plus its distance under the surface) returns that limit.
      */
     virtual double depth(std::span<const glm::dvec3> hull, const glm::dvec3& out) = 0;
 };

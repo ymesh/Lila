@@ -3,6 +3,7 @@
 #include "core/PrefStore.h"
 #include "scene/ProxySet.h"
 #include "scene/Skin.h"
+#include "scene/SkinPaint.h"
 #include "ui/AnimProxyUi.h"
 #include "ui/Camera.h"
 #include "ui/SelectionHandlers.h"
@@ -102,21 +103,34 @@ TEST_CASE("a weight paint stroke paints the current influence as one undo step")
     CHECK(std::string(tool->name()) == "weightPaint");
 
     lila::ui::ViewInfo view = frontView();
+    const json weights = run("skinPercent", {{"args", {mesh}}});
     double before = total(mesh, "bone_c");
-    // Default brush: replace with 1. Stroke across the middle of the tube, where bone_c had little weight.
+    // Default brush: replace with 1. Across the middle of the tube three bones share each point, so Strict refuses it.
+    lila::PrefStore::get().set("general", skinpaint::kStrictPref, true);
     QPointF mid(200, 200);
     mouse(tool, QEvent::MouseButtonPress, mid, view);
     mouse(tool, QEvent::MouseMove, mid + QPointF(15, 0), view);
     mouse(tool, QEvent::MouseButtonRelease, mid + QPointF(15, 0), view);
+    CHECK(run("skinPercent", {{"args", {mesh}}}) == weights);
+
+    // Strict off: it paints and Lila's split is marked automatic.
+    run("acceptSkinWeights", {{"args", {mesh}}});
+    lila::PrefStore::get().set("general", skinpaint::kStrictPref, false);
+    mouse(tool, QEvent::MouseButtonPress, mid, view);
+    mouse(tool, QEvent::MouseMove, mid + QPointF(15, 0), view);
+    mouse(tool, QEvent::MouseButtonRelease, mid + QPointF(15, 0), view);
+    lila::PrefStore::get().set("general", skinpaint::kStrictPref, true);
     double after = total(mesh, "bone_c");
     CHECK(after > before + 1.0);
     CHECK(run("skinInfo", {{"args", {mesh}}})["unnormalized"] == 0);
+    CHECK(run("skinInfo", {{"args", {mesh}}})["automatic"].get<int>() > 0);
 
     lila::render::FrameState s;
     lila::ui::OverlayPainter painter(s.overlayTris, 1.0);
     tool->draw(s, painter, view);
     CHECK(!s.tris3d.empty());
     CHECK(!grayscale(s.tris3d));
+    CHECK(!s.points.empty());
 
     run("undo");
     CHECK(total(mesh, "bone_c") == doctest::Approx(before));
@@ -125,25 +139,55 @@ TEST_CASE("a weight paint stroke paints the current influence as one undo step")
     lila::ui::viewportTools::set(nullptr);
 }
 
-TEST_CASE("brush math keeps sums and locks")
+TEST_CASE("Ctrl+Alt+click picks the receiver, and Strict then paints where it refused")
 {
     std::string mesh = skinnedCylinder(20);
-    NodeId sk = skin::find(graph(), node(mesh).id());
-    WeightTable t = skin::table(graph(), sk);
-    auto infs = skin::influences(graph(), sk);
-    std::vector<char> locked(3, 0);
-    locked[size_t(skin::indexOf(infs, "bone_a"))] = 1;
-    uint32_t c = uint32_t(skin::indexOf(infs, "bone_c"));
-    for (size_t p = 0; p < t.points.size(); ++p)
-    {
-        float lockedBefore = t.get(p, uint32_t(skin::indexOf(infs, "bone_a")));
-        skin::paintPoint(t, p, c, skin::PaintMode::Add, false, 0.5f, 1.0f, locked, 4);
-        float sum = 0.0f;
-        for (auto& [i, w] : t.points[p])
-            sum += w;
-        CHECK(sum == doctest::Approx(1.0f).epsilon(1e-4));
-        CHECK(t.get(p, uint32_t(skin::indexOf(infs, "bone_a"))) == doctest::Approx(lockedBefore));
-    }
+    run("select", {{"args", {mesh, "bone_c"}}});
+    lila::PrefStore::get().set("general", skinpaint::kStrictPref, true);
+    lila::ui::startWeightPaint();
+    lila::ui::ViewportTool* tool = lila::ui::viewportTools::active();
+    REQUIRE(tool);
+    lila::ui::ViewInfo view = frontView();
+    const json weights = run("skinPercent", {{"args", {mesh}}});
+    QPointF mid(200, 200);
+    mouse(tool, QEvent::MouseButtonPress, mid, view);
+    mouse(tool, QEvent::MouseButtonRelease, mid, view);
+    CHECK(run("skinPercent", {{"args", {mesh}}}) == weights);
+
+    // On the surface, the heaviest other joint there (bone_b in the middle) becomes the receiver.
+    const auto mods = Qt::ControlModifier | Qt::AltModifier;
+    QMouseEvent press(QEvent::MouseButtonPress, mid, mid, Qt::LeftButton, Qt::LeftButton, mods);
+    CHECK(tool->mousePress(&press, view));
+    QMouseEvent release(QEvent::MouseButtonRelease, mid, mid, Qt::LeftButton, Qt::NoButton, mods);
+    tool->mouseRelease(&release, view);
+    mouse(tool, QEvent::MouseButtonPress, mid, view);
+    mouse(tool, QEvent::MouseButtonRelease, mid, view);
+    CHECK(run("skinPercent", {{"args", {mesh}}}) != weights);
+    CHECK(run("skinInfo", {{"args", {mesh}}})["unnormalized"] == 0);
+    lila::ui::viewportTools::set(nullptr);
+}
+
+TEST_CASE("relax and settle strokes keep weights normalized")
+{
+    std::string mesh = skinnedCylinder(20);
+    run("select", {{"args", {mesh, "bone_b"}}});
+    run("setAttr", {{"args", {"bone_b.rotate", v3(0, 0, 90)}}});
+    lila::ui::startWeightPaint();
+    lila::ui::ViewportTool* tool = lila::ui::viewportTools::active();
+    REQUIRE(tool);
+    lila::ui::ViewInfo view = frontView();
+    const json weights = run("skinPercent", {{"args", {mesh}}});
+    // Shift relaxes.
+    QPointF at(200, 200);
+    QMouseEvent press(QEvent::MouseButtonPress, at, at, Qt::LeftButton, Qt::LeftButton, Qt::ShiftModifier);
+    tool->mousePress(&press, view);
+    QMouseEvent move(QEvent::MouseMove, at + QPointF(10, 0), at + QPointF(10, 0), Qt::LeftButton, Qt::LeftButton, Qt::ShiftModifier);
+    tool->mouseMove(&move, view);
+    QMouseEvent release(QEvent::MouseButtonRelease, at + QPointF(10, 0), at + QPointF(10, 0), Qt::LeftButton, Qt::NoButton, Qt::ShiftModifier);
+    tool->mouseRelease(&release, view);
+    CHECK(run("skinPercent", {{"args", {mesh}}}) != weights);
+    CHECK(run("skinInfo", {{"args", {mesh}}})["unnormalized"] == 0);
+    lila::ui::viewportTools::set(nullptr);
 }
 
 TEST_CASE("the split mesh tool previews pieces at the joints and cuts on Enter")

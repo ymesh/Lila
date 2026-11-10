@@ -118,7 +118,10 @@ void registerMeshEditMeshOpsCommands()
         .doc = "Catmull-Clark subdivide whole meshes (crease-aware).",
         .positionalDoc = "objects",
         .flags = {{"levels", "", T::Int, 1, "Subdivision levels.", {}, {}, 1.0, 5.0},
-                  {"keepHardEdges", "", T::Bool, false, "Keep normals split along hard edges; off smooths the shading across them."}},
+                  {"keepHardEdges", "", T::Bool, false, "Keep normals split along hard edges; off smooths the shading across them."},
+                  {"uvs", "", T::String, "fitSurface", "Island interior uvs: fitSurface spreads them evenly over the smoothed surface; blend smooths them like the points.",
+                   {"fitSurface", "blend"}},
+                  {"uvCorners", "", T::String, "keep", "Island corner uvs: keep or smooth.", {"keep", "smooth"}}},
         .run = [](const Args& a) -> json {
             Graph& g = graph();
             UndoChunk chunk("Subdivide");
@@ -129,6 +132,8 @@ void registerMeshEditMeshOpsCommands()
                 geo::SubdivideOptions o;
                 o.levels = std::clamp(a.get<int>("levels"), 1, 5);
                 o.keepHardEdges = a.get<bool>("keepHardEdges", false);
+                o.uvs = a.get<std::string>("uvs", "fitSurface") == "blend" ? geo::SubdivideUvs::Blend : geo::SubdivideUvs::FitSurface;
+                o.uvCorners = a.get<std::string>("uvCorners", "keep") == "smooth" ? geo::SubdivideUvCorners::Smooth : geo::SubdivideUvCorners::Keep;
                 g.setValue(base, MeshPtr(std::make_shared<geo::Mesh>(geo::subdivide(baseMesh(base), o))));
             }
             components::clear();

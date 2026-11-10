@@ -49,6 +49,8 @@ std::optional<D3> snapToGeometry(QPointF px, const ViewInfo& view, unsigned snap
             geometrySnap::addCurve(nearest, g, id, snaps);
             continue;
         }
+        if (geometrySnap::addPointObject(nearest, g, id, snaps))
+            continue;
         if (!n->type().isA("mesh") || !scene::effectivelyVisible(g, id) || !isolate::shows(iso, id))
             continue;
         scene::MeshPtr m = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);

@@ -187,11 +187,17 @@ std::vector<ModifierType> modifierTypes()
         {"subdivisionModifier",
          "Smooths the mesh with Catmull-Clark subdivision. Use it to turn a low-poly cage into a smooth high-poly surface.",
          {param("levels", PlugType::Int, int64_t(1), "Subdivision levels, 0 to 4. Each level about quadruples the face count; 0 passes the mesh through.", 0.0, 4.0),
-          param("keepHardEdges", PlugType::Bool, false, "Keep normals split along hard edges; off smooths the shading across them.")},
+          param("keepHardEdges", PlugType::Bool, false, "Keep normals split along hard edges; off smooths the shading across them."),
+          param("uvs", PlugType::Enum, int64_t(1),
+                "How island interiors get their uvs. fitSurface spreads them evenly over the smoothed surface, so rounded "
+                "bevels never squash into slivers; blend smooths them like the points."),
+          param("uvCorners", PlugType::Enum, int64_t(0), "Island corner uvs: keep holds them where the cage has them; smooth rounds them off with the border.")},
          [](const geo::Mesh& in, const Node& n) {
              geo::SubdivideOptions o;
              o.levels = int(std::clamp<int64_t>(intOf(n, "levels"), 0, 4));
              o.keepHardEdges = flagOf(n, "keepHardEdges");
+             o.uvs = geo::SubdivideUvs(std::clamp<int64_t>(intOf(n, "uvs"), 0, 1));
+             o.uvCorners = geo::SubdivideUvCorners(std::clamp<int64_t>(intOf(n, "uvCorners"), 0, 1));
              return o.levels == 0 ? in : geo::subdivide(in, o);
          }},
         {"bevelModifier",
@@ -251,7 +257,7 @@ std::vector<ModifierType> modifierTypes()
          "bevelled hard-surface game meshes.",
          {param("mode", PlugType::Enum, int64_t(0), "What weighs a face: its area, its corner angle, or both."),
           param("dominance", PlugType::Float, 0.5, "Faces under this fraction of the heaviest face in a fan are left out; 0 keeps all.", 0.0, 1.0),
-          param("keepHardEdges", PlugType::Bool, true, "Keep normals split along hard edges instead of smoothing across them.")},
+          param("keepHardEdges", PlugType::Bool, false, "Keep normals split along the mesh's hard edges. Leave off on a mesh you bake a normal map onto.")},
          [](const geo::Mesh& in, const Node& n) {
              geo::Mesh m = in;
              geo::WeightedNormalOptions o;
@@ -316,7 +322,7 @@ void ModifierNode::compute(const EvalContext&)
     }
     try
     {
-        setOutput(outAttr, MeshPtr(std::make_shared<geo::Mesh>(apply(*in, *this))));
+        setOutput(outAttr, MeshPtr(std::make_shared<geo::Mesh>(apply(*modifiers::stackInput(*this, in), *this))));
     }
     catch (const std::exception& e)
     {
@@ -363,6 +369,45 @@ std::vector<NodeId> stack(Graph& g, NodeId mesh)
         plug = {up->id(), mod->inAttr, -1};
     }
     return out;
+}
+
+namespace
+{
+bool isSubdivision(const Node& n)
+{
+    return n.type().name == "subdivisionModifier";
+}
+} // namespace
+
+bool feedsSubdivision(const ModifierNode& mod)
+{
+    const Graph* g = mod.graph();
+    if (!g)
+        return false;
+    std::vector<PlugRef> todo = g->destinations({mod.id(), mod.outAttr, -1});
+    std::unordered_set<NodeId> seen;
+    while (!todo.empty())
+    {
+        const PlugRef p = todo.back();
+        todo.pop_back();
+        const ModifierNode* next = asModifier(g->node(p.node));
+        if (!next || p.attr != next->inAttr || !seen.insert(next->id()).second)
+            continue;
+        if (isSubdivision(*next))
+            return true;
+        for (const PlugRef& d : g->destinations({next->id(), next->outAttr, -1}))
+            todo.push_back(d);
+    }
+    return false;
+}
+
+MeshPtr stackInput(const ModifierNode& mod, const MeshPtr& in)
+{
+    if (!in || isSubdivision(mod) || geo::hasFitSpacing(*in) || !feedsSubdivision(mod))
+        return in;
+    auto m = std::make_shared<geo::Mesh>(*in);
+    geo::addFitSpacing(*m);
+    return m;
 }
 
 namespace
@@ -519,6 +564,16 @@ void registerTypes()
                 p.enumNames = {"+ to -", "- to +", "both"};
             if (std::string(m.name) == "weightedNormalsModifier" && p.name == "mode")
                 p.enumNames = {"area", "angle", "areaAngle"};
+            if (std::string(m.name) == "subdivisionModifier" && p.name == "uvs")
+            {
+                p.enumNames = {"blend", "fitSurface"};
+                p.niceName = "UVs";
+            }
+            if (std::string(m.name) == "subdivisionModifier" && p.name == "uvCorners")
+            {
+                p.enumNames = {"keep", "smooth"};
+                p.niceName = "UV Corners";
+            }
             if (std::string(m.name) == "decimateModifier" && p.name == "symmetry")
                 p.enumNames = {"off", "x", "y", "z"};
             if (std::string(m.name) == "arrayModifier")
@@ -603,6 +658,10 @@ void registerCommands()
                 g.connect({source->id(), MeshSourceNode::kOutMesh, -1}, {mod->id(), mn->inAttr, -1});
             }
             g.connect({mod->id(), mn->outAttr, -1}, top);
+            // The modifiers below rerun to carry the spacing layers their first one adds for a subdivision.
+            if (isSubdivision(*mod))
+                for (NodeId id : stack(g, mesh.id()))
+                    g.touch(id);
             if (a.has("params"))
                 for (auto& [k, val] : a.flags["params"].items())
                 {

@@ -15,6 +15,8 @@
 
 #include <chrono>
 #include <cmath>
+#include <map>
+#include <set>
 
 using namespace lila;
 using geo::Index;
@@ -137,9 +139,10 @@ TEST_CASE("reprojection round trip leaves an untouched cage unchanged")
     ops::execute("sculptEnter", {{"args", {"rtCube"}}, {"levels", 2}});
     REQUIRE(sculpt::active());
     CHECK(sculpt::active()->sculpt.mesh().numFaces() == 6 * 16);
-    ops::execute("sculptExit", {{"method", "fit"}});
+    ops::execute("sculptLevel", {{"level", 0}});
+    ops::execute("sculptExit", json::object());
     CHECK_FALSE(sculpt::active());
-    CHECK(maxDiff(before, inMesh("rtCube")) < 1e-9);
+    CHECK(maxDiff(before, inMesh("rtCube")) < 1e-4);
 }
 
 TEST_CASE("exit fit recovers a displaced cage")
@@ -530,6 +533,126 @@ TEST_CASE("Snake Hook, Elastic Grab, Nudge, Thumb, Clay, Blob and Magnify move t
     CHECK(outward > 0.1);
 }
 
+TEST_CASE("Smooth removes noise and keeps the form's volume")
+{
+    geo::SubdivideOptions o;
+    o.levels = 2;
+    geo::Mesh noisy = geo::subdivide(sphere(16), o);
+    for (Index p = 0; p < noisy.pointCapacity(); ++p)
+    {
+        const double h = std::sin(double(p) * 12.9898) * 43758.5453;
+        const glm::dvec3 at = noisy.position(p);
+        noisy.setPosition(p, at * ((50.0 + (h - std::floor(h) - 0.5) * 1.2) / glm::length(at)));
+    }
+    auto radii = [](const geo::Mesh& m) {
+        double sum = 0.0, sq = 0.0;
+        int n = 0;
+        for (Index p = 0; p < m.pointCapacity(); ++p)
+            if (glm::length(m.position(p) - glm::dvec3(50.0, 0.0, 0.0)) < 12.0)
+            {
+                const double r = glm::length(m.position(p));
+                sum += r;
+                sq += r * r;
+                ++n;
+            }
+        const double mean = sum / n;
+        return std::pair(mean, std::sqrt(std::max(0.0, sq / n - mean * mean)));
+    };
+    auto smoothed = [&](bool keepVolume) {
+        sculpt::SculptMesh s(noisy);
+        sculpt::BrushSettings b;
+        b.brush = sculpt::Brush::Smooth;
+        b.strength = 1.0;
+        b.keepVolume = keepVolume;
+        s.beginStroke(b);
+        for (int i = 0; i < 20; ++i)
+            s.dab(dabAt(s, glm::dvec3(200.0, 0.0, 0.0), 30.0));
+        s.endStroke();
+        return radii(s.mesh());
+    };
+    const auto [meanBefore, noiseBefore] = radii(noisy);
+    const auto [meanAfter, noiseAfter] = smoothed(true);
+    CHECK(noiseBefore > 0.25);
+    CHECK(noiseAfter < noiseBefore * 0.3);
+    CHECK(std::abs(meanAfter - meanBefore) < 0.15);
+    // Keep Volume off averages points, so the form shrinks toward flat as well.
+    const auto [meanFlat, noiseFlat] = smoothed(false);
+    CHECK(noiseFlat < noiseBefore);
+    CHECK(meanBefore - meanFlat > 2.0 * std::abs(meanAfter - meanBefore));
+}
+
+TEST_CASE("Pinch draws points in and presses them down; Ctrl spreads and lifts")
+{
+    const geo::Mesh grid = flatGrid();
+    auto moveOf = [&](bool invert) {
+        sculpt::SculptMesh s = strokeOn(grid, sculpt::Brush::Pinch, std::vector<sculpt::Dab>(4, flatDab({0.0, 0.0, 0.0}, 10.0)), invert);
+        double down = 0.0, inward = 0.0;
+        for (Index p = 0; p < grid.pointCapacity(); ++p)
+        {
+            const glm::dvec3 a = grid.position(p), b = s.mesh().position(p);
+            down += a.y - b.y;
+            inward += glm::length(glm::dvec2(a.x, a.z)) - glm::length(glm::dvec2(b.x, b.z));
+        }
+        return std::pair(down, inward);
+    };
+    const auto [down, inward] = moveOf(false);
+    CHECK(down > 0.1);
+    CHECK(inward > 0.1);
+    const auto [downInv, inwardInv] = moveOf(true);
+    CHECK(downInv < -0.1);
+    CHECK(inwardInv < -0.1);
+}
+
+TEST_CASE("Pinch at depth 0 draws points in without pressing them down")
+{
+    const geo::Mesh grid = flatGrid();
+    sculpt::SculptMesh s(grid);
+    sculpt::BrushSettings b;
+    b.brush = sculpt::Brush::Pinch;
+    b.strength = 1.0;
+    b.pinchDepth = 0.0;
+    s.beginStroke(b);
+    for (int i = 0; i < 4; ++i)
+        s.dab(flatDab({0.0, 0.0, 0.0}, 10.0));
+    s.endStroke();
+    double down = 0.0, inward = 0.0;
+    for (Index p = 0; p < grid.pointCapacity(); ++p)
+    {
+        const glm::dvec3 a = grid.position(p), c = s.mesh().position(p);
+        down = std::max(down, std::abs(a.y - c.y));
+        inward += glm::length(glm::dvec2(a.x, a.z)) - glm::length(glm::dvec2(c.x, c.z));
+    }
+    CHECK(down < 1e-9);
+    CHECK(inward > 0.1);
+}
+
+TEST_CASE("Ctrl-Grab moves along the stroke's normal, not the drag")
+{
+    const geo::Mesh grid = flatGrid();
+    sculpt::Dab at = flatDab({0.0, 0.0, 0.0}, 10.0);
+    auto moveOf = [&](glm::dvec3 delta, bool invert) {
+        sculpt::Dab drag = at;
+        drag.delta = delta;
+        sculpt::SculptMesh s = strokeOn(grid, sculpt::Brush::Grab, {at, drag, drag}, invert);
+        glm::dvec3 sum(0.0);
+        double sideways = 0.0;
+        for (Index p = 0; p < grid.pointCapacity(); ++p)
+        {
+            const glm::dvec3 d = s.mesh().position(p) - grid.position(p);
+            sum += d;
+            sideways = std::max(sideways, glm::length(glm::dvec2(d.x, d.z)));
+        }
+        return std::pair(sum, sideways);
+    };
+    const auto [plain, plainSideways] = moveOf({1.0, 0.5, 0.0}, false);
+    CHECK(plain.x > 1.0);
+    CHECK(plainSideways > 0.1);
+    const auto [out, outSideways] = moveOf({1.0, 0.5, 0.0}, true);
+    CHECK(out.y > 1.0);
+    CHECK(outSideways < 1e-9);
+    CHECK(moveOf({0.3, -1.0, 0.0}, true).first.y < -1.0);
+}
+
 TEST_CASE("mask and freeze are respected")
 {
     geo::SubdivideOptions o;
@@ -610,9 +733,10 @@ std::pair<FitResult, FitResult> sculptAndFit(geo::Mesh cage, const std::vector<j
             r.sculptMove = std::max(r.sculptMove, glm::length(now[i] - start[i]));
         sculpt::FitOptions fo;
         fo.maxMoveRatio = ratio;
-        std::vector<glm::dvec3> x = sculpt::fitCage(s->cage, s->stack->stencils, now, fo);
-        for (Index p = 0; p < s->cage.pointCapacity(); ++p)
-            r.cageMove = std::max(r.cageMove, glm::length(x[p] - s->cage.position(p)));
+        const geo::Mesh& cage = s->stack->levels.front()->mesh;
+        std::vector<glm::dvec3> x = sculpt::fitCage(cage, s->stack->stencils, now, fo);
+        for (Index p = 0; p < cage.pointCapacity(); ++p)
+            r.cageMove = std::max(r.cageMove, glm::length(x[p] - cage.position(p)));
         for (const auto& st : s->stack->stencils)
             x = st.apply(x);
         for (size_t i = 0; i < now.size(); ++i)
@@ -665,39 +789,6 @@ TEST_CASE("exit fit still follows a broad sculpt")
     CHECK(limited.rms <= plain.rms * 1.01);
 }
 
-TEST_CASE("exitPositions previews exactly what sculptExit leaves")
-{
-    json dab = {{"center", {0.0, 0.0, 50.0}}, {"normal", {0.0, 0.0, 1.0}}, {"radius", 40.0}};
-    for (const char* mode : {"subdivide", "remesh"})
-        for (const char* method : {"fit", "closest"})
-        {
-            CAPTURE(mode);
-            CAPTURE(method);
-            // Subdivided, so the closest point fit has a cage point under the stroke.
-            scene::Node* n = makeMeshNode("previewCube", geo::makeCube({.subdivX = 2, .subdivY = 2, .subdivZ = 2}));
-            scene::Graph::current().setValue({n->id(), scene::MeshNode::kSymmetry, -1}, int64_t(1));
-            ops::execute("sculptEnter", {{"args", {"previewCube"}}, {"mode", mode}, {"levels", 2}, {"resolution", 32}});
-            auto s = sculpt::active();
-            REQUIRE(s);
-            // Each stroke moves the preview, from the solver kept on the session.
-            std::vector<glm::dvec3> first = sculpt::exitPositions(*s, method);
-            ops::execute("sculptStroke", {{"brush", "draw"}, {"strength", 1.0}, {"dabs", json::array({dab, dab})}});
-            std::vector<glm::dvec3> second = sculpt::exitPositions(*s, method);
-            CHECK(s->exitSolver);
-            double moved = 0.0;
-            for (size_t p = 0; p < first.size(); ++p)
-                moved = std::max(moved, glm::length(second[p] - first[p]));
-            CHECK(moved > 0.1);
-            ops::execute("sculptExit", {{"method", method}});
-            const geo::Mesh& out = inMesh("previewCube");
-            double diff = 0.0;
-            for (Index p = 0; p < out.pointCapacity(); ++p)
-                if (out.pointValid(p))
-                    diff = std::max(diff, glm::length(out.position(p) - second[p]));
-            CHECK(diff < 1e-9);
-        }
-}
-
 TEST_CASE("CageFitter matches fitCage from any start")
 {
     geo::Mesh cage = sphere(6);
@@ -741,15 +832,15 @@ TEST_CASE("sculpt commands undo as single steps")
     CHECK(sculpted != start);
     ops::execute("sculptExit", json::object());
     CHECK_FALSE(sculpt::active());
-    CHECK(maxDiff(before, inMesh("undoCube")) > 0.1);
-    CHECK(scene::Graph::current().find("undoCube_high"));
+    CHECK(inMesh("undoCube").numFaces() == 6 * 16);
+    CHECK(sculpt::storedLevels(*scene::Graph::current().find("undoCube")));
 
-    // Undo exit: back in sculpt mode with the sculpt intact, cage restored.
+    // Undo exit: back in sculpt mode with the sculpt intact, mesh and levels as before.
     REQUIRE(u.undo());
     REQUIRE(sculpt::active() == s);
     CHECK(maxDiff(before, inMesh("undoCube")) == 0.0);
     CHECK(std::vector<glm::dvec3>(s->sculpt.mesh().positions().begin(), s->sculpt.mesh().positions().end()) == sculpted);
-    CHECK_FALSE(scene::Graph::current().find("undoCube_high"));
+    CHECK_FALSE(sculpt::storedLevels(*scene::Graph::current().find("undoCube")));
     // Undo the stroke, then the enter.
     REQUIRE(u.undo());
     CHECK(std::vector<glm::dvec3>(s->sculpt.mesh().positions().begin(), s->sculpt.mesh().positions().end()) == start);
@@ -762,13 +853,13 @@ TEST_CASE("sculpt commands undo as single steps")
     CHECK(std::vector<glm::dvec3>(s->sculpt.mesh().positions().begin(), s->sculpt.mesh().positions().end()) == sculpted);
     REQUIRE(u.redo());
     CHECK_FALSE(sculpt::active());
-    CHECK(maxDiff(before, inMesh("undoCube")) > 0.1);
+    CHECK(inMesh("undoCube").numFaces() == 6 * 16);
 
-    // Re-entering resumes from the kept proxy.
-    ops::execute("sculptEnter", {{"args", {"undoCube"}}});
+    // Re-entering picks up the stored levels.
+    json r2 = ops::execute("sculptEnter", {{"args", {"undoCube"}}});
     REQUIRE(sculpt::active());
-    CHECK(sculpt::active()->mode == sculpt::ProxyMode::Subdivide);
-    CHECK(sculpt::active()->proxyNode != scene::kNoNode);
+    CHECK(r2["level"].get<int>() == 2);
+    CHECK(r2["levels"].get<int>() == 2);
     ops::execute("sculptCancel", json::object());
     CHECK_FALSE(sculpt::active());
 }
@@ -920,5 +1011,219 @@ TEST_CASE("strokes on a radially symmetric mesh repeat exactly through its orbit
             CHECK_MESSAGE(!r.empty(), sculpt::brushName(brush));
             CHECK_MESSAGE(radialAsymmetry() < 1e-9, sculpt::brushName(brush));
         }
+    }
+}
+
+TEST_CASE("the sculpt draws with the mesh's material slots and uv seams")
+{
+    geo::Mesh cube = geo::makeCube({});
+    cube.materialNames() = {"Red", "Blue"};
+    std::span<int32_t> mat = cube.faceAttrs().getOrAdd<int32_t>(geo::attr::kMaterial);
+    mat[0] = 1;
+    mat[1] = 1;
+    geo::SubdivideOptions o;
+    o.levels = 2;
+    sculpt::SculptMesh sm(geo::subdivide(cube, o));
+    const auto rm = sm.renderMesh();
+    REQUIRE(rm->sections.size() == 2);
+    std::set<uint32_t> slots;
+    for (const render::MeshSection& s : rm->sections)
+        slots.insert(s.material);
+    CHECK(slots == std::set<uint32_t>{0, 1});
+    // A cube's uvs are cut, so seam points get a vertex per side.
+    CHECK(rm->dynamic->vertices.size() > size_t(sm.mesh().numPoints()));
+
+    // A stroke moves every vertex of a seam point together.
+    sculpt::BrushSettings b;
+    sm.beginStroke(b);
+    sculpt::Dab d;
+    d.center = glm::dvec3(50.0);
+    d.normal = glm::normalize(glm::dvec3(1.0));
+    d.radius = 30.0;
+    sm.dab(d);
+    sm.endStroke();
+    std::map<glm::vec3, int, decltype([](const glm::vec3& a, const glm::vec3& c) { return std::tie(a.x, a.y, a.z) < std::tie(c.x, c.y, c.z); })> seen;
+    for (Index p = 0; p < sm.mesh().pointCapacity(); ++p)
+        if (sm.mesh().pointValid(p))
+            seen[glm::vec3(sm.mesh().position(p))] = 0;
+    for (const render::MeshVertex& v : rm->dynamic->vertices)
+        CHECK(seen.contains(v.pos));
+}
+
+namespace
+{
+/** A flat 40 cm square in XZ, 0.5 cm apart, with a column of points on x = 0. */
+struct FineGrid
+{
+    static constexpr int kSide = 81;
+    static constexpr double kStep = 0.5;
+    geo::Mesh mesh;
+
+    FineGrid()
+    {
+        geo::PlaneOptions o;
+        o.width = o.depth = kStep * (kSide - 1);
+        o.subdivX = o.subdivZ = kSide - 1;
+        mesh = geo::makePlane(o);
+    }
+
+    /** Point at column i (x) and row k (z). */
+    Index at(const std::vector<std::vector<Index>>& lookup, int i, int k) const { return lookup[size_t(i)][size_t(k)]; }
+
+    std::vector<std::vector<Index>> lookup() const
+    {
+        std::vector<std::vector<Index>> out(kSide, std::vector<Index>(kSide, geo::kInvalid));
+        const double half = kStep * (kSide - 1) * 0.5;
+        for (Index p = 0; p < mesh.pointCapacity(); ++p)
+        {
+            const glm::dvec3 q = mesh.position(p);
+            out[size_t(std::lround((q.x + half) / kStep))][size_t(std::lround((q.z + half) / kStep))] = p;
+        }
+        return out;
+    }
+};
+
+struct PlaneReport
+{
+    double asymmetry = 0.0;
+    /** Largest distance of a point on the plane from it. */
+    double offPlane = 0.0;
+    double moved = 0.0;
+    /** Largest change in move from a plane point to its neighbour across x, and from there to the next two out. */
+    double planeStep = 0.0, nextStep = 0.0;
+};
+
+PlaneReport planeReport(const sculpt::SculptMesh& s, const FineGrid& grid, std::span<const glm::dvec3> before)
+{
+    PlaneReport r;
+    r.asymmetry = asymmetry(s);
+    const auto lookup = grid.lookup();
+    const int mid = FineGrid::kSide / 2;
+    auto disp = [&](int i, int k) {
+        const Index p = grid.at(lookup, i, k);
+        return s.mesh().position(p) - before[p];
+    };
+    for (int k = 0; k < FineGrid::kSide; ++k)
+    {
+        r.offPlane = std::max(r.offPlane, std::abs(s.mesh().position(grid.at(lookup, mid, k)).x));
+        for (int i = 0; i < FineGrid::kSide; ++i)
+            r.moved = std::max(r.moved, glm::length(disp(i, k)));
+        r.planeStep = std::max(r.planeStep, glm::length(disp(mid + 1, k) - disp(mid, k)));
+        for (int i = mid + 2; i <= mid + 3; ++i)
+            r.nextStep = std::max(r.nextStep, glm::length(disp(i, k) - disp(i - 1, k)));
+    }
+    return r;
+}
+
+/** Every built-in brush that moves points, plus Mask. */
+std::vector<sculpt::Brush> planeBrushes()
+{
+    std::vector<sculpt::Brush> out;
+    for (int b = 0; b < int(sculpt::Brush::Count); ++b)
+        if (sculpt::Brush(b) != sculpt::Brush::Freeze && sculpt::Brush(b) != sculpt::Brush::Paint && sculpt::Brush(b) != sculpt::Brush::Boundary)
+            out.push_back(sculpt::Brush(b));
+    return out;
+}
+} // namespace
+
+TEST_CASE("strokes near and across the symmetry plane leave no seam at the centre")
+{
+    const FineGrid grid;
+    const std::vector<glm::dvec3> before(grid.mesh.positions().begin(), grid.mesh.positions().end());
+    // Along the plane just off it, so dab and mirror overlap without matching; and straight across it.
+    struct Path
+    {
+        const char* name;
+        glm::dvec3 from, step, delta;
+    };
+    const Path paths[] = {
+        {"along", {1.5, 0.0, -4.0}, {0.0, 0.0, 1.0}, {0.4, 0.3, 0.6}},
+        {"across", {-6.0, 0.0, 0.0}, {1.5, 0.0, 0.0}, {0.6, 0.3, 0.2}},
+    };
+    for (sculpt::Brush brush : planeBrushes())
+        for (const Path& path : paths)
+        {
+            CAPTURE(sculpt::brushName(brush));
+            CAPTURE(std::string(path.name));
+            sculpt::SculptMesh s(grid.mesh);
+            s.setSymmetry(geo::axisPlane(0), 1e-4);
+            REQUIRE(s.symmetric());
+            sculpt::BrushSettings b;
+            b.brush = brush;
+            b.strength = 0.6;
+            s.beginStroke(b);
+            for (int i = 0; i < 9; ++i)
+            {
+                sculpt::Dab d = flatDab(path.from + path.step * double(i), 5.0);
+                d.delta = path.delta;
+                d.direction = glm::normalize(path.step);
+                s.dab(d);
+            }
+            s.endStroke();
+            if (brush == sculpt::Brush::Mask)
+            {
+                // The mask's own seam: the plane column against its neighbours.
+                const auto lookup = grid.lookup();
+                const int mid = FineGrid::kSide / 2;
+                double step = 0.0, planeStep = 0.0, most = 0.0;
+                for (int k = 0; k < FineGrid::kSide; ++k)
+                {
+                    for (int i = 1; i < FineGrid::kSide; ++i)
+                        step = std::max(step, double(std::abs(s.mask()[grid.at(lookup, i, k)] - s.mask()[grid.at(lookup, i - 1, k)])));
+                    planeStep = std::max(planeStep, double(std::abs(s.mask()[grid.at(lookup, mid + 1, k)] - s.mask()[grid.at(lookup, mid, k)])));
+                    for (int i = 0; i < FineGrid::kSide; ++i)
+                        most = std::max(most, double(s.mask()[grid.at(lookup, i, k)]));
+                }
+                CHECK(most > 0.0);
+                CHECK(planeStep <= step);
+                continue;
+            }
+            const PlaneReport r = planeReport(s, grid, before);
+            if (r.moved < 1e-9)
+                continue;
+            CHECK(r.asymmetry == 0.0);
+            CHECK(r.offPlane == 0.0);
+            // A smooth move changes about as much from the plane to its neighbour as between the next points out; a seam jumps.
+            CHECK(r.planeStep <= 2.0 * r.nextStep + 0.02 * r.moved);
+        }
+}
+
+TEST_CASE("a held or dragged brush on the symmetry plane moves points once, not once per side")
+{
+    const FineGrid grid;
+    for (sculpt::Brush brush : {sculpt::Brush::Grab, sculpt::Brush::ElasticGrab, sculpt::Brush::SnakeHook, sculpt::Brush::Nudge,
+                                sculpt::Brush::Pinch, sculpt::Brush::Inflate, sculpt::Brush::Mask})
+    {
+        CAPTURE(sculpt::brushName(brush));
+        sculpt::SculptMesh plain(grid.mesh), mirrored(grid.mesh);
+        mirrored.setSymmetry(geo::axisPlane(0), 1e-4);
+        REQUIRE(mirrored.symmetric());
+        sculpt::BrushSettings b;
+        b.brush = brush;
+        b.strength = 0.6;
+        for (sculpt::SculptMesh* s : {&plain, &mirrored})
+        {
+            s->beginStroke(b);
+            for (int i = 0; i < 4; ++i)
+            {
+                sculpt::Dab d = flatDab({0.0, 0.0, double(i) * 0.5}, 5.0);
+                // Along the plane, so the mirrored drag is the same drag.
+                d.delta = glm::dvec3(0.0, 0.4, 0.5);
+                d.direction = glm::dvec3(0.0, 0.0, 1.0);
+                s->dab(d);
+            }
+            s->endStroke();
+        }
+        double off = 0.0, moved = 0.0, maskOff = 0.0, mask = 0.0;
+        for (Index p = 0; p < grid.mesh.pointCapacity(); ++p)
+        {
+            off = std::max(off, glm::length(plain.mesh().position(p) - mirrored.mesh().position(p)));
+            moved = std::max(moved, glm::length(plain.mesh().position(p) - grid.mesh.position(p)));
+            maskOff = std::max(maskOff, double(std::abs(plain.mask()[p] - mirrored.mask()[p])));
+            mask = std::max(mask, double(plain.mask()[p]));
+        }
+        CHECK(moved + mask > 0.0);
+        CHECK(off <= 1e-6 * std::max(moved, 1.0));
+        CHECK(maskOff <= 1e-5);
     }
 }

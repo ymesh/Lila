@@ -78,10 +78,23 @@ bool keywordMatch(const QAction* a, const QString& query)
     return !query.isEmpty() && keywordMatch(keywordsOf(a), query);
 }
 
+/** Hides or shows a row. QMenu leaves a hidden widget row's widget where it was, drawn over the rows still shown. */
+void setRowVisible(QAction* a, bool on)
+{
+    a->setVisible(on);
+    if (auto* wa = qobject_cast<QWidgetAction*>(a); wa && wa->defaultWidget())
+        wa->defaultWidget()->setVisible(on);
+}
+
 bool matches(const QAction* a, const QString& text, int depth = 0)
 {
     if (plain(a).contains(text, Qt::CaseInsensitive) || keywordMatch(a, text))
         return true;
+    // A widget row has no text of its own; its labels name it.
+    if (auto* wa = qobject_cast<const QWidgetAction*>(a); wa && wa->defaultWidget())
+        for (const QLabel* l : wa->defaultWidget()->findChildren<QLabel*>())
+            if (l->text().contains(text, Qt::CaseInsensitive))
+                return true;
     if (QMenu* sub = a->menu(); sub && depth < 8)
         for (const QAction* c : sub->actions())
             if (c->isVisible() && !c->isSeparator() && matches(c, text, depth + 1))
@@ -165,7 +178,7 @@ private:
     {
         for (QAction* a : f.hidden)
             if (a)
-                a->setVisible(true);
+                setRowVisible(a, true);
         f.hidden.clear();
         if (f.header)
         {
@@ -224,14 +237,14 @@ private:
             {
                 if (!hiddenByUs)
                 {
-                    a->setVisible(false);
+                    setRowVisible(a, false);
                     f.hidden.emplace_back(a);
                 }
                 continue;
             }
             if (hiddenByUs)
             {
-                a->setVisible(true);
+                setRowVisible(a, true);
                 std::erase(f.hidden, QPointer<QAction>(a));
             }
             // Highlighting a submenu row would pop it open, so Enter goes to the first plain row.
@@ -269,7 +282,12 @@ void collect(QMenu* menu, const QString& path, std::vector<Item>& out, int depth
         if (QMenu* sub = a->menu())
             collect(sub, path + " > " + label, out, depth + 1);
         else
+        {
+            // The rows a menu picks between (layouts) say what they are, so "Groom" the layout reads apart from the panel.
+            if (a->isCheckable())
+                label += menu->property(kSearchSuffixProperty).toString();
             out.push_back({a, label, path});
+        }
     }
 }
 

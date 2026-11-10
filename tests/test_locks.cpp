@@ -259,3 +259,32 @@ TEST_CASE("move, rotate and scale take one axis with x=, y=, z=")
     for (const json& p : pts)
         CHECK(p[1].get<double>() == doctest::Approx(6.0));
 }
+
+TEST_CASE("gimbalFrame: turning about each gimbal axis changes only that channel, and Y at 90 lines X up with Z")
+{
+    run("newScene");
+    run("spaceLocator", {{"name", "A"}});
+    Graph& g = Graph::current();
+    NodeId a = g.find("A")->id();
+    for (int order : {0, 4})
+    {
+        run("setAttr", {{"args", {"A.rotateOrder", order}}});
+        run("rotate", {{"args", {"A"}}, {"to", {10, 20, 30}}});
+        const glm::dmat3 frame = xformops::gimbalFrame(g, a);
+        for (int i = 0; i < 3; ++i)
+        {
+            glm::dvec3 after = xformops::rotatedEuler(g, a, glm::angleAxis(glm::radians(5.0), frame[i]));
+            glm::dvec3 want(10, 20, 30);
+            want[i] += 5.0;
+            for (int c = 0; c < 3; ++c)
+                CHECK(after[c] == doctest::Approx(want[c]));
+        }
+    }
+    run("setAttr", {{"args", {"A.rotateOrder", 0}}});
+    run("rotate", {{"args", {"A"}}, {"to", {0, 90, 0}}});
+    const glm::dmat3 locked = xformops::gimbalFrame(g, a);
+    CHECK(std::abs(glm::dot(locked[0], locked[2])) == doctest::Approx(1.0));
+
+    run("rotate", {{"args", {"A"}}, {"by", {15, 0, 0}}, {"space", "gimbal"}});
+    CHECK(vec(run("getAttr", {{"args", {"A.rotate"}}})) == glm::dvec3(15, 90, 0));
+}

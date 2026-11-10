@@ -169,7 +169,7 @@ std::vector<std::string> panels::shownToolPalettes(QWidget* window)
     std::vector<std::string> out;
     for (const Panel* p : registry().allInOrder())
         if (p->toolPalette)
-            if (auto* d = window->findChild<QDockWidget*>(QString::fromStdString(p->id)); d && d->isVisible())
+            if (auto* d = window->findChild<QDockWidget*>(QString::fromStdString(p->id)); d && d->isVisible() && d->isFloating())
                 out.push_back(p->id);
     return out;
 }
@@ -178,7 +178,7 @@ void panels::hideToolPalettes(QWidget* window, const std::vector<std::string>& k
 {
     for (const Panel* p : registry().allInOrder())
         if (p->toolPalette)
-            if (auto* d = window->findChild<QDockWidget*>(QString::fromStdString(p->id)))
+            if (auto* d = window->findChild<QDockWidget*>(QString::fromStdString(p->id)); d && d->isFloating())
                 d->setVisible(std::ranges::find(keep, p->id) != keep.end());
 }
 

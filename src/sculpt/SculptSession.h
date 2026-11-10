@@ -11,78 +11,84 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <string>
 #include <vector>
 
 /**
- * Sculpt mode on a scene mesh. Entering builds a temporary high-resolution copy of the mesh's cage to sculpt on
- * (subdivision levels, a voxel remesh, or the cage itself for direct sculpting); strokes edit it; exiting moves the cage
- * so its subdivision fits the sculpt. The copy lives outside the scene, so it is never saved, unless exiting keeps it as
- * the hidden child mesh "<mesh>_high" that baking pairs with the mesh and the next Enter Sculpt resumes from.
+ * Sculpt mode on a scene mesh: strokes edit the mesh itself, at any of its subdivision levels. Level 0 is the mesh's cage;
+ * each level above is a Catmull-Clark subdivision of the one below carrying its own detail. Exiting leaves the mesh at the
+ * level being sculpted and stores every level on the mesh (hidden attrs, saved with the scene), so the next Enter Sculpt
+ * picks them all up again. Edits to the mesh outside sculpt mode that keep its topology ride along into the levels.
  *
- * Commands: sculptEnter, sculptExit, sculptCancel, sculptLevel, sculptAddLevel, sculptDeleteHigher, sculptStroke,
- * sculptMask, sculptColor, sculptState, transferShape. Entering, exiting, each level change and each stroke are single
- * undo steps.
+ * Commands: sculptEnter, sculptExit, sculptCancel, sculptLevel, sculptAddLevel, sculptDeleteHigher, sculptDeleteLower,
+ * sculptReconstruct, sculptRemesh, sculptDuplicate, sculptDeleteLevels, sculptStroke, sculptMask, sculptColor,
+ * sculptState, transferShape. Entering, exiting, each level change and each stroke are single undo steps.
  */
 namespace lila::sculpt
 {
-inline constexpr const char* kProxySuffix = "_high";
-/** Hidden attrs on a kept high poly: the finest level when it keeps a lower one, and the level a resume opens at. */
+/**
+ * Hidden attrs on a mesh with stored levels: its cage, its finest level (with the mask, freeze and polypaint layers),
+ * the level the mesh is at, that level's point and face counts (which tell when an edit changed its topology), and a
+ * stamp of its positions at exit (which tells when points were moved since).
+ */
+inline constexpr const char* kCageAttr = "sculptCage";
 inline constexpr const char* kFinestAttr = "sculptFinest";
-inline constexpr const char* kResumeLevelAttr = "sculptResumeLevel";
-/** Point layers on a kept proxy holding the mask and freeze state. */
+inline constexpr const char* kLevelAttr = "sculptLevel";
+inline constexpr const char* kPointsAttr = "sculptPoints";
+inline constexpr const char* kFacesAttr = "sculptFaces";
+inline constexpr const char* kStampAttr = "sculptStamp";
+/** Point layers on a stored finest level holding the mask and freeze state. */
 inline constexpr const char* kMaskLayer = "sculptMask";
 inline constexpr const char* kFreezeLayer = "sculptFreeze";
-/** The color set polypaint lives in, on a kept proxy and on the cage after Exit Sculpt. */
+/** The color set polypaint lives in, on the mesh after Exit Sculpt. */
 inline constexpr const char* kColorSet = "polypaint";
-
-enum class ProxyMode : uint8_t
-{
-    Subdivide,
-    Remesh,
-    Direct,
-};
-
-/** sculptExit's solver for a session, kept between calls: see exitPositions. */
-struct ExitSolver;
+inline constexpr int kMaxLevels = 6;
 
 struct Session
 {
     scene::NodeId node = scene::kNoNode;
-    ProxyMode mode = ProxyMode::Subdivide;
-    geo::SubdivideOptions subdivide;
-    /** The cage at Enter, in object space, with its ids. */
-    geo::Mesh cage;
-    /** Subdivide mode: the subdivision levels, shared by every session of this sculpt. */
+    /** The mesh's base point capacity and face count at Enter, to tell whether exiting can keep it and move its points. */
+    geo::Index basePoints = 0;
+    geo::Index baseFaces = 0;
+    /** The level the mesh was at on Enter: while the stack still holds it, Exit moves the mesh's points instead of
+     *  replacing the mesh, keeping whatever was edited on it outside sculpt mode. */
+    std::shared_ptr<const SubdLevel> base;
+    /** The subdivision levels, shared by every session of this sculpt. */
     std::shared_ptr<const SubdStack> stack;
-    /** Subdivide mode: the level being sculpted, 0 (the cage) to stack->top(). */
+    /** The level being sculpted, 0 (the cage) to stack->top(). */
     int level = 0;
-    /** Subdivide mode: what each level above `level` adds, [k] for level k; null adds nothing. */
+    /** What each level above `level` adds, [k] for level k; null adds nothing. */
     std::vector<DetailPtr> detail;
     SculptMesh sculpt;
-    /** The kept proxy node this session resumed from. */
-    scene::NodeId proxyNode = scene::kNoNode;
     /** The symmetry the sculpt mesh was last set up with: its layer name, empty when off. */
     std::string symmetryKey;
 
     /** A stroke the viewport tool already applied live, adopted by the sculptStroke call carrying this token. */
     uint64_t liveToken = 0;
     StrokeRecord live;
-
-    std::shared_ptr<ExitSolver> exitSolver;
 };
 
-/** The high poly a mesh's last Exit Sculpt kept, which the next Enter Sculpt resumes from. */
-struct KeptSculpt
+/** The levels a mesh carries from an earlier Exit Sculpt. */
+struct StoredLevels
 {
-    scene::NodeId node = scene::kNoNode;
-    /** The level it resumes at, -1 for the finest. */
-    int level = -1;
-    /** Its subdivision levels, 0 for a voxel remesh. */
+    /** The level the mesh is at. */
+    int level = 0;
+    /** The finest level. */
     int levels = 0;
+    /** Whether the mesh's topology still fits that level; false after an edit like an extrude. */
+    bool fits = true;
 };
 
-LILA_SCENE_API std::optional<KeptSculpt> keptSculpt(const scene::Node& mesh);
+/** The mesh's stored levels, or nothing when it has none. */
+LILA_SCENE_API std::optional<StoredLevels> storedLevels(const scene::Node& mesh);
+
+/**
+ * Called after a top-level command changed the topology of meshes with stored levels, so they no longer fit. The UI
+ * asks whether to keep the edit (sculptDeleteLevels) or undo it. Without a handler the levels stay until Enter Sculpt
+ * drops them.
+ */
+LILA_SCENE_API void setLevelsBrokenHandler(std::function<void(const std::vector<scene::NodeId>&, std::string_view command)> fn);
 
 /** The open session, or null. */
 LILA_SCENE_API std::shared_ptr<Session> active();
@@ -99,19 +105,6 @@ LILA_SCENE_API uint64_t nextLiveToken();
 
 /** Gets the tumble point a stroke's undo or redo goes back to (StrokeRecord::pivotBefore and pivotAfter). */
 LILA_SCENE_API void setPivotHandler(std::function<void(const std::optional<glm::dvec3>&)> handler);
-
-/**
- * The cage positions (per point capacity, object space) sculptExit would leave with this method ("fit", "closest" or
- * "normal") and the mesh's current symmetry: what Exit Sculpt is about to make, for showing it live. The fit's solver
- * is kept on the session, so after the first call each one costs a subdivision and a back substitution.
- */
-LILA_SCENE_API std::vector<glm::dvec3> exitPositions(Session& s, const std::string& method, int iterations = 3);
-
-/**
- * The low poly sculptExit would leave with this method, at a subdivision level: 0 is the mesh's own topology (exitPositions),
- * a higher one that level's topology, its points onto the sculpt (closest, normal) or its own subdivision cage (fit).
- */
-LILA_SCENE_API geo::Mesh lowPoly(Session& s, const std::string& method, int level = 0, int iterations = 3);
 
 LILA_SCENE_API void registerCommands();
 } // namespace lila::sculpt

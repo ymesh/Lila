@@ -366,6 +366,31 @@ void markWedgeSeams(Mesh& mesh, std::span<const Index> faces, const std::unorder
         seam[e] = on;
 }
 
+/**
+ * Gives every corner of one wedge at a point the same uvs: the bevel places a point from a strip's end on one face and
+ * from the corner patch on the next, two blends that agree only where the cage's uvs are flat across the wedge, and a
+ * crack between them would split the island wherever its layout bends. The lowest corner's values stand for all.
+ */
+void unifyWedges(Mesh& mesh, const std::unordered_map<Index, int>& label)
+{
+    std::vector<std::pair<Index, int>> corners(label.begin(), label.end());
+    std::sort(corners.begin(), corners.end());
+    std::map<std::pair<Index, int>, Index> first;
+    std::vector<std::span<glm::vec2>> layers;
+    for (size_t l = 0; l < mesh.cornerAttrs().layerCount(); ++l)
+        if (mesh.cornerAttrs().layer(l).type() == AttrType::Float2)
+            layers.push_back(mesh.cornerAttrs().get<glm::vec2>(std::string(mesh.cornerAttrs().layer(l).name())));
+    for (const auto& [c, w] : corners)
+    {
+        if (!mesh.cornerValid(c))
+            continue;
+        const auto [it, added] = first.emplace(std::pair{mesh.cornerPoint(c), w}, c);
+        if (!added)
+            for (std::span<glm::vec2> uv : layers)
+                uv[c] = uv[it->second];
+    }
+}
+
 /** Faces with no more area than a square of side tol. */
 size_t flatFaces(const Mesh& mesh, double tol)
 {
@@ -374,6 +399,12 @@ size_t flatFaces(const Mesh& mesh, double tol)
         n += mesh.faceValid(f) && mesh.faceArea(f) <= tol * tol;
     return n;
 }
+
+/**
+ * New edges shorter than this share of the offset closed under the clamp. Only where a face's sides are exactly parallel
+ * do they meet exactly; a slight taper leaves them a hair apart, a strip of no width that shades as a hard edge.
+ */
+constexpr double kClosedShare = 0.01;
 
 /** What a clamp does with edges whose ends would meet. */
 enum class Close : uint8_t
@@ -636,6 +667,15 @@ std::vector<Index> bevel(Mesh& mesh, std::span<const Index> edgesIn, const Bevel
     // they meet the edge closes, and its points are welded at the end.
     double offset = std::max(0.0, opts.offset);
     bool collapses = false;
+    // Each limit goes to the bevelled edges at the points whose replacements meet.
+    std::vector<double> limits(opts.edgeLimits && opts.clamp ? mesh.edgeCapacity() : 0, std::numeric_limits<double>::infinity());
+    auto limitAt = [&](Index p, double limit) {
+        if (!limits.empty())
+            mesh.forEachPointEdge(p, [&](Index e) {
+                if (bev[e])
+                    limits[e] = std::min(limits[e], limit);
+            });
+    };
     if (opts.clamp)
         for (Index f : touchedFaces)
             mesh.forEachFaceCorner(f, [&](Index c) {
@@ -650,7 +690,13 @@ std::vector<Index> bevel(Mesh& mesh, std::span<const Index> edgesIn, const Bevel
                 if (auto it = fanSlot.find(cn); it != fanSlot.end())
                     db = verts[it->second.first].chain[it->second.second].front().dir;
                 const double k = glm::dot(da - db, (b - a) / len);
-                if (k > 1e-12 && len / k < offset)
+                if (k <= 1e-12)
+                    return;
+                if (da != glm::dvec3(0.0))
+                    limitAt(mesh.cornerPoint(c), len / k);
+                if (db != glm::dvec3(0.0))
+                    limitAt(mesh.cornerPoint(cn), len / k);
+                if (len / k < offset)
                 {
                     offset = len / k;
                     collapses = true;
@@ -690,6 +736,7 @@ std::vector<Index> bevel(Mesh& mesh, std::span<const Index> edgesIn, const Bevel
                 crossing.push_back(f);
         if (!crossing.empty())
         {
+            const double start = offset;
             double lo = 0.0, hi = offset;
             for (int it = 0; it < 40; ++it)
             {
@@ -699,6 +746,16 @@ std::vector<Index> bevel(Mesh& mesh, std::span<const Index> edgesIn, const Bevel
             }
             offset = lo * (1.0 - kClampMargin);
             collapses = false;
+            for (Index f : limits.empty() ? std::vector<Index>{} : crossing)
+            {
+                double flo = 0.0, fhi = start;
+                for (int it = 0; it < 40; ++it)
+                {
+                    const double mid = 0.5 * (flo + fhi);
+                    (simpleAt(f, mid) ? flo : fhi) = mid;
+                }
+                mesh.forEachFaceCorner(f, [&](Index c) { limitAt(mesh.cornerPoint(c), flo); });
+            }
         }
     }
     // Closing is clean where the meeting points weld; where a point lands on a vertex mesh's side instead, the patch
@@ -718,6 +775,8 @@ std::vector<Index> bevel(Mesh& mesh, std::span<const Index> edgesIn, const Bevel
     }
     if (opts.appliedOffset)
         *opts.appliedOffset = offset;
+    if (opts.edgeLimits)
+        *opts.edgeLimits = limits;
     if (offset <= 0.0)
         return {};
 
@@ -1692,6 +1751,7 @@ std::vector<Index> bevel(Mesh& mesh, std::span<const Index> edgesIn, const Bevel
     for (Index p : welded)
         mesh.removePoint(p);
     mesh.removeLoose(oldEdges, oldPoints);
+    unifyWedges(mesh, cornerLabel);
     markWedgeSeams(mesh, out, cornerLabel);
 
     if (opts.smoothingAngle >= 0.0)
@@ -1703,7 +1763,7 @@ std::vector<Index> bevel(Mesh& mesh, std::span<const Index> edgesIn, const Bevel
         setHardEdgesByAngle(mesh, opts.smoothingAngle, newEdges);
     }
     if (collapses)
-        weldClosedEdges(mesh, edgeCap0, kWeldShare * offset, out);
+        weldClosedEdges(mesh, edgeCap0, kClosedShare * offset, out);
     applySymmetrySnap(mesh, opts.symmetry, firstNewPoint);
     return out;
 }

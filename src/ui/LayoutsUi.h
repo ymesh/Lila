@@ -54,6 +54,8 @@ public:
 private:
     void fillMenu();
     void refreshSwitcher();
+    /** A layout tab's right-click menu: reset, revert, save, shelf, manage. */
+    void tabMenu(const std::string& name, QPoint at);
     /** A layout.apply.<name> action per layout, so every layout is keybindable. */
     void refreshLayoutActions();
     void run(const char* command, const nlohmann::json& call);

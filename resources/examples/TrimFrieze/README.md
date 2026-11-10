@@ -6,7 +6,8 @@ A sandstone wall built from one trim sheet: a plinth with a moulded base, three 
 
 1. Open `trim_frieze.lila` and look through `Cam_Wall` (in the view, Panels > Look Through Selected).
 2. Open the Level Toolkit's Trim Sheets section: the sheet is current, so its palette shows the strips. Select a band of the wall and click another strip to see it there.
-3. Unhide `SheetHigh` to see the generated high poly and the rosettes and dentils modelled on it. Move or reshape them, then press **Bake** in the Trim Sheets section: every band updates.
+3. Compare normals: look through `Cam_Compare`. `Wall` (left) has **Normals From Height** on, so the dentils' sides light as walls; `Wall_BakedNormal` (right) uses the baked normal alone, and the dentils read as flat stickers. Toggle **Normals From Height** on either wall's material in the Material Editor to flip it.
+4. Unhide `SheetHigh` to see the generated high poly and the rosettes and dentils modelled on it. Move or reshape them, then press **Bake** in the Trim Sheets section: every band updates.
 
 ## Troubleshooting
 

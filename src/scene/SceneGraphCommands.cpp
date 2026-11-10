@@ -3,6 +3,8 @@
 #include "ops/Command.h"
 #include "rigmath/MathNodes.h"
 #include "scene/Graph.h"
+#include "scene/MeshNodes.h"
+#include "scene/Modifiers.h"
 #include "scene/SceneData.h"
 
 #include <algorithm>
@@ -51,7 +53,7 @@ std::string viewArg(const Args& a, const char* cmd)
 {
     std::string view = stringArg(a, 0, cmd, "view");
     if (std::none_of(kViews.begin(), kViews.end(), [&](const char* v) { return view == v; }))
-        throw CommandError(std::string(cmd) + ": no view '" + view + "' (Selection, Hierarchy, Upstream or Downstream)");
+        throw CommandError(std::string(cmd) + ": no view '" + view + "' (Selection, History, Hierarchy, Upstream or Downstream)");
     return view;
 }
 
@@ -239,12 +241,55 @@ void collectHierarchy(const Graph& g, ViewNodes& v)
             v.add(id);
 }
 
+/** Each selected mesh's whole modifier stack and the node it starts from. A selected modifier stands for the mesh it feeds. */
+void collectHistory(const Graph& g, const Edges& e, ViewNodes& v)
+{
+    auto stackLink = [&](const Edges::List::value_type& c) {
+        const Node* n = g.node(c.first.node);
+        return n && (modifiers::asModifier(n) || dynamic_cast<const MeshNode*>(n));
+    };
+    for (NodeId id : g.selection())
+    {
+        NodeId mesh = id;
+        while (modifiers::asModifier(g.node(mesh)))
+        {
+            const Edges::List& out = e.of(mesh, false);
+            auto it = std::ranges::find_if(out, stackLink);
+            if (it == out.end())
+                break;
+            mesh = it->first.node;
+        }
+        if (!dynamic_cast<const MeshNode*>(g.node(mesh)))
+        {
+            v.add(id);
+            continue;
+        }
+        std::vector<NodeId> chain{mesh};
+        PlugRef plug{mesh, MeshNode::kInMesh, -1};
+        while (auto src = g.source(plug))
+        {
+            chain.push_back(src->node);
+            const ModifierNode* mod = modifiers::asModifier(g.node(src->node));
+            if (!mod)
+                break;
+            plug = {src->node, mod->inAttr, -1};
+        }
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+            v.add(*it);
+    }
+}
+
 ViewNodes collect(const Graph& g, const Edges& e, const std::string& view, int depth, bool all)
 {
     ViewNodes v;
     if (view == "Hierarchy")
     {
         collectHierarchy(g, v);
+        return v;
+    }
+    if (view == "History")
+    {
+        collectHistory(g, e, v);
         return v;
     }
     std::vector<NodeId> roots;
@@ -575,7 +620,8 @@ void registerCommands()
         .name = "sceneGraphInfo",
         .doc = "A view of the scene's nodes for the node editor: the nodes with their plugs as sockets and values, the connections "
                "between them as links, and each node's canvas position.\n\n"
-               "Views: Selection (the selection and what is wired straight into and out of it), Hierarchy (the selection's parents "
+               "Views: Selection (the selection and what is wired straight into and out of it), History (each selected mesh's whole "
+               "modifier stack and its source), Hierarchy (the selection's parents "
                "and children), Upstream and Downstream (depth steps from the selection). Views look through anim curves and unit "
                "conversions unless all is on.",
         .positionalDoc = "view",

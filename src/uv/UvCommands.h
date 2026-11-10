@@ -57,4 +57,7 @@ LILA_SCENE_API const std::vector<ProjectionRecord>& lastProjections();
 
 /** World direction the active view looks along; uvProject reads it for the seam when no viewDir is given. Set by the UI. */
 LILA_SCENE_API std::function<std::optional<glm::dvec3>()>& projectionViewProvider();
+
+/** World to clip (Vulkan) of the active view; uvProject type=camera uses it when given no camera or matrix. Set by the UI. */
+LILA_SCENE_API std::function<std::optional<glm::dmat4>()>& projectionCameraProvider();
 } // namespace lila::uv

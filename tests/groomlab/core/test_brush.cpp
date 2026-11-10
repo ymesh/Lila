@@ -909,5 +909,22 @@ TEST(ScreenPointGrid, FindsEveryPolylineWithAPointInTheCircle) {
     }
 }
 
+TEST(Brush, DrapedPlaceLiesOverTheScalp) {
+    Scene s;
+    PlaceSettings p;
+    p.matchNeighbors = false;
+    p.drape = true;
+    p.length = 0.4f;
+    const GuideId placed = placeGuide(s.h, *s.scalp, p, s.scalp->closestPoint({0.5f, 0, 0.5f}));
+    const std::vector<Vec3f>& pts = s.h.guide(placed)->points;
+    // A scalp facing up: the guide leaves it, turns over and runs along it rather than standing up.
+    float top = 0.0f;
+    for (const Vec3f& q : pts) top = std::max(top, q.y);
+    const Vec3f run = pts.back() - pts.front();
+    EXPECT_LT(top, 0.2f);
+    EXPECT_GT(std::sqrt(run.x * run.x + run.z * run.z), 0.2f);
+    EXPECT_GE(pts.back().y, -1e-4f);
+}
+
 }  // namespace
 }  // namespace groomlab

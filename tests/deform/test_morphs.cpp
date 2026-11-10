@@ -126,6 +126,148 @@ TEST_CASE("morph in-betweens: the shape passes through the in-between and export
     }
 }
 
+TEST_CASE("smooth shape coefficients pass through the knots, and the response curve eases the weight")
+{
+    using morphs::shapeCoefficients;
+    auto c = [](const std::vector<double>& k, double w) { return shapeCoefficients(k, w, true); };
+    CHECK(c({1.0}, 0.3)[0] == doctest::Approx(0.3));
+    CHECK(c({1.0}, 1.5)[0] == doctest::Approx(1.5));
+    CHECK(c({0.5, 1.0}, 0.5)[0] == doctest::Approx(1.0));
+    CHECK(c({0.5, 1.0}, 0.5)[1] == doctest::Approx(0.0));
+    CHECK(c({0.5, 1.0}, 1.0)[1] == doctest::Approx(1.0));
+    CHECK(c({0.5, 1.0}, 0.0)[0] == doctest::Approx(0.0));
+    // Between knots the curve leaves the straight line.
+    CHECK(c({0.5, 1.0}, 0.75)[0] != doctest::Approx(0.5));
+    double sum = 0.0;
+    for (double x : c({0.25, 0.5, 1.0}, 0.6))
+        sum += x;
+    CHECK(std::isfinite(sum));
+
+    CHECK(morphs::respond(0, 0.5) == doctest::Approx(0.5));
+    CHECK(morphs::respond(1, 0.5) == doctest::Approx(0.25));
+    CHECK(morphs::respond(1, -0.5) == doctest::Approx(-0.25));
+    CHECK(morphs::respond(1, 1.5) == doctest::Approx(1.5));
+}
+
+namespace
+{
+/** Base and a target moving point 0 by full, with an in-between at 0.5 moving it by half when given. */
+std::pair<std::string, std::string> pathTarget(const glm::dvec3& full, std::optional<glm::dvec3> half)
+{
+    run("newScene");
+    std::string base = run("polyCube", {{"name", "Base"}})[0];
+    std::string shape = run("polyCube", {{"name", "Lid"}})[0];
+    editPoints(shape, [&](geo::Index p, const glm::dvec3&) { return p == 0 ? full : glm::dvec3(0.0); });
+    run("morph", {{"args", {shape, base}}});
+    std::string t = run("morphTargets", {{"args", {base}}})[0]["node"];
+    if (half)
+    {
+        std::string mid = run("polyCube", {{"name", "LidHalf"}})[0];
+        editPoints(mid, [&](geo::Index p, const glm::dvec3&) { return p == 0 ? *half : glm::dvec3(0.0); });
+        run("addInBetween", {{"args", {t, mid}}, {"weight", 0.5}});
+    }
+    return {base, t};
+}
+
+/** Point 0's offset at weight w, evaluated and as the exports rebuild it from their shapes and weights. */
+std::pair<glm::dvec3, glm::dvec3> offsetAt(const std::string& base, const std::string& t, const glm::dvec3& rest, double w)
+{
+    run("setAttr", {{"args", {t + ".weight", w}}});
+    const glm::dvec3 evaluated = points(base)[0] - rest;
+    glm::dvec3 exported(0.0);
+    for (const morphs::Target& e : morphs::targets(graph(), morphs::find(graph(), graph().find(base)->id())))
+        for (size_t k = 0; k < e.indices.size(); ++k)
+            if (e.indices[k] == 0)
+                exported += e.deltas[k] * e.weight;
+    return {evaluated, exported};
+}
+} // namespace
+
+TEST_CASE("arc interpolation carries points round the circle through their in-between, and exports fit it")
+{
+    // Offsets on a circle of radius 10 about (10, 0, 0): rest at 180 degrees, the in-between at 135, the full shape at 90.
+    const double r = 10.0;
+    auto onCircle = [&](double deg) { return glm::dvec3(r + r * std::cos(glm::radians(deg)), r * std::sin(glm::radians(deg)), 0.0); };
+    auto [base, t] = pathTarget(onCircle(90.0), onCircle(135.0));
+    run("setAttr", {{"args", {t + ".weight", 0.0}}});
+    const glm::dvec3 rest = points(base)[0];
+
+    // Linear cuts the corner; arc stays on the circle.
+    CHECK(near(offsetAt(base, t, rest, 0.25).first, (onCircle(135.0)) * 0.5, 1e-6));
+    json info = run("morphPath", {{"args", {t}}, {"interpolation", "arc"}});
+    CHECK(info["interpolation"] == "arc");
+    for (double w : {0.25, 0.5, 0.75, 1.0, 1.2})
+    {
+        auto [evaluated, exported] = offsetAt(base, t, rest, w);
+        CHECK(near(evaluated, onCircle(180.0 - 90.0 * w), 1e-6));
+        CHECK(near(exported, evaluated, 0.011));
+    }
+    info = run("morphPath", {{"args", {t}}});
+    REQUIRE(info["shapes"].size() >= 2);
+    CHECK(info["shapes"][0] == "Lid");
+    CHECK(info["shapes"][1] == "Lid_p2");
+    CHECK(info["fitError"].get<double>() <= 0.01);
+    CHECK_FALSE(info["capped"].get<bool>());
+
+    // One shape can't follow the arc, and says so.
+    run("setAttr", {{"args", {t + ".fitShapes", 1}}});
+    info = run("morphPath", {{"args", {t}}});
+    CHECK(info["shapes"].size() == 1);
+    CHECK(info["capped"].get<bool>());
+}
+
+TEST_CASE("pivot interpolation swings points about the pivot without an in-between")
+{
+    run("newScene");
+    auto [base, t] = pathTarget({10, -10, 0}, std::nullopt);
+    const glm::dvec3 rest = points(base)[0];
+    // A quarter turn about a pivot 10 below point 0: from straight up to straight out along x.
+    run("morphPath", {{"args", {t}}, {"interpolation", "pivot"}, {"pivot", v3(rest.x, rest.y - 10.0, rest.z)}});
+    const double s = std::sqrt(0.5) * 10.0;
+    auto [half, halfExported] = offsetAt(base, t, rest, 0.5);
+    CHECK(near(half, {s, s - 10.0, 0.0}, 1e-6));
+    CHECK(near(halfExported, half, 0.011));
+    CHECK(near(offsetAt(base, t, rest, 1.0).first, {10, -10, 0}, 1e-6));
+
+    // An in-between added on the path leaves it where it was.
+    run("addInBetween", {{"args", {t}}, {"weight", 0.5}});
+    CHECK(near(offsetAt(base, t, rest, 0.25).first, glm::dvec3(10.0 * std::sin(glm::radians(22.5)), 10.0 * std::cos(glm::radians(22.5)) - 10.0, 0.0), 1e-6));
+
+    // The overlay's paths start at the rest point and end at the full shape.
+    std::vector<std::vector<glm::dvec3>> paths = morphs::paths(graph(), graph().find(t)->id(), 8, 10);
+    REQUIRE(paths.size() == 1);
+    CHECK(near(paths[0].front(), rest));
+    CHECK(near(paths[0].back(), rest + glm::dvec3(10, -10, 0), 1e-6));
+}
+
+TEST_CASE("the response curve eases a target's weight in evaluation and in exported weights")
+{
+    run("newScene");
+    auto [base, t] = pathTarget({0, 10, 0}, std::nullopt);
+    const glm::dvec3 rest = points(base)[0];
+    run("morphPath", {{"args", {t}}, {"response", "quadraticEaseIn"}});
+    auto [evaluated, exported] = offsetAt(base, t, rest, 0.5);
+    CHECK(near(evaluated, {0, 2.5, 0}));
+    CHECK(near(exported, evaluated));
+    CHECK(morphs::weights(graph(), morphs::find(graph(), graph().find(base)->id()))[0] == doctest::Approx(0.25));
+    CHECK(morphs::mapped(*graph().find(t)));
+    CHECK_THROWS(run("morphPath", {{"args", {t}}, {"response", "wobbly"}}));
+}
+
+TEST_CASE("smooth interpolation curves through the in-between and exports its shapes as they are")
+{
+    auto [base, t] = pathTarget({0, 10, 0}, glm::dvec3(4, 0, 0));
+    run("setAttr", {{"args", {t + ".weight", 0.0}}});
+    const glm::dvec3 rest = points(base)[0];
+    run("morphPath", {{"args", {t}}, {"interpolation", "smooth"}});
+    CHECK(near(offsetAt(base, t, rest, 0.5).first, {4, 0, 0}));
+    CHECK(near(offsetAt(base, t, rest, 1.0).first, {0, 10, 0}));
+    auto [evaluated, exported] = offsetAt(base, t, rest, 0.75);
+    CHECK_FALSE(near(evaluated, {2, 5, 0}, 1e-3));
+    CHECK(near(exported, evaluated));
+    CHECK(morphs::shapeNames(graph(), graph().find(t)->id()) == std::vector<std::string>{"Lid", "Lid_50"});
+}
+
 TEST_CASE("morph target point weights scale every shape of the target, in evaluation and in exports")
 {
     run("newScene");

@@ -12,6 +12,7 @@ class QCheckBox;
 class QComboBox;
 class QDragEnterEvent;
 class QDropEvent;
+class QFormLayout;
 class QFileSystemWatcher;
 class QPoint;
 class QDoubleSpinBox;
@@ -55,6 +56,7 @@ private:
     void refreshSession();
     QToolButton* brushButton(const QIcon& icon, const QString& label, const QString& doc, QLayout* flow = nullptr);
     void rebuildCustomBrushes();
+    void fillMaterials();
     void rebuildPresets();
     void savePreset();
     void importPresets();
@@ -78,6 +80,7 @@ private:
     bool mPresetsQueued = false;
     QToolButton* mColor = nullptr;
     QCheckBox* mPaint = nullptr;
+    QCheckBox* mCavityPaint = nullptr;
     QCheckBox* mShareRadius = nullptr;
     QCheckBox* mShareStrength = nullptr;
     QCheckBox* mShareStroke = nullptr;
@@ -91,31 +94,28 @@ private:
     controls::SliderField* mStrength = nullptr;
     controls::SliderField* mSpacing = nullptr;
     QCheckBox* mFrontFaces = nullptr;
-    QCheckBox* mShowCage = nullptr;
-    controls::Segmented* mMode = nullptr;
-    controls::SliderField* mLevels = nullptr;
-    QWidget* mLevelRow = nullptr;
+    QWidget* mLevelsBox = nullptr;
     QLabel* mLevelLabel = nullptr;
     QToolButton* mLevelDown = nullptr;
     QToolButton* mLevelUp = nullptr;
     QToolButton* mAddLevel = nullptr;
+    QToolButton* mReconstruct = nullptr;
+    QToolButton* mDeleteLower = nullptr;
     QToolButton* mDeleteHigher = nullptr;
-    controls::SliderField* mResolution = nullptr;
-    QComboBox* mExitMethod = nullptr;
-    QComboBox* mHighPoly = nullptr;
-    controls::SliderField* mHighLevel = nullptr;
-    controls::SliderField* mLowLevel = nullptr;
+    QToolButton* mDuplicate = nullptr;
+    QToolButton* mDuplicateHide = nullptr;
     QCheckBox* mSymmetryLine = nullptr;
+    QCheckBox* mSculptLighting = nullptr;
+    QCheckBox* mKeepVolume = nullptr;
+    controls::SliderField* mPinchDepth = nullptr;
+    QFormLayout* mBrushForm = nullptr;
+    controls::SliderField* mLightAngle = nullptr;
+    int mPrefListener = 0;
     controls::Segmented* mSymmetry = nullptr;
     brush::ui::StrokeOptions* mStrokeOptions = nullptr;
     QLabel* mStatus = nullptr;
-    /** What Exit will leave, in one line; clicking it opens On Exit. */
-    QLabel* mExitSummary = nullptr;
-    QToolButton* mExitHeader = nullptr;
     QPushButton* mEnter = nullptr;
     QPushButton* mExit = nullptr;
-    QPushButton* mPreview = nullptr;
-    QPushButton* mCancel = nullptr;
     int mSettingsListener = 0;
     int mSessionListener = 0;
     int mGraphListener = 0;
@@ -123,8 +123,11 @@ private:
 };
 
 /**
- * Registers the sculpt actions (window.sculpt, sculpt.tool, sculpt.enter, sculpt.exit, sculpt.cancel, sculpt.brush.*,
+ * Registers the sculpt actions (window.sculpt, sculpt.tool, sculpt.enter, sculpt.exit, sculpt.cancel, the level and duplicate actions, sculpt.brush.*,
  * sculpt.mask*, sculpt.freezeClear, mesh.relaxKeepForm, mesh.reproject, mesh.transferShape), the sculptBrush command and the viewport drawer.
  */
 LILA_UI_API void registerSculptUi();
+LILA_UI_API bool sculptPanelOpen();
+/** A mesh is among the selection, so Enter Sculpt has something to sculpt. */
+LILA_UI_API bool meshSelected();
 } // namespace lila::ui

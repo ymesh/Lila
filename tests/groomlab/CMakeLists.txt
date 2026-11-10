@@ -3,6 +3,7 @@
 find_package(GTest CONFIG REQUIRED)
 find_package(Alembic CONFIG REQUIRED)
 add_executable(lila_groomlab_tests
+    core/test_async_evaluation.cpp
     core/test_attributes.cpp
     core/test_brush.cpp
     core/test_brush_alpha.cpp
@@ -10,6 +11,7 @@ add_executable(lila_groomlab_tests
     core/test_budgets.cpp
     core/test_budgets_ops.cpp
     core/test_budgets_paint.cpp
+    core/test_budgets_stroke.cpp
     core/test_camera_solve.cpp
     core/test_card_maps.cpp
     core/test_card_separation.cpp
@@ -24,6 +26,7 @@ add_executable(lila_groomlab_tests
     core/test_determinism.cpp
     core/test_display.cpp
     core/test_distance_field.cpp
+    core/test_evaluator_extras.cpp
     core/test_example_node.cpp
     core/test_expression.cpp
     core/test_feather_cards.cpp
@@ -63,12 +66,12 @@ add_executable(lila_groomlab_tests
     core/test_reference_edit.cpp
     core/test_reference_guides.cpp
     core/test_regions.cpp
-    core/test_renderman_look.cpp
     core/test_render_overrides.cpp
+    core/test_renderman_look.cpp
     core/test_robustness.cpp
     core/test_scale_export.cpp
-    core/test_scale_with_scalp.cpp
     core/test_scale_invariance.cpp
+    core/test_scale_with_scalp.cpp
     core/test_scales.cpp
     core/test_scalp_paint.cpp
     core/test_scalp_pieces.cpp
@@ -110,8 +113,17 @@ set_source_files_properties(example_node_src/example_op.cpp PROPERTIES INCLUDE_D
 target_compile_options(lila_groomlab_tests PRIVATE /wd4456 /wd4457 /wd4267 /wd4005 /wd4189)
 set_target_properties(lila_groomlab_tests PROPERTIES LILA_NO_UNITY ON CXX_STANDARD 17)
 add_test(NAME lila_groomlab_tests COMMAND lila_groomlab_tests --gtest_filter=-Budget.*:Performance.*)
-add_test(NAME lila_groomlab_timing COMMAND lila_groomlab_tests --gtest_filter=Budget.*:Performance.*-Budget.InterpolateHalfMillion)
-# Upstream's 90 ms budget for half a million strands, set on their machine; about 100-110 ms here.
-add_test(NAME lila_groomlab_interpolate_budget COMMAND lila_groomlab_tests --gtest_filter=Budget.InterpolateHalfMillion)
-set_tests_properties(lila_groomlab_timing lila_groomlab_interpolate_budget PROPERTIES RUN_SERIAL TRUE)
-set_tests_properties(lila_groomlab_interpolate_budget PROPERTIES LABELS known_failing)
+add_test(NAME lila_groomlab_timing COMMAND lila_groomlab_tests --gtest_filter=Budget.*:Performance.*)
+set_tests_properties(lila_groomlab_timing PROPERTIES RUN_SERIAL TRUE)
+
+# The look engine's kernels on Lila's Vulkan compute against the CPU's (upstream's GPU tests, a headless renderer).
+add_executable(lila_groomlab_gpu_tests gpu/main.cpp gpu/test_look_engine.cpp)
+target_link_libraries(lila_groomlab_gpu_tests PRIVATE groomlab_core lila_groom_evaluator lila_groom_look LilaUI GTest::gtest nlohmann_json::nlohmann_json)
+target_include_directories(lila_groomlab_gpu_tests PRIVATE core ${CMAKE_SOURCE_DIR}/src/groom/groomlab/core/src)
+target_compile_definitions(lila_groomlab_gpu_tests PRIVATE "GROOMLAB_TEST_DATA=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+    "GROOMLAB_SHIPPED_PRESETS=\"${CMAKE_CURRENT_SOURCE_DIR}/data/shipped_presets\"")
+target_compile_options(lila_groomlab_gpu_tests PRIVATE /wd4456 /wd4457 /wd4267 /wd4005 /wd4189)
+target_compile_definitions(lila_groomlab_gpu_tests PRIVATE _SILENCE_CXX20_U8PATH_DEPRECATION_WARNING)
+set_target_properties(lila_groomlab_gpu_tests PROPERTIES LILA_NO_UNITY ON)
+add_test(NAME lila_groomlab_gpu_tests COMMAND lila_groomlab_gpu_tests --gtest_filter=-*Bench*)
+set_tests_properties(lila_groomlab_gpu_tests PROPERTIES RUN_SERIAL TRUE)

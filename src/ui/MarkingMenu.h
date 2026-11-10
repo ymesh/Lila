@@ -165,6 +165,7 @@ private:
     int mOverflow = -1; // highlighted overflow row
     bool mOnBox = false; // the cursor is on the highlighted item's option box
     QElapsedTimer mOnBoxSince; // a compass box only counts once the cursor has rested on it, so a flick never opens it
+    QElapsedTimer mSlotSince; // how long the cursor has rested on the highlighted compass slot, for opening its submenu
     QElapsedTimer mRowSince; // how long the cursor has rested on the highlighted overflow row, for cascading its submenu
     bool mSticky = false; // released on a submenu row: the menu stays open and the next click picks
     bool mCopied = false;

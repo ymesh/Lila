@@ -7,12 +7,10 @@ workers_dev = true
 [triggers]
 crons = ["0 15 * * *"]
 
-# Credits stay off (503) until this is uncommented: `wrangler d1 create lila-credits`, paste its id,
-# `wrangler d1 execute lila-credits --remote --file=schema.sql`, then deploy.
-# [[d1_databases]]
-# binding = "CREDITS_DB"
-# database_name = "lila-credits"
-# database_id = ""
+[[d1_databases]]
+binding = "CREDITS_DB"
+database_name = "lila-credits"
+database_id = "84976697-2822-41a5-af79-430a20c90e2e"
 
 # Issue reports. Secrets: REPORTS_APP_ID, REPORTS_APP_KEY, REPORTS_INSTALLATION_ID, ADMIN_TOKEN.
 # The bucket's lifecycle rules expire files/ after 90 days and limits/ after 2.

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui/GraphEditorCommon.h"
+#include "ui/GraphModel.h"
 #include "ui/GraphMotion.h"
 
 #include <QWidget>
@@ -47,13 +48,6 @@ enum class Quantity : uint8_t
     WorldAngular, // degrees/s of the selected transforms
 };
 
-enum class RotationDisplay : uint8_t
-{
-    Euler,
-    Quaternion,
-    Both,
-};
-
 /** A curve as it was when snapshotted, drawn behind the live one and swapped back in on request. */
 struct Buffer
 {
@@ -78,39 +72,20 @@ struct ViewSettings
     bool showBuffer = true;
 };
 
-class CurveView : public QWidget
+/** The Graph Editor's plot: draws a GraphModel and edits it with the mouse. */
+class CurveView : public QWidget, public GraphModel
 {
 public:
     explicit CurveView(GraphEditor* editor);
     ~CurveView() override;
 
     ViewSettings settings;
-    std::vector<Channel> channels;
-    /** Keyed by channel id; a rotation channel's holds its derived keys. */
-    std::map<NodeId, anim::Curve> curves;
-    /** Rotation curves by their own node id, loop applied. */
-    std::map<NodeId, anim::RotationCurve> rotations;
-    /** Channels whose curve has a loop key. */
-    std::set<NodeId> loopCurves;
     /** By the curve node's own id. */
     std::map<NodeId, Buffer> buffers;
-    std::vector<KeySel> sel;
-    NodeId activeCurve = scene::kNoNode;
 
-    /** What commands call a channel: its curve node, or for a rotation channel its plug. Empty when read only. */
-    std::string commandTarget(NodeId id) const;
-    const Channel* channelOf(NodeId curve) const;
-    bool isSelected(NodeId curve, double t) const;
-    /** Curves edits apply to: those with selected keys, else the clicked one, else every shown one. */
-    std::vector<NodeId> targetCurves() const;
-    void dropMissing();
     void frame(bool selectedOnly);
     /** Recomputes each channel's display map for the view mode. */
     void updateMaps();
-    /** The selection as a keys argument: [{curve, times}], read-only channels left out. */
-    nlohmann::json keysArgument() const;
-    /** The curves edits apply to as command objects (curve nodes, or plugs for rotation channels). */
-    nlohmann::json targetNames() const;
     void loopKeys(bool on);
     void invalidateMotion() { mWorld.invalidate(); }
 
@@ -136,6 +111,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* e) override;
     void mouseReleaseEvent(QMouseEvent* e) override;
     void wheelEvent(QWheelEvent* e) override;
+    void keyPressEvent(QKeyEvent* e) override;
 
 private:
     enum class Drag : uint8_t
@@ -160,23 +136,6 @@ private:
     double displayAt(double y) const { return mV0 + (plotBottom() - y) / mSy; }
     double yOfKey(const Channel& ch, double v) const { return yOf(ch.display(v)); }
 
-    std::vector<NodeId> activeSet() const;
-    std::vector<double> selectedTimes(NodeId id) const;
-    /** The channel's value over time as drawn, with any edit in progress and the curve's modifiers applied. */
-    std::function<double(double)> sampler(NodeId id, const anim::Curve& c) const;
-    double defaultFor(const Channel& ch) const;
-
-    /** The move or scale in progress for one channel. */
-    anim::KeyTransform transformFor(NodeId id) const;
-    bool transforming() const { return (mDrag == Drag::Move || mDrag == Drag::Scale || mDrag == Drag::Region) && mMoved; }
-    /** During a key drag the selection still holds the old times; maps a previewed key back. */
-    double keyTimeBeforeDrag(NodeId curve, double t) const;
-    anim::RotationCurve previewRotation(NodeId realId) const;
-    /** The channel's keys with every edit in progress applied. */
-    anim::Curve preview(NodeId id) const;
-    /** Weight (0..1) the falloff gives an unselected key during a drag; 0 when falloff is off. */
-    double falloffWeightAt(NodeId id, double t) const;
-
     QPointF handlePoint(const anim::Curve& c, size_t i, bool out, const Channel& ch) const;
     void drawCurve(QPainter& p, const anim::Curve& c, const Channel& ch, bool active, const std::function<double(double)>& eval,
                    const QColor* ghost = nullptr);
@@ -191,19 +150,21 @@ private:
     bool hitHandle(QPointF pos);
     NodeId hitCurve(QPointF pos) const;
     double angleFor(QPointF pos, double* weight) const;
-    double screenAngleOf(const Channel& ch, double slope) const;
-    double slopeOfScreenAngle(const Channel& ch, double degrees) const;
     void scrubTo(double x);
 
     void beginTransform(Drag kind);
+    /** Makes key the one the readout follows and typed numbers set. */
+    void setAnchor(const KeySel& key);
     /** Pivots for a scale: the time pivot and each channel's value pivot, from the pivot setting. */
     void setPivots(QPointF press);
     void finishBox();
-    void commitTransform();
-    void commitTangent();
-    void commitTangentRotate();
-    void selectionChanged();
+    /** Ends the drag in progress: commits it, or with cancel puts back what it changed. */
+    void endDrag(bool cancel);
     void showMenu(QPoint at);
+    /** The drag's readout at the cursor: the dragged key's frame and value, or the tangent's angle, and any axis lock. */
+    QString readout() const;
+    /** A number typed during a key drag: the dragged key's frame (when the value is locked) or value, else its tangent angle. */
+    void applyTyped();
 
     GraphEditor* mEditor;
     double mT0 = -0.2; // time at the left edge
@@ -218,32 +179,23 @@ private:
     QPointF mPress;
     QPointF mLast;
     bool mMoved = false;
-    int mBoxMode = 0; // 1 add, -1 remove, 0 replace
+    SelectOp mBoxOp = SelectOp::Replace;
     NodeId mPressCurve = scene::kNoNode;
     double mZoomAnchorT = 0.0, mZoomAnchorV = 0.0, mZoomSx = 1.0, mZoomSy = 1.0;
 
-    // Move, scale and region drags: time parts shared, value offset in display units, value pivots per channel.
-    anim::KeyTransform mXform;
-    double mDisplayOffset = 0.0;
-    std::map<NodeId, double> mValuePivots;
     int mRegionHandle = -1;
     QRectF mRegionStart;
-
-    KeySel mTangent;
-    int mTangentSide = 1;
-    double mTangentAngle = std::nan("");
-    double mTangentWeight = std::nan("");
-    double mRotateDelta = 0.0; // screen degrees, the rotate tool
-
-    bool mTweening = false;
-    anim::BlendMode mTweenMode = anim::BlendMode::Neighbour;
-    double mTweenAmount = 0.0;
+    /** The key a move drag started on (or the first selected key), whose frame and value the readout shows. */
+    std::optional<KeySel> mAnchor;
+    double mAnchorValue = 0.0;
+    /** Axis lock of the drag in progress: 1 time locked (value moves), 2 value locked, 0 free. */
+    int mLock = 0;
+    QString mTyped;
+    /** A right-button press in the plot: a click opens the context menu, a drag the tangent marking menu. */
+    bool mRightPending = false;
 
     WorldMotion mWorld;
 
-    /** Mirrors the drag in progress into the scene so the viewport follows it; cleared before every commit. */
-    void pushPreviews();
-    void dropPreviews();
     void endHold();
 
     struct Hold

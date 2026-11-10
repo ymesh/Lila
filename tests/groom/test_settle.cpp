@@ -3,6 +3,7 @@
 #include "GroomTestUtil.h"
 
 #include "groom/Locks.h"
+#include "groom/RodSettle.h"
 #include "groom/Settle.h"
 
 #include <cmath>
@@ -128,4 +129,53 @@ TEST_CASE("settle: a fan of flat locks from the crown lies down smooth, without 
         CHECK(turning(s[k]) < before[k] * 1.5 + 0.5);
     CHECK(deepest(s, 10.0) < 0.05);
     CHECK(st.lastMotion < 0.5);
+}
+
+TEST_CASE("settleOnRods: GroomLab's rod solver drops a lock straight out, root and length kept, resting outside the head")
+{
+    const Surface scalp = sphereScalp(10.0);
+    Splines s{guide(D3(10, 0, 0), D3(1, 0, 0), 12.0, 16, 1.0)};
+    const double len = attr::length(s[0]);
+    const std::vector<std::vector<double>> radii{std::vector<double>(16, 0.3)};
+    SettleOptions o;
+    o.steps = 240;
+    o.bend = 0.1;
+    o.holdShape = 0.0;
+    o.rootStiffness = 0.2;
+    SettleStats st;
+    settleOnRods(s, radii, &scalp, o, &st);
+    CHECK(glm::distance(s[0].points.front(), D3(10, 0, 0)) < 1e-3);
+    CHECK(s[0].points.back().y < -6.0);
+    CHECK(attr::length(s[0]) == doctest::Approx(len).epsilon(0.03));
+    CHECK(deepest(s, 10.0, 0.3) < 0.05);
+    CHECK(st.maxPenetration < 0.05);
+}
+
+TEST_CASE("settleOnRods: draped locks drawn through each other end apart and outside the head, the same every run")
+{
+    const Surface scalp = sphereScalp(10.0);
+    auto make = [] {
+        Splines s;
+        s.push_back(lyingGuide(10.0, 0.0, 16, 1.0));
+        s.push_back(lyingGuide(10.0, 0.02, 16, 2.0));
+        for (Spline& sp : s)
+            for (D3& p : sp.points)
+                p *= 0.98;
+        s[0].points.front() = glm::normalize(s[0].points.front()) * 10.0;
+        s[1].points.front() = glm::normalize(s[1].points.front()) * 10.0;
+        return s;
+    };
+    const std::vector<std::vector<double>> radii(2, std::vector<double>(16, 0.25));
+    SettleOptions o;
+    o.steps = 120;
+    Splines a = make(), b = make();
+    settleOnRods(a, radii, &scalp, o);
+    settleOnRods(b, radii, &scalp, o);
+    CHECK(deepest(a, 10.0, 0.25) < 0.06);
+    double closest = 1e9;
+    for (size_t i = 4; i < a[0].size(); ++i)
+        for (size_t j = 4; j < a[1].size(); ++j)
+            closest = std::min(closest, glm::distance(a[0].points[i], a[1].points[j]));
+    CHECK(closest > 0.4);
+    CHECK(a[0].points == b[0].points);
 }

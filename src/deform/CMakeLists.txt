@@ -1,6 +1,8 @@
 find_package(Eigen3 CONFIG REQUIRED)
 
 lila_module(lila_deform Scene
+    BendBones.cpp
+    BendBones.h
     Deform.cpp
     Deform.h
     DeformUtil.h
@@ -11,6 +13,8 @@ lila_module(lila_deform Scene
     RigidBind.h
     Shape.cpp
     Shape.h
+    SoftNet.cpp
+    SoftNet.h
     Skinning.cpp
     Skinning.h
     Ssdr.cpp

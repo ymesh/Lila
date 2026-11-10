@@ -6,6 +6,7 @@
 #include "ui/NodeHandles.h"
 #include "ui/RenderPasses.h"
 #include "ui/SelectionHandlers.h"
+#include "ui/SurfaceSnap.h"
 #include "ui/ViewportDisplay.h"
 #include "ui/ViewportHooks.h"
 #include "ui/ViewportRenderers.h"

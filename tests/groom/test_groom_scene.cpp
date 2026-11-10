@@ -175,8 +175,30 @@ TEST_CASE("groomShell: one live mesh over the locks; scene round trip keeps the 
     const curve::Splines& s = guides(guide);
     REQUIRE(s.size() == 5);
     CHECK(groom::attr::get(s[4], groom::attr::kId, 0.0) == doctest::Approx(5.0));
-    CHECK(groom::attr::get(s[4], groom::attr::kWidth, 0.0) == doctest::Approx(1.4));
+    // A lock's width is its width scale times each point's radius: drawn at 1.4, the guide holds 1.4 at its root.
+    CHECK(groom::attr::get(s[4], groom::attr::kWidth, 0.0) * s[4].radius.front() == doctest::Approx(1.4).epsilon(0.02));
     CHECK(outMesh(shell[0])->numFaces() > 100);
+}
+
+TEST_CASE("groomShell quads: the shell quad remeshed for retopology in the same step")
+{
+    const json made = makeGroom();
+    const std::string groom = made["groom"];
+    for (int k = 0; k < 5; ++k)
+        run("groomDraw", {{"args", {groom}}, {"points", stroke(k * 0.35)}, {"width", 1.4}});
+    const json shell = run("groomShell", {{"args", {groom}}, {"voxelSize", 0.35}, {"blend", 0.8}, {"quads", 1500}});
+    REQUIRE(shell.size() == 3);
+    scene::MeshPtr q = outMesh(shell[2]["name"]);
+    REQUIRE(q);
+    size_t quads = 0, faces = 0;
+    for (geo::Index f = 0; f < q->faceCapacity(); ++f)
+        if (q->faceValid(f))
+        {
+            ++faces;
+            quads += q->facePoints(f).size() == 4;
+        }
+    CHECK(faces > 500);
+    CHECK(quads > faces * 9 / 10);
 }
 
 TEST_CASE("presets: Lila's are listed; a saved preset brings back the stack, lock settings and guides on another head")
@@ -221,7 +243,9 @@ TEST_CASE("groomEditLock sets a guide's width and twist; grab with settle moves 
     run("groomDraw", {{"args", {groom}}, {"points", stroke(0.15)}});
     run("groomEditLock", {{"args", {guide}}, {"index", 1}, {"width", 2.0}, {"twist", 90.0}});
     const curve::Splines& s = guides(guide);
-    CHECK(groom::attr::get(s[1], groom::attr::kWidth, 0.0) == doctest::Approx(2.0));
+    // Its width scale goes into its points' radius: twice the other lock's, drawn the same.
+    CHECK(s[1].radius.front() * groom::attr::get(s[1], groom::attr::kWidth, 1.0) ==
+          doctest::Approx(2.0 * s[0].radius.front() * groom::attr::get(s[0], groom::attr::kWidth, 1.0)).epsilon(0.02));
     REQUIRE(s[1].tilt.size() == s[1].size());
     CHECK(s[1].tilt.back() == doctest::Approx(glm::radians(90.0)));
 

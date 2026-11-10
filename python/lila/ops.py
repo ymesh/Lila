@@ -41,6 +41,12 @@ def refresh():
         _startup.expose_commands()
     except ImportError:
         pass
+    try:
+        from . import _stubgen
+
+        _stubgen.write_extensions()
+    except Exception:
+        pass
 
 
 def __getattr__(name):

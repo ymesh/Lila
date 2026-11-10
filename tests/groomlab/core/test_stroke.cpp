@@ -11,11 +11,15 @@
 
 #include "groomlab/brush.h"
 #include "groomlab/curve.h"
+#include "groom/GroomEvaluator.h"
+#include "groom/GroomStrokeHost.h"
 #include "groomlab/guide_selection.h"
 #include "groomlab/random.h"
 #include "groomlab/scalp_maps.h"
 #include "groomlab/stroke.h"
 #include "test_helpers.h"
+
+using lila::groom::GroomEvaluator;
 
 namespace groomlab {
 namespace {
@@ -71,6 +75,21 @@ GuideHierarchy groomOn(const ScalpMesh& scalp, int primaries, std::size_t childr
     }
     return h;
 }
+
+struct StrokeGroom {
+    MeshPtr scalp;
+    std::unique_ptr<GroomEvaluator> session;
+    std::unique_ptr<lila::groom::GroomStrokeHost> host;
+    explicit StrokeGroom(int primaries = 40, std::size_t children = 0, const std::string& maps = {}) : scalp(sphereWithUVs()) {
+        GroomData data;
+        data.scalp = scalp;
+        data.hierarchyJson = groomOn(*scalp, primaries, children).toJson();
+        session = std::make_unique<GroomEvaluator>(std::move(data));
+        if (!maps.empty()) session->setScalpMapsJson(maps);
+        host = std::make_unique<lila::groom::GroomStrokeHost>(*session);
+    }
+    std::string guides() const { return session->data().hierarchyJson; }
+};
 
 ToolView frontView() { return ToolView::fromMatrix(test::lookAtProjection({0, 1.2f, 4}, {0, 0.6f, 0}, 40.0, 1.0), 800, 800); }
 
@@ -169,6 +188,408 @@ TEST(ToolView, PixelsAsWorldToViewGivesThem) {
     EXPECT_FALSE(view.projectPixel({50.0f, 0.5f, 0.0f}, ix, iy));  // outside the view: no pixel
     EXPECT_TRUE(view.project({50.0f, 0.5f, 0.0f}, fx, fy));        // ... though in front of the camera
     EXPECT_FALSE(view.projectPixel({0.0f, 1.0f, 9.0f}, ix, iy));   // behind it
+}
+
+TEST(Stroke, CombOnASessionCommitsOneUndoableEdit) {
+    StrokeGroom g;
+    const std::string before = g.guides();
+    const ToolView view = frontView();
+    BrushTool tool;
+    tool.settings.setMode("comb");
+    tool.settings.screenRadius = 120.0f;
+    ASSERT_TRUE(tool.stroke(*g.host, view, screenLine(view, {-0.5f, 1.1f, 0.6f}, {0.5f, 1.1f, 0.6f}, 16)));
+    ASSERT_EQ(g.host->edits().size(), 1u);
+    const StrokeEdit& edit = g.host->edits().back();
+    EXPECT_EQ(edit.mode, "comb");
+    ASSERT_TRUE(edit.text(StrokeField::Guides).set);
+    EXPECT_FALSE(edit.text(StrokeField::Parts).set);
+    EXPECT_EQ(edit.text(StrokeField::Guides).before, before);
+    const std::string after = g.guides();
+    EXPECT_NE(after, before);
+    EXPECT_EQ(after, edit.text(StrokeField::Guides).after);
+    EXPECT_FALSE(g.session->hasPreview());  // the preview went with the commit
+    ASSERT_TRUE(g.host->undo());
+    EXPECT_EQ(g.guides(), before);
+    ASSERT_TRUE(g.host->redo());
+    EXPECT_EQ(g.guides(), after);
+    // A stroke off the groom changes nothing and commits nothing.
+    EXPECT_FALSE(tool.stroke(*g.host, view, {{2, 2}, {30, 2}}));
+    EXPECT_EQ(g.host->edits().size(), 1u);
+}
+
+TEST(Stroke, UndoBringsBackGuidesAndMapsHandedOverAsObjects) {
+    // A session given its guides as a hierarchy and its maps as maps (no texts): undo sets them
+    // back as they were (the maps as they are stored: values to 1/1000).
+    StrokeGroom g;
+    const std::string original = g.session->storedHierarchy()->toJson();
+    g.session->setHierarchy(std::make_shared<const GuideHierarchy>(*g.session->storedHierarchy()));
+    ScalpMaps maps;
+    maps.maps["crown"] = ScalpMapEntry{"vertices", std::vector<float>(g.scalp->pointCount(), 0.123456f), ""};
+    g.session->setScalpMaps(maps);
+    const ToolView view = frontView();
+    BrushTool tool;
+    tool.settings.setMode("comb");
+    tool.settings.screenRadius = 120.0f;
+    ASSERT_TRUE(tool.stroke(*g.host, view, screenLine(view, {-0.5f, 1.1f, 0.6f}, {0.5f, 1.1f, 0.6f}, 12)));
+    tool.settings.setMode("paint");
+    tool.settings.paintKind = "vertices";
+    tool.settings.brush.attribute = "crown";
+    ASSERT_TRUE(tool.stroke(*g.host, view, screenLine(view, Vec3f(-0.2f, 0.9f, 0.5f).normalized(), Vec3f(0.2f, 0.9f, 0.5f).normalized(), 6)));
+    ASSERT_TRUE(g.host->undo());
+    EXPECT_EQ(g.session->scalpMaps().maps.at("crown").values, ScalpMaps::fromJson(maps.toJson()).maps.at("crown").values);
+    ASSERT_TRUE(g.host->undo());
+    EXPECT_EQ(g.session->storedHierarchy()->toJson(), original);
+}
+
+TEST(Stroke, TheMatrixAndTheHostsProjectionStrokeAlike) {
+    // Weights read from the matrix (parallel, culled by bounds) or through the host's projection
+    // (serial, nothing culled): the same guides, by the same amounts, Mask by scalp on.
+    const ToolView view = frontView();
+    std::string results[2];
+    for (int k = 0; k < 2; ++k) {
+        StrokeGroom g(30, 4);
+        BrushTool tool;
+        tool.settings.setMode("comb");
+        tool.settings.brush.level = -1;
+        tool.settings.screenRadius = 150.0f;
+        const ToolView used = k == 0 ? view : hostOnly(view);
+        ASSERT_EQ(used.parallelWeights(), k == 0);
+        ASSERT_TRUE(tool.stroke(*g.host, used, screenLine(view, {-0.6f, 1.0f, 0.7f}, {0.6f, 1.0f, 0.7f}, 20)));
+        results[k] = g.guides();
+    }
+    EXPECT_EQ(results[0], results[1]);
+}
+
+TEST(Stroke, ScriptedCombIsTheCoreStroke) {
+    StrokeGroom g;
+    const std::vector<Vec3f> path{{-0.4f, 1.1f, 0.5f}, {0.0f, 1.2f, 0.55f}, {0.4f, 1.1f, 0.5f}};
+    BrushToolSettings s;
+    s.setMode("comb");
+    s.brush.radius = 0.4f;
+    s.brush.strength = 0.8f;
+    GuideHierarchy direct(*g.session->authoredHierarchy());
+    applyBrushStroke(direct, g.scalp.get(), s.brush, path);
+    EXPECT_EQ(scriptedStroke(*g.host, s, path), 0u);
+    EXPECT_EQ(g.guides(), direct.toJson());
+    ASSERT_TRUE(g.host->undo());
+    EXPECT_NE(g.guides(), direct.toJson());
+}
+
+TEST(Stroke, CtrlIsTheOppositeShiftSmooths) {
+    const ToolView view = frontView();
+    const auto path = screenLine(view, {-0.3f, 1.1f, 0.6f}, {0.3f, 1.1f, 0.6f}, 12);
+    // Ctrl is every brush's opposite: Lift lays the guides down.
+    std::string lifted, laid;
+    for (const bool ctrl : {false, true}) {
+        StrokeGroom g;
+        BrushTool tool;
+        tool.settings.setMode("lift");
+        tool.settings.screenRadius = 150.0f;
+        ASSERT_TRUE(tool.stroke(*g.host, view, path, 1.0f, ctrl ? kStrokeCtrl : 0u));
+        (ctrl ? laid : lifted) = g.guides();
+    }
+    EXPECT_NE(lifted, laid);
+    // Comb has no opposite: Ctrl leaves it as it is.
+    std::string combed, ctrlCombed;
+    for (const bool ctrl : {false, true}) {
+        StrokeGroom g;
+        BrushTool tool;
+        tool.settings.setMode("comb");
+        tool.settings.screenRadius = 150.0f;
+        ASSERT_TRUE(tool.stroke(*g.host, view, path, 1.0f, ctrl ? kStrokeCtrl : 0u));
+        (ctrl ? ctrlCombed : combed) = g.guides();
+    }
+    EXPECT_EQ(combed, ctrlCombed);
+    // Shift smooths with every brush: a Comb stroke with Shift is a Smooth stroke (selecting is the
+    // Select tool's).
+    std::string shiftCombed, smoothed;
+    for (const bool shift : {true, false}) {
+        StrokeGroom g;
+        BrushTool tool;
+        tool.settings.setMode(shift ? "comb" : "smooth");
+        tool.settings.screenRadius = 150.0f;
+        ASSERT_TRUE(tool.stroke(*g.host, view, path, 1.0f, shift ? kStrokeShift : 0u));
+        EXPECT_EQ(tool.settings.modeName(), shift ? "comb" : "smooth");  // (Comb again after it)
+        (shift ? shiftCombed : smoothed) = g.guides();
+    }
+    EXPECT_EQ(shiftCombed, smoothed);
+    EXPECT_NE(shiftCombed, combed);
+    // Painting a guide attribute (Freeze), Ctrl is the opposite: it unfreezes.
+    std::string frozen, thawed;
+    for (const bool ctrl : {false, true}) {
+        StrokeGroom g;
+        BrushTool tool;
+        tool.settings.setMode("paint");  // the Freeze tool: Paint on the guides' freeze mask
+        tool.settings.brush.attribute = "freeze";
+        tool.settings.brush.value = 1.0f;
+        tool.settings.paintKind = "guides";
+        tool.settings.screenRadius = 150.0f;
+        if (ctrl) ASSERT_TRUE(tool.stroke(*g.host, view, path, 1.0f, 0u));  // frozen first, then Ctrl unfreezes
+        ASSERT_TRUE(tool.stroke(*g.host, view, path, 1.0f, ctrl ? kStrokeCtrl : 0u));
+        (ctrl ? thawed : frozen) = g.guides();
+    }
+    EXPECT_NE(frozen, thawed);
+    // The Shape brush: Ctrl shrinks the tubes it grows.
+    std::string grown, shrunk;
+    for (const bool ctrl : {false, true}) {
+        StrokeGroom g;
+        BrushTool tool;
+        tool.settings.setMode("shape");
+        tool.settings.brush.strength = 0.5f;
+        tool.settings.screenRadius = 150.0f;
+        ASSERT_TRUE(tool.stroke(*g.host, view, path, 1.0f, ctrl ? kStrokeCtrl : 0u));
+        const GuideHierarchy h = GuideHierarchy::fromJson(g.guides());
+        float width = 0.0f;
+        for (const HierarchyGuide& guide : h.guides()) {
+            for (const float w : guide.tube.width) width += w;
+        }
+        (ctrl ? shrunk : grown) = std::to_string(width);
+    }
+    EXPECT_GT(std::stof(grown), std::stof(shrunk));
+    // A guide brush's Shift: a click does nothing, a drag smooths the guides (one step), the tool
+    // Comb again after it.
+    {
+        StrokeGroom g(20, 3);
+        BrushTool tool;
+        tool.settings.setMode("comb");
+        tool.settings.screenRadius = 150.0f;
+        tool.press(*g.host, view, path[0][0], path[0][1], 1.0f, kStrokeShift);
+        EXPECT_FALSE(tool.stroking());
+        EXPECT_EQ(tool.release(*g.host, view), StrokeRelease::None);
+        EXPECT_TRUE(g.host->edits().empty());
+        tool.press(*g.host, view, path[0][0], path[0][1], 1.0f, kStrokeShift);
+        for (std::size_t i = 1; i < path.size(); ++i) tool.drag(*g.host, view, path[i][0], path[i][1], 1.0f);
+        EXPECT_TRUE(tool.stroking());
+        EXPECT_EQ(tool.settings.modeName(), "smooth");
+        EXPECT_EQ(tool.release(*g.host, view), StrokeRelease::Stroke);
+        EXPECT_EQ(g.host->edits().size(), 1u);
+        EXPECT_EQ(tool.settings.modeName(), "comb");
+    }
+    // Painting, Shift: a click does nothing (no stroke, no step), a drag smooths while the tool
+    // stays the Paint brush.
+    StrokeGroom g(20, 3);
+    BrushTool tool;
+    tool.settings.setMode("paint");
+    tool.settings.brush.attribute = "mask";
+    tool.settings.paintKind = "guides";
+    tool.settings.screenRadius = 150.0f;
+    tool.press(*g.host, view, path[0][0], path[0][1], 1.0f, kStrokeShift);
+    EXPECT_FALSE(tool.stroking());
+    EXPECT_EQ(tool.release(*g.host, view), StrokeRelease::None);
+    const std::size_t clicked = g.host->edits().size();
+    EXPECT_EQ(clicked, 0u);
+    tool.press(*g.host, view, path[0][0], path[0][1], 1.0f, kStrokeShift);
+    for (std::size_t i = 1; i < path.size(); ++i) tool.drag(*g.host, view, path[i][0], path[i][1], 1.0f);
+    EXPECT_TRUE(tool.stroking());
+    EXPECT_EQ(tool.settings.brush.mode, BrushMode::Smooth);
+    EXPECT_EQ(tool.toolModeName(), "paint");
+    tool.release(*g.host, view);
+    EXPECT_EQ(tool.settings.brush.mode, BrushMode::Attribute);
+}
+
+TEST(Stroke, PaintingGuideWeightReshapesTheHairWhereGuidesGiveWay) {
+    // + New Map > Guide weight: a vertex map wired to Interpolate's guideWeight, white (as before:
+    // the hair unchanged); a stroke of black lets the guides there give way to their neighbours,
+    // reshaping the hair round it, as a fresh session of the painted groom gives it.
+    const ToolView view = frontView();
+    const auto path = screenLine(view, Vec3f(-0.2f, 0.9f, 0.5f).normalized(), Vec3f(0.2f, 0.9f, 0.5f).normalized(), 8);
+    StrokeGroom g(40);
+    const std::vector<Vec3f> before = g.session->evaluate(GroomEvaluator::Request{}).strands->positions();
+    BrushTool tool;
+    const PaintableSetting* setting = paintableSetting("guideWeight");
+    ASSERT_TRUE(setting);
+    const std::string node = firstNodeOfType(g.session->data().graphJson, setting->type);
+    ASSERT_FALSE(node.empty());
+    paintParamMap(*g.host, tool.settings, node, setting->param);
+    const GroomEvaluator::Result& wired = g.session->evaluate(GroomEvaluator::Request{});
+    ASSERT_TRUE(wired.errors.empty()) << wired.errors[0];
+    EXPECT_EQ(wired.strands->positions(), before) << "a white map weighs every guide alike";
+    tool.settings.brush.value = 0.0f;
+    tool.settings.brush.strength = 1.0f;
+    tool.settings.brush.hardness = 1.0f;
+    tool.settings.screenRadius = 60.0f;
+    ASSERT_TRUE(tool.stroke(*g.host, view, path, 1.0f, 0u));
+    const GroomEvaluator::Result& painted = g.session->evaluate(GroomEvaluator::Request{});
+    ASSERT_TRUE(painted.errors.empty()) << painted.errors[0];
+    EXPECT_NE(painted.strands->positions(), before);
+    GroomEvaluator fresh(g.session->data());
+    fresh.setScalpMapsJson(g.session->scalpMapsJson());
+    EXPECT_EQ(fresh.evaluate(GroomEvaluator::Request{}).strands->positions(), painted.strands->positions());
+}
+
+TEST(Stroke, CtrlTakesHairAwayOnADensityOrWidthMapWhateverTheValue) {
+    // The tester's report: with the value lowered, Ctrl painted hair back in (toward 1 - value).
+    // Ctrl takes away (toward 0) whatever the value; without Ctrl, toward the value. The map is
+    // the one + New Map > for a setting makes (paintParamMap).
+    const ToolView view = frontView();
+    const auto path = screenLine(view, Vec3f(-0.2f, 0.9f, 0.5f).normalized(), Vec3f(0.2f, 0.9f, 0.5f).normalized(), 8);
+    for (const char* brush : {"density", "width"}) {
+        for (const bool ctrl : {false, true}) {
+            SCOPED_TRACE(std::string(brush) + (ctrl ? " with Ctrl" : ""));
+            StrokeGroom g(4);
+            BrushTool tool;
+            const PaintableSetting* setting = paintableSetting(brush);
+            ASSERT_TRUE(setting);
+            paintParamMap(*g.host, tool.settings, firstNodeOfType(g.session->data().graphJson, setting->type), setting->param);
+            tool.settings.brush.value = 0.3f;
+            tool.settings.brush.strength = 1.0f;
+            tool.settings.brush.hardness = 1.0f;
+            tool.settings.screenRadius = 60.0f;
+            ASSERT_TRUE(tool.stroke(*g.host, view, path, 1.0f, ctrl ? kStrokeCtrl : 0u));
+            const ScalpMaps& maps = g.session->scalpMaps();
+            const std::string name = std::string(brush) == "density" ? "scatter_density" : "width_width";
+            ASSERT_TRUE(maps.maps.count(name)) << g.session->scalpMapsJson();
+            const std::vector<float>& values = maps.maps.at(name).values;
+            ASSERT_FALSE(values.empty());
+            EXPECT_EQ(*std::max_element(values.begin(), values.end()), 1.0f);  // white where the stroke did not go
+            EXPECT_NEAR(*std::min_element(values.begin(), values.end()), ctrl ? 0.0f : 0.3f, 1e-4f);
+        }
+    }
+}
+
+TEST(Stroke, PickLevelAndHover) {
+    StrokeGroom g(20, 4);
+    const ToolView view = frontView();
+    BrushTool tool;
+    tool.settings.setMode("comb");
+    tool.settings.screenRadius = 40.0f;
+    // A child's tip: the pick is that child's level and group.
+    const std::shared_ptr<const GuideHierarchy> h = g.session->hierarchy();
+    const HierarchyGuide* child = nullptr;
+    for (const HierarchyGuide& guide : h->guides()) {
+        if (h->groupDepth(guide.group) == 1) {
+            float x = 0, y = 0;
+            if (view.project(guide.points.back(), x, y) && x > 50 && x < 750 && y > 50 && y < 750) {
+                child = &guide;
+                break;
+            }
+        }
+    }
+    ASSERT_NE(child, nullptr);
+    float x = 0, y = 0;
+    view.project(child->points.back(), x, y);
+    const int level = tool.pickLevel(*g.host, view, x, y);
+    EXPECT_GE(level, 0);
+    EXPECT_EQ(tool.settings.brush.level, level);
+    EXPECT_EQ(tool.pickLevel(*g.host, view, 2, 2), -2);
+    // Hovering lights the brushable guides under the circle only.
+    tool.settings.brush.level = -1;
+    tool.settings.brush.group.clear();
+    EXPECT_FALSE(tool.affectedLines(*g.host, view, x, y).empty());
+    EXPECT_TRUE(tool.affectedLines(*g.host, view, 2, 2).empty());
+    EXPECT_EQ(tool.affectedLines(*g.host, view, x, y).size(), tool.affectedLines(*g.host, hostOnly(view), x, y).size());
+}
+
+TEST(Stroke, PlaceDrawPartAndFlowTools) {
+    StrokeGroom g(10);
+    const ToolView view = frontView();
+    BrushTool tool;
+    const std::size_t guides = g.session->authoredHierarchy()->guides().size();
+    tool.settings.setMode("place");
+    tool.settings.place.matchNeighbors = false;
+    float x = 0, y = 0;
+    view.project(Vec3f(0.2f, 0.6f, 0.77f).normalized(), x, y);
+    ASSERT_TRUE(tool.stroke(*g.host, view, {{std::round(x), std::round(y)}}));
+    EXPECT_EQ(g.session->authoredHierarchy()->guides().size(), guides + 1);
+    // A part drawn across the scalp, erased again with Ctrl.
+    tool.settings.setMode("part");
+    tool.settings.partName = "crown";
+    const auto across = screenLine(view, Vec3f(-0.4f, 0.85f, 0.35f).normalized(), Vec3f(0.4f, 0.85f, 0.35f).normalized(), 21);
+    tool.stroke(*g.host, view, across);
+    PartSet parts = PartSet::fromJson(g.session->data().partsJson);
+    ASSERT_EQ(parts.parts.size(), 1u);
+    EXPECT_EQ(parts.parts[0].name, "crown");
+    float mx = 0, my = 0;
+    view.project(Vec3f(0.0f, 0.85f, 0.35f).normalized(), mx, my);
+    tool.stroke(*g.host, view, {{std::round(mx), std::round(my) - 30}, {std::round(mx), std::round(my) + 30}}, 1.0f, kStrokeCtrl);
+    EXPECT_TRUE(PartSet::fromJson(g.session->data().partsJson).empty());
+    g.host->undo();
+    EXPECT_EQ(PartSet::fromJson(g.session->data().partsJson).parts.size(), 1u);
+    // Flow: one line of arrows along the stroke.
+    tool.settings.setMode("flow");
+    tool.settings.screenRadius = 100.0f;
+    tool.stroke(*g.host, view, screenLine(view, Vec3f(-0.5f, 0.8f, 0.5f).normalized(), Vec3f(0.4f, 0.8f, 0.5f).normalized(), 16));
+    const FlowSet flow = FlowSet::fromJson(g.session->data().flowJson);
+    ASSERT_GT(flow.pins.size(), 2u);
+    for (std::size_t i = 0; i < flow.pins.size(); ++i) EXPECT_EQ(flow.pins[i].seq, static_cast<int>(i));
+    // Draw: a guide shaped like the stroke.
+    tool.settings.setMode("draw");
+    tool.settings.place.segments = 8;
+    const std::size_t before = g.session->authoredHierarchy()->guides().size();
+    view.project(Vec3f(0.0f, 0.6f, 0.8f).normalized(), x, y);
+    std::vector<std::array<float, 2>> up;
+    for (int k = 0; k < 20; ++k) up.push_back({std::round(x) + 3 * k, std::round(y) + 6 * k});
+    ASSERT_TRUE(tool.stroke(*g.host, view, up));
+    EXPECT_EQ(g.session->authoredHierarchy()->guides().size(), before + 1);
+}
+
+TEST(Stroke, VertexMapPaintedFromScreenAndWorldPoints) {
+    StrokeGroom g(4, 0, R"({"crown": {"kind": "vertices", "values": []}})");
+    const ToolView view = frontView();
+    BrushTool tool;
+    tool.settings.setMode("paint");
+    tool.settings.paintKind = "vertices";
+    tool.settings.brush.attribute = "crown";
+    tool.settings.brush.value = 1.0f;
+    tool.settings.screenRadius = 60.0f;
+    ASSERT_TRUE(tool.stroke(*g.host, view, screenLine(view, Vec3f(-0.2f, 0.9f, 0.5f).normalized(), Vec3f(0.2f, 0.9f, 0.5f).normalized(), 8)));
+    const ScalpMaps maps = ScalpMaps::fromJson(g.host->edits().back().text(StrokeField::ScalpMaps).after);
+    const std::vector<float>& values = maps.maps.at("crown").values;
+    ASSERT_EQ(values.size(), g.scalp->pointCount());
+    EXPECT_GT(*std::max_element(values.begin(), values.end()), 0.5f);
+    EXPECT_EQ(*std::min_element(values.begin(), values.end()), 0.0f);
+    EXPECT_EQ(g.session->scalpMaps().maps.at("crown").values, values);
+    // Scripted: dabs a quarter radius apart along the points, the same code as paintMapStroke.
+    BrushToolSettings s;
+    s.setMode("paint");
+    s.paintKind = "vertices";
+    s.brush.attribute = "crown";
+    s.brush.value = 0.25f;
+    s.brush.radius = 0.3f;
+    s.brush.mirrorAxis = 0;
+    const std::vector<Vec3f> path{{0.3f, 0.8f, 0.5f}, {0.5f, 0.6f, 0.6f}};
+    std::vector<float> expected = values;
+    MapCanvas canvas;
+    canvas.vertices = &expected;
+    const std::size_t changed = paintMapStroke(canvas, *g.scalp, MapDab::of(s, s.brush, kGrayMap, false, 1.0f), path, 0.3f);
+    EXPECT_EQ(scriptedStroke(*g.host, s, path), changed);
+    EXPECT_EQ(g.session->scalpMaps().maps.at("crown").values, ScalpMaps::fromJson(withVertexMap({}, "crown", expected, 1).toJson()).maps.at("crown").values);
+    ASSERT_TRUE(g.host->undo());
+    EXPECT_EQ(g.session->scalpMaps().maps.at("crown").values, values);
+}
+
+TEST(Stroke, TextureMapStrokeUndoesByTiles) {
+    StrokeGroom g(4, 0, R"({"tint": {"kind": "texture", "texture": "tint.png", "channels": 4}})");
+    auto paint = std::make_shared<TexturePaint>(*g.scalp, 128, 128, PaintColor{0.0f, 0.0f, 0.0f, 1.0f});
+    g.host->setTexturePaint("tint", paint);
+    const std::vector<float> blank = paint->values();
+    const ToolView view = frontView();
+    BrushTool tool;
+    tool.settings.setMode("paint");
+    tool.settings.paintKind = "texture";
+    tool.settings.brush.attribute = "tint";
+    tool.settings.paintColor = {0.0f, 0.0f, 1.0f, 1.0f};
+    tool.settings.paintChannels = channelMask("b");
+    tool.settings.screenRadius = 60.0f;
+    ASSERT_TRUE(tool.stroke(*g.host, view, screenLine(view, Vec3f(-0.2f, 0.9f, 0.5f).normalized(), Vec3f(0.2f, 0.9f, 0.5f).normalized(), 8)));
+    const StrokeEdit& edit = g.host->edits().back();
+    EXPECT_EQ(edit.textureMap, "tint");
+    EXPECT_FALSE(edit.texture.empty());
+    EXPECT_FALSE(paint->editing());
+    const std::vector<float> painted = paint->values();
+    ASSERT_NE(painted, blank);
+    for (std::size_t i = 0; i < painted.size(); i += 4) {
+        EXPECT_EQ(painted[i], 0.0f);  // red untouched
+    }
+    g.host->undo();
+    EXPECT_EQ(paint->values(), blank);
+    g.host->redo();
+    EXPECT_EQ(paint->values(), painted);
+    // A map without a paint is refused with a warning, nothing committed.
+    tool.settings.brush.attribute = "missing";
+    EXPECT_FALSE(tool.stroke(*g.host, view, {{400, 600}}));
+    ASSERT_FALSE(g.host->warnings().empty());
+    EXPECT_NE(g.host->warnings().back().find("GroomLab paint:"), std::string::npos);
 }
 
 TEST(GuidePicking, LassoBoundsAndClicks) {
@@ -280,6 +701,22 @@ TEST(GuidePicking, MirrorSelectionAsAScanWouldPick) {
 
 // ---- Brush alphas ------------------------------------------------------------------------------
 
+// A sphere fine enough for an alpha's pattern in a vertex map ("crown"), four guides on it.
+struct FineGroom {
+    MeshPtr scalp = sphereWithUVs(96, 192);
+    std::unique_ptr<GroomEvaluator> session;
+    std::unique_ptr<lila::groom::GroomStrokeHost> host;
+    FineGroom() {
+        GroomData data;
+        data.scalp = scalp;
+        data.hierarchyJson = groomOn(*scalp, 4, 0).toJson();
+        session = std::make_unique<GroomEvaluator>(std::move(data));
+        session->setScalpMapsJson(R"({"crown": {"kind": "vertices", "values": []}})");
+        host = std::make_unique<lila::groom::GroomStrokeHost>(*session);
+    }
+    std::vector<float> crown() const { return session->scalpMaps().maps.at("crown").values; }
+};
+
 // An alpha `size` square, each texel `f(u, v)` (u, v in -1..1 at its center, v up).
 template <typename F>
 BrushAlphaPtr alphaOf(int size, F f) {
@@ -302,6 +739,231 @@ void alphaPaint(BrushTool& tool, const BrushAlphaPtr& alpha, float radius) {
     tool.settings.setHardness(1.0f);  // full strength to the edge: the alpha alone shapes the dab
     tool.settings.screenRadius = radius;
     tool.settings.alpha = alpha;
+}
+
+TEST(Stroke, AlphaShapesTheDab) {
+    // White on the left half: a click paints left of the cursor only; turned half a turn, right
+    // of it. Along the stroke, a click alone stamps on release.
+    const ToolView view = frontView();
+    const BrushAlphaPtr left = alphaOf(64, [](float u, float) { return u < 0.0f ? 1.0f : 0.0f; });
+    float cx = 0, cy = 0;
+    view.project(Vec3f(0.0f, 0.6f, 0.8f).normalized(), cx, cy);
+    for (const char* rotation : {"fixed", "turned", "stroke"}) {
+        SCOPED_TRACE(rotation);
+        FineGroom g;
+        BrushTool tool;
+        alphaPaint(tool, left, 80.0f);
+        if (std::string(rotation) == "turned") tool.settings.alphaAngle = 180.0f;
+        if (std::string(rotation) == "stroke") tool.settings.setAlphaRotation("stroke");
+        ASSERT_TRUE(tool.settings.stampsAlpha());
+        ASSERT_TRUE(tool.stroke(*g.host, view, {{std::round(cx), std::round(cy)}}));
+        const std::vector<float> crown = g.crown();
+        const bool flipped = std::string(rotation) == "turned";
+        std::size_t painted = 0, wrongSide = 0;
+        for (std::size_t v = 0; v < crown.size(); ++v) {
+            if (crown[v] <= 0.01f) continue;
+            float px = 0, py = 0;
+            view.project(g.scalp->points()[v], px, py);
+            ++painted;
+            if (flipped ? px < std::round(cx) - 3.0f : px > std::round(cx) + 3.0f) ++wrongSide;
+        }
+        EXPECT_GT(painted, 20u);
+        EXPECT_EQ(wrongSide, 0u);
+    }
+    // Shift+drag smoothing and guide maps take no alpha.
+    BrushTool tool;
+    alphaPaint(tool, left, 80.0f);
+    tool.settings.paintKind = "guides";
+    EXPECT_FALSE(tool.settings.stampsAlpha());
+}
+
+TEST(Stroke, AlphaDabsAreSpacedAlongTheStroke) {
+    // A dot alpha, dabs 1.5 diameters apart: separate spots, nothing between them; without the
+    // alpha the stroke paints all along.
+    const ToolView view = frontView();
+    const BrushAlphaPtr dot = alphaOf(64, [](float u, float v) { return u * u + v * v < 0.25f ? 1.0f : 0.0f; });
+    const std::vector<std::array<float, 2>> line =
+        screenLine(view, Vec3f(-0.35f, 0.6f, 0.75f).normalized(), Vec3f(0.35f, 0.6f, 0.75f).normalized(), 40);
+    const float radius = 40.0f, step = 1.5f * 2.0f * radius;
+    const float dx = line.back()[0] - line.front()[0], dy = line.back()[1] - line.front()[1];
+    ASSERT_GT(std::hypot(dx, dy), step + radius);
+    const float ux = dx / std::hypot(dx, dy), uy = dy / std::hypot(dx, dy);
+    // The most painted within `within` pixels of the point `along` pixels down the line.
+    const auto most = [&](const FineGroom& g, float along, float within) {
+        const float sx = line.front()[0] + ux * along, sy = line.front()[1] + uy * along;
+        const std::vector<float> crown = g.crown();
+        float m = 0.0f;
+        for (std::size_t v = 0; v < crown.size(); ++v) {
+            const Vec3f& p = g.scalp->points()[v];
+            float px = 0, py = 0;
+            if (p.z < 0.0f || !view.project(p, px, py) || std::hypot(px - sx, py - sy) > within) continue;
+            m = std::max(m, crown[v]);
+        }
+        return m;
+    };
+    FineGroom spaced;
+    BrushTool tool;
+    alphaPaint(tool, dot, radius);
+    tool.settings.setAlphaSpacing(1.5f);
+    ASSERT_TRUE(tool.stroke(*spaced.host, view, line));
+    EXPECT_GT(most(spaced, 0.0f, 12.0f), 0.5f);   // the first dab
+    EXPECT_GT(most(spaced, step, 12.0f), 0.5f);   // the second, a step on
+    EXPECT_EQ(most(spaced, 0.5f * step, 20.0f), 0.0f);  // nothing between
+    FineGroom plain;
+    BrushTool round;
+    alphaPaint(round, nullptr, radius);
+    ASSERT_TRUE(round.stroke(*plain.host, view, line));
+    EXPECT_GT(most(plain, 0.5f * step, 20.0f), 0.5f);
+}
+
+TEST(Stroke, AlphaIsMirroredWithSymmetry) {
+    // The left half (toward the head's middle, painting right of it): the mirrored dab paints
+    // toward the middle too, the alpha mirrored rather than a round spot.
+    const ToolView view = frontView();
+    const BrushAlphaPtr left = alphaOf(64, [](float u, float) { return u < 0.0f ? 1.0f : 0.0f; });
+    const Vec3f at = Vec3f(0.4f, 0.6f, 0.7f).normalized();
+    float cx = 0, cy = 0;
+    view.project(at, cx, cy);
+    FineGroom g;
+    BrushTool tool;
+    alphaPaint(tool, left, 70.0f);
+    tool.settings.setSymmetry("x");
+    ASSERT_TRUE(tool.stroke(*g.host, view, {{std::round(cx), std::round(cy)}}));
+    const std::vector<float> crown = g.crown();
+    std::size_t mirrored = 0, outward = 0;
+    for (std::size_t v = 0; v < crown.size(); ++v) {
+        const Vec3f& p = g.scalp->points()[v];
+        if (crown[v] <= 0.01f || p.x >= 0.0f) continue;
+        ++mirrored;
+        if (p.x < -at.x - 0.04f) ++outward;
+    }
+    EXPECT_GT(mirrored, 20u);
+    EXPECT_EQ(outward, 0u);
+}
+
+// The Length Keys tool: a click adds a key (at the field's scale there: nothing changes), a key
+// dragged up scales up the guides round it in the preview, Apply commits them with the keys back at
+// x1 (one undo step), Cancel drops an edit, a left drag moves a key, Ctrl+click deletes one.
+TEST(LengthKeyTool, KeysPreviewApplyAndCancel) {
+    StrokeGroom g(60);
+    const ToolView view = frontView();
+    BrushTool tool;
+    tool.settings.setMode("lengths");
+    EXPECT_EQ(tool.settings.modeName(), "lengths");
+    tool.settings.screenRadius = 120.0f;
+    const std::string before = g.guides();
+    auto lengths = [&]() {
+        std::map<GuideId, float> out;
+        for (const HierarchyGuide& h : g.host->authoredHierarchy()->guides()) out[h.id] = arcLength(h.points);
+        return out;
+    };
+    const std::map<GuideId, float> start = lengths();
+    ASSERT_EQ(start.size(), 60u);
+    float x = 0, y = 0;
+    ASSERT_TRUE(view.project(Vec3f(0.0f, 0.45f, 0.89f).normalized(), x, y));
+    tool.press(*g.host, view, x, y, 1.0f, 0);
+    EXPECT_EQ(tool.release(*g.host, view), StrokeRelease::Stroke);
+    LengthKeyTool& lk = tool.lengths();
+    ASSERT_EQ(lk.keys(*g.host).keys.size(), 1u);
+    EXPECT_EQ(lk.keys(*g.host).keys[0].scale, 1.0f);  // the first: a hold
+    const float guide = lk.keyLength(*g.host, tool.settings, 0);  // the guide nearest it (about 0.6 to 0.7)
+    EXPECT_GT(guide, 0.5f);
+    EXPECT_LT(guide, 0.9f);
+    EXPECT_TRUE(lk.edited());
+    EXPECT_EQ(g.guides(), before);  // previewed, not applied
+    // A hold on the other side, then the adjusting button dragged up a doubling's worth on the
+    // first key: x2, and the length it gives its guide twice as long.
+    float hx = 0, hy = 0;
+    ASSERT_TRUE(view.project(Vec3f(0.6f, 0.45f, 0.66f).normalized(), hx, hy));
+    tool.press(*g.host, view, hx, hy, 1.0f, 0);
+    tool.release(*g.host, view);
+    ASSERT_EQ(lk.keys(*g.host).keys.size(), 2u);
+    EXPECT_EQ(lk.keys(*g.host).keys[1].scale, 1.0f);  // the field there was x1
+    tool.press(*g.host, view, x, y, 1.0f, kStrokeAdjust);
+    tool.drag(*g.host, view, x, y + LengthKeyTool::kPixelsPerDoubling, 1.0f);
+    tool.release(*g.host, view);
+    EXPECT_EQ(lk.activeKey(), 0);
+    EXPECT_NEAR(lk.keys(*g.host).keys[0].scale, 2.0f, 1e-4f);
+    EXPECT_NEAR(lk.keyLength(*g.host, tool.settings, 0), 2.0f * guide, 1e-4f);
+    // A key placed between them takes the field's scale there: between x1 and x2.
+    tool.press(*g.host, view, 0.5f * (x + hx), 0.5f * (y + hy), 1.0f, 0);
+    tool.release(*g.host, view);
+    ASSERT_EQ(lk.keys(*g.host).keys.size(), 3u);
+    EXPECT_GT(lk.keys(*g.host).keys[2].scale, 1.05f);
+    EXPECT_LT(lk.keys(*g.host).keys[2].scale, 1.95f);
+    lk.deleteKey(*g.host, tool.settings);  // (the active one: just placed)
+    ASSERT_EQ(lk.keys(*g.host).keys.size(), 2u);
+    ASSERT_TRUE(lk.apply(*g.host, tool.settings));
+    EXPECT_FALSE(lk.edited());
+    const std::map<GuideId, float> applied = lengths();
+    std::size_t longer = 0, shorter = 0;
+    for (const auto& [id, length] : start) {
+        const float now = applied.at(id);
+        if (now > length * 1.05f) ++longer;
+        else if (now < length * (1.0f - 1e-5f)) ++shorter;
+    }
+    EXPECT_GT(longer, 0u);
+    EXPECT_EQ(shorter, 0u);
+    // Saved with them, back at x1 (applying again changes nothing).
+    const LengthKeySet& saved = g.host->authoredHierarchy()->lengthKeys();
+    ASSERT_EQ(saved.keys.size(), 2u);
+    EXPECT_FALSE(saved.scaled());
+    EXPECT_EQ(lk.keys(*g.host).keys[0].scale, 1.0f);
+    EXPECT_FALSE(lk.apply(*g.host, tool.settings));  // nothing more to apply
+    // Cancel: an edit dropped, the stored keys back.
+    lk.select(*g.host, 0);
+    lk.setKeyScale(*g.host, tool.settings, 0.5f);
+    EXPECT_TRUE(lk.edited());
+    lk.cancel(*g.host);
+    EXPECT_FALSE(lk.edited());
+    EXPECT_EQ(lk.keys(*g.host).keys[0].scale, 1.0f);
+    // A length typed: the scale that gives the guide nearest the key that length.
+    lk.setKeyLength(*g.host, tool.settings, 3.0f * lk.keyLength(*g.host, tool.settings, 0));
+    EXPECT_NEAR(lk.keys(*g.host).keys[0].scale, 3.0f, 1e-4f);
+    lk.cancel(*g.host);
+    // One undo step: the guides as they were (the tool reads the stored keys again: none).
+    ASSERT_TRUE(g.host->undo());
+    EXPECT_EQ(g.guides(), before);
+    EXPECT_TRUE(lk.keys(*g.host).empty());
+    // A left drag on a key moves it, its scale kept; Ctrl+click deletes it.
+    tool.press(*g.host, view, x, y, 1.0f, 0);
+    tool.release(*g.host, view);
+    lk.setKeyScale(*g.host, tool.settings, 1.5f);
+    const Vec3f wasAt = lk.keys(*g.host).keys[0].point;
+    tool.press(*g.host, view, x, y, 1.0f, 0);
+    tool.drag(*g.host, view, x, y + 25.0f, 1.0f);
+    tool.release(*g.host, view);
+    ASSERT_EQ(lk.keys(*g.host).keys.size(), 1u);
+    EXPECT_GT((lk.keys(*g.host).keys[0].point - wasAt).length(), 0.01f);
+    EXPECT_EQ(lk.keys(*g.host).keys[0].scale, 1.5f);
+    float mx = 0, my = 0;
+    ASSERT_TRUE(view.project(lk.keys(*g.host).keys[0].point, mx, my));
+    tool.press(*g.host, view, mx, my, 1.0f, kStrokeCtrl);
+    tool.release(*g.host, view);
+    EXPECT_TRUE(lk.keys(*g.host).empty());
+    // Symmetry on: the mirrored keys drawn too, across x = 0, marked so.
+    tool.press(*g.host, view, x - 60.0f, y, 1.0f, 0);
+    tool.release(*g.host, view);
+    const LengthKeyTool::Overlay overlay = lk.overlay(*g.host, tool.settings);
+    ASSERT_EQ(overlay.keys.size(), 1u);
+    EXPECT_TRUE(overlay.keys[0].active);
+    tool.settings.setSymmetry("x");
+    const LengthKeyTool::Overlay both = lk.overlay(*g.host, tool.settings);
+    ASSERT_EQ(both.keys.size(), 2u);
+    EXPECT_FALSE(both.keys[0].mirror);
+    EXPECT_TRUE(both.keys[1].mirror);
+    EXPECT_NEAR(both.keys[1].at.x, -both.keys[0].at.x, 0.02f);
+    // Topology: each key at its partner spot on the scalp (here a sphere symmetric about x = 0, so
+    // where the world plane puts it; a posed scalp: LengthField.TopologySymmetryFollowsAPosedScalp).
+    tool.settings.setSymmetry("topology");
+    const LengthKeyTool::Overlay partner = lk.overlay(*g.host, tool.settings);
+    ASSERT_EQ(partner.keys.size(), 2u);
+    EXPECT_TRUE(partner.keys[1].mirror);
+    EXPECT_NEAR(partner.keys[1].at.x, -partner.keys[0].at.x, 0.02f);
+    EXPECT_NEAR(partner.keys[1].at.y, partner.keys[0].at.y, 0.02f);
+    tool.settings.setSymmetry("none");
+    lk.clear(*g.host, tool.settings);
+    EXPECT_TRUE(lk.keys(*g.host).empty());
 }
 
 }  // namespace

@@ -24,11 +24,14 @@
 #include <nlohmann/json.hpp>
 
 #include "groomlab/graph_io.h"
+#include "groom/GroomEvaluator.h"
 #include "groomlab/guide_hierarchy.h"
 #include "groomlab/operators.h"
 #include "groomlab/random.h"
 #include "groomlab/simulation.h"
 #include "test_helpers.h"
+
+using lila::groom::GroomEvaluator;
 
 namespace groomlab {
 namespace {
@@ -530,9 +533,328 @@ GroomData simData(const std::string& graph = kSimGraph) {
     return d;
 }
 
+StrandsPtr viewAt(GroomEvaluator& session, int frame) {
+    GroomEvaluator::Request request;
+    request.time = frame / kFps;
+    const GroomEvaluator::Result& view = session.evaluate(request);
+    EXPECT_TRUE(view.errors.empty()) << (view.errors.empty() ? "" : view.errors.front());
+    return view.strands;
+}
+
 void expectSameStrands(const StrandSet& a, const StrandSet& b, const std::string& what) {
     ASSERT_EQ(a.ids(), b.ids()) << what;
     ASSERT_EQ(a.positions(), b.positions()) << what;
+}
+
+TEST(SimulateNode, GuidesSavedOnAnotherTopologyFollowAMovingScalp) {
+    // A groom saved with its guides bound to another mesh (the scalp re-meshed or subdivided
+    // since): every frame re-rooted them at the points nearest their saved shapes, so on a moving
+    // scalp the guides, and the Simulate node's targets with them, stayed where they were groomed
+    // (a wolf's 32 guides slid to its tail as it ran off). Bound again once on the scalp's rest
+    // pose, they follow it. (strength 0: the Simulate node gives its input guides.)
+    GroomData data = simData(simGraph(R"({"gravity": 9.8, "strength": 0.0, "startFrame": 1})"));
+    data.hierarchyJson = hierarchyOn(*test::makeSphere(8, 16));  // bound on other triangles
+    auto scalp = std::make_shared<ScalpMesh>(*data.scalp);
+    scalp->setRestPoints(scalp->points());
+    data.scalp = scalp;
+    GroomEvaluator session(data);
+    viewAt(session, 1);
+    const GuidesPtr atRest = session.simulatedFrame("sim", 1);
+    ASSERT_TRUE(atRest);
+    std::vector<Vec3f> moved = scalp->points();
+    for (Vec3f& p : moved) p += Vec3f{3.0f, 0.0f, 0.0f};
+    session.updateScalpPoints(moved);
+    viewAt(session, 2);
+    const GuidesPtr after = session.simulatedFrame("sim", 2);
+    ASSERT_TRUE(after);
+    ASSERT_EQ(after->size(), atRest->size());
+    float worst = 0.0f;
+    for (std::size_t g = 0; g < atRest->size(); ++g) {
+        const auto& a = atRest->guides()[g].points;
+        const auto& b = after->guides()[g].points;
+        ASSERT_EQ(a.size(), b.size());
+        for (std::size_t j = 0; j < a.size(); ++j) worst = std::max(worst, (b[j] - (a[j] + Vec3f{3.0f, 0.0f, 0.0f})).length());
+    }
+    EXPECT_LT(worst, 1e-3f) << "the guides did not move with the scalp";
+}
+
+TEST(SimulateNode, MovesTheGuidesTheStrandsFollow) {
+    GroomEvaluator session(simData());
+    GroomEvaluator still(simData(unsimulatedGraph()));
+    const StrandsPtr atStart = viewAt(session, 1);
+    expectSameStrands(*atStart, *viewAt(still, 1), "the start frame is the groom at rest");
+    const StrandsPtr later = viewAt(session, 12);
+    EXPECT_NE(later->positions(), viewAt(still, 12)->positions()) << "the simulation moved nothing";
+    const std::vector<SimStatus> status = session.simulationStatus();
+    ASSERT_EQ(status.size(), 1u);
+    EXPECT_EQ(status[0].node, "sim");
+    ASSERT_EQ(status[0].ranges.size(), 1u);
+    EXPECT_EQ(status[0].ranges[0], std::make_pair(1, 12));
+    EXPECT_TRUE(session.readsTime());
+}
+
+TEST(SimulateNode, ScrubbingBackGivesTheFirstPassExactly) {
+    GroomEvaluator session(simData());
+    std::vector<std::vector<Vec3f>> first;
+    for (int f = 1; f <= 16; ++f) first.push_back(viewAt(session, f)->positions());
+    const std::size_t evaluations = session.evaluationCount();
+    for (int f = 16; f >= 1; --f) {
+        EXPECT_EQ(viewAt(session, f)->positions(), first[static_cast<std::size_t>(f - 1)]) << "frame " << f;
+    }
+    // Scrubbing back steps nothing: only the graph after the Simulate node runs again.
+    EXPECT_EQ(session.simulationStatus()[0].frames, 16u);
+    EXPECT_GT(session.evaluationCount(), evaluations);
+}
+
+TEST(SimulateNode, AJumpForwardStepsOnFromTheLastFrameAsPlayingDoes) {
+    GroomEvaluator played(simData()), jumped(simData());
+    played.setSimulationFeed([](double) { return true; });  // the inputs are the same at every time
+    jumped.setSimulationFeed([](double) { return true; });
+    for (int f = 1; f <= 6; ++f) viewAt(played, f);
+    viewAt(jumped, 6);
+    for (int f = 7; f <= 20; ++f) viewAt(played, f);
+    const StrandsPtr a = viewAt(played, 20), b = viewAt(jumped, 20);
+    expectSameStrands(*a, *b, "a jump from frame 6 to 20");
+    EXPECT_EQ(jumped.simulationStatus()[0].ranges[0], std::make_pair(1, 20));
+}
+
+TEST(SimulateNode, AParamChangeDropsTheFramesFromTheStartFrame) {
+    GroomEvaluator session(simData(simGraph(R"({"gravity": 9.8, "collisionOffset": 0.02, "cacheMode": "cached"})")));
+    const SimRun run = session.simulateTo(10);
+    EXPECT_TRUE(run.errors.empty());
+    EXPECT_EQ(run.frames, 10);
+    EXPECT_EQ(session.simulationStatus()[0].frames, 10u);
+    const StrandsPtr simulated = viewAt(session, 10);
+    session.setGraphJson(simGraph(R"({"gravity": 9.8, "collisionOffset": 0.02, "cacheMode": "cached", "damping": 0.4})"));
+    const StrandsPtr after = viewAt(session, 10);
+    EXPECT_EQ(session.simulationStatus()[0].frames, 0u) << "the frames of the old settings stayed";
+    GroomEvaluator still(simData(unsimulatedGraph()));
+    expectSameStrands(*after, *viewAt(still, 10), "cached mode without frames passes the guides through");
+    EXPECT_NE(simulated->positions(), after->positions());
+}
+
+TEST(SimulateNode, AGroomEditDropsTheFrames) {
+    GroomData data = simData();
+    GroomEvaluator session(data);
+    viewAt(session, 8);
+    ASSERT_EQ(session.simulationStatus()[0].frames, 8u);
+    session.setHierarchyJson(hierarchyOn(*data.scalp, 0.3f));
+    viewAt(session, 8);
+    // Started again from frame 1 on the new guides: a fresh session's frames.
+    GroomData edited = data;
+    edited.hierarchyJson = hierarchyOn(*data.scalp, 0.3f);
+    GroomEvaluator fresh(edited);
+    expectSameStrands(*viewAt(session, 8), *viewAt(fresh, 8), "after a groom edit");
+}
+
+TEST(SimulateNode, AGroomEditShownAtASubframeDropsTheFramesToo) {
+    // Edited while a subframe shows (a frame it kept has no inputs at that time to compare): the
+    // same time again with other inputs starts it again, so frames after are a fresh session's,
+    // not stepped on from frames simulated before the edit.
+    GroomData data = simData();
+    GroomEvaluator session(data);
+    auto at = [](GroomEvaluator& s, double frame) {
+        GroomEvaluator::Request request;
+        request.time = frame / kFps;
+        const GroomEvaluator::Result& view = s.evaluate(request);
+        EXPECT_TRUE(view.errors.empty());
+        return view.strands;
+    };
+    at(session, 6.5);
+    session.setHierarchyJson(hierarchyOn(*data.scalp, 0.3f));
+    at(session, 6.5);
+    GroomData edited = data;
+    edited.hierarchyJson = hierarchyOn(*data.scalp, 0.3f);
+    GroomEvaluator fresh(edited);
+    expectSameStrands(*at(session, 6.5), *at(fresh, 6.5), "the subframe after the edit");
+    expectSameStrands(*viewAt(session, 10), *viewAt(fresh, 10), "a frame after the edit");
+}
+
+TEST(SimulateNode, CachedModeStepsOnlyInSimulateRange) {
+    GroomEvaluator session(simData(simGraph(R"({"gravity": 9.8, "cacheMode": "cached"})")));
+    viewAt(session, 12);
+    EXPECT_EQ(session.simulationStatus()[0].frames, 0u) << "a view stepped a cached-mode node";
+    int calls = 0;
+    const SimRun run = session.simulateTo(24, [&](int done, int count) {
+        ++calls;
+        EXPECT_EQ(count, 24);
+        return done < 12;  // stop half way
+    });
+    EXPECT_TRUE(run.cancelled);
+    EXPECT_EQ(calls, 12);
+    EXPECT_EQ(session.simulationStatus()[0].ranges[0], std::make_pair(1, 12));
+    EXPECT_FALSE(session.simulationStatus()[0].live);
+    session.invalidateSimulation();
+    EXPECT_EQ(session.simulationStatus()[0].frames, 0u);
+}
+
+TEST(SimulateNode, AGroomReadsEarlierFramesUntilABakeCoversThem) {
+    GroomEvaluator stepped(simData());
+    for (int f = 1; f <= 12; ++f) viewAt(stepped, f);
+    EXPECT_TRUE(stepped.readsEarlierFrames({}, 1, 12)) << "a live Simulate node without a bake";
+    EXPECT_FALSE(stepped.readsEarlierFrames({}, -10, 0)) << "frames before its start frame";
+    // A bake of frames 1-12 made with the node's settings.
+    GroomEvaluator session(simData());
+    auto baked = std::make_shared<BakedSimulation>();
+    baked->read = [&stepped](double seconds) { return stepped.simulatedFrame("sim", static_cast<int>(std::lround(seconds * kFps))); };
+    baked->firstSeconds = 1 / kFps;
+    baked->lastSeconds = 12 / kFps;
+    baked->stamp = session.simulationStamp("sim");
+    session.setBakedSimulation("sim", baked);
+    EXPECT_FALSE(session.readsEarlierFrames({}, 1, 12));
+    EXPECT_TRUE(session.readsEarlierFrames({}, 1, 20)) << "frames past the bake step";
+    session.setGraphJson(simGraph(R"({"gravity": 9.8, "collisionOffset": 0.02, "startFrame": 1, "damping": 0.4})"));
+    EXPECT_TRUE(session.readsEarlierFrames({}, 1, 12)) << "a bake of other settings";
+    GroomEvaluator still(simData(unsimulatedGraph()));
+    EXPECT_FALSE(still.readsEarlierFrames({}, 1, 100));
+}
+
+TEST(SimulateNode, WithSteppingOffAViewShowsTheFramesItHasOnly) {
+    GroomEvaluator stepped(simData());
+    for (int f = 1; f <= 12; ++f) viewAt(stepped, f);
+    GroomEvaluator background(simData());
+    background.setSimulationStepping(false);
+    GroomEvaluator still(simData(unsimulatedGraph()));
+    expectSameStrands(*viewAt(background, 12), *viewAt(still, 12), "nothing stepped: the guides as groomed");
+    EXPECT_EQ(background.simulationStatus()[0].frames, 0u);
+    // Its bake's frames, in any order: what stepping showed.
+    auto baked = std::make_shared<BakedSimulation>();
+    baked->read = [&stepped](double seconds) { return stepped.simulatedFrame("sim", static_cast<int>(std::lround(seconds * kFps))); };
+    baked->firstSeconds = 1 / kFps;
+    baked->lastSeconds = 12 / kFps;
+    baked->stamp = background.simulationStamp("sim");
+    background.setBakedSimulation("sim", baked);
+    for (int f : {9, 4, 12}) expectSameStrands(*viewAt(background, f), *viewAt(stepped, f), "a baked frame " + std::to_string(f));
+    EXPECT_EQ(background.simulationStatus()[0].frames, 0u);
+}
+
+TEST(SimulateNode, BypassGivesTheGroomExactly) {
+    GroomEvaluator session(simData());
+    viewAt(session, 10);
+    std::string bypassed = kSimGraph;
+    const std::string node = R"({"name": "sim", "type": "Simulate", )";
+    bypassed.replace(bypassed.find(node), node.size(), R"({"name": "sim", "type": "Simulate", "bypass": true, )");
+    session.setGraphJson(bypassed);
+    GroomEvaluator still(simData(unsimulatedGraph()));
+    expectSameStrands(*viewAt(session, 10), *viewAt(still, 10), "bypassed");
+    // Before its start frame it gives the guides through too.
+    GroomEvaluator early(simData(simGraph(R"({"gravity": 9.8, "startFrame": 20})")));
+    expectSameStrands(*viewAt(early, 10), *viewAt(still, 10), "before the start frame");
+}
+
+TEST(SimulateNode, WetnessReachesTheStrandsAndWaterParamsDropTheFrames) {
+    // The sphere under water: its guides' wetness, blended by Interpolate into the strands'
+    // wetness point channel (what Clump, HairColor and the shaders read).
+    GroomEvaluator session(simData(simGraph(R"({"gravity": 9.8, "water": true, "waterLevel": 5.0})")));
+    const StrandsPtr wet = viewAt(session, 12);
+    const std::vector<float>* channel = wet->pointChannel(kWetnessChannel);
+    ASSERT_TRUE(channel) << "no wetness channel on the strands";
+    float least = 1.0f;
+    for (const float w : *channel) least = std::min(least, w);
+    EXPECT_GT(least, 0.8f);
+    // Between two frames the wetness blends as the points do.
+    GroomEvaluator::Request between;
+    between.time = 11.5 / kFps;
+    EXPECT_TRUE(session.evaluate(between).strands->pointChannel(kWetnessChannel));
+    // A water param edited: the frames go, and the frames made again differ.
+    session.setGraphJson(simGraph(R"({"gravity": 9.8, "water": true, "waterLevel": 5.0, "buoyancy": 2.0})"));
+    viewAt(session, 1);
+    EXPECT_EQ(session.simulationStatus()[0].frames, 1u) << "the frames of the old settings stayed";
+    EXPECT_NE(viewAt(session, 12)->positions(), wet->positions());
+    // Before the start frame the hair is dry, but the channel is there for the maps reading it.
+    GroomEvaluator early(simData(simGraph(R"({"gravity": 9.8, "water": true, "waterLevel": 5.0, "startFrame": 20})")));
+    const std::vector<float>* none = viewAt(early, 10)->pointChannel(kWetnessChannel);
+    ASSERT_TRUE(none);
+    EXPECT_EQ(*std::max_element(none->begin(), none->end()), 0.0f);
+    // Dry, the strands get no wetness channel.
+    GroomEvaluator dry(simData());
+    EXPECT_FALSE(viewAt(dry, 4)->pointChannel(kWetnessChannel));
+}
+
+TEST(SimulateNode, TheHeadsMotionSwingsTheHairWhichSettles) {
+    // The scalp slides along +x over frames 1 to 6 and stops; the hosts' feed gives each frame's.
+    GroomData data = simData(simGraph(R"({"gravity": 9.8, "damping": 0.3, "rootStiffnessProfile": 0.0})"));
+    const MeshPtr rest = data.scalp;
+    auto shifted = [&](double seconds) {
+        const float frame = static_cast<float>(seconds * kFps);
+        const float dx = 0.15f * std::clamp(frame - 1.0f, 0.0f, 5.0f);
+        std::vector<Vec3f> points = rest->points();
+        for (Vec3f& p : points) p.x += dx;
+        return points;
+    };
+    GroomEvaluator session(data);
+    session.setSimulationFeed([&](double seconds) {
+        session.updateScalpPoints(shifted(seconds));
+        return true;
+    });
+    auto tipLag = [&](int frame) {
+        session.updateScalpPoints(shifted(frame / kFps));
+        viewAt(session, frame);
+        // The guides' tips against their roots, along x (the hierarchy as the view shows it is
+        // the input; the simulated frame is the node's).
+        const GuidesPtr sim = session.simulatedFrame("sim", frame);
+        float lag = 0.0f;
+        for (const Guide& g : sim->guides()) lag += (g.points.back().x - g.points.front().x);
+        return lag / static_cast<float>(sim->size());
+    };
+    const float atRest = tipLag(1);
+    const float moving = tipLag(6);
+    EXPECT_LT(moving, atRest - 0.02f) << "the tips did not trail the motion";
+    const float settled = tipLag(96);
+    EXPECT_NEAR(settled, atRest, 0.05f) << "the hair did not settle back";
+}
+
+TEST(SimulateNode, FramesPlaybackSkippedAreSteppedInOneGoAndKept) {
+    // Real-time playback skips frames when a frame takes longer than its time, and while it plays
+    // the host's feed gives nothing (Maya reads no other time then). The frames skipped were each
+    // stepped toward the frame shown: the head's whole motion since the last frame in the first of
+    // them (the hair whipped), and each was stamped with the shown frame's inputs, so scrubbing
+    // back to one (not playing: the feed gives its own) found other inputs and threw every frame
+    // away; what was simulated again, and baked, was not what had played. Now they are stepped in
+    // one go toward the frame shown (the roots moving evenly over them) and kept.
+    GroomData data = simData(simGraph(R"({"gravity": 9.8, "damping": 0.3, "rootStiffnessProfile": 0.0})"));
+    const MeshPtr rest = data.scalp;
+    auto shifted = [&](double seconds) {
+        const float frame = static_cast<float>(seconds * kFps);
+        const float dx = 0.15f * std::clamp(frame - 1.0f, 0.0f, 8.0f);
+        std::vector<Vec3f> points = rest->points();
+        if (dx != 0.0f) {  // (else the points to the bit: -0 + 0 is +0, another scalp's hash)
+            for (Vec3f& p : points) p.x += dx;
+        }
+        return points;
+    };
+    bool playing = true;
+    GroomEvaluator skipped(data), every(data);
+    for (GroomEvaluator* s : {&skipped, &every}) {
+        s->setSimulationFeed([s, &playing, &shifted](double seconds) {
+            if (playing) return false;  // (as Maya's: no other time is read while it plays)
+            s->updateScalpPoints(shifted(seconds));
+            return true;
+        });
+    }
+    auto show = [&](GroomEvaluator& s, int frame) {
+        s.updateScalpPoints(shifted(frame / kFps));
+        return viewAt(s, frame);
+    };
+    std::map<int, std::vector<Vec3f>> played, everyFrame;
+    for (int f = 1; f <= 16; f += 3) played[f] = show(skipped, f)->positions();  // frames 2-3, 5-6... skipped
+    for (int f = 1; f <= 16; ++f) everyFrame[f] = show(every, f)->positions();
+    // Close to playing every frame: the skipped frames' motion spread evenly, not all in one (the
+    // guides 0.8 long: 0.06 apart at most, where stepping each toward the frame shown was 0.42).
+    float worst = 0.0f;
+    for (const auto& [f, points] : played) {
+        ASSERT_EQ(points.size(), everyFrame[f].size());
+        for (std::size_t i = 0; i < points.size(); ++i) worst = std::max(worst, (points[i] - everyFrame[f][i]).length());
+    }
+    EXPECT_LT(worst, 0.1f);
+    // Stopped: scrubbing back to a skipped frame keeps the frames that played.
+    playing = false;
+    show(skipped, 5);
+    EXPECT_EQ(skipped.simulationStatus()[0].ranges[0], std::make_pair(1, 16));
+    for (const auto& [f, points] : played) EXPECT_TRUE(show(skipped, f)->positions() == points) << "frame " << f << " as it played";
+    EXPECT_EQ(skipped.simulationStatus()[0].frames, 16u);
+    // Simulate Range steps nothing more (a bake writes the frames that played).
+    EXPECT_EQ(skipped.simulateTo(16).frames, 0);
 }
 
 // ---- Cost --------------------------------------------------------------------------------------

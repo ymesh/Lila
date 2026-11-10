@@ -26,6 +26,8 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QTimer>
+
+#include <numeric>
 #include <QWidget>
 
 #include <algorithm>
@@ -134,7 +136,7 @@ void RetopoDrawTool::activate()
     cursorBadges::add({kMergeBadge, "arrow-merge", [this](const ViewportState&) { return merging(); }, "Vertex merges on release"});
     refresh();
     log::info("Retopo Draw on {} into {}: click dots, Shift-click to fill or place an angle-snapped dot, Ctrl-drag loops, "
-              "Tab-drag extends (Shift: whole loop, Ctrl: up to the extrude angle), Shift-drag relaxes, Ctrl+Alt-click deletes, Esc exits",
+              "Tab-drag extends (Shift: whole loop, Ctrl: up to the extrude angle), Shift-drag relaxes, Ctrl+Shift-click deletes, Esc exits",
               mRefMesh ? scene::Graph::current().node(mReference)->path() : std::string("(no reference)"), mRetopoName);
 }
 
@@ -179,14 +181,14 @@ bool RetopoDrawTool::setReference(scene::NodeId reference)
     scene::Node* retopo = retopoNode();
     if (retopo && retopo->id() == reference)
     {
-        log::warn("Retopo Draw: the surface can't be the retopo mesh itself");
+        log::warn("Set Retopo Reference: the retopo mesh can't be its own reference");
         return false;
     }
     if (retopo && !run("retopoDrawSetReference", {{"mesh", retopo->path()}, {"reference", ref->path()}}))
         return false;
     mReference = reference;
     refresh();
-    log::info("Retopo Draw: drawing on {}", ref->path());
+    log::info("Retopo reference: {}", ref->path());
     viewportTools::requestRedraw();
     return true;
 }
@@ -235,11 +237,19 @@ void RetopoDrawTool::refresh()
             mDotsWorld = mRetopoWorld;
             mDots = retopo::retopoDrawDots(*n);
         }
+        const std::string& guides = n->as<std::string>(scene::MeshNode::kRetopoGuides);
+        if (guides != mGuidesText)
+        {
+            mGuidesText = guides;
+            mGuides = retopo::retopoGuides(*n);
+        }
     }
     else
     {
         mDots.clear();
         mDotsText.clear();
+        mGuides.clear();
+        mGuidesText.clear();
     }
     if (mHover.dot >= int(mDots.size()))
         mHover.dot = -1;
@@ -259,7 +269,8 @@ scene::Node* RetopoDrawTool::retopoNode() const
 bool RetopoDrawTool::deleting() const
 {
     Qt::KeyboardModifiers m = QGuiApplication::queryKeyboardModifiers();
-    return (m & Qt::AltModifier) && (m & Qt::ControlModifier) && (mDrag == Drag::None || mDrag == Drag::DeleteClick);
+    // Ctrl+Shift as in the Knife; Ctrl+Alt as in the Topology tool.
+    return (m & Qt::ControlModifier) && (m & (Qt::ShiftModifier | Qt::AltModifier)) && (mDrag == Drag::None || mDrag == Drag::DeleteClick);
 }
 
 std::optional<QCursor> RetopoDrawTool::cursor() const
@@ -544,57 +555,10 @@ std::optional<RetopoDrawTool::Fill> RetopoDrawTool::findFill(QPointF px, const V
             if (screen[p])
                 cands.push_back({*screen[p], pointWorld(p), -1});
     }
-    std::stable_sort(cands.begin(), cands.end(), [&](const Candidate& a, const Candidate& b) { return distPx(a.screen, px) < distPx(b.screen, px); });
-    if (cands.size() > 7)
-        cands.resize(7);
-
-    // The smallest convex quad (else triangle) of nearby candidates that contains the cursor.
-    std::vector<int> best;
-    double bestPerimeter = std::numeric_limits<double>::max();
-    for (int size : {4, 3})
-    {
-        int n = int(cands.size());
-        std::vector<int> pick(size);
-        auto tryCombo = [&]() {
-            std::vector<int> order = pick;
-            QPointF c(0, 0);
-            for (int i : order)
-                c += cands[i].screen / double(size);
-            // Counter-clockwise as seen on screen (y points down), so the face points at the camera.
-            std::sort(order.begin(), order.end(), [&](int a, int b) {
-                return std::atan2(-(cands[a].screen.y() - c.y()), cands[a].screen.x() - c.x()) <
-                       std::atan2(-(cands[b].screen.y() - c.y()), cands[b].screen.x() - c.x());
-            });
-            std::vector<QPointF> poly;
-            for (int i : order)
-                poly.push_back(cands[i].screen);
-            if (!convex(poly) || !insidePolygon(px, poly))
-                return;
-            double per = 0.0;
-            for (size_t k = 0; k < poly.size(); ++k)
-                per += distPx(poly[k], poly[(k + 1) % poly.size()]);
-            if (per < bestPerimeter)
-            {
-                bestPerimeter = per;
-                best = order;
-            }
-        };
-        std::function<void(int, int)> rec = [&](int start, int depth) {
-            if (depth == size)
-            {
-                tryCombo();
-                return;
-            }
-            for (int i = start; i < n; ++i)
-            {
-                pick[depth] = i;
-                rec(i + 1, depth + 1);
-            }
-        };
-        rec(0, 0);
-        if (!best.empty())
-            break;
-    }
+    std::vector<QPointF> screen;
+    for (const Candidate& c : cands)
+        screen.push_back(c.screen);
+    std::vector<int> best = smallestFillAround(px, screen);
     if (best.empty())
         return std::nullopt;
     Fill fill;
@@ -845,7 +809,7 @@ bool RetopoDrawTool::mousePress(QMouseEvent* e, const ViewInfo& view)
     }
     if (e->button() != Qt::LeftButton)
         return false;
-    if (ctrl && (mMods & Qt::AltModifier))
+    if (ctrl && (mMods & (Qt::AltModifier | Qt::ShiftModifier)) && !mTabDown)
         mDrag = Drag::DeleteClick;
     else if (mTabDown)
     {
@@ -1120,6 +1084,9 @@ void RetopoDrawTool::draw(render::FrameState& s, OverlayPainter& p, const ViewIn
     const bool del = here && deleting();
     auto world = [&](Index i) { return mMoved.contains(i) ? mMoved.at(i) : pointWorld(i); };
 
+    drawRetopoGuides(
+        p, view, mGuides, [this](const glm::dvec3& w) { return symmetryImages(w); }, [&](const glm::dvec3& w) { return visible(w, view); });
+
     if (mRetopo)
     {
         const geo::Mesh& m = *mRetopo;
@@ -1142,9 +1109,9 @@ void RetopoDrawTool::draw(render::FrameState& s, OverlayPainter& p, const ViewIn
         for (Index e = 0; e < m.edgeCapacity(); ++e)
             if (m.edgeValid(e))
             {
-                glm::vec4 c = here && e == mHover.edge && mDrag == Drag::None && !shift ? kHotLinear : kWireLinear;
-                s.linesOnTop.push_back({glm::vec3(world(m.edgePoint(e, 0))), c});
-                s.linesOnTop.push_back({glm::vec3(world(m.edgePoint(e, 1))), c});
+                const bool hot = here && e == mHover.edge && mDrag == Drag::None && !shift;
+                pushRetopoEdge(s, glm::vec3(world(m.edgePoint(e, 0))), glm::vec3(world(m.edgePoint(e, 1))),
+                               hot ? kHotLinear : glm::vec4(0.6f, 0.6f, 0.6f, 1.0f), hot);
             }
 
         // Edge loop preview while Ctrl is held over an edge, or during the drag.
@@ -1267,7 +1234,45 @@ void RetopoDrawTool::draw(render::FrameState& s, OverlayPainter& p, const ViewIn
                         .fields = {{"angle", QString("%1\u00b0").arg(int(std::lround(extrudeAngle())))}},
                         .keys = {{"wheel", "angle"}}});
     else if (here && mTabDown && shift && !ctrl)
-        drawToolStatus(p, view, {.tool = "Retopo Draw", .mode = "extrude edge loop"});
+        drawToolStatus(p, view, {.tool = "Retopo Draw", .mode = "extrude edge loop", .keys = {{"drag border", "extrude the loop"}}});
+    else
+        drawToolStatus(p, view, status(here ? mMods : Qt::NoModifier));
+}
+
+ToolStatus RetopoDrawTool::status(Qt::KeyboardModifiers mods) const
+{
+    const bool shift = mods & Qt::ShiftModifier, ctrl = mods & Qt::ControlModifier;
+    ToolStatus st{.tool = "Retopo Draw", .subject = QString::fromStdString(mRetopoName).section('|', -1)};
+    if (mSymmetry)
+        st.symmetry = ToolSymmetry{true};
+    // The keys follow the modifiers held, so each one shows what it adds.
+    if (mTabDown)
+    {
+        st.mode = "extend";
+        st.keys = {{"drag border", "extend a strip"}, {"+Shift", "whole loop"}, {"+Ctrl", "to the extrude angle"}};
+    }
+    else if (ctrl && shift)
+    {
+        st.mode = "delete";
+        st.keys = {{"click", "delete face, vertex or dot"}};
+    }
+    else if (shift)
+    {
+        st.mode = "fill";
+        st.keys = {{"click", "fill, or a snapped dot"}, {"drag", "relax"}, {"wheel", "brush size"}};
+    }
+    else if (ctrl)
+    {
+        st.mode = "loop";
+        st.keys = {{"drag edge", "insert loop"}, {"+Shift click", "delete"}};
+    }
+    else
+    {
+        st.prompt = mDots.empty() ? "click to place dots" : "Shift-click to fill a face";
+        st.keys = {{"Shift-click", "fill"},       {"Shift-drag", "relax"},       {"Ctrl-drag", "edge loop"}, {"Tab-drag", "extend border"},
+                   {"drag vertex", "move"},       {"Ctrl+Shift-click", "delete"}, {"Backspace", "last dot"}, {"Esc", "exit"}};
+    }
+    return st;
 }
 
 void RetopoDrawTool::drawLineSnap(OverlayPainter& p, const ViewInfo& view) const
@@ -1349,11 +1354,68 @@ void RetopoDrawTool::drawDeleteTarget(render::FrameState& s, OverlayPainter& p, 
         }
 }
 
+std::vector<int> smallestFillAround(QPointF px, const std::vector<QPointF>& screen)
+{
+    std::vector<int> near(screen.size());
+    std::iota(near.begin(), near.end(), 0);
+    std::stable_sort(near.begin(), near.end(), [&](int a, int b) { return distPx(screen[a], px) < distPx(screen[b], px); });
+    if (near.size() > 7)
+        near.resize(7);
+    std::vector<int> best;
+    double bestPerimeter = std::numeric_limits<double>::max();
+    const int n = int(near.size());
+    for (int size : {4, 3})
+    {
+        std::vector<int> pick(size);
+        auto tryCombo = [&]() {
+            std::vector<int> order;
+            for (int i : pick)
+                order.push_back(near[i]);
+            QPointF c(0, 0);
+            for (int i : order)
+                c += screen[i] / double(size);
+            // Counter-clockwise as seen on screen (y points down), so the face points at the camera.
+            std::sort(order.begin(), order.end(), [&](int a, int b) {
+                return std::atan2(-(screen[a].y() - c.y()), screen[a].x() - c.x()) < std::atan2(-(screen[b].y() - c.y()), screen[b].x() - c.x());
+            });
+            std::vector<QPointF> poly;
+            for (int i : order)
+                poly.push_back(screen[i]);
+            if (!convex(poly) || !insidePolygon(px, poly))
+                return;
+            double per = 0.0;
+            for (size_t k = 0; k < poly.size(); ++k)
+                per += distPx(poly[k], poly[(k + 1) % poly.size()]);
+            if (per < bestPerimeter)
+            {
+                bestPerimeter = per;
+                best = order;
+            }
+        };
+        std::function<void(int, int)> rec = [&](int start, int depth) {
+            if (depth == size)
+            {
+                tryCombo();
+                return;
+            }
+            for (int i = start; i < n; ++i)
+            {
+                pick[depth] = i;
+                rec(i + 1, depth + 1);
+            }
+        };
+        rec(0, 0);
+        if (!best.empty())
+            break;
+    }
+    return best;
+}
+
 RetopoDrawTool* activeRetopoDraw() { return dynamic_cast<RetopoDrawTool*>(viewportTools::active()); }
 
 namespace
 {
-/** The surface Set Retopo Surface picks: the first selected mesh that isn't the retopo mesh. */
+/** The reference Set Retopo Reference picks: the first selected mesh that isn't the retopo mesh. */
 scene::Node* selectedSurface(const std::string& retopo)
 {
     scene::Graph& g = scene::Graph::current();
@@ -1363,37 +1425,64 @@ scene::Node* selectedSurface(const std::string& retopo)
     return nullptr;
 }
 
+/** Connects the retopo mesh to the reference, creating it (with the reference's symmetry) when it doesn't exist yet. */
+bool connectReference(const std::string& retopo, const scene::Node& ref)
+{
+    try
+    {
+        ops::execute("retopoDrawSetReference", {{"mesh", retopo}, {"reference", ref.path()}, {"create", true}}, CallSource::UI);
+    }
+    catch (const CommandError& e)
+    {
+        log::error("{}", e.what());
+        return false;
+    }
+    log::info("Retopo reference: {}. Retopo mesh: {}", ref.path(), retopo);
+    return true;
+}
+
 void setReferenceFromSelection()
 {
+    scene::Graph& g = scene::Graph::current();
     if (RetopoDrawTool* tool = activeRetopoDraw())
     {
-        scene::Node* ref = selectedSurface(tool->retopoName());
-        if (!ref)
-            log::warn("Set Retopo Surface: select the mesh to draw on");
-        else
+        if (scene::Node* ref = selectedSurface(tool->retopoName()))
             tool->setReference(ref->id());
+        else
+            log::warn("Set Retopo Reference: no mesh selected");
         return;
     }
-    // Outside the tool: a selected retopo mesh takes the other selected mesh as its surface.
-    scene::Graph& g = scene::Graph::current();
+    if (TopologyTool* topo = activeTopologyTool())
+    {
+        scene::Node* ref = selectedSurface(topo->retopoName());
+        if (!ref)
+        {
+            log::warn("Set Retopo Reference: no mesh selected");
+            return;
+        }
+        std::string retopo = topo->retopoName();
+        TopoMode mode = topo->mode();
+        if (connectReference(retopo, *ref))
+            viewportTools::set(std::make_unique<TopologyTool>(ref->id(), retopo, mode));
+        return;
+    }
+    // A selected retopo mesh takes the other selected mesh as its reference.
     for (scene::NodeId id : g.selection())
         if (retopo::retopoDrawReference(g, id) != scene::kNoNode)
-        {
-            std::string retopo = g.node(id)->path();
-            if (scene::Node* ref = selectedSurface(retopo))
+            if (scene::Node* ref = selectedSurface(g.node(id)->path()))
             {
-                try
-                {
-                    ops::execute("retopoDrawSetReference", {{"mesh", retopo}, {"reference", ref->path()}}, CallSource::UI);
-                }
-                catch (const CommandError& e)
-                {
-                    log::error("{}", e.what());
-                }
+                connectReference(g.node(id)->path(), *ref);
                 return;
             }
-        }
-    log::warn("Set Retopo Surface: run it in Retopo Draw with the new surface selected, or select a retopo mesh and its new surface");
+    // Otherwise the selected mesh becomes the reference, and its retopo mesh is made now.
+    std::optional<retopo::RetopoDrawTargets> t = retopo::resolveRetopoDraw(g, g.selection());
+    scene::Node* ref = t ? g.node(t->reference) : nullptr;
+    if (!ref)
+    {
+        log::warn("Set Retopo Reference: no mesh selected");
+        return;
+    }
+    connectReference(t->retopo, *ref);
 }
 
 void stepSnapAngle(int dir)
@@ -1440,16 +1529,16 @@ void registerRetopoActions()
         nullptr,
         "Draw a new quad mesh over the selected reference, or resume on a selected retopo mesh: click dots, Shift-click to fill "
         "(or, with nothing to fill, place a dot on an angle-snapped line), "
-        "Ctrl-drag loops, Tab-drag extends (Tab+Shift: whole loop, Tab+Ctrl: up to the extrude angle), Shift-drag relaxes, MMB-drag tweaks, Ctrl+Alt-click deletes. Esc or Q/W/E/R exits.",
+        "Ctrl-drag loops, Tab-drag extends (Tab+Shift: whole loop, Tab+Ctrl: up to the extrude angle), Shift-drag relaxes, MMB-drag tweaks, Ctrl+Shift-click deletes. Esc or Q/W/E/R exits.",
         "lila.ui.run_action(\"retopo.draw\")",
     });
     actions::add({
         .id = "retopo.setReference",
-        .label = "Set Retopo Surface",
+        .label = "Set Retopo Reference",
         .category = "Mesh",
         .run = setReferenceFromSelection,
-        .doc = "Retopo Draw draws over the selected mesh from here on, and the retopo mesh keeps it as its surface. Works in "
-               "the running tool, or with a retopo mesh and its new surface selected.",
+        .doc = "Makes the selected mesh the reference the retopo tools draw on, and creates its retopo mesh (with the "
+               "reference's symmetry) if there isn't one. With a retopo mesh and another mesh selected, that mesh becomes its new reference.",
         .python = "lila.ui.run_action(\"retopo.setReference\")",
     });
     actions::add({

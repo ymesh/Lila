@@ -38,6 +38,8 @@ lila_module(lila_scene Scene
     SplitRingsModifier.cpp SplitRingsModifier.h
     AutoPose.cpp AutoPose.h
     FullBodyIk.cpp FullBodyIk.h
+    Strings.cpp Strings.h
+    BendBonesDeformer.cpp BendBonesDeformer.h
     Fracture.cpp Fracture.h
     DominantInfluence.cpp
     Ghosts.cpp
@@ -56,6 +58,8 @@ lila_module(lila_scene Scene
     PostProcess.cpp PostProcess.h
     LodGroup.cpp LodGroup.h
     Materials.cpp
+    MathNodes.cpp MathNodes.h
+    Expression.cpp Expression.h
     MeshCache.cpp MeshCache.h
     Measure.cpp
     MeasureMath.cpp
@@ -105,6 +109,8 @@ lila_module(lila_scene Scene
     Skin.cpp
     SkinBake.cpp SkinBake.h
     SkinMethods.cpp SkinMethods.h
+    SkinPaint.cpp SkinPaint.h
+    WeightProxy.cpp WeightProxy.h
     Jiggle.cpp Jiggle.h
     SmartJoin.cpp
     SplitMesh.cpp SplitMesh.h

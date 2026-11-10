@@ -70,6 +70,15 @@ inline const ModifierNode* asModifier(const Node* n) { return n && (n->traits() 
 /** Modifiers feeding a mesh node, first applied first. */
 LILA_SCENE_API std::vector<NodeId> stack(Graph& g, NodeId mesh);
 
+/** True when a subdivision modifier comes after the modifier in its stack. */
+LILA_SCENE_API bool feedsSubdivision(const ModifierNode& mod);
+
+/**
+ * The modifier's input as it runs: the first modifier of a stack feeding a subdivision adds geo::addFitSpacing's layers,
+ * so a Fit Surface subdivision measures island borders bunched as the modifiers before it bunch the uvs.
+ */
+LILA_SCENE_API MeshPtr stackInput(const ModifierNode& mod, const MeshPtr& in);
+
 /** The storable plug holding the base mesh direct edits change. Bakes a procedural source into a stored one. */
 LILA_SCENE_API PlugRef editPlug(Graph& g, NodeId mesh);
 

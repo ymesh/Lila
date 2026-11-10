@@ -304,7 +304,6 @@ ClaySettings& claySettings()
 }
 
 constexpr const char* kPaletteId = "clayPalette";
-constexpr const char* kClayKeysPref = "/clay/keys";
 
 void settingsChanged();
 
@@ -583,9 +582,9 @@ public:
         mKeys = new QCheckBox("Show Keys", optionsBox);
         mKeys->setToolTip("Show Keys: list the tool's keys in the corner of the view.");
         connect(mKeys, &QCheckBox::toggled, this, [](bool on) {
-            if (on == PrefStore::get().value<bool>("general", kClayKeysPref, true))
+            if (on == PrefStore::get().value<bool>("general", kShowKeysPref, true))
                 return;
-            PrefStore::get().set("general", kClayKeysPref, on);
+            PrefStore::get().set("general", kShowKeysPref, on);
             viewportTools::requestRedraw();
         });
         options->addWidget(mKeys);
@@ -631,7 +630,7 @@ public:
         mMirror->setEnabled(surface);
         mMirror->setChecked(surface && surface->as<int64_t>(surface->type().attrIndex("symmetry")) == 1);
         mMirror->setToolTip(surface ? QString("Mirror X: mirror %1 across its YZ plane.").arg(QString::fromStdString(o->name())) : "Mirror X: select clay to mirror it.");
-        mKeys->setChecked(PrefStore::get().value<bool>("general", kClayKeysPref, true));
+        mKeys->setChecked(PrefStore::get().value<bool>("general", kShowKeysPref, true));
     }
 
 private:
@@ -989,7 +988,7 @@ public:
             }
         }
         // Above the view axis in the bottom-left corner.
-        if (PrefStore::get().value<bool>("general", kClayKeysPref, true))
+        if (PrefStore::get().value<bool>("general", kShowKeysPref, true))
             drawKeyList(p, QPointF(16.0, view.height - 84.0), clayKeys());
     }
 

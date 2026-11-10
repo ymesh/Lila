@@ -296,7 +296,7 @@ QPointF ringPosition(const Stroke& stroke, QPointF hover)
 void drawCursor(lila::ui::OverlayPainter& p, const lila::ui::ViewInfo& view, const BrushSettings& s, QPointF at,
                 const std::optional<CursorSurface>& surface, const CursorOptions& o)
 {
-    const glm::vec4 rim(0.95f, 0.95f, 0.95f, 1.0f), dim(0.6f, 0.6f, 0.6f, 0.8f), strength(0.82f, 0.82f, 0.82f, 0.95f);
+    const glm::vec4 rim = o.color.value_or(glm::vec4(0.95f, 0.95f, 0.95f, 1.0f)), dim(0.6f, 0.6f, 0.6f, 0.8f), strength(0.82f, 0.82f, 0.82f, 0.95f);
     if (o.stroke && o.stroke->active())
     {
         const StrokeSampler& sm = o.stroke->sampler();
@@ -307,12 +307,26 @@ void drawCursor(lila::ui::OverlayPainter& p, const lila::ui::ViewInfo& view, con
             p.line(start, cursor, 1.5f, rim);
             p.disc(start, 3.0f, rim);
         }
+        else if (sm.mode() == StrokeMode::Curve)
+        {
+            // The drawn path faint, the curve it will become bright.
+            std::vector<QPointF> drawn, clean;
+            for (const glm::dvec2& q : sm.path())
+                drawn.push_back(QPointF(q.x, q.y));
+            for (const glm::dvec2& q : sm.smoothedPath())
+                clean.push_back(QPointF(q.x, q.y));
+            p.polyline(drawn, 1.0f, dim);
+            p.polyline(clean, 1.5f, rim);
+        }
         else if (s.lazyRadius > 0.0)
         {
             p.line(at, cursor, 1.0f, dim);
             p.disc(cursor, 2.5f, dim);
         }
     }
+    // Brush tools hide the system cursor, so the dot marks the exact point.
+    p.disc(at, 2.5f, glm::vec4(0.05f, 0.05f, 0.05f, 0.9f));
+    p.disc(at, 1.5f, rim);
     const double roundness = std::clamp(s.roundness, 0.01, 1.0);
     const double angle = s.angle * kPi / 180.0;
     if (surface)
@@ -520,10 +534,10 @@ StrokeOptions::StrokeOptions(QWidget* parent, SettingsRef settings, std::functio
     addNumber(numberField("flow", "Flow", false, 0.0, 1.0, 0.05, "How much each dab adds; strokes that build up do so more slowly below 1"),
               &BrushSettings::flow);
 
-    add(choiceField("mode", "Stroke", {{"freehand", "Freehand"}, {"line", "Line"}},
-                    "Line: drag from where the line starts to where it ends; the dabs go down on release"),
-        [](const BrushSettings& s) { return json(s.mode == StrokeMode::Line ? "line" : "freehand"); },
-        [](BrushSettings& s, const json& v) { s.mode = v == "line" ? StrokeMode::Line : StrokeMode::Freehand; });
+    add(choiceField("mode", "Stroke", {{"freehand", "Freehand"}, {"line", "Line"}, {"curve", "Curve"}},
+                    "Line: drag from where the line starts to where it ends. Curve: draw the path freely and it is smoothed into a clean curve. Both lay their dabs on release"),
+        [](const BrushSettings& s) { return json(s.mode == StrokeMode::Line ? "line" : s.mode == StrokeMode::Curve ? "curve" : "freehand"); },
+        [](BrushSettings& s, const json& v) { s.mode = v == "line" ? StrokeMode::Line : v == "curve" ? StrokeMode::Curve : StrokeMode::Freehand; });
     addNumber(numberField("lazyRadius", "Lazy radius", false, 0.0, 500.0, 5.0,
                           "Lazy mouse: the brush trails the cursor on a string this long, so strokes come out steady", " px"),
               &BrushSettings::lazyRadius);

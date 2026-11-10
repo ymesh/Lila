@@ -853,7 +853,13 @@ ImportResult importFbx(scene::Graph& graph, const fs::path& path, const ImportOp
 
     // Conjugating every local matrix by C keeps the hierarchy clean: no conversion rotation lands on the roots.
     const double unitScale = r.sourceUnitMeters / 0.01;
-    const glm::dmat4 C = glm::dmat4(fileToLila(axes, math::upAxis())) * glm::scale(glm::dmat4(1.0), glm::dvec3(unitScale));
+    // Characters from Z-up (Unreal) files turn to face Lila's forward; see characterTurn.
+    bool zUpFile = false;
+    fileToCanonical(axes, &zUpFile);
+    const bool turnCharacter = zUpFile && (fbx->skin_clusters.count > 0 || fbx->bones.count > 0);
+    const glm::dmat3 fileToLilaAxes3 =
+        turnCharacter ? characterTurn(math::upAxis()) * fileToLila(axes, math::upAxis()) : fileToLila(axes, math::upAxis());
+    const glm::dmat4 C = glm::dmat4(fileToLilaAxes3) * glm::scale(glm::dmat4(1.0), glm::dvec3(unitScale));
     const glm::dmat4 Cinv = glm::inverse(C);
 
     const NodeType* meshType = types::find("mesh");
@@ -869,7 +875,7 @@ ImportResult importFbx(scene::Graph& graph, const fs::path& path, const ImportOp
     std::map<uint32_t, std::vector<Index>> pointCache;
     std::unordered_map<uint32_t, NodeFrame> frames; // by ufbx node element id
     std::vector<std::pair<const ufbx_node*, NodeId>> skinned, blended;
-    const glm::dmat3 C3 = glm::dmat3(fileToLila(axes, math::upAxis()));
+    const glm::dmat3 C3 = fileToLilaAxes3;
     const AxisMap fileToLilaAxes = axisMap(C3);
 
     // Skinned bones are joints even when the file calls them nulls.

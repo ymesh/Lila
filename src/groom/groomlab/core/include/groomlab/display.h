@@ -30,6 +30,7 @@
 #include "groomlab/hair_color.h"
 #include "groomlab/scalp_maps.h"
 #include "groomlab/flow.h"
+#include "groomlab/follow_scalp.h"
 #include "groomlab/graph.h"
 #include "groomlab/guide_hierarchy.h"
 #include "groomlab/instances.h"
@@ -402,6 +403,51 @@ struct DisplaySettings {
     DisplayTheme theme;
 };
 
+// What the host evaluated (a GroomSession's ViewResult) and what only it knows.
+struct DisplayInputs {
+    StrandsPtr strands;
+    bool viewedRoots = false;  // the strands are a Scatter's roots: dots
+    // A viewed Clump's clump centers, each its root on the scalp: dots in the
+    // theme's clumpCenters color, with the guides' (ViewResult::clumpCenters). Null: none.
+    std::shared_ptr<const std::vector<Vec3f>> clumpCenters;
+    // The guides as a GuideCache or Simulate node moves them (ViewResult::movingGuides): drawn over
+    // the groomed guides in the theme's movingGuides color, the groomed ones dimmed. Null: none.
+    GuidesPtr movingGuides;
+    MeshPtr scalp;
+    HierarchyPtr hierarchy;
+    PartsPtr parts;
+    FlowPtr flow;
+    std::shared_ptr<const CardMesh> cards;
+    std::vector<StrandMeshSource> strandMeshes;  // ViewResult::strandMeshes
+    // Counters that move when the strands, guides, cards or strand meshes changed
+    // (ViewResult::versions or the host's own).
+    std::uint64_t strandsVersion = 0, hierarchyVersion = 0, cardsVersion = 0, strandMeshVersion = 0;
+    // Which strands these are and how they differ from earlier ones (ViewResult::strandsSerial,
+    // changesBase, strandsChanges): strand lines whose host holds those of serial changesBase are
+    // written again only where the strands changed (DisplayItem::updated). 0: not known.
+    std::uint64_t strandsSerial = 0, changesBase = 0;
+    ChangesPtr strandsChanges;
+    // Following the scalp: `strands` handed on at rest, which the host carries to the scalp now
+    // itself (ViewResult::follow: Maya's viewport, on the GPU). What rides on them that the builder
+    // draws, the instances, it places on their strands carried. Null: the strands are where they are.
+    FollowCarryPtr follow;
+    bool stroke = false;  // a brush stroke is live (sculptDisplay)
+    // Guide selection weights (1 selected, below soft) and a hash of what they come from: asked
+    // only when the selection rebuilds.
+    std::function<std::map<GuideId, float>()> selection;
+    std::uint64_t selectionHash = 0;
+    // The instances' prototypes by name (null: none found).
+    const std::map<std::string, InstancePrototype>* prototypes = nullptr;
+    // The map shown on the scalp, and whether the host holds a texture of its image (with a
+    // counter that moves when the host made another texture).
+    ScalpMapView scalpMap;
+    bool scalpMapTexture = false;
+    std::uint64_t scalpMapTextureGeneration = 0;
+    // The colored strand lines may take new colors alone (the host still has them as built).
+    bool recolorable = true;
+
+};
+
 enum class DisplayPart { Strands, Instances, Guides, Selection, Parts, Flow, Cards, ScalpMap, StrandMesh, Count };
 // In drawing (upload) order.
 enum class DisplayItemId {
@@ -652,5 +698,85 @@ struct DisplayFrame {
 // `gap` strands apart are joined (writing a few strands that did not change costs less than
 // another write).
 std::vector<std::pair<std::size_t, std::size_t>> strandRuns(const std::vector<std::uint32_t>& changed, std::size_t gap = 32);
+
+// Keeps what each part was built for and builds again only what changed. One host thread at a
+// time; builders run in parallel inside (output equal to a serial run).
+class DisplayBuilder {
+public:
+    DisplayBuilder();
+    const DisplayFrame& update(const DisplayInputs& inputs, const DisplaySettings& settings);
+    const DisplayFrame& frame() const { return frame_; }
+    // The part builds again on the next update (its host lost the items).
+    void invalidate(DisplayPart part);
+    void invalidateAll();
+    // The host let go of a kept item's buffers (DisplayItem::keep: the dimmed strands between
+    // strokes): it holds nothing for it, and the next time the item shows it is written whole.
+    // True when the item was kept (hidden, holding strands); nothing else changes.
+    bool forgetKept(DisplayItemId id);
+    // The host's buffers of strand-lines item `id` hold other points now (a GPU preview wrote them
+    // in place), the same point counts: its next build writes all its points (its indices and uvs
+    // kept), nothing rebuilt before then; kept hidden meanwhile as it was.
+    void forgetHeld(DisplayItemId id) {
+        Held& held = held_[static_cast<std::size_t>(id)];
+        if (held.serial != 0) held.serial = ~std::uint64_t{0};  // (no strands' serial: none matches it)
+    }
+    // Keep the built geometry in the items (default on); off, an item holds its geometry only in
+    // the update that built it (a host that uploads at once and keeps no second copy).
+    void setRetain(bool retain) { retain_ = retain; }
+    // On, the strand lines (strands, dimmed strands, colored strands) come as StrandLines
+    // (DisplayGeometry::lines) the host writes into its buffers, their vectors left empty
+    // (default off: the vectors filled).
+    void setWriteLines(bool writeLines) { writeLines_ = writeLines; }
+    // On (with setWriteLines), the ribbons come as StrandLines too (DisplayGeometry::ribbons), for a
+    // host that expands them on the GPU from the lines (Maya: two vertices a point made by a
+    // kernel from the points alone); materialized() gives the triangles strandRibbons builds, for
+    // where it cannot (default off: the triangles built here).
+    void setRibbonLines(bool ribbonLines) { ribbonLines_ = ribbonLines; }
+
+private:
+    void buildStrands(const DisplayInputs& in, const DisplaySettings& s);
+    // A strand-lines item: `updated` when its host holds the strands these changed from (or
+    // these), kept when `hidden` (stepping back for a stroke, or back after it).
+    void putLines(DisplayItemId id, DisplayGeometry&& geometry, const DisplayInputs& in, bool hidden);
+    void buildInstances(const DisplayInputs& in, const DisplaySettings& s);
+    void buildGuides(const DisplayInputs& in, const DisplaySettings& s);
+    void buildSelection(const DisplayInputs& in, const DisplaySettings& s);
+    void buildOverlays(const DisplayInputs& in, const DisplaySettings& s);
+    void buildCards(const DisplayInputs& in, const DisplaySettings& s);
+    void buildStrandMesh(const DisplayInputs& in, const DisplaySettings& s);
+    void buildScalpMap(const DisplayInputs& in, const DisplaySettings& s);
+    bool rebuild(DisplayPart part, std::uint64_t key);
+    void put(DisplayItemId id, DisplayGeometry&& geometry);
+    DisplayItem& item(DisplayItemId id) { return frame_.items[static_cast<std::size_t>(id)]; }
+
+    DisplayFrame frame_;
+    ScaleMeshBuilder scales_;  // the scales' bent meshes, kept per scale (buildInstances)
+    std::array<std::uint64_t, kDisplayPartCount> keys_;
+    // What each strand-lines item was last built with (what its host holds): the strands' serial,
+    // how its lines are written (lit, the scalp they lean out of, colored), their point counts.
+    struct Held {
+        std::uint64_t serial = 0, shape = 0, layout = 0;
+        bool hidden = false;  // kept hidden (DisplayItem::keep said)
+    };
+    std::array<Held, kDisplayItemCount> held_{};
+    // The clump centers last hashed into the guides' key (held, so the pointer names them) and
+    // their hash: hashed once per set of centers, not on every update.
+    std::shared_ptr<const std::vector<Vec3f>> clumpCentersHashed_;
+    std::uint64_t clumpCentersHash_ = 0;
+    // The instances as last built (buildInstances): their set (held, so the pointer names it), the
+    // strands' serial they sit on, a key of those strands' points (kept while later strands hold the
+    // same points: StrandChanges::pointsKept) and a digest of their widths (scaled by width).
+    std::shared_ptr<const InstanceSet> instancesOf_;
+    std::uint64_t instancesSerial_ = 0, instancesVersion_ = 0, instancesPoints_ = 0, instancesWidths_ = 0;
+    // Following the scalp (DisplayInputs::follow): the strands at rest holding instances (a subset
+    // of instancedFrom_'s), carried to the scalp on every update the instances are placed again.
+    StrandsPtr instancedFrom_, instancedRest_;
+    std::uint64_t strandShape_ = ~std::uint64_t{0};
+    std::uint64_t pullVersion_ = ~std::uint64_t{0};
+    std::uint64_t counter_ = 0;
+    bool retain_ = true;
+    bool writeLines_ = false;
+    bool ribbonLines_ = false;
+};
 
 }  // namespace groomlab

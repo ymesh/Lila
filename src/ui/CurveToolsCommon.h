@@ -38,7 +38,7 @@ inline bool plainKey(const QKeyEvent& e) { return (e.modifiers() & ~Qt::KeypadMo
 inline PrefStore& prefs() { return PrefStore::get(); }
 inline D3 upAxis() { return math::upAxis() == math::UpAxis::Z ? D3(0, 0, 1) : D3(0, 1, 0); }
 
-/** The nearest mesh or curve point (V) or point on a mesh edge or curve (C) within kSnapPx of the cursor. */
+/** The nearest mesh or curve point, locator or joint (V), or point on a mesh edge or curve (C), within kSnapPx of the cursor. */
 std::optional<D3> snapToGeometry(QPointF px, const ViewInfo& view, unsigned snaps);
 /** The spline, tessellated, as lines drawn over everything. */
 void drawSpline(render::FrameState& f, const curve::Spline& s, const glm::vec4& color);

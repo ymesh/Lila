@@ -1,6 +1,7 @@
 #include "uv/LiveSolver.h"
 
 #include "core/Profile.h"
+#include "uv/FinalOperator.h"
 #include "uv/OptimizeMath.h"
 #include "uv/Unwrap.h"
 
@@ -67,9 +68,12 @@ struct LiveIsland::Factor
     std::vector<int> bndSlot;  // 9 per boundary vertex
     double mean = 1.0;         // mean diagonal of the elastic part
     double prox = 0.0;
+    double hold = 0.0;         // the cage hold's factor (exported-mesh mode)
     bool ok = false;
-    // Exported-mesh mode: chart vertices to exported corners, and the exported corners' stiffness matrix.
-    SpMat r, rt, s;
+    // Exported-mesh mode: the exported corners' stiffness matrix, and the system's factor (complex when weights rotate).
+    SpMat s;
+    detail::UvFactor uv;
+    Eigen::VectorXd so, sov; // s times the exported offsets, u and v
 };
 
 std::string_view liveBrushName(LiveBrush b)
@@ -234,6 +238,9 @@ void LiveIsland::setFinal(std::shared_ptr<const FinalIsland> island)
 {
     mFinal = island && !island->tris.empty() ? std::move(island) : nullptr;
     mFinalFrames.clear();
+    mFinalFill.reset();
+    mFinalOp.reset();
+    mCageHold.reset();
     if (mFinal)
         prepareFinal();
     mFactor.reset();
@@ -243,7 +250,15 @@ void LiveIsland::setFinal(std::shared_ptr<const FinalIsland> island)
 
 void LiveIsland::prepareFinal()
 {
+    auto fill = std::make_shared<const UninfluencedFill>(mChart, *mFinal);
+    if (!fill->empty())
+    {
+        mFinal = std::make_shared<const FinalIsland>(fill->fold(*mFinal));
+        mFinalFill = std::move(fill);
+    }
     const FinalIsland& isl = *mFinal;
+    mFinalOp = std::make_shared<const detail::FinalOperator>(isl, size_t(vertexCount()), mSign < 0.0);
+    mCageHold = std::make_shared<const detail::CageHold>(mChart, isl, mX);
     mFinalFrames.assign(isl.tris.size(), {});
     for (size_t i = 0; i < isl.tris.size(); ++i)
     {
@@ -261,15 +276,8 @@ void LiveIsland::prepareFinal()
 
 std::vector<glm::dvec2> LiveIsland::finalUvs(const std::vector<glm::dvec2>& x, bool offsets) const
 {
-    const FinalIsland& isl = *mFinal;
-    std::vector<glm::dvec2> y(isl.pos.size());
-    for (size_t c = 0; c < y.size(); ++c)
-    {
-        glm::dvec2 s = offsets ? toInternal(isl.offset[c]) : glm::dvec2(0.0);
-        for (Index k = isl.rowStart[c]; k < isl.rowStart[c + 1]; ++k)
-            s += isl.weights[k] * x[isl.cols[k]];
-        y[c] = s;
-    }
+    std::vector<glm::dvec2> y(mFinalOp->corners());
+    mFinalOp->apply(x, y, offsets ? glm::dvec2(mSign, 1.0) : glm::dvec2(0.0));
     return y;
 }
 
@@ -282,24 +290,18 @@ void LiveIsland::factorFinal()
     const size_t C = isl.pos.size();
     auto f = std::make_shared<Factor>();
     std::vector<Triplet> trips;
-    trips.reserve(isl.cols.size());
     std::vector<double> cornerStiff(C, 1.0);
     for (size_t c = 0; c < C; ++c)
     {
         double w = 0.0, k = 0.0;
         for (Index e = isl.rowStart[c]; e < isl.rowStart[c + 1]; ++e)
         {
-            trips.emplace_back(int(c), int(isl.cols[e]), isl.weights[e]);
             w += std::abs(isl.weights[e]);
             k += std::abs(isl.weights[e]) * mStiff[isl.cols[e]];
         }
         if (w > 0.0)
             cornerStiff[c] = k / w;
     }
-    f->r.resize(Eigen::Index(C), Eigen::Index(V));
-    f->r.setFromTriplets(trips.begin(), trips.end());
-    f->rt = f->r.transpose();
-    trips.clear();
     for (size_t i = 0; i < isl.tris.size(); ++i)
     {
         const Frame& fr = mFinalFrames[i];
@@ -313,13 +315,30 @@ void LiveIsland::factorFinal()
     }
     f->s.resize(Eigen::Index(C), Eigen::Index(C));
     f->s.setFromTriplets(trips.begin(), trips.end());
-    const SpMat k = (f->rt * (f->s * f->r)).pruned();
+    {
+        const std::vector<glm::dvec2> o = finalUvs(std::vector<glm::dvec2>(mX.size(), glm::dvec2(0.0)), true);
+        Eigen::VectorXd ou(static_cast<Eigen::Index>(C)), ov(static_cast<Eigen::Index>(C));
+        for (size_t c = 0; c < C; ++c)
+        {
+            ou[Eigen::Index(c)] = o[c].x;
+            ov[Eigen::Index(c)] = o[c].y;
+        }
+        f->so = f->s * ou;
+        f->sov = f->s * ov;
+    }
+    const auto [k, ki] = mFinalOp->gram(f->s);
     double trace = 0.0;
     for (Index v = 0; v < V; ++v)
         trace += k.coeff(v, v);
     f->mean = V > 0 && trace > 0.0 ? trace / double(V) : 1.0;
     f->prox = 1e-7 * f->mean;
     trips.clear();
+    if (mCageHold)
+    {
+        f->hold = mCageHold->scaleFor(detail::kCageHold, f->mean);
+        for (const Triplet& t : mCageHold->laplacian)
+            trips.emplace_back(t.row(), t.col(), f->hold * t.value());
+    }
     for (Index v = 0; v < V; ++v)
     {
         double d = f->prox;
@@ -344,8 +363,7 @@ void LiveIsland::factorFinal()
     SpMat d(V, V);
     d.setFromTriplets(trips.begin(), trips.end());
     f->a = k + d;
-    f->ldlt.compute(f->a);
-    f->ok = f->ldlt.info() == Eigen::Success;
+    f->ok = f->uv.compute(f->a, ki);
     mFactor = std::move(f);
     ++mFactorizations;
     mMatrixDirty = false;
@@ -398,7 +416,7 @@ double LiveIsland::finalStep(std::vector<double>& bu, std::vector<double>& bv) c
         triEnergy[i] = k * (d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3 + e);
     });
     const auto nC = Eigen::Index(C);
-    Eigen::VectorXd eu = Eigen::VectorXd::Zero(nC), ev = Eigen::VectorXd::Zero(nC), ou(nC), ov(nC);
+    Eigen::VectorXd eu = Eigen::VectorXd::Zero(nC), ev = Eigen::VectorXd::Zero(nC);
     double energy = 0.0;
     for (size_t i = 0; i < T; ++i)
     {
@@ -410,15 +428,27 @@ double LiveIsland::finalStep(std::vector<double>& bu, std::vector<double>& bv) c
         }
         energy += triEnergy[i];
     }
+    const Eigen::VectorXd gu = eu - f.so, gv = ev - f.sov;
+    std::vector<glm::dvec2> g(C), r(mX.size());
     for (size_t c = 0; c < C; ++c)
+        g[c] = glm::dvec2(gu[Eigen::Index(c)], gv[Eigen::Index(c)]);
+    mFinalOp->applyTransposed(g, r);
+    bu.resize(r.size());
+    bv.resize(r.size());
+    for (size_t v = 0; v < r.size(); ++v)
     {
-        const glm::dvec2 o = toInternal(isl.offset[c]);
-        ou[Eigen::Index(c)] = o.x;
-        ov[Eigen::Index(c)] = o.y;
+        bu[v] = r[v].x;
+        bv[v] = r[v].y;
     }
-    const Eigen::VectorXd ru = f.rt * (eu - f.s * ou), rv = f.rt * (ev - f.s * ov);
-    bu.assign(ru.data(), ru.data() + ru.size());
-    bv.assign(rv.data(), rv.data() + rv.size());
+    if (mCageHold && f.hold > 0.0)
+    {
+        for (size_t v = 0; v < r.size(); ++v)
+        {
+            bu[v] += f.hold * mCageHold->rest[v].x;
+            bv[v] += f.hold * mCageHold->rest[v].y;
+        }
+        energy += f.hold * mCageHold->energy(mX);
+    }
     return energy;
 }
 
@@ -818,8 +848,17 @@ void LiveIsland::step(std::span<const double> weights)
     }
 
     // Global step.
-    Eigen::VectorXd su = f.ldlt.solve(bu), sv = f.ldlt.solve(bv);
-    if (!su.allFinite() || !sv.allFinite())
+    Eigen::VectorXd su, sv;
+    bool solved = false;
+    if (mFinal)
+        solved = f.uv.solve(bu, bv, su, sv);
+    else
+    {
+        su = f.ldlt.solve(bu);
+        sv = f.ldlt.solve(bv);
+        solved = su.allFinite() && sv.allFinite();
+    }
+    if (!solved)
     {
         mSettled = true;
         return;
@@ -842,6 +881,8 @@ void LiveIsland::step(std::span<const double> weights)
     for (Index v = 0; v < V; ++v)
         if (mChart.pinned[v])
             mX[v] = mPinAt[v];
+    if (mFinalFill)
+        mFinalFill->apply(mX);
     bool anchored = mTargetCount > 0;
     for (uint8_t p : mChart.pinned)
         anchored |= p != 0;

@@ -1,0 +1,40 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "meshPanelLayout",
+  "label": "Panel Layout",
+  "category": "Mesh",
+  "doc": "The mesh's Panel Layout from the set's bake: lines (white on the panel lines), panel id (a flat colour per panel), random (a grey per panel, for varying each panel) and height (the Texture lines' grooves, 1 at the surface). Reads (u, v, 0) when the maps aren't supplied.",
+  "inputs": [],
+  "outputs": [
+    {
+      "id": "lines",
+      "type": "gray"
+    },
+    {
+      "id": "panelId",
+      "type": "color"
+    },
+    {
+      "id": "random",
+      "type": "gray"
+    },
+    {
+      "id": "height",
+      "type": "gray"
+    }
+  ],
+  "params": [],
+  "cost": 1,
+  "externals": [
+    "panelLines",
+    "panelId",
+    "panelHeight"
+  ],
+  "body": {
+    "lines": "return panelLines.sample(uv).x;",
+    "panelId": "return panelId.sample(uv);",
+    "random": "float4 c = panelId.sample(uv); return frac(c.x * 0.6180339 + c.y * 0.7548777 + c.z * 0.5698403);",
+    "height": "return panelHeight.sample(uv).x;"
+  }
+}

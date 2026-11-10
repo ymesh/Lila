@@ -16,13 +16,15 @@ using namespace lila::scene;
 
 namespace puppeteer
 {
-namespace
-{
-NodeId rootOf(Graph& g, NodeId character)
+NodeId characterRoot(Graph& g, NodeId character)
 {
     Node* r = character ? named(g, textOf(*g.node(character), "root")) : nullptr;
     return r ? r->id() : kNoNode;
 }
+
+namespace
+{
+NodeId rootOf(Graph& g, NodeId character) { return characterRoot(g, character); }
 
 void setPins(Graph& g, NodeId character, const std::vector<NodeId>& pins)
 {
@@ -60,10 +62,9 @@ bool solvable(Graph& g, NodeId joint, NodeId root)
     return branches >= 2;
 }
 
-/**
- * Stiffness per joint of the character: its rig template's (rig.fullBody.stiffness, by marker), when Rig Templates is
- * loaded and the template has one, else by name.
- */
+glm::dquat worldRotation(const glm::dmat4& m) { return glm::normalize(glm::quat_cast(math::rotationOf(m))); }
+} // namespace
+
 std::vector<std::pair<NodeId, double>> stiffnessOf(Graph& g, NodeId character, const std::vector<NodeId>& joints)
 {
     std::map<std::string, double> byJoint;
@@ -92,9 +93,6 @@ std::vector<std::pair<NodeId, double>> stiffnessOf(Graph& g, NodeId character, c
     }
     return out;
 }
-
-glm::dquat worldRotation(const glm::dmat4& m) { return glm::normalize(glm::quat_cast(math::rotationOf(m))); }
-} // namespace
 
 std::vector<NodeId> pinsOf(Graph& g, NodeId character)
 {

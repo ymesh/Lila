@@ -233,7 +233,21 @@ bool bridgeable(const Mesh& m, Index e)
     return e < m.edgeCapacity() && m.edgeValid(e) && m.edgeFaceCount(e) <= 1;
 }
 
-std::vector<PathPair> planPairs(const Mesh& mesh, std::span<const Index> edges, BridgeConnect connect)
+/** +1 or -1 for a path wholly on one side of the mirror, 0 for one on or across the plane. */
+int pathSide(const SymmetryMap& s, const EdgePath& p)
+{
+    int side = 0;
+    for (Index pt : p.points)
+        if (const int k = s.side(pt); k != 0)
+        {
+            if (side != 0 && k != side)
+                return 0;
+            side = k;
+        }
+    return side;
+}
+
+std::vector<PathPair> planPairs(const Mesh& mesh, std::span<const Index> edges, BridgeConnect connect, const SymmetryMap* symmetry = nullptr)
 {
     std::vector<Index> border;
     for (Index e : edges)
@@ -245,10 +259,13 @@ std::vector<PathPair> planPairs(const Mesh& mesh, std::span<const Index> edges, 
     std::erase_if(paths, [](const EdgePath& p) { return p.edges.empty(); });
     const size_t n = paths.size();
     std::vector<glm::dvec3> centres, open;
+    std::vector<int> sides;
+    const bool mirrored = symmetry && !symmetry->isRadial() && !symmetry->empty();
     for (const EdgePath& p : paths)
     {
         centres.push_back(pathCentre(mesh, p));
         open.push_back(openSide(mesh, p));
+        sides.push_back(mirrored ? pathSide(*symmetry, p) : 0);
     }
     std::vector<PathPair> out;
 
@@ -299,7 +316,7 @@ std::vector<PathPair> planPairs(const Mesh& mesh, std::span<const Index> edges, 
     for (size_t i = 0; i < n; ++i)
         for (size_t j = i + 1; j < n; ++j)
         {
-            if (paths[i].closed != paths[j].closed)
+            if (paths[i].closed != paths[j].closed || sides[i] * sides[j] < 0)
                 continue;
             if (paths[i].closed && !loopsFace(mesh, paths[i], centres[i], centres[j]))
                 continue;
@@ -1722,7 +1739,7 @@ BridgeResult bridge(Mesh& mesh, std::span<const Index> edges, const BridgeOption
     LILA_ZONE();
 
     BridgeResult r;
-    for (const PathPair& pair : planPairs(mesh, edges, opts.connect))
+    for (const PathPair& pair : planPairs(mesh, edges, opts.connect, opts.symmetry))
     {
         // Later pairs were planned before earlier ones split end borders or merged points; skip any that went stale.
         bool fresh = true;
@@ -1779,7 +1796,7 @@ std::vector<Index> bridgeEdgeLoops(Mesh& mesh, std::span<const Index> edges, con
 {
     LILA_ZONE();
 
-    std::vector<PathPair> pairs = planPairs(mesh, edges, BridgeConnect::Pairs);
+    std::vector<PathPair> pairs = planPairs(mesh, edges, BridgeConnect::Pairs, opts.symmetry);
     if (pairs.empty())
         return {};
     BridgeResult r;

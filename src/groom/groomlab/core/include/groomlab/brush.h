@@ -307,6 +307,9 @@ struct PlaceSettings {
     // straight up with `length` and `segments`. The group's own guides, or while it has none the other
     // groups' at its level. Draw takes the painted layers.
     bool matchNeighbors = true;
+    // With no neighbors to copy, a new guide leaves the scalp and falls under gravity (-Y) over it instead of
+    // standing straight out along the normal.
+    bool drape = false;
     float spacing = 0.1f;  // Place Many: no new root closer than this to any root of the group
     // Solo new guides (Place, Draw): a stroke's new guides unfrozen and every other guide frozen
     // (soloGuides), in the same undo step, so the brushes after work on the new ones alone.

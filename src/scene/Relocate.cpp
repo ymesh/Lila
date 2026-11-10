@@ -1803,6 +1803,11 @@ void registerBuiltins()
              "morphTarget", "correction", "deltaMush", "smoothDeformer", "tension", "textureDeformer", "noiseDeformer", "meshCache"})
         registerNeutral(t);
     registerNeutral("gameExportPreset");
+    // Math nodes, scale and pole vector constraints among them: they compute from connected values and hold nothing in world space.
+    for (const char* t : {"addDoubleLinear", "multDoubleLinear", "blendColors", "blendTwoAttr", "blendWeighted", "choice", "clamp", "condition",
+                          "multiplyDivide", "plusMinusAverage", "remapValue", "reverse", "setRange", "unitConversion", "pairBlend", "distanceBetween",
+                          "vectorProduct", "closestPointOnMesh", "expression", "scaleConstraint", "poleVectorConstraint"})
+        registerNeutral(t);
 
     // Linked only: nothing stored in world space, but what they link must move together.
     for (const char* t : {"constraint", "parentConstraint", "pointConstraint", "orientConstraint", "aimConstraint"})

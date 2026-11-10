@@ -198,7 +198,7 @@ void registerDefaults()
     add({"snap.rotateHold", "angle", snap(SnapRotateHold), "Rotate snap toggled", {"snap.rotateHoldOn"}});
     add({"pivotEdit", "target", [](const ViewportState&) { return tools::pivotEdit(); }, "Pivot edit",
          {"tool.pivotEditOn", "tool.pivotEditToggle"}});
-    add({"cloneDrag", "copy", [](const ViewportState&) { return tools::cloneDrag(); }, "Drag a handle to clone", {"tool.cloneDragOn"}});
+    add({"cloneDrag", "copy", [](const ViewportState&) { return tools::cloneDrag(); }, "Drag a handle to clone", {"tool.cloneKeyDown", "tool.cloneDragOn"}});
     add({"softSelect.adjust", "circle-dotted", [](const ViewportState&) { return tools::softSelectAdjusting(); },
          "Drag to set the soft select radius", {"softSelect.keyDown", "softSelect.adjustOn"}});
     add({"softSelect.on", "ripple",

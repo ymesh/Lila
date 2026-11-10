@@ -72,6 +72,12 @@ LILA_SCENE_API const char* profileName(AxisProfile p);
 
 /** Lila space to file space for a profile and scene up axis: a rotation (signed axis permutation). */
 LILA_SCENE_API glm::dmat3 profileBasis(AxisProfile p, math::UpAxis up);
+/**
+ * The quarter turn about up that characters in Z-up (Unreal) files take on import: Unreal builds skeletal meshes facing
+ * its +Y, which profileBasis puts on Lila's right, and Lila characters face forward. Skeletal and animation exports to a
+ * Z-up profile turn them back by its inverse.
+ */
+LILA_SCENE_API glm::dmat3 characterTurn(math::UpAxis up);
 
 /**
  * What an export is for. Static writes meshes and transforms. Skeletal adds joints as LimbNodes, skins (Skin and

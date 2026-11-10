@@ -254,22 +254,7 @@ std::vector<FlagDef> modifierAttrFlags(const std::string& type)
     {
         if (!(d.flags & AttrInput) || (d.flags & AttrHidden) || d.name == "enabled" || d.name == "exportEnabled")
             continue;
-        FlagDef fd{d.name, "", T::Float, nullptr, d.doc};
-        fd.min = d.minValue;
-        fd.max = d.maxValue;
-        switch (d.type)
-        {
-        case PlugType::Bool: fd.type = T::Bool; break;
-        case PlugType::Int: fd.type = T::Int; break;
-        case PlugType::String: fd.type = T::String; break;
-        case PlugType::Vec3: fd.type = T::Vec3; break;
-        case PlugType::Enum:
-            fd.type = T::String;
-            fd.choices = d.enumNames;
-            break;
-        default: break;
-        }
-        out.push_back(std::move(fd));
+        out.push_back(helpers::flagFromAttr(d));
     }
     return out;
 }

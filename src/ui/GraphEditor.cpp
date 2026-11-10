@@ -100,16 +100,6 @@ template <size_t N> int indexOf(const char* const (&names)[N], const std::string
     return fallback;
 }
 
-QString unitOf(const scene::Node& curve)
-{
-    const std::string& t = curve.type().name;
-    if (t == "animCurveTA" || t == "animCurveRQ")
-        return QStringLiteral("°");
-    if (t == "animCurveTL")
-        return QStringLiteral("cm");
-    return {};
-}
-
 /** "+=5", "-=5", "*=2", "/=2" or a plain number: the operator ('=' for plain) and the number. */
 std::optional<std::pair<char, double>> parseEntry(QString text)
 {
@@ -205,17 +195,16 @@ GraphEditor::GraphEditor(QWidget* parent) : QWidget(parent)
 
     bar->addWidget(geDimLabel("Tangents", this));
     mTangentSeg = new controls::Segmented(this);
-    const char* tangentTypes[] = {"auto", "spline", "linear", "flat", "step", "clamped"};
     for (int i = 0; i < 6; ++i)
     {
-        const char* t = tangentTypes[i];
+        const char* t = kTangentTypes[i];
         mTangentSeg->add({}, QString("curve-tangent-%1").arg(t), QString("%1 Tangents\nSet on the selected keys, or every key of the shown curves").arg(niceName(t)), i);
     }
     // A hidden segment stands for "mixed or no keys", so no visible type reads as current.
     mTangentSeg->add({}, {}, {}, kMixedSegment)->hide();
-    connect(mTangentSeg, &controls::Segmented::picked, this, [this, tangentTypes](int i) {
+    connect(mTangentSeg, &controls::Segmented::picked, this, [this](int i) {
         if (i >= 0 && i < 6)
-            applyTangent(tangentTypes[i]);
+            applyTangent(kTangentTypes[i]);
         syncTangentState();
     });
     bar->addWidget(mTangentSeg);
@@ -575,79 +564,47 @@ void GraphEditor::rebuild()
     for (QTreeWidgetItem* item : mChannels->selectedItems())
         keep.push_back(item->data(0, Qt::UserRole + 1).toString().toStdString());
 
-    std::vector<Channel> channels;
+    std::vector<Channel> channels = GraphModel::gather(g, g.selection(), mView->settings.rotation);
     QSignalBlocker block(mChannels);
     mChannels->clear();
-    const RotationDisplay rotationDisplay = mView->settings.rotation;
-    for (NodeId id : g.selection())
+    QTreeWidgetItem* top = nullptr;
+    NodeId topNode = scene::kNoNode;
+    for (int i = 0; i < int(channels.size()); ++i)
     {
-        scene::Node* n = g.node(id);
-        if (!n)
-            continue;
-        std::vector<anim::AnimatedPlug> plugs = anim::animatedPlugs(g, id);
-        if (plugs.empty())
-            continue;
-        auto* top = new QTreeWidgetItem(mChannels, {QString::fromStdString(n->name())});
-        top->setData(0, Qt::UserRole + 1, QString::fromStdString(n->fullPath()));
-        top->setToolTip(0, QString::fromStdString(n->fullPath()));
-        QFont f = top->font(0);
-        f.setWeight(QFont::DemiBold);
-        top->setFont(0, f);
-        auto addChannel = [&](const anim::AnimatedPlug& ap, NodeId cid, const QString& label, int axis) {
-            Channel ch;
-            ch.plug = ap.plug;
-            ch.curve = cid;
-            scene::Node* curveNode = g.node(ap.curve);
-            ch.curveName = curveNode->path();
-            ch.label = label;
-            ch.unit = slotOf(cid) >= 3 ? QString() : unitOf(*curveNode);
-            ch.axis = axis;
-            ch.modifiers = anim::modifiersOf(*curveNode);
-            // Neighbouring channels never share a look: gray level and dash both cycle, at different periods.
-            static constexpr int kLevels[] = {210, 150, 180, 120};
-            static constexpr Qt::PenStyle kDashes[] = {Qt::SolidLine, Qt::DashLine, Qt::DotLine};
-            ch.level = kLevels[channels.size() % 4];
-            ch.dash = kDashes[channels.size() % 3];
-            QString text = ch.label;
-            if (!ch.modifiers.empty())
-            {
-                QStringList names;
-                for (const anim::Modifier& m : ch.modifiers)
-                    names << anim::modifierTypeName(m.type);
-                text += "  ·  " + names.join(", ");
-            }
-            auto* item = new QTreeWidgetItem(top, {text});
-            item->setIcon(0, [&] {
-                QPixmap pm(28, 12);
-                pm.fill(Qt::transparent);
-                QPainter p(&pm);
-                p.setPen(QPen(channelColor(ch, ch.level), 2, ch.dash, Qt::FlatCap));
-                p.drawLine(2, 6, 26, 6);
-                return QIcon(pm);
-            }());
-            if (!ch.modifiers.empty())
-                item->setToolTip(0, "Modifiers change this curve's output: " + text.section("  ·  ", 1));
-            item->setData(0, Qt::UserRole, int(channels.size()));
-            item->setData(0, Qt::UserRole + 1, QString::fromStdString(g.plugName(ap.plug)) + ch.label);
-            channels.push_back(std::move(ch));
-        };
-        for (const anim::AnimatedPlug& ap : plugs)
+        const Channel& ch = channels[size_t(i)];
+        if (!top || ch.plug.node != topNode)
         {
-            const scene::AttrDef& a = g.attr(ap.plug);
-            bool rotation = anim::isRotationCurve(*g.node(ap.curve));
-            std::string attr = ap.plug.component >= 0 ? a.childNames[ap.plug.component] : a.name;
-            if (!rotation || rotationDisplay != RotationDisplay::Quaternion)
-                addChannel(ap, rotation ? slotId(ap.curve, ap.plug.component) : ap.curve, niceName(attr), [&] {
-                    if (ap.plug.component < 0 || a.childNames.size() != 3 || a.childNames[size_t(ap.plug.component)].empty())
-                        return -1;
-                    char last = char(std::toupper(static_cast<unsigned char>(a.childNames[size_t(ap.plug.component)].back())));
-                    return last == 'X' + ap.plug.component ? ap.plug.component : -1;
-                }());
-            if (rotation && rotationDisplay != RotationDisplay::Euler && ap.plug.component == 2)
-                for (int s = 3; s < 7; ++s)
-                    addChannel(ap, slotId(ap.curve, s), niceName(a.name) + " " + QChar("WXYZ"[s - 3]), -1);
+            scene::Node* n = g.node(ch.plug.node);
+            topNode = ch.plug.node;
+            top = new QTreeWidgetItem(mChannels, {QString::fromStdString(n->name())});
+            top->setData(0, Qt::UserRole + 1, QString::fromStdString(n->fullPath()));
+            top->setToolTip(0, QString::fromStdString(n->fullPath()));
+            QFont f = top->font(0);
+            f.setWeight(QFont::DemiBold);
+            top->setFont(0, f);
+            top->setExpanded(true);
         }
-        top->setExpanded(true);
+        QString text = ch.label;
+        if (!ch.modifiers.empty())
+        {
+            QStringList names;
+            for (const anim::Modifier& m : ch.modifiers)
+                names << anim::modifierTypeName(m.type);
+            text += "  ·  " + names.join(", ");
+        }
+        auto* item = new QTreeWidgetItem(top, {text});
+        item->setIcon(0, [&] {
+            QPixmap pm(28, 12);
+            pm.fill(Qt::transparent);
+            QPainter p(&pm);
+            p.setPen(QPen(channelColor(ch, ch.level), 2, ch.dash, Qt::FlatCap));
+            p.drawLine(2, 6, 26, 6);
+            return QIcon(pm);
+        }());
+        if (!ch.modifiers.empty())
+            item->setToolTip(0, "Modifiers change this curve's output: " + text.section("  ·  ", 1));
+        item->setData(0, Qt::UserRole, i);
+        item->setData(0, Qt::UserRole + 1, QString::fromStdString(g.plugName(ch.plug)) + ch.label);
     }
     for (QTreeWidgetItemIterator it(mChannels); *it; ++it)
         if (std::find(keep.begin(), keep.end(), (*it)->data(0, Qt::UserRole + 1).toString().toStdString()) != keep.end())
@@ -667,37 +624,7 @@ void GraphEditor::rebuild()
 
 void GraphEditor::reloadCurves()
 {
-    Graph& g = Graph::current();
-    mView->curves.clear();
-    mView->rotations.clear();
-    mView->loopCurves.clear();
-    for (Channel& ch : mView->channels)
-    {
-        scene::Node* n = g.node(realCurve(ch.curve));
-        if (!n)
-            continue;
-        ch.modifiers = anim::modifiersOf(*n);
-        if (anim::curveLoops(*n))
-            mView->loopCurves.insert(ch.curve);
-        try
-        {
-            int slot = slotOf(ch.curve);
-            if (slot < 0)
-            {
-                mView->curves[ch.curve] = anim::curveOf(*n);
-                continue;
-            }
-            auto it = mView->rotations.find(n->id());
-            if (it == mView->rotations.end())
-                it = mView->rotations.emplace(n->id(), anim::rotationCurveOf(*n).looped()).first;
-            mView->curves[ch.curve] = derivedChannel(it->second, slot);
-        }
-        catch (const std::exception& e)
-        {
-            log::warn("{}: {}", n->path(), e.what());
-        }
-    }
-    mView->dropMissing();
+    mView->reloadCurves();
     mView->updateMaps();
     refreshKeyFields();
     mView->update();
@@ -729,45 +656,17 @@ void GraphEditor::applyVisibility()
 
 void GraphEditor::applyTangent(const char* type)
 {
-    bool step = std::string_view(type) == "step";
-    UndoChunk chunk("Key Tangents");
-    if (!mView->sel.empty())
-    {
-        for (const KeySel& k : mView->sel)
-            if (std::string name = mView->commandTarget(k.curve); !name.empty())
-            {
-                json call = {{"args", {name}}, {"time", k.time}, {"outTangentType", type}};
-                if (!step)
-                    call["inTangentType"] = type;
-                runUnechoed("keyTangent", call);
-            }
-    }
-    else
-        for (NodeId c : mView->targetCurves())
-            if (std::string name = mView->commandTarget(c); !name.empty())
-            {
-                json call = {{"args", {name}}, {"outTangentType", type}};
-                if (!step)
-                    call["inTangentType"] = type;
-                runUnechoed("keyTangent", call);
-            }
-    log::write(LogLevel::Echo, std::string("# tangents: ") + type + "\n");
+    mView->applyTangent(type);
 }
 
 void GraphEditor::lockTangents(bool lock)
 {
-    if (mView->sel.empty())
-    {
-        log::warn("{} tangents: select keys first", lock ? "Unify" : "Break");
-        return;
-    }
-    {
-        UndoChunk chunk(lock ? "Unify Tangents" : "Break Tangents");
-        for (const KeySel& k : mView->sel)
-            if (std::string name = mView->commandTarget(k.curve); !name.empty())
-                runUnechoed("keyTangent", {{"args", {name}}, {"time", k.time}, {"lock", lock}});
-    }
-    log::write(LogLevel::Echo, std::string("# tangents ") + (lock ? "unified\n" : "broken\n"));
+    mView->lockTangents(lock);
+}
+
+graphed::GraphModel& GraphEditor::model()
+{
+    return *mView;
 }
 
 void GraphEditor::applyInfinity(bool pre, const char* mode)
@@ -792,18 +691,7 @@ void GraphEditor::applyInfinity(bool pre, const char* mode)
 
 void GraphEditor::deleteSelectedKeys()
 {
-    if (mView->sel.empty())
-        return;
-    std::vector<KeySel> doomed = mView->sel;
-    mView->sel.clear();
-    {
-        UndoChunk chunk("Delete Keys");
-        for (const KeySel& k : doomed)
-            if (std::string name = mView->commandTarget(k.curve); !name.empty())
-                runUnechoed("cutKey", {{"args", {name}}, {"time", k.time}, {"clear", true}});
-    }
-    log::write(LogLevel::Echo, "# deleted " + std::to_string(doomed.size()) + " keys\n");
-    refreshKeyFields();
+    mView->deleteSelectedKeys();
 }
 
 void GraphEditor::runOnKeys(const std::string& command, const json& call)
@@ -938,25 +826,7 @@ void GraphEditor::fillCurveMenu(QMenu* menu)
 
 void GraphEditor::fillContextMenu(QMenu* menu)
 {
-    QMenu* tangents = menu->addMenu("Tangents");
-    for (const char* t : {"auto", "spline", "linear", "flat", "step", "clamped"})
-        tangents->addAction(icon(QString("curve-tangent-%1").arg(t)), niceName(t), [this, t] { applyTangent(t); });
-    tangents->addSeparator();
-    tangents->addAction(icon("unlink"), "Break", [this] { lockTangents(false); });
-    tangents->addAction(icon("link"), "Unify", [this] { lockTangents(true); });
-    tangents->addSeparator();
-    tangents->addAction("Weighted", [this] {
-        UndoChunk chunk("Weighted Tangents");
-        for (NodeId c : mView->targetCurves())
-            if (std::string name = mView->commandTarget(c); !name.empty())
-                runUnechoed("keyTangent", {{"args", {name}}, {"weightedTangents", true}});
-    });
-    tangents->addAction("Non-Weighted", [this] {
-        UndoChunk chunk("Non-Weighted Tangents");
-        for (NodeId c : mView->targetCurves())
-            if (std::string name = mView->commandTarget(c); !name.empty())
-                runUnechoed("keyTangent", {{"args", {name}}, {"weightedTangents", false}});
-    });
+    fillTangentMenu(menu->addMenu("Tangents"), *mView);
     fillInfinityMenu(menu);
     fillCurveMenu(menu->addMenu("Curves"));
     menu->addSeparator();

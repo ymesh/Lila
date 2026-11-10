@@ -18,6 +18,10 @@
 #include "groomlab/sculpt.h"
 #include "groomlab/stroke.h"
 #include "test_helpers.h"
+#include "groom/GroomEvaluator.h"
+#include "groom/GroomStrokeHost.h"
+
+using lila::groom::GroomEvaluator;
 
 namespace groomlab {
 namespace {
@@ -261,6 +265,24 @@ std::string sparseGuides(const ScalpMesh& scalp, float lean) {
     return h.toJson();
 }
 
+struct Workflow {
+    MeshPtr scalp = test::makeSphere(24, 48);
+    std::unique_ptr<GroomEvaluator> session;
+    std::unique_ptr<lila::groom::GroomStrokeHost> host;
+    explicit Workflow(const std::string& graph = workflowGraph()) {
+        GroomData data;
+        data.scalp = scalp;
+        data.graphJson = graph;
+        data.hierarchyJson = sparseGuides(*scalp, 0.0f);
+        session = std::make_unique<GroomEvaluator>(std::move(data));
+        host = std::make_unique<lila::groom::GroomStrokeHost>(*session);
+        GroomEvaluator::Request request;
+        EXPECT_TRUE(session->evaluate(request).strands);
+    }
+    GuidesPtr output(const std::string& node = "sculpt1") { return valueAs<GuidesPtr>(session->evaluateNode(node, 1.0f, 0.0)); }
+    GuidesPtr input(const std::string& node = "sculpt1") { return session->sculptInput(node).guides; }
+};
+
 const Guide* byId(const GuideSet& set, std::uint64_t id) {
     for (const Guide& g : set.guides()) {
         if (g.id == id) return &g;
@@ -277,6 +299,167 @@ std::vector<std::pair<float, float>> relativeForm(const Guide& in, const Guide& 
     }
     return form;
 }
+
+TEST(SculptNode, WithoutEditsTheNodeIsTheIdentity) {
+    Workflow w;
+    EXPECT_EQ(w.output(), w.input());  // the very guides it is fed
+    // Edits at strength 0: the guides as fed too.
+    Workflow zero(workflowGraph("sculpt1", 0.0));
+    const GuidesPtr in = zero.input();
+    SculptSet set;
+    set.nodes["sculpt1"].guides[in->guides()[0].id] =
+        recordSculpt(in->guides()[0], hooked(in->guides()[0].points, 3, 0.5f), 1.0f, zero.scalp.get());
+    zero.session->setSculptsJson(set.toJson());
+    EXPECT_EQ(zero.output(), zero.input());
+}
+
+TEST(SculptNode, StrokesShapeTheNodesGuidesAndKeepTheirFormUpstream) {
+    Workflow w;
+    w.session->setSculptTarget("sculpt1");
+    const GuidesPtr fed = w.input();
+    ASSERT_GE(fed->size(), 20u);
+    // The view shows the node's guides as the editable ones.
+    const GroomEvaluator::Result& shown = w.session->evaluate(GroomEvaluator::Request{});
+    ASSERT_TRUE(shown.hierarchy);
+    EXPECT_EQ(shown.hierarchy->guides().size(), fed->size());
+    EXPECT_NE(shown.hierarchy->group(shown.hierarchy->guides()[0].group)->name.find("sculpt1"), std::string::npos);
+
+    // A comb across the top, then a curl: two undo steps, each the node's edits.
+    BrushToolSettings s;
+    s.setMode("comb");
+    s.brush.radius = 0.5f;
+    s.brush.strength = 1.0f;
+    EXPECT_EQ(scriptedStroke(*w.host, s, {{-0.4f, 1.3f, 0.0f}, {0.0f, 1.35f, 0.2f}, {0.4f, 1.3f, 0.4f}}), 0u);
+    ASSERT_EQ(w.host->edits().size(), 1u);
+    EXPECT_TRUE(w.host->edits()[0].text(StrokeField::Sculpts).set);
+    EXPECT_FALSE(w.host->edits()[0].text(StrokeField::Guides).set);  // the stored guides untouched
+    const SculptSet afterComb = SculptSet::fromJson(w.session->data().sculptsJson);
+    ASSERT_TRUE(afterComb.node("sculpt1"));
+    const std::size_t combed = afterComb.node("sculpt1")->guides.size();
+    EXPECT_GT(combed, 0u);
+    EXPECT_LT(combed, fed->size());  // only the guides it touched
+    s.setMode("twist");
+    s.brush.strength = 1.0f;
+    scriptedStroke(*w.host, s, {{0.3f, 1.2f, 0.3f}, {0.35f, 1.2f, 0.4f}});
+    ASSERT_EQ(w.host->edits().size(), 2u);
+
+    // The output carries the edits; the hair downstream follows.
+    const GuidesPtr out = w.output();
+    std::uint64_t edited = 0;
+    float most = 0.0f;
+    for (const Guide& g : out->guides()) {
+        const float d = maxDistance(g.points, byId(*fed, g.id)->points);
+        if (d > most) {
+            most = d;
+            edited = g.id;
+        }
+    }
+    ASSERT_GT(most, 0.05f);
+    const auto formBefore = relativeForm(*byId(*fed, edited), *byId(*out, edited));
+
+    // Undo and redo, stroke by stroke.
+    ASSERT_TRUE(w.host->undo());
+    ASSERT_TRUE(w.host->undo());
+    EXPECT_EQ(w.output(), w.input());
+    ASSERT_TRUE(w.host->redo());
+    ASSERT_TRUE(w.host->redo());
+    EXPECT_EQ(byId(*w.output(), edited)->points, byId(*out, edited)->points);
+
+    // The sparse guides combed upstream: the dense guides are made again with the same IDs, and the
+    // sculpted guide keeps its relative form (the same turns at the same places, the same lengths).
+    w.session->setHierarchyJson(sparseGuides(*w.scalp, 0.8f));
+    ASSERT_TRUE(w.session->evaluate(GroomEvaluator::Request{}).strands);
+    const GuidesPtr fedAgain = w.input();
+    const GuidesPtr outAgain = w.output();
+    const Guide* in2 = byId(*fedAgain, edited);
+    ASSERT_TRUE(in2);
+    EXPECT_GT(maxDistance(in2->points, byId(*fed, edited)->points), 0.05f);  // the input did move
+    const auto formAfter = relativeForm(*in2, *byId(*outAgain, edited));
+    ASSERT_EQ(formAfter.size(), formBefore.size());
+    for (std::size_t k = 0; k < formBefore.size(); ++k) {
+        EXPECT_NEAR(formAfter[k].first, formBefore[k].first, 2e-3f) << k;
+        EXPECT_NEAR(formAfter[k].second, formBefore[k].second, 1e-4f) << k;
+    }
+    // ... and it did not snap back to where it was.
+    EXPECT_GT(maxDistance(byId(*outAgain, edited)->points, byId(*out, edited)->points), 0.05f);
+}
+
+TEST(SculptNode, TheInteractiveBrushPreviewsAndCommitsTheNodesEdits) {
+    Workflow w;
+    w.session->setSculptTarget("sculpt1");
+    const ToolView view = ToolView::fromMatrix(test::lookAtProjection({0, 3.0f, 2.5f}, {0, 1.0f, 0}, 40.0, 1.0), 800, 800);
+    BrushTool tool;
+    tool.settings.setMode("comb");
+    tool.settings.screenRadius = 150.0f;
+    tool.settings.brush.level = 1;  // whatever level the brush is at, the node's guides are brushed
+    // Hover shows the node's guides.
+    float cx = 0, cy = 0;
+    view.project({0.0f, 1.3f, 0.3f}, cx, cy);
+    EXPECT_FALSE(tool.affectedLines(*w.host, view, cx, cy).empty());
+    bool previewed = false;
+    std::vector<std::array<float, 2>> line;
+    for (int k = 0; k < 12; ++k) line.push_back({cx - 120.0f + 20.0f * static_cast<float>(k), cy});
+    ASSERT_TRUE(tool.stroke(*w.host, view, line, 1.0f, 0, [&] {
+        previewed = previewed || w.session->hasPreviewSculpt();
+        const GroomEvaluator::Result& r = w.session->evaluate(GroomEvaluator::Request{});
+        EXPECT_TRUE(r.strands);
+        EXPECT_EQ(r.hierarchy.get(), w.session->sculptHierarchy().get());  // the stroke's guides drawn
+    }));
+    EXPECT_TRUE(previewed);
+    EXPECT_FALSE(w.session->hasPreviewSculpt());
+    EXPECT_FALSE(w.session->hasPreview());
+    ASSERT_EQ(w.host->edits().size(), 1u);
+    EXPECT_TRUE(w.host->edits()[0].text(StrokeField::Sculpts).set);
+    EXPECT_NE(w.output(), w.input());
+    // Brushes a Sculpt node does not take are refused, saying why.
+    tool.settings.setMode("erase");
+    EXPECT_FALSE(tool.stroke(*w.host, view, line));
+    EXPECT_FALSE(w.host->warnings().empty());
+}
+
+TEST(SculptNode, GroomFilesKeepTheEditsAndRenamesCarryThem) {
+    Workflow w;
+    w.session->setSculptTarget("sculpt1");
+    BrushToolSettings s;
+    s.setMode("comb");
+    s.brush.radius = 0.5f;
+    scriptedStroke(*w.host, s, {{-0.4f, 1.3f, 0.0f}, {0.4f, 1.3f, 0.4f}});
+    const GuidesPtr out = w.output();
+    const std::string sculpts = w.session->data().sculptsJson;
+    ASSERT_FALSE(SculptSet::fromJson(sculpts).empty());
+
+    // Through a groom file.
+    const auto path = std::filesystem::temp_directory_path() / "groomlab_sculpt_node.groom";
+    GroomFile file;
+    file.data = w.session->data();
+    writeGroomFile(path.string(), file);
+    const GroomFile read = readGroomFile(path.string());
+    std::filesystem::remove(path);
+    EXPECT_EQ(SculptSet::fromJson(read.data.sculptsJson).nodes, SculptSet::fromJson(sculpts).nodes);
+    GroomData data = read.data;
+    data.scalp = w.scalp;
+    GroomEvaluator again(std::move(data));
+    again.evaluate(GroomEvaluator::Request{});
+    const GuidesPtr outAgain = valueAs<GuidesPtr>(again.evaluateNode("sculpt1", 1.0f, 0.0));
+    ASSERT_EQ(outAgain->size(), out->size());
+    for (std::size_t k = 0; k < out->size(); ++k) EXPECT_EQ(outAgain->guides()[k].points, out->guides()[k].points);
+
+    // The node renamed with its edits: the same guides.
+    w.session->setGraphJson(workflowGraph("shape"));
+    w.session->setSculptsJson(renameSculptNode(sculpts, "sculpt1", "shape"));
+    w.session->evaluate(GroomEvaluator::Request{});
+    const GuidesPtr renamed = w.output("shape");
+    ASSERT_EQ(renamed->size(), out->size());
+    for (std::size_t k = 0; k < out->size(); ++k) EXPECT_EQ(renamed->guides()[k].points, out->guides()[k].points);
+    // Renamed without them: the guides as fed.
+    w.session->setSculptsJson(sculpts);
+    EXPECT_EQ(w.output("shape"), w.input("shape"));
+    // A bad text is said, and no edits apply.
+    w.session->setSculptsJson("{nope");
+    ASSERT_FALSE(w.session->inputErrors().empty());
+    EXPECT_NE(w.session->inputErrors().back().find("sculptData"), std::string::npos);
+}
+
 
 TEST(SculptNode, TheEditableGuidesDrawInTheirToGuidesNodesColor) {
     // ToGuides tags the guides it makes with its color; a Sculpt node's copy keeps it, and the

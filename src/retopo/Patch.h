@@ -39,6 +39,11 @@ struct PatchOptions
      * point wins (overriding variant), and the interior leans toward it.
      */
     std::optional<glm::dvec3> pull;
+    /**
+     * For a cap: the direction the patch bulges along. The interior is carried along it onto the surface (a fingertip's
+     * dome) before relaxing, rather than to the nearest surface point, which on a tube is its side.
+     */
+    std::optional<glm::dvec3> lift;
     /** Tangential relax passes on the surface once the interior is placed. */
     int relaxIterations = 10;
 };

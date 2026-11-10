@@ -1,5 +1,6 @@
 add_executable(lila_deform_tests
     main.cpp
+    test_bend_bones.cpp
     test_deform_eval.cpp
     test_deform_math.cpp
     test_deformers.cpp

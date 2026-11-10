@@ -7,6 +7,7 @@
 #include "scene/Graph.h"
 #include "scene/Modifiers.h"
 #include "scene/Morphs.h"
+#include "scene/Transform.h"
 #include "ui/Actions.h"
 #include "ui/Controls.h"
 #include "ui/Deletion.h"
@@ -19,6 +20,8 @@
 #include "ui/UiCommands.h"
 #include "ui/UiCommon.h"
 #include "ui/ValueReset.h"
+#include "ui/ViewportHooks.h"
+#include "ui/Overlay.h"
 
 #include <QApplication>
 #include <QComboBox>
@@ -56,6 +59,9 @@ constexpr int kTargetRole = Qt::UserRole;
 constexpr int kWeightSliderSteps = 1000;
 
 std::string gCurrentTarget;
+/** The current target's paths are drawn in the viewport while the panel shows. */
+bool gShowPaths = true;
+QPointer<QWidget> gPanel;
 
 /** The morph of the lead selection: a mesh's, a target's, or the morph itself. */
 std::string selectedMorph()
@@ -92,6 +98,79 @@ void onTarget(const char* command, json call = json::object())
             args.push_back(a);
     call["args"] = args;
     actions::runWithOptions(command, call);
+}
+
+/** Puts the target's pivot at the last selected node that isn't the target. */
+void pivotFromSelected(const std::string& target)
+{
+    json sel = selectionNames();
+    for (auto it = sel.rbegin(); it != sel.rend(); ++it)
+        if (it->get<std::string>() != target)
+        {
+            runUi("morphPath", {{"args", {target}}, {"pivot", *it}});
+            return;
+        }
+    log::warn("Pivot From Selected: select the node to swing about, such as a locator at the eye's centre");
+}
+
+uint64_t gPathsVersion = 0;
+
+/** The current target's point paths (only the farthest moving points), and its pivot in Pivot mode, while the panel shows. */
+void drawPaths(render::FrameState& f, OverlayPainter&, const ViewInfo&)
+{
+    if (!gShowPaths || !gPanel || !gPanel->isVisible())
+        return;
+    const std::string t = currentMorphTarget();
+    static std::string cachedFor;
+    static uint64_t cachedVersion = ~uint64_t(0);
+    static std::vector<render::LineVertex> cached;
+    if (t.empty())
+        return;
+    if (t != cachedFor || gPathsVersion != cachedVersion)
+    {
+        cachedFor = t;
+        cachedVersion = gPathsVersion;
+        cached.clear();
+        try
+        {
+            Graph& g = Graph::current();
+            scene::Node* n = findNode(t);
+            const scene::NodeId morph = n ? scene::morphs::morphOf(g, n->id()) : scene::kNoNode;
+            const scene::NodeId mesh = morph != scene::kNoNode ? scene::modifiers::meshOf(g, morph) : scene::kNoNode;
+            if (mesh == scene::kNoNode)
+                return;
+            const glm::dmat4 world = g.node(mesh)->as<glm::dmat4>(scene::Transform::kWorldMatrix);
+            auto at = [&](const glm::dvec3& p) { return glm::vec3(world * glm::dvec4(p, 1.0)); };
+            const glm::vec4 color = f.wirePreselect * glm::vec4(1.0f, 1.0f, 1.0f, 0.7f);
+            double reach = 0.0;
+            for (const std::vector<glm::dvec3>& path : scene::morphs::paths(g, n->id(), 24, 300))
+            {
+                for (size_t k = 1; k < path.size(); ++k)
+                {
+                    cached.push_back({at(path[k - 1]), color});
+                    cached.push_back({at(path[k]), color});
+                }
+                reach = std::max(reach, glm::length(path.back() - path.front()));
+            }
+            if (scene::morphs::Interpolation(n->as<int64_t>(scene::morphs::kInterpolation)) == scene::morphs::Interpolation::Pivot)
+            {
+                const glm::dvec3 c = n->as<glm::dvec3>(scene::morphs::kPivot);
+                const double r = std::max(reach * 0.1, 0.5);
+                for (int axis = 0; axis < 3; ++axis)
+                {
+                    glm::dvec3 d(0.0);
+                    d[axis] = r;
+                    cached.push_back({at(c - d), f.wireSelected});
+                    cached.push_back({at(c + d), f.wireSelected});
+                }
+            }
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("Morph paths: {}", e.what());
+        }
+    }
+    f.linesXray.insert(f.linesXray.end(), cached.begin(), cached.end());
 }
 
 /** Live preview while a slider drags, kept out of undo; the release commits one setAttr. */
@@ -388,8 +467,10 @@ MorphTargetsPanel::MorphTargetsPanel(QWidget* parent) : QWidget(parent)
         menu.exec(mTree->viewport()->mapToGlobal(at));
     });
 
+    gPanel = this;
     QPointer<MorphTargetsPanel> self(this);
     mGraphListener = Graph::current().addListener([self](scene::Change, scene::NodeId) {
+        ++gPathsVersion;
         if (self)
             self->scheduleRefresh();
     });
@@ -465,6 +546,10 @@ void MorphTargetsPanel::refresh()
         }
         if (t["live"].get<bool>())
             info << "live";
+        if (t["interpolation"] != "linear")
+            info << QString::fromStdString(t["interpolation"].get<std::string>()) + " path";
+        if (t["response"] != "linear")
+            info << niceName(t["response"].get<std::string>()).toLower();
         item->setText(kInfo, info.join(" | "));
         item->setToolTip(kInfo, item->text(kInfo));
 
@@ -545,6 +630,52 @@ void MorphTargetsPanel::fillTargetMenu(QMenu* menu, QTreeWidgetItem* item)
     });
     custom->setCheckable(true);
     custom->setChecked(!preset);
+
+    menu->addSeparator();
+    Graph& g = Graph::current();
+    auto choice = [&](QMenu* sub, const std::string& label, bool checked, auto fn) {
+        QAction* a = sub->addAction(QString::fromStdString(label), this, fn);
+        a->setCheckable(true);
+        a->setChecked(checked);
+    };
+    const auto mode = scene::morphs::Interpolation(n->as<int64_t>(scene::morphs::kInterpolation));
+    QMenu* path = menu->addMenu("Path");
+    const std::vector<std::string>& modes = g.attr({n->id(), scene::morphs::kInterpolation, -1}).enumNames;
+    for (size_t i = 0; i < modes.size(); ++i)
+        choice(path, niceName(modes[i]).toStdString(), size_t(mode) == i,
+               [node, m = modes[i]] { runUi("morphPath", {{"args", {node}}, {"interpolation", m}}); });
+    path->addSeparator();
+    path->addAction("Pivot From Selected", this, [node] { pivotFromSelected(node); })
+        ->setEnabled(mode == scene::morphs::Interpolation::Pivot);
+    QAction* show = path->addAction("Show Paths", this, [](bool on) { gShowPaths = on; });
+    show->setCheckable(true);
+    show->setChecked(gShowPaths);
+
+    // Control Rig's easing names come in families (quadraticEaseIn, quadraticEaseOut ...): one submenu per family.
+    QMenu* response = menu->addMenu("Response");
+    const std::vector<std::string>& eases = g.attr({n->id(), scene::morphs::kResponse, -1}).enumNames;
+    const int64_t current = n->as<int64_t>(scene::morphs::kResponse);
+    std::map<std::string, QMenu*> families;
+    for (size_t i = 0; i < eases.size(); ++i)
+    {
+        auto set = [node, e = eases[i]] { runUi("morphPath", {{"args", {node}}, {"response", e}}); };
+        const size_t cut = eases[i].find("Ease");
+        if (cut == std::string::npos)
+        {
+            choice(response, niceName(eases[i]).toStdString(), current == int64_t(i), set);
+            continue;
+        }
+        const std::string family = eases[i].substr(0, cut);
+        QMenu*& sub = families[family];
+        if (!sub)
+            sub = response->addMenu(niceName(family));
+        if (current == int64_t(i))
+        {
+            sub->menuAction()->setCheckable(true);
+            sub->menuAction()->setChecked(true);
+        }
+        choice(sub, niceName(eases[i].substr(cut + 4)).toStdString(), current == int64_t(i), set);
+    }
 }
 
 // ------------------------------------------------------------------------------------------------ driven channels
@@ -812,6 +943,18 @@ void registerMorphUi()
                   .doc = "Replaces the current morph target's shape with the selected mesh's."});
     onCurrent("deform.addInBetween", "Add In-Between", "addInBetween", json::object(),
               "Adds an in-between shape to the current morph target at a weight (option box), ready to edit.");
+    actions::add({.id = "deform.morphPivotFromSelected",
+                  .label = "Morph Pivot From Selected",
+                  .category = "Deform",
+                  .run =
+                      [] {
+                          if (std::string t = currentMorphTarget(); !t.empty())
+                              pivotFromSelected(t);
+                      },
+                  .enabled = [] { return !currentMorphTarget().empty(); },
+                  .doc = "Puts the current morph target's pivot at the selected node, for the Pivot path: a locator at the eye's centre "
+                         "swings a lid over the eye."});
+    viewportHooks::addDrawer("lila.morphPaths", drawPaths);
     onCurrent("deform.flipMorphTarget", "Flip Morph Target", "mirrorMorphTarget", {{"mode", "flip"}},
               "Mirrors the current morph target to the other side as a new target, left and right swapped in its name.");
     onCurrent("deform.symmetrizeMorphTarget", "Symmetrize Morph Target", "mirrorMorphTarget", {{"mode", "symmetrize"}},

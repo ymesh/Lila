@@ -908,7 +908,7 @@ public:
         }
         if (!ensurePaint())
             return true;
-        const bool line = vertexPaintSettings().stroke.mode == brush::StrokeMode::Line;
+        const bool line = vertexPaintSettings().stroke.mode == brush::StrokeMode::Line || vertexPaintSettings().stroke.mode == brush::StrokeMode::Curve;
         if (!line && !surfaceHit(e->position(), view, hit))
             return false;
         beginStroke(e, view);
@@ -1033,7 +1033,7 @@ public:
         }
     }
 
-    std::optional<QCursor> cursor() const override { return QCursor(Qt::CrossCursor); }
+    std::optional<QCursor> cursor() const override { return QCursor(Qt::BlankCursor); }
 
 private:
     struct Hit

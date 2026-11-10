@@ -55,6 +55,12 @@ public:
     virtual void release() = 0;
     /** Ends the drag and puts back what it changed. */
     virtual void cancel() = 0;
+    /** A wheel step during a drag (+1 up, -1 down); true when the gizmo used it. */
+    virtual bool wheel(int steps)
+    {
+        (void)steps;
+        return false;
+    }
     virtual bool dragging() const = 0;
     virtual bool hovering() const = 0;
     /** The hovered handle can't act (its channels are locked): the cursor says so. */

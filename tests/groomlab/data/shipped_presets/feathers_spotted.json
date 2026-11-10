@@ -7,16 +7,24 @@
     {"name": "guides", "type": "Guides", "ui": {"x": 0, "y": 180}},
     {"name": "shafts", "type": "Scatter", "params": {"density": 14.0, "length": 0.8, "seed": 11, "previewAll": true}, "ui": {"x": 240, "y": 0}},
     {"name": "shaftShapes", "type": "Interpolate", "ui": {"x": 480, "y": 0}},
-    {"name": "barredFeather", "type": "Compound", "params": {"count": 40, "vaneWidth": 0.22, "angle": 55.0, "splits": 4.0, "curl": 18.0, "barbWidth": 0.004, "shaftWidth": 0.012, "definition": {"graph": {"version": 1, "nodes": [{"name": "shafts", "type": "Input", "params": {"name": "shafts", "type": "Curves"}, "ui": {"x": 0, "y": 0}}, {"name": "propagate", "type": "Propagate", "params": {"shaftWidth": 0.012, "sides": "both", "count": 40, "start": 0.06, "segments": 10, "length": 0.22, "lengthProfile": [[0, 0.35], [0.45, 1], [0.9, 0.65], [1, 0.4]], "angle": 55.0, "angleProfile": [[0, 1.2], [0.7, 0.9], [1, 0.4]], "curl": 18.0, "droop": 10.0, "splits": 4.0, "splitAmount": 0.5, "lengthRandom": 0.08, "angleRandom": 3.0, "down": 0.3, "downCount": 22, "downLength": 0.9, "downCurl": 160.0, "downFrizz": 22.0, "downSegments": 12}, "ui": {"x": 240, "y": 0}}, {"name": "ruffle", "type": "Noise", "params": {"amplitude": 0.006, "frequency": 3.0, "profile": [[0, 0], [1, 1]]}, "ui": {"x": 480, "y": 0}}, {"name": "color", "type": "HairColor", "params": {"melanin": 0.75, "redness": 0.3, "dye": [1.0, 1.0, 1.0], "melaninRandom": 0.05, "specular": 0.55, "roughness": 0.35}, "ui": {"x": 720, "y": 0}}, {"name": "colorFeathers", "type": "FeatherColor", "params": {"pattern": "spots", "melanin": 0.0, "dye": [0.95, 0.93, 0.85], "vanes": "both", "count": 9.0, "width": 0.55, "angle": 12.0, "sharpness": 0.8, "offsetRandom": 0.25, "scaleRandom": 0.08, "angleRandom": 4.0, "downColor": [0.92, 0.91, 0.88], "downStrength": 1.0, "iridescence": 0.0, "iridescenceColor": [0.04, 0.45, 0.12], "iridescenceShift": 0.22, "iridescenceOn": "rightVane"}, "ui": {"x": 960, "y": 0}}, {"name": "width", "type": "Width", "params": {"width": 0.004, "profile": [[0, 1], [1, 0.3]]}, "ui": {"x": 1440, "y": 0}}], "connections": [{"from": "shafts", "to": "propagate", "input": "shafts"}, {"from": "propagate", "to": "ruffle", "input": "strands"}, {"from": "ruffle", "to": "color", "input": "strands"}, {"from": "colorFeathers", "to": "width", "input": "strands"}, {"from": "color", "to": "colorFeathers", "input": "strands"}], "output": "width"}, "inputs": [{"name": "shafts", "type": "Curves"}], "expose": {"shaftWidth": "propagate.shaftWidth", "count": "propagate.count", "vaneWidth": "propagate.length", "angle": "propagate.angle", "splits": "propagate.splits", "curl": "propagate.curl", "barbWidth": "width.width", "down": "propagate.down", "bars": "colorFeathers.count", "barWidth": "colorFeathers.width", "iridescence": "colorFeathers.iridescence"}}, "down": 0.3, "bars": 9.0, "barWidth": 0.55, "iridescence": 0.0}, "ui": {"x": 720, "y": 0}},
-    {"name": "output", "type": "Output", "ui": {"x": 960, "y": 0}}
+    {"name": "output", "type": "Output", "ui": {"x": 960, "y": 0}},
+    {"name": "barredFeather/propagate", "type": "Propagate", "params": {"shaftWidth": 0.012, "sides": "both", "count": 40, "start": 0.06, "segments": 10, "length": 0.22, "lengthProfile": [[0, 0.35], [0.45, 1], [0.9, 0.65], [1, 0.4]], "angle": 55.0, "angleProfile": [[0, 1.2], [0.7, 0.9], [1, 0.4]], "curl": 18.0, "droop": 10.0, "splits": 4.0, "splitAmount": 0.5, "lengthRandom": 0.08, "angleRandom": 3.0, "down": 0.3, "downCount": 22, "downLength": 0.9, "downCurl": 160.0, "downFrizz": 22.0, "downSegments": 12}, "ui": {"x": 760, "y": 40}},
+    {"name": "barredFeather/ruffle", "type": "Noise", "params": {"amplitude": 0.006, "frequency": 3.0, "profile": [[0, 0], [1, 1]]}, "ui": {"x": 800, "y": 80}},
+    {"name": "barredFeather/color", "type": "HairColor", "params": {"melanin": 0.75, "redness": 0.3, "dye": [1.0, 1.0, 1.0], "melaninRandom": 0.05, "specular": 0.55, "roughness": 0.35}, "ui": {"x": 840, "y": 120}},
+    {"name": "barredFeather/colorFeathers", "type": "FeatherColor", "params": {"pattern": "spots", "melanin": 0.0, "dye": [0.95, 0.93, 0.85], "vanes": "both", "count": 9.0, "width": 0.55, "angle": 12.0, "sharpness": 0.8, "offsetRandom": 0.25, "scaleRandom": 0.08, "angleRandom": 4.0, "downColor": [0.92, 0.91, 0.88], "downStrength": 1.0, "iridescence": 0.0, "iridescenceColor": [0.04, 0.45, 0.12], "iridescenceShift": 0.22, "iridescenceOn": "rightVane"}, "ui": {"x": 880, "y": 160}},
+    {"name": "barredFeather/width", "type": "Width", "params": {"width": 0.004, "profile": [[0, 1], [1, 0.3]]}, "ui": {"x": 920, "y": 200}}
   ],
   "connections": [
     {"from": "scalp", "to": "shafts", "input": "scalp"},
     {"from": "shafts", "to": "shaftShapes", "input": "strands"},
     {"from": "guides", "to": "shaftShapes", "input": "guides"},
     {"from": "scalp", "to": "shaftShapes", "input": "scalp"},
-    {"from": "shaftShapes", "to": "barredFeather", "input": "shafts"},
-    {"from": "barredFeather", "to": "output", "input": "strands"}
+    {"from": "shaftShapes", "to": "barredFeather/propagate", "input": "shafts"},
+    {"from": "barredFeather/propagate", "to": "barredFeather/ruffle", "input": "strands"},
+    {"from": "barredFeather/ruffle", "to": "barredFeather/color", "input": "strands"},
+    {"from": "barredFeather/colorFeathers", "to": "barredFeather/width", "input": "strands"},
+    {"from": "barredFeather/color", "to": "barredFeather/colorFeathers", "input": "strands"},
+    {"from": "barredFeather/width", "to": "output", "input": "strands"}
   ],
   "output": "output"
 }

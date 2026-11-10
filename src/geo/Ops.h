@@ -8,8 +8,11 @@
 #include "geo/Triangulate.h"
 
 #include <array>
+#include <complex>
 #include <functional>
+#include <memory>
 #include <span>
+#include <string>
 #include <vector>
 
 /**
@@ -114,6 +117,11 @@ struct BevelOptions
     const SymmetryMap* symmetry = nullptr;
     /** When set, receives the offset actually used after clamping. */
     double* appliedOffset = nullptr;
+    /**
+     * When set (and clamping), receives per edge of the input mesh the largest offset the clamp leaves that bevelled edge,
+     * infinity where nothing limits it.
+     */
+    std::vector<double>* edgeLimits = nullptr;
 };
 
 /** Bevels manifold edges. Returns the new bevel and corner faces. */
@@ -260,6 +268,26 @@ struct NgonSplitOptions
  */
 LILA_SCENE_API std::vector<Index> splitNgons(Mesh& mesh, std::span<const Index> faces, const NgonSplitOptions& opts = {});
 
+/** How subdivision gives the inside of each uv island its uvs. */
+enum class SubdivideUvs : uint8_t
+{
+    /** Blended from the level below, like the positions. */
+    Blend,
+    /**
+     * The island's border uvs as Blend gives them, its interior the harmonic fill of that border on the subdivided
+     * surface (one solve on the last level), so the interior follows the surface however the cage moved.
+     */
+    FitSurface,
+};
+
+/** What subdivision does with the uv of an island corner, where only one of the island's faces meets the point. */
+enum class SubdivideUvCorners : uint8_t
+{
+    Keep,
+    /** Smoothed along the island border like any other border point. */
+    Smooth,
+};
+
 struct SubdivideOptions
 {
     int levels = 1;
@@ -267,6 +295,8 @@ struct SubdivideOptions
     bool sharpBoundary = true;
     /** Normals stay split along hard edges; off, the result is smooth-shaded everywhere, like Maya's smooth preview. */
     bool keepHardEdges = false;
+    SubdivideUvs uvs = SubdivideUvs::FitSurface;
+    SubdivideUvCorners uvCorners = SubdivideUvCorners::Keep;
 };
 
 /** Where the cage's components went in subdivide's result. */
@@ -285,9 +315,81 @@ struct SubdivideMap
 /**
  * Catmull-Clark subdivision. Edge "crease" of 1 or more is sharp (and drops by one per level),
  * fractions blend between smooth and sharp. Uv layers are smoothed within their islands (a layer named "<name>@<set>" uses
- * the islands of uv set <set>); colours are interpolated linearly per face.
+ * the islands of uv set <set>) as opts.uvs says; colours are interpolated linearly per face.
  */
 LILA_SCENE_API Mesh subdivide(const Mesh& mesh, const SubdivideOptions& opts = {}, SubdivideMap* map = nullptr);
+
+/**
+ * Adds the spacing layers a Fit Surface subdivision measures its island borders in: per uv island layer, a corner layer
+ * placing each island border loop's points at their distance along the loop on the surface. Built at the cage, before the
+ * modifiers that blend uvs (bevels, mirrors), they bunch where those modifiers bunch the uvs, whatever the cage's layout.
+ * A Fit Surface subdivision builds them itself when its input has none; every subdivision removes them.
+ */
+LILA_SCENE_API void addFitSpacing(Mesh& mesh);
+LILA_SCENE_API bool hasFitSpacing(const Mesh& mesh);
+LILA_SCENE_API void removeFitSpacing(Mesh& mesh);
+
+/** One uv island's Fit Surface fill: its interior groups' values as a fixed linear map of its border groups' values. */
+class LILA_SCENE_API FitFill
+{
+public:
+    struct Impl;
+    explicit FitFill(std::shared_ptr<const Impl> impl);
+    ~FitFill();
+
+    size_t borderCount() const;
+    size_t interiorCount() const;
+    /**
+     * Interior values from border values, column-major with the given column count: border is borderCount() x columns,
+     * interior interiorCount() x columns.
+     */
+    void solve(std::span<const double> border, std::span<double> interior, size_t columns) const;
+    /** The transpose: per border group, the sum over interior groups of the map's weight times g. */
+    void solveTransposed(std::span<const double> g, std::span<double> border, size_t columns) const;
+
+private:
+    std::shared_ptr<const Impl> mImpl;
+};
+
+/** A uv island of a Fit Surface subdivision as uv tools read it: groups are an island's corners sharing one point. */
+struct FitIslandRecord
+{
+    std::vector<std::vector<Index>> groups;
+    /**
+     * Groups the fill reads, and each one's value as a blend of groups' values before the fit (respaced borders, rebuilt
+     * island corners). A weight is complex: it scales and rotates the uv, read as u + iv.
+     */
+    std::vector<Index> border;
+    std::vector<std::vector<std::pair<Index, std::complex<double>>>> borderFrom;
+    /** Groups the fill writes, in the fill's order. */
+    std::vector<Index> interior;
+    std::shared_ptr<const FitFill> fill;
+};
+
+struct FitRecord
+{
+    std::string islandLayer;
+    Index cornerCapacity = 0;
+    std::vector<FitIslandRecord> islands;
+};
+
+/**
+ * While alive, Fit Surface subdivisions on this thread record their fills here and leave the uvs as Blend gives them, so
+ * a probe sees only ring-local blends and composes the fill itself.
+ */
+class LILA_SCENE_API FitRecorder
+{
+public:
+    FitRecorder();
+    ~FitRecorder();
+    FitRecorder(const FitRecorder&) = delete;
+    FitRecorder& operator=(const FitRecorder&) = delete;
+
+    std::vector<FitRecord> records;
+
+private:
+    FitRecorder* mOuter = nullptr;
+};
 
 /** Sparse linear map between point sets: out row i = sum of weights[k] * in point cols[k], k in [offsets[i], offsets[i+1]). */
 struct LILA_SCENE_API PointStencil

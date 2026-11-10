@@ -60,6 +60,7 @@ void ConstraintNode::compute(const EvalContext&)
         return xformops::closestEuler(r, order, restR);
     };
 
+    const bool pivotOffsets = as<bool>(kPivotOffsets);
     double wsum = 0.0;
     glm::dvec3 pos(0.0);
     QuatBlend rot;
@@ -69,10 +70,19 @@ void ConstraintNode::compute(const EvalContext&)
         if (w <= 0.0)
             continue;
         glm::dmat4 m = std::get<glm::dmat4>(target);
+        glm::dmat3 r = orthonormal(glm::dmat3(m));
         if (kind == Kind::Parent)
-            m = m * elementOr<glm::dmat4>(kTargetOffset, i);
+        {
+            // The offset rides the target's scale for its position but not its turn, so a non-uniform scale doesn't skew it.
+            const glm::dmat4& targetOffset = elementOr<glm::dmat4>(kTargetOffset, i);
+            m = m * targetOffset;
+            r = r * orthonormal(glm::dmat3(targetOffset));
+            // Targets pull the rotate pivot, as Maya blends them, so several targets average where it goes.
+            if (!pivotOffsets)
+                m[3] += glm::dvec4(r * rp, 0.0);
+        }
         pos += glm::dvec3(m[3]) * w;
-        rot.add(glm::quat_cast(orthonormal(glm::dmat3(m))), w);
+        rot.add(glm::quat_cast(r), w);
         wsum += w;
     }
 
@@ -84,7 +94,7 @@ void ConstraintNode::compute(const EvalContext&)
         case Kind::Parent:
         {
             glm::dmat4 world(rot.result());
-            world[3] = glm::dvec4(pos, 1.0);
+            world[3] = glm::dvec4(pos - glm::dmat3(world) * rp, 1.0);
             glm::dmat4 local = parentInv * world;
             glm::dmat3 lr = orthonormal(glm::dmat3(local));
             outR = xformops::closestEuler(glm::transpose(jo) * lr, order, restR);
@@ -458,6 +468,7 @@ void registerConstraintTypes()
     base.retiredAttrs = {"targetCount"};
     base.ownAttrs.push_back(vec3Attr("constraintTranslate", glm::dvec3(0.0), AttrOutput, "Drives the object's translate."));
     base.ownAttrs.push_back(vec3Attr("constraintRotate", glm::dvec3(0.0), AttrOutput, "Drives the object's rotate."));
+    base.ownAttrs.push_back(boolAttr("pivotOffsets", false, "Parent constraint: each target's offset places the rotate pivot, as Maya's do, rather than the origin."));
     const NodeType& b = types::registerType(std::move(base));
 
     for (int k = 0; k < 4; ++k)

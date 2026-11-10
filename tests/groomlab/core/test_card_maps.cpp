@@ -279,7 +279,67 @@ TEST(CardMaps, NormalsAreRoundFibersOutOfTheCard) {
 
 // The normal is in the card's tangent space (x across, y along, z out), not the groom's: the
 // whole groom and its cards turned (x, y, z to z, x, y), the map stays as it was.
+TEST(CardMaps, NormalsStayInTangentSpaceWhenTheGroomTurns) {
+    FurMaps f = furMaps(128, 0);
+    CardBakeSettings bake;
+    bake.size = 128;
+    bake.dilate = 0;
+    bake.occlusion = 0.0f;
+    const CardMaps before = bakeCardMaps(*f.strands, f.mesh, bake);
+    auto turn = [](const Vec3f& p) { return Vec3f{p.z, p.x, p.y}; };
+    StrandSet turned = *f.strands;
+    for (Vec3f& p : turned.mutablePositions()) p = turn(p);
+    for (CardMesh::Card& card : f.mesh.cards) {
+        ASSERT_FALSE(card.source);
+        for (std::vector<Vec3f>* values : {&card.center, &card.side, &card.normal, &card.shading, &card.refCenter,
+                                           &card.refSide, &card.refNormal, &card.refShading, &card.base}) {
+            for (Vec3f& value : *values) value = turn(value);
+        }
+    }
+    const CardMaps after = bakeCardMaps(turned, f.mesh, bake);
+    ASSERT_EQ(after.normal.size(), before.normal.size());
+    for (std::size_t i = 0; i < before.normal.size(); ++i) EXPECT_NEAR(after.normal[i], before.normal[i], 5e-5f) << i;
+}
 
+TEST(CardMaps, RootRunsFromRootToTipAndIdsDifferPerClump) {
+    const FurMaps f = furMaps(256);
+    const CardMaps& m = f.maps;
+    const auto n = static_cast<std::size_t>(m.size);
+    double low = 0.0, high = 0.0;
+    std::size_t lowCount = 0, highCount = 0;
+    std::map<int, std::multiset<float>> idsByCard;
+    for (std::size_t c = 0; c < f.mesh.cards.size(); ++c) {
+        const CardMesh::Card& card = f.mesh.cards[c];
+        if (card.variationOf >= 0) continue;
+        const auto x0 = static_cast<std::size_t>(card.cell[0] * m.size), x1 = static_cast<std::size_t>(card.cell[2] * m.size);
+        const auto yTop = static_cast<std::size_t>((1.0f - card.cell[3]) * m.size), yBottom = static_cast<std::size_t>((1.0f - card.cell[1]) * m.size);
+        const std::size_t quarter = (yBottom - yTop) / 4;
+        for (std::size_t y = yTop; y < yBottom && y < n; ++y) {
+            for (std::size_t x = x0; x < x1 && x < n; ++x) {
+                const std::size_t p = y * n + x;
+                if (m.coverage[p] < 0.5f) continue;
+                if (y >= yBottom - quarter) low += m.root[p], ++lowCount;  // near the roots (the cell's bottom)
+                if (y < yTop + quarter) high += m.root[p], ++highCount;     // near the tips
+                idsByCard[static_cast<int>(c)].insert(m.id[p]);
+            }
+        }
+    }
+    ASSERT_GT(lowCount, 0u);
+    ASSERT_GT(highCount, 0u);
+    EXPECT_LT(low / static_cast<double>(lowCount), 0.3);
+    EXPECT_GT(high / static_cast<double>(highCount), 0.7);
+    // Each card holds one clump: its texels share one ID (the median), and clumps differ.
+    std::set<int> medians;
+    for (const auto& [card, ids] : idsByCard) medians.insert(static_cast<int>(std::lround(*std::next(ids.begin(), static_cast<long>(ids.size() / 2)) * 1000.0f)));
+    EXPECT_GE(medians.size(), 8u);  // the fur has 12 clumps
+    ASSERT_GE(idsByCard.size(), 4u);
+    // The root map is the attribute map's coordU, and the seed its third channel.
+    const CardTextures t = cardTexturesFromMaps(m);
+    for (std::size_t p = 0; p < n * n; p += 13) {
+        EXPECT_EQ(t.attribute[p * 4 + 3], static_cast<std::uint8_t>(std::lround(std::clamp(m.root[p], 0.0f, 1.0f) * 255.0f)));
+        EXPECT_EQ(t.attribute[p * 4 + 2], static_cast<std::uint8_t>(std::lround(std::clamp(m.seed[p], 0.0f, 1.0f) * 255.0f)));
+    }
+}
 
 TEST(CardMaps, TranslucencyIsHigherWhereTheHairIsDenser) {
     const FurMaps f = furMaps(256);

@@ -18,12 +18,12 @@ class Node;
 } // namespace lila::scene
 
 /**
- * Grooming in the scene. A groom is its guides (a curve node with a groomSurface), the style modifiers they run through
- * (groomSplit, groomCurl, ... chained curve to curve) and the groom node that makes the locks mesh; groomShell and
- * hairCards read the same chain. The stack is DG history:
+ * Grooming in the scene. A groom node holds its guides (a GroomLab guide hierarchy) and its graph: the guides run through
+ * its lock styles into its locks, and its strands are interpolated from them. A guides curve shows the guides (the
+ * groom's outGuides) and the lock tools edit them through it; the locks mesh and the shell read the groom:
  *
- *   HairGuides.worldSpace -> groomSplit -> groomCurl -> groom.inCurve -> HairLocks.inMesh
- *                                                         groom.outCurve -> groomShell -> HairShell.inMesh
+ *   HairGroom.outGuides -> HairGuides.create      HairGroom.outMesh -> HairLocks.inMesh
+ *   HairGroom.outCurve -> groomShell -> HairShell.inMesh
  */
 namespace lila::groom
 {
@@ -32,16 +32,16 @@ LILA_SCENE_API std::string groomSurfaceOf(const scene::Node& curve);
 LILA_SCENE_API CardOptions cardOptionsOf(const scene::Node& n);
 LILA_SCENE_API LockOptions lockOptionsOf(const scene::Node& groom);
 LILA_SCENE_API ShellOptions shellOptionsOf(const scene::Node& shell);
-/** A style node's settings; kind from its type. */
-LILA_SCENE_API StyleOptions styleOptionsOf(const scene::Node& style);
-LILA_SCENE_API bool isStyleNode(const scene::Node& n);
 
 /** The groom node the curve feeds, through its style stack; null when it feeds none. */
 LILA_SCENE_API scene::Node* groomOf(scene::Graph& g, const scene::Node& curve);
 /** The guides curve at the start of a groom's stack; null when nothing feeds it. */
 LILA_SCENE_API scene::Node* guidesOf(scene::Graph& g, const scene::Node& groom);
-/** The style nodes between the guides and the groom node, first applied first. */
-LILA_SCENE_API std::vector<scene::Node*> styleStack(scene::Graph& g, const scene::Node& groom);
+/** Stores splines as the guides' own: into the groom's hierarchy when the curve shows one, else the curve's (dropping any
+ * history feeding it). Lock tools showing work in progress call it with undo off and put the groom's hierarchy back. */
+LILA_SCENE_API void storeGuides(scene::Graph& g, scene::Node& guides, Splines s);
+/** Lock splines, world space, into the groom's hierarchy (matched by id; unchanged guides kept as they are). */
+LILA_SCENE_API void setGroomGuides(scene::Graph& g, scene::Node& groom, const Splines& world);
 /** A groom from any part of it: the groom node, its guides, a style node, its locks or shell mesh. Null for none. */
 LILA_SCENE_API scene::Node* findGroom(scene::Graph& g, const scene::Node& part);
 

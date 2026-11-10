@@ -121,6 +121,8 @@ struct CursorOptions
     bool normalTick = false;
     /** The live stroke: draws the lazy mouse string and the line stroke's line. */
     const Stroke* stroke = nullptr;
+    /** The rim colour, sRGB, when the tool marks the brush (a warning while it would refuse). */
+    std::optional<glm::vec4> color;
 };
 
 /**

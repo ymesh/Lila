@@ -154,6 +154,12 @@ void MainWindow::registerActions()
         actions::add({std::string("viewport.view.") + view, label, "View", [this, view] { mViewports->active()->setView(view); }, nullptr, doc,
                       std::string("lila.ui.run_action(\"viewport.view.") + view + "\")"});
     }
+    for (auto [view, label] : {std::pair{"persp", "Switch to Persp"}, {"front", "Switch to Front"}, {"right", "Switch to Side"}, {"top", "Switch to Top"}})
+        actions::add({std::string("viewport.switch.") + (std::string(view) == "right" ? "side" : view), label, "View",
+                      [this, view] { mViewports->active()->switchView(view); }, nullptr,
+                      std::string(view) == "persp" ? "Switches the active view to the perspective camera."
+                                                   : "Switches the active view to that side; again for the opposite side, as the View Switcher does.",
+                      std::string("lila.ui.run_action(\"viewport.switch.") + (std::string(view) == "right" ? "side" : view) + "\")"});
     auto selectedCamera = []() -> scene::Node* {
         scene::Graph& g = scene::Graph::current();
         for (scene::NodeId id : g.selection())

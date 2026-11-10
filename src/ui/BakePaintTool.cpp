@@ -273,6 +273,8 @@ class BakePaintTool final : public ViewportTool, public uvTools::UvTool, public 
 {
 public:
     const char* name() const override { return "bakePaint"; }
+    // The brush ring and its centre dot are the cursor.
+    std::optional<QCursor> cursor() const override { return QCursor(Qt::BlankCursor); }
 
     void activate() override
     {
@@ -462,7 +464,10 @@ public:
                           .mode = kOps[int(opFor(mStroking ? mMods : QApplication::keyboardModifiers()))],
                           .fields = {{"map", st.attr == bake::kSkewAttr ? "skew" : "offset"},
                                      {"value", QString::number(st.value)},
-                                     {"under cursor", under}}};
+                                     {"under cursor", under}},
+                          .keys = {{"Shift", "smooth"}}};
+        if (const bake::PaintOp op = bakePaintSettings().op; op == bake::PaintOp::Add || op == bake::PaintOp::Subtract)
+            status.keys.push_back({"Ctrl", op == bake::PaintOp::Add ? "subtract" : "add"});
         // An editable cage replaces the auto cage the paint shapes, so painting alone changes nothing the bake uses.
         if (scene::Node* grp = groupOfLow(g, mMesh); grp && st.attr != bake::kSkewAttr)
             if (const std::string c = bake::groupSettings(*grp).cage; !c.empty())

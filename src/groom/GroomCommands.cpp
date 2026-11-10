@@ -1,3 +1,4 @@
+#include "groom/GroomEdit.h"
 #include "groom/GroomNodes.h"
 
 #include "brush/Brush.h"
@@ -92,22 +93,7 @@ std::vector<FlagDef> nodeFlags()
     {
         if (!(d.flags & AttrInput) || (d.flags & AttrHidden))
             continue;
-        FlagDef fd{d.name, "", T::Float, nullptr, d.doc};
-        fd.min = d.minValue;
-        fd.max = d.maxValue;
-        switch (d.type)
-        {
-        case PlugType::Bool: fd.type = T::Bool; break;
-        case PlugType::Int: fd.type = T::Int; break;
-        case PlugType::String: fd.type = T::String; break;
-        case PlugType::Vec3: fd.type = T::Vec3; break;
-        case PlugType::Enum:
-            fd.type = T::String;
-            fd.choices = d.enumNames;
-            break;
-        default: break;
-        }
-        out.push_back(std::move(fd));
+        out.push_back(curve::helpers::flagFromAttr(d));
     }
     return out;
 }
@@ -179,10 +165,7 @@ std::unique_ptr<groom::Surface> surfaceFor(Graph& g, Node& curve, const std::str
 
 void storeSplines(Graph& g, Node& n, Splines s)
 {
-    PlugRef create{n.id(), CurveShape::kCreate, -1};
-    if (g.source(create))
-        g.disconnect(create);
-    g.setValue(create, makeCurveData(std::move(s)));
+    groom::storeGuides(g, n, std::move(s));
 }
 
 } // namespace

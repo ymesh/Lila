@@ -6,6 +6,7 @@
 #include "core/PrefStore.h"
 #include "core/Profile.h"
 #include "core/Log.h"
+#include "scene/Camera.h"
 #include "scene/Components.h"
 #include "scene/DeformEval.h"
 #include "scene/Graph.h"
@@ -19,6 +20,7 @@
 #include "uv/UvEdit.h"
 
 #include <glm/gtc/constants.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -546,13 +548,14 @@ Stack exportStack(Node& n)
         if (!mod || !scene::modifiers::exportEnabled(*mod))
             continue;
         std::string name = mod->name();
+        const bool subdivides = mod->type().name == "subdivisionModifier";
         if (!mod->apply)
-            out.push_back({name, [name](const geo::Mesh&) -> geo::Mesh { throw std::runtime_error(name + " can't be re-run"); }});
+            out.push_back({name, [name](const geo::Mesh&) -> geo::Mesh { throw std::runtime_error(name + " can't be re-run"); }, subdivides});
         else
             out.push_back({name, [mod](const geo::Mesh& in) {
                                scene::deformEval::CpuOnly cpu;
                                return mod->apply(in, *mod);
-                           }});
+                           }, subdivides});
     }
     return out;
 }
@@ -861,6 +864,40 @@ std::function<std::optional<glm::dvec3>()>& projectionViewProvider()
     return fn;
 }
 
+std::function<std::optional<glm::dmat4>()>& projectionCameraProvider()
+{
+    static std::function<std::optional<glm::dmat4>()> fn;
+    return fn;
+}
+
+namespace
+{
+/** World to clip for a camera node, or for the active view when name is empty, with clip Y up so V follows the image. */
+glm::dmat4 cameraWorldToClip(const std::string& name)
+{
+    glm::dmat4 m{1.0};
+    if (name.empty())
+    {
+        std::optional<glm::dmat4> view = projectionCameraProvider() ? projectionCameraProvider()() : std::nullopt;
+        if (!view)
+            throw CommandError("uvProject: type=camera needs camera= or matrix= when there is no viewport");
+        m = *view;
+    }
+    else
+    {
+        Graph& g = graph();
+        g.evaluate();
+        Node* n = g.find(name);
+        if (!n || !n->type().isA("camera"))
+            throw CommandError("uvProject: " + name + " is not a camera");
+        glm::dmat4 world = n->as<glm::dmat4>(scene::Transform::kWorldMatrix);
+        m = scene::camera::projection(*n, scene::renderSettings().deviceAspect()) * scene::camera::viewMatrix(world);
+    }
+    // Vulkan clip space has Y down.
+    return glm::scale(glm::dmat4(1.0), glm::dvec3(1.0, -1.0, 1.0)) * m;
+}
+} // namespace
+
 const std::vector<ProjectionRecord>& lastProjections()
 {
     return lastProjectionsMutable();
@@ -970,9 +1007,57 @@ void registerCommands()
     });
 
     ops::registerCommand({
+        .name = "uvUnwrapExported",
+        .doc = "Apply the selected meshes' modifier stacks, then unwrap the result along its seams: the uvs are solved on the exported "
+               "surface itself, so no triangle collapses. The modifiers are gone afterwards (undo brings them back).",
+        .flags = join({uvSetFlag(),
+                       {"method", "", T::String, "slim", "slim (low stretch), conformal (LSCM only) or bff (Boundary First Flattening).",
+                        {"slim", "conformal", "bff"}},
+                       {"iterations", "", T::Int, 12, "SLIM iterations.", {}, {}, 0.0, 200.0},
+                       {"pack", "", T::Bool, false, "Pack the unwrapped islands into 0-1."}},
+                      packFlags()),
+        .run = [](const Args& a) -> json {
+            UnwrapFacesOptions o;
+            const std::string method = a.get<std::string>("method", "slim");
+            o.unwrap.method = method == "conformal" ? UnwrapMethod::Conformal : method == "bff" ? UnwrapMethod::Bff : UnwrapMethod::Slim;
+            o.unwrap.iterations = std::clamp(a.get<int>("iterations", 12), 0, 200);
+            o.pack = a.get<bool>("pack", false);
+            o.packing = packArgs(a);
+            // Seams the export's islands need to unfold are cut rather than refused: this path always ends unwrapped.
+            o.openIslands = true;
+            const std::string set = uvSetArg(a);
+            Graph& g = graph();
+            std::vector<NodeId> meshes;
+            for (const auto& [node, ids] : targets(K::Face, true))
+                meshes.push_back(node);
+            if (meshes.empty())
+                throw CommandError("uvUnwrapExported: select a mesh first");
+            UndoChunk chunk("Unwrap Exported Mesh");
+            json out = json::object();
+            for (NodeId id : meshes)
+            {
+                Node& n = *g.node(id);
+                const bool applied = !exportStack(n).empty();
+                if (applied)
+                    ops::execute("bakeModifierStack", {{"args", {n.path()}}});
+                g.evaluate();
+                const scene::PlugRef base = basePlug(n);
+                geo::Mesh m = baseMesh(base);
+                if (m.cornerAttrs().get<glm::vec2>(set).empty())
+                    throw CommandError("uvUnwrapExported: " + n.name() + " has no " + set);
+                const UnwrapFacesResult r = unwrapFaces(m, {}, set, o);
+                g.setValue(base, MeshPtr(std::make_shared<geo::Mesh>(std::move(m))));
+                out[n.path()] = {{"modifiersApplied", applied}, {"islands", r.islands}, {"failed", r.failed}, {"seamsAdded", r.seamsAdded}};
+            }
+            return out.size() == 1 ? out.begin().value() : out;
+        },
+    });
+
+    ops::registerCommand({
         .name = "uvProject",
         .doc = "Project uvs onto the selected faces: planar, box, cylindrical, spherical or camera (matrix=object to clip, 16 numbers). "
-               "The frame is fitted to the faces unless given; returns the frame used.",
+               "Camera uses camera=, else the active view, unless matrix= is given. The frame is fitted to the faces unless given; "
+               "returns the frame used.",
         .flags = {uvSetFlag(),
                   {"type", "", T::String, "planar", "planar, box, cylindrical, spherical or camera.", {"planar", "box", "cylindrical", "spherical", "camera"}},
                   {"axis", "", T::String, "best", "x, y, z or best (fitted to the faces).", {"best", "x", "y", "z"}},
@@ -993,7 +1078,10 @@ void registerCommands()
                   {"viewDir", "", T::Vec3, nullptr, "World direction the camera looks along, for the seam; the UI passes the active view's."},
                   {"normalize", "", T::Bool, true, "Fit into 0-1 keeping proportions."},
                   {"keepSeams", "", T::Bool, false, "Keep the seams already cut inside the faces; off joins the faces into the projection's islands."},
-                  {"matrix", "", T::List, nullptr, "Camera projection, column major, for type=camera."},
+                  nodeFlag({"camera", "", T::String, nullptr,
+                            "Camera node to project through, for type=camera; the active view when not given. UVs span its resolution gate."},
+                           "camera"),
+                  {"matrix", "", T::List, nullptr, "Object to clip, column major, for type=camera; overrides camera."},
                   {"pack", "", T::Bool, false, "Pack the resulting islands afterwards."}},
         .run = [](const Args& a) -> json {
             ProjectOptions o;
@@ -1036,15 +1124,16 @@ void registerCommands()
             std::optional<glm::dvec3> view = vec3("viewDir");
             if (!view && projectionViewProvider())
                 view = projectionViewProvider()();
-            if (o.type == Projection::Camera)
+            std::optional<glm::dmat4> worldToClip;
+            if (o.type == Projection::Camera && a.has("matrix"))
             {
                 std::vector<double> mat = listArg(a, "matrix", 16, 0.0);
-                if (!a.has("matrix"))
-                    throw CommandError("uvProject: type=camera needs matrix=");
                 for (int c = 0; c < 4; ++c)
                     for (int r = 0; r < 4; ++r)
                         o.camera[c][r] = mat[size_t(c * 4 + r)];
             }
+            else if (o.type == Projection::Camera)
+                worldToClip = cameraWorldToClip(a.get<std::string>("camera", ""));
             bool pack = a.get<bool>("pack", false);
             std::string set = uvSetArg(a);
             std::vector<ProjectionRecord> records;
@@ -1052,6 +1141,8 @@ void registerCommands()
                 ProjectOptions mo = o;
                 glm::dmat4 world = n.as<glm::dmat4>(scene::Transform::kWorldMatrix);
                 mo.worldLinear = glm::dmat3(world);
+                if (worldToClip)
+                    mo.camera = *worldToClip * world;
                 if (view)
                     mo.viewDir = glm::inverse(mo.worldLinear) * *view;
                 std::vector<Index> half;

@@ -164,7 +164,7 @@ void registerTransformCommands()
             {"x", "", T::Float, nullptr, "Local X rotation, degrees; on components, a turn about world X."},
             {"y", "", T::Float, nullptr, "Local Y rotation, degrees."},
             {"z", "", T::Float, nullptr, "Local Z rotation, degrees."},
-            {"space", "", T::String, "world", "'world', 'object' or 'parent' for `by`."},
+            {"space", "", T::String, "world", "'world', 'object' or 'parent' for `by`, or 'gimbal' to add `by` to the rotate channels."},
         },
         .run = [](const Args& a) -> json {
             Graph& g = Graph::current();
@@ -194,6 +194,8 @@ void registerTransformCommands()
                     for (NodeId id : ids)
                         g.setValue({id, Transform::kRotate}, g.keepLocked({id, Transform::kRotate}, vec3(a.flags["to"])));
                 }
+                else if (a.get<std::string>("space", "world") == "gimbal")
+                    xformops::rotateChannelsBy(g, ids, vec3(a.flags["by"]));
                 else
                     xformops::rotateBy(g, ids, eulerQuat(vec3(a.flags["by"])), spaceArg(a));
             });

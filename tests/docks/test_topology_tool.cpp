@@ -41,6 +41,9 @@ void setup()
         retopo::registerCommands();
         done = true;
     }
+    // Pencil strokes land exactly where the synthetic drags put them unless a test turns these on.
+    PrefStore::get().set("general", "/topology/pencil/lazy", 0.0);
+    PrefStore::get().set("general", "/topology/pencil/smoothing", 0.0);
     ui::viewportTools::set(nullptr);
     scene::Graph::current().clear();
     UndoStack::get().clear();
@@ -185,7 +188,7 @@ TEST_CASE("topology tool: patch, wheel and pull on a closed shape")
     CHECK(tool()->activeConstruct() == recs[0].id);
     size_t faces = m->numFaces();
 
-    toolWheel(px(0, -29), 1, view);
+    toolWheel(px(0, -29), 1, view, Qt::ControlModifier);
     CHECK(topoMesh()->numFaces() != faces);
     CHECK(records().size() == 1);
     CHECK(records()[0].live);
@@ -197,6 +200,135 @@ TEST_CASE("topology tool: patch, wheel and pull on a closed shape")
     toolKey(Qt::Key_Return);
     CHECK(records().empty());
     CHECK(topoMesh()->numFaces() > 4);
+    ui::viewportTools::set(nullptr);
+}
+
+TEST_CASE("topology tool: strips stay editable, snap to neighbours, gaps fill, cap closes a border")
+{
+    setup();
+    meshNode("ref", plane());
+    ui::ViewInfo view = topView();
+    begin(ui::TopoMode::Strip);
+    drag(path({px(-60, -60), px(0, -60)}), view);
+    drag(path({px(-60, -30), px(0, -30)}), view);
+    // Adding one strip leaves the other live, so its knots still show and drag.
+    REQUIRE(records().size() == 2);
+    CHECK(records()[0].live);
+    CHECK(records()[1].live);
+
+    // Knots dragged next to the other strip: its border joins the other's.
+    const size_t pointsBefore = topoMesh()->numPoints();
+    for (double x : {-60.0, -40.0, -20.0, 0.0})
+        drag({px(x, -30), px(x, -49)}, view);
+    CHECK(topoMesh()->numPoints() < pointsBefore);
+
+    // Shift-click in the gap between two retopo vertices pairs fills it.
+    ui::viewportTools::set(nullptr);
+    setup();
+    meshNode("ref", plane());
+    begin(ui::TopoMode::Strip);
+    drag(path({px(-40, -60), px(-20, -60)}), view);
+    drag(path({px(0, -60), px(20, -60)}), view);
+    const size_t faces = topoMesh()->numFaces();
+    drag({px(-10, -60)}, view, Qt::ShiftModifier);
+    CHECK(topoMesh()->numFaces() == faces + 1);
+
+    // Cap fills a closed border.
+    ui::viewportTools::set(nullptr);
+    setup();
+    meshNode("ref", plane());
+    begin(ui::TopoMode::Strip);
+    drag(path({px(-40, -40), px(40, -40), px(40, 40), px(-40, 40), px(-40, -38)}), view);
+    const size_t ring = topoMesh()->numFaces();
+    tool()->setMode(ui::TopoMode::Cap);
+    drag({px(-35, 0)}, view);
+    CHECK(topoMesh()->numFaces() > ring);
+    ui::viewportTools::set(nullptr);
+}
+
+TEST_CASE("topology tool: strips stay mirrored, the wheel over a strip changes its loops")
+{
+    setup();
+    meshNode("ref", plane());
+    ui::ViewInfo view = topView();
+    begin(ui::TopoMode::Pencil);
+    drag(path({px(60, 60), px(70, 70)}), view);
+    ops::execute("setSymmetry", {{"args", {"topo"}}, {"axis", "x"}});
+    tool()->setMode(ui::TopoMode::Strip);
+    auto report = [&](const char* when) {
+        const geo::Mesh* m = topoMesh();
+        int unpaired = 0, onPlane = 0, borderOnPlane = 0;
+        for (geo::Index p = 0; p < m->pointCapacity(); ++p)
+        {
+            if (!m->pointValid(p)) continue;
+            glm::dvec3 q = m->position(p);
+            if (std::abs(q.x) < 1e-6) { ++onPlane; borderOnPlane += m->isBoundaryPoint(p); continue; }
+            bool found = false;
+            for (geo::Index r = 0; r < m->pointCapacity() && !found; ++r)
+                found = m->pointValid(r) && glm::length(m->position(r) - glm::dvec3(-q.x, q.y, q.z)) < 1e-4;
+            unpaired += !found;
+        }
+        INFO(when << ": on plane " << onPlane << ", border on plane " << borderOnPlane);
+        CHECK(unpaired == 0);
+        CHECK(records().back().live);
+    };
+    drag(path({px(-30, 0), px(50, 0)}), view);
+    report("across");
+    // Right over a knot: Ctrl-wheel still means loops; Shift-wheel there is the knot's width.
+    const nlohmann::json spec = records().back().spec;
+    const std::vector<int> counts = records().back().counts;
+    const nlohmann::json knot = spec["knots"][1];
+    const QPointF knotPx = px(knot[0].get<double>(), -knot[2].get<double>());
+    {
+        // The plain wheel is the camera's, never the tool's.
+        QWheelEvent plain(knotPx, knotPx, QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        CHECK_FALSE(tool()->wheel(&plain, view));
+    }
+    toolWheel(knotPx, 1, view, Qt::ControlModifier);
+    CHECK(records().back().counts.at(0) == counts.at(0) + 1);
+    CHECK_FALSE(records().back().spec.contains("scales"));
+    toolWheel(knotPx, 1, view, Qt::ShiftModifier);
+    CHECK(records().back().spec.contains("scales"));
+    report("wheel");
+    toolWheel(px(20, 0), 1, view, Qt::ControlModifier | Qt::AltModifier);
+    report("ctrl wheel");
+    drag(path({px(-60, 40), px(-2, 40)}), view);
+    report("ends near middle");
+    drag(path({px(4, -40), px(4, 40)}), view);
+    report("along middle");
+    ui::viewportTools::set(nullptr);
+}
+
+TEST_CASE("topology tool: a cap follows the end it closes")
+{
+    setup();
+    geo::CylinderOptions o;
+    o.radius = 20.0;
+    o.height = 120.0;
+    o.subdivAxis = 48;
+    o.subdivHeight = 12;
+    o.caps = true;
+    meshNode("ref", geo::makeCylinder(o));
+    begin(ui::TopoMode::Cylinder);
+    ui::ViewInfo view = frontView();
+    // Two rings below the top end (y = 60), screen y running with world y here: a tube whose open top the cap closes.
+    drag({QPointF(60, 140), QPointF(140, 140)}, view);
+    drag({QPointF(60, 70), QPointF(140, 70)}, view);
+    REQUIRE(topoMesh());
+    double ringTop = -1e9;
+    for (geo::Index p = 0; p < topoMesh()->pointCapacity(); ++p)
+        if (topoMesh()->pointValid(p))
+            ringTop = std::max(ringTop, topoMesh()->position(p).y);
+    const size_t faces = topoMesh()->numFaces();
+    tool()->setMode(ui::TopoMode::Cap);
+    drag({QPointF(100, 100.0 + ringTop)}, view);
+    REQUIRE(topoMesh()->numFaces() > faces);
+    double top = -1e9;
+    for (geo::Index p = 0; p < topoMesh()->pointCapacity(); ++p)
+        if (topoMesh()->pointValid(p))
+            top = std::max(top, topoMesh()->position(p).y);
+    // Carried out along the tube onto its end, not left flat across the ring.
+    CHECK(top == doctest::Approx(60.0).epsilon(0.02));
     ui::viewportTools::set(nullptr);
 }
 
@@ -268,7 +400,7 @@ TEST_CASE("topology tool: cylinder rings, pencil guides, auto region and handles
         drag({QPointF(60, 100), QPointF(140, 100)}, view);
         CHECK(records().size() == 1);
         CHECK(records()[0].spec["rings"].size() == 3);
-        toolWheel(QPointF(100, 80), 1, view);
+        toolWheel(QPointF(100, 80), 1, view, Qt::ControlModifier);
         CHECK(records()[0].spec["points"].get<int>() == 9);
         CHECK(topoMesh()->numFaces() != faces);
     }
@@ -284,6 +416,62 @@ TEST_CASE("topology tool: cylinder rings, pencil guides, auto region and handles
         CHECK(retopo::retopoGuides(*topo).size() == 2);
         drag(path({px(-10, -40), px(10, -40)}), view, Qt::ControlModifier);
         CHECK(retopo::retopoGuides(*topo).size() == 1);
+        // Starting on a guide's end carries it on in its colour; ending back at its start closes it.
+        std::vector<retopo::Guide> before = retopo::retopoGuides(*topo);
+        drag(path({px(50, 0), px(50, 40)}), view);
+        std::vector<retopo::Guide> after = retopo::retopoGuides(*topo);
+        REQUIRE(after.size() == 1);
+        CHECK(after[0].points.size() > before[0].points.size());
+        CHECK(after[0].color == before[0].color);
+        CHECK_FALSE(after[0].closed);
+        drag(path({px(50, 40), px(-50, 40), px(-50, 0)}), view);
+        after = retopo::retopoGuides(*topo);
+        REQUIRE(after.size() == 1);
+        CHECK(after[0].closed);
+    }
+    SUBCASE("lazy pencil trails the cursor, smoothing keeps the ends")
+    {
+        meshNode("ref", plane());
+        PrefStore::get().set("general", "/topology/pencil/lazy", 10.0);
+        PrefStore::get().set("general", "/topology/pencil/smoothing", 1.0);
+        begin(ui::TopoMode::Pencil);
+        ui::ViewInfo view = topView();
+        drag(path({px(-50, 0), px(0, 20), px(50, 0)}), view);
+        scene::Node* topo = scene::Graph::current().find("topo");
+        REQUIRE(topo);
+        std::vector<retopo::Guide> g = retopo::retopoGuides(*topo);
+        REQUIRE(g.size() == 1);
+        CHECK(g[0].points.front().x == doctest::Approx(-50.0).epsilon(0.02));
+        CHECK(g[0].points.back().x < 45.0);
+        CHECK(g[0].points.back().x > 30.0);
+    }
+    SUBCASE("pencil with symmetry meets the middle and continues from the mirror")
+    {
+        meshNode("ref", plane());
+        begin(ui::TopoMode::Pencil);
+        ui::ViewInfo view = topView();
+        drag(path({px(30, 0), px(30, 30)}), view);
+        scene::Node* topo = scene::Graph::current().find("topo");
+        REQUIRE(topo);
+        ops::execute("setSymmetry", {{"args", {"topo"}}, {"axis", "x"}});
+        // Drawn from the mirror image's end: the guide on the +X side carries on.
+        drag(path({px(-30, 30), px(-30, 60)}), view);
+        std::vector<retopo::Guide> g = retopo::retopoGuides(*topo);
+        REQUIRE(g.size() == 1);
+        CHECK(g[0].points.back().x == doctest::Approx(30.0).epsilon(0.05));
+        CHECK(g[0].points.back().z == doctest::Approx(-60.0).epsilon(0.05));
+        // Across the middle: cut where it meets the plane.
+        drag(path({px(40, -40), px(-20, -40)}), view);
+        g = retopo::retopoGuides(*topo);
+        REQUIRE(g.size() == 2);
+        for (const glm::dvec3& p : g[1].points)
+            CHECK(p.x >= -1e-6);
+        CHECK(g[1].points.back().x == doctest::Approx(0.0));
+        // Ending a few pixels short of the middle lands on it.
+        drag(path({px(40, -70), px(4, -70)}), view);
+        g = retopo::retopoGuides(*topo);
+        REQUIRE(g.size() == 3);
+        CHECK(g[2].points.back().x == doctest::Approx(0.0));
     }
     SUBCASE("auto region and handles")
     {
@@ -299,6 +487,27 @@ TEST_CASE("topology tool: cylinder rings, pencil guides, auto region and handles
         REQUIRE(topoMesh());
         CHECK(topoMesh()->numFaces() > 4);
         CHECK(tool()->regionFaceCount() == 0);
+        const int id = recs[0].id;
+
+        // Faces sets the density; one far past the limit is refused instead of running for minutes.
+        CHECK(tool()->editConstruct(id, [](nlohmann::json& spec) { spec["targetFaces"] = 60; }));
+        CHECK(records()[0].counts.at(0) == doctest::Approx(60).epsilon(0.5));
+        const size_t faces = topoMesh()->numFaces();
+        CHECK_FALSE(tool()->editConstruct(id, [](nlohmann::json& spec) {
+            spec.erase("targetFaces");
+            spec["edgeLength"] = 0.001;
+        }));
+        CHECK(topoMesh()->numFaces() == faces);
+
+        // The region undoes like any other edit.
+        ops::execute("undo", nlohmann::json::object());
+        CHECK(records()[0].spec.value("targetFaces", 0) == 0);
+        ops::execute("undo", nlohmann::json::object());
+        CHECK((!topoMesh() || topoMesh()->numFaces() == 0));
+        ops::execute("redo", nlohmann::json::object());
+        ops::execute("redo", nlohmann::json::object());
+        REQUIRE(topoMesh());
+        CHECK(topoMesh()->numFaces() == faces);
 
         tool()->setMode(ui::TopoMode::Handles);
         drag(path({px(-20, 0), px(20, 0)}), view);

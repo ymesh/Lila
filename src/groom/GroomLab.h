@@ -3,12 +3,17 @@
 #include "core/Export.h"
 #include "curve/Spline.h"
 
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace lila::geo
 {
 class Mesh;
+}
+namespace lila::scene
+{
+class Node;
 }
 
 /**
@@ -32,5 +37,8 @@ struct GrownStrands
 LILA_SCENE_API GrownStrands growStrands(const geo::Mesh& scalp, const curve::Splines& guides, const std::string& graphJson,
                                         double seconds = 0.0);
 
+/** The groom node (registered with its attrs in GroomNodes.cpp). */
+std::unique_ptr<scene::Node> makeGroomNode();
+/** The groom's evaluate hook, the lock styles' GroomLab operators and the Hair geometry nodes. */
 void registerGroomLabType();
 } // namespace lila::groom

@@ -432,3 +432,28 @@ TEST_CASE("symmetry: radial orbits copy dabs and hits to every wedge")
             CHECK(w == 0.5f);
     }
 }
+
+TEST_CASE("curve stroke: nothing while drawing, then even dabs along the smoothed path")
+{
+    BrushSettings s;
+    s.spacing = 0.1;
+    s.mode = brush::StrokeMode::Curve;
+    StrokeSampler sm;
+    sm.begin(s, {{0, 0}, 1.0}, 100.0);
+    CHECK(sm.take().empty());
+    // A shaky horizontal drag: alternating 4 px up and down every 5 px.
+    for (int k = 1; k <= 60; ++k)
+        sm.move({{k * 5.0, (k % 2 ? 4.0 : -4.0)}, 1.0});
+    CHECK(sm.take().empty());
+    CHECK(sm.path().size() > 50);
+    sm.end();
+    const auto out = sm.take();
+    REQUIRE(out.size() > 20);
+    // Smoothed: the wobble is mostly gone, and the dabs run from the start to the end.
+    for (const auto& d : out)
+        CHECK(std::abs(d.position.y) < 2.5);
+    CHECK(std::abs(out.front().position.x) < 0.5);
+    CHECK(out.back().position.x > 280.0);
+    for (size_t k = 1; k < out.size(); ++k)
+        CHECK(out[k].position.x > out[k - 1].position.x);
+}

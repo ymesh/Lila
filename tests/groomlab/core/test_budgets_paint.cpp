@@ -21,6 +21,8 @@
 #include <tuple>
 
 #include "groomlab/brush.h"
+#include "groom/GroomEvaluator.h"
+#include "groom/GroomStrokeHost.h"
 #include "groomlab/guide_hierarchy.h"
 #include "groomlab/random.h"
 #include "groomlab/scalp_paint.h"
@@ -28,6 +30,8 @@
 #include "groomlab/texture.h"
 #include "groomlab/view_projection.h"
 #include "test_helpers.h"
+
+using lila::groom::GroomEvaluator;
 
 namespace groomlab {
 namespace {
@@ -279,6 +283,41 @@ TEST(Budget, GuideStampWithCullingAt5kGuides) {
     EXPECT_EQ(familyHash, familyCulledHash);
     std::printf("[ budget ] comb dab over %zu children (of 64 guides): %.2f ms, culled %.2f ms (%zu children changed a dab)\n",
                 family.guides().size() - 64, familyMs, familyCulledMs, familyCulledChanged);
+}
+
+TEST(Budget, BrushToolDabOnASession) {
+    // The interactive tool's dab (stroke.h: BrushTool on a GroomEvaluator's host, a 60 pixel circle
+    // from a view matrix, the scalp masking the back, the preview handed to the session) over
+    // 5000 guides, against the stamp it makes (applyBrushStamp with the same weight, reach and
+    // stroke cache): the tool adds next to nothing per dab.
+    const auto scalp = test::makeSphere(60, 120, 1.0f);
+    GroomData data;
+    data.scalp = scalp;
+    data.hierarchyJson = guidesOnSphere(*scalp, 5000).toJson();
+    GroomEvaluator session(std::move(data));
+    lila::groom::GroomStrokeHost host(session);
+    const ToolView view = ToolView::fromMatrix(lookAt({0.0f, 1.8f, 4.5f}, {0.0f, 0.8f, 0.0f}, 40.0, 1.5), 1200, 800);
+    BrushTool tool;
+    tool.settings.setMode("comb");
+    tool.settings.screenRadius = 60.0f;
+    tool.settings.brush.collide = false;
+    const int dabs = 20;
+    ASSERT_TRUE(tool.begin(host, view, 560.0f, 520.0f, 1.0f));
+    double total = 0.0;
+    for (int i = 1; i <= dabs; ++i) {
+        const auto t0 = std::chrono::steady_clock::now();
+        tool.moveTo(host, view, 560.0f + 4.0f * static_cast<float>(i), 520.0f, 1.0f);
+        total += msSince(t0);
+    }
+    const double toolMs = total / dabs;
+    const auto t0 = std::chrono::steady_clock::now();
+    tool.end(host, view);
+    const double commitMs = msSince(t0);
+    EXPECT_TRUE(tool.changed());
+    ASSERT_EQ(host.edits().size(), 1u);
+    std::printf("[ budget ] BrushTool comb dab over 5000 guides on a session: %.2f ms a dab, the commit %.1f ms\n", toolMs,
+                commitMs);
+    EXPECT_BUDGET(toolMs, 5.0);
 }
 
 }  // namespace

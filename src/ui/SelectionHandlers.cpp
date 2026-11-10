@@ -107,9 +107,10 @@ std::vector<std::string> redirect(const std::vector<Hit>& hits)
         if (!name.empty() && std::find(out.begin(), out.end(), name) == out.end())
             out.push_back(name);
     };
+    // Only the selection mask blocks a redirect: joints hidden from view are still what a mesh click picks.
     auto maskedOut = [](const std::string& name) {
         const scene::Node* n = findNode(name);
-        return n && !scene::selectionMask::pickable(*n);
+        return n && !scene::selectionMask::enabled(scene::selectionMask::kindOf(*n));
     };
     for (const Hit& hit : hits)
     {
@@ -133,7 +134,7 @@ std::vector<std::string> redirect(const std::vector<Hit>& hits)
             for (const std::string& name : *to)
                 if (std::string as = applySelectAs(name); !maskedOut(as))
                     picked.push_back(as);
-        // A redirect onto a masked kind (a joint with the joint mask off) selects what was clicked instead; an empty one drops the hit.
+        // A redirect onto a masked kind (the joint mask off) selects what was clicked instead; an empty one drops the hit.
         if (!to || (!to->empty() && picked.empty()))
             push(hit.name);
         for (const std::string& name : picked)

@@ -506,6 +506,8 @@ QString appStyleSheet(const themes::Theme& t)
         QToolButton[role="segment"] { background: transparent; color: $dim; padding: 3px 10px; border-radius: 3px; font-weight: 500; }
         QToolButton[role="segment"]:hover { background: $hover; color: $text; }
         QToolButton[role="segment"]:checked { background: $sel; color: $selText; }
+        QToolButton[role="segment"]:disabled { color: $disabled; }
+        QToolButton[role="segment"]:checked:disabled { background: $hover; color: $disabled; }
         QDoubleSpinBox[role="slider"], QDoubleSpinBox[role="slider"]:hover, QDoubleSpinBox[role="slider"]:focus { background: transparent; }
         QDoubleSpinBox[role="axis"] { padding-left: 20px; }
 

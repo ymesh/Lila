@@ -147,29 +147,98 @@ TEST_CASE("enter starts on the cage and exit without levels keeps no high poly")
     const std::vector<glm::dvec3> sculpted = positions();
     ops::execute("sculptExit", json::object());
     scene::Graph& g = scene::Graph::current();
-    CHECK_FALSE(g.find("lvBare_high"));
+    CHECK_FALSE(sculpt::storedLevels(*g.find("lvBare")));
     const auto& mesh = *std::get<scene::MeshPtr>(g.storedValue({g.find("lvBare")->id(), scene::MeshNode::kInMesh, -1}));
     CHECK(maxGap(sculpted, {mesh.positions().begin(), mesh.positions().end()}) < 1e-6);
 }
 
-TEST_CASE("exit from a lower level fits the cage to the finest level")
+TEST_CASE("exit leaves the mesh at the level sculpted and the next enter gets every level back")
 {
     makeMesh("lvExit", geo::makeCube({}));
+    scene::Graph& g = scene::Graph::current();
     ops::execute("sculptEnter", {{"args", {"lvExit"}}, {"levels", 3}});
     bump({0.0, 0.0, 50.0}, 20.0);
-    const std::vector<glm::dvec3> fromTop = sculpt::exitPositions(*sculpt::active(), "fit");
+    const std::vector<glm::dvec3> top = positions();
     ops::execute("sculptLevel", {{"level", 1}});
-    CHECK(maxGap(fromTop, sculpt::exitPositions(*sculpt::active(), "fit")) < 1e-6);
+    json r = ops::execute("sculptExit", json::object());
+    CHECK(r["level"].get<int>() == 1);
+    CHECK(r["levels"].get<int>() == 3);
+    CHECK(g.children(g.find("lvExit")->id()).empty());
+    const auto& mesh = *std::get<scene::MeshPtr>(g.storedValue({g.find("lvExit")->id(), scene::MeshNode::kInMesh, -1}));
+    CHECK(mesh.numFaces() == 6 * 4);
+    auto stored = sculpt::storedLevels(*g.find("lvExit"));
+    REQUIRE(stored);
+    CHECK(stored->level == 1);
+    CHECK(stored->levels == 3);
+    CHECK(stored->fits);
 
-    ops::execute("sculptExit", json::object());
-    scene::Graph& g = scene::Graph::current();
-    const auto& kept = *std::get<scene::MeshPtr>(g.storedValue({g.find("lvExit_high")->id(), scene::MeshNode::kInMesh, -1}));
-    CHECK(kept.numFaces() == 6 * 64);
-    // Resumes on the level it left from, with every level there.
-    json r = ops::execute("sculptEnter", {{"args", {"lvExit"}}});
+    r = ops::execute("sculptEnter", {{"args", {"lvExit"}}});
     CHECK(level() == 1);
     CHECK(r["levels"].get<int>() == 3);
+    ops::execute("sculptLevel", {{"level", 3}});
+    CHECK(maxGap(top, positions()) < 1e-4);
+    // Leaving and coming back at the top keeps the sculpt exactly.
+    ops::execute("sculptExit", json::object());
+    ops::execute("sculptEnter", {{"args", {"lvExit"}}});
+    CHECK(level() == 3);
+    CHECK(maxGap(top, positions()) < 1e-4);
     ops::execute("sculptCancel", json::object());
+}
+
+TEST_CASE("points moved outside sculpt mode carry into the levels; a topology change drops them")
+{
+    makeMesh("lvEdit", geo::makeCube({}));
+    scene::Graph& g = scene::Graph::current();
+    ops::execute("sculptEnter", {{"args", {"lvEdit"}}, {"levels", 2}});
+    bump({0.0, 0.0, 50.0}, 10.0);
+    ops::execute("sculptLevel", {{"level", 0}});
+    ops::execute("sculptExit", json::object());
+
+    const scene::PlugRef in{g.find("lvEdit")->id(), scene::MeshNode::kInMesh, -1};
+    geo::Mesh moved = *std::get<scene::MeshPtr>(g.storedValue(in));
+    for (glm::dvec3& p : moved.positions())
+        p.x += 30.0;
+    g.setValue(in, scene::MeshPtr(std::make_shared<geo::Mesh>(moved)));
+    REQUIRE(sculpt::storedLevels(*g.find("lvEdit"))->fits);
+    ops::execute("sculptEnter", {{"args", {"lvEdit"}}});
+    CHECK(level() == 0);
+    CHECK(maxGap(positions(), {moved.positions().begin(), moved.positions().end()}) < 1e-9);
+    ops::execute("sculptLevel", {{"level", 2}});
+    double minX = 1e9;
+    for (const glm::dvec3& p : positions())
+        minX = std::min(minX, p.x);
+    CHECK(minX > -50.0 + 20.0);
+    ops::execute("sculptCancel", json::object());
+
+    g.setValue(in, scene::MeshPtr(std::make_shared<geo::Mesh>(geo::makeCube({.subdivX = 3}))));
+    REQUIRE(sculpt::storedLevels(*g.find("lvEdit")));
+    CHECK_FALSE(sculpt::storedLevels(*g.find("lvEdit"))->fits);
+    json r = ops::execute("sculptEnter", {{"args", {"lvEdit"}}});
+    CHECK(r["levels"].get<int>() == 0);
+    CHECK_FALSE(sculpt::storedLevels(*g.find("lvEdit")));
+    ops::execute("sculptCancel", json::object());
+}
+
+TEST_CASE("a command that breaks stored levels is reported")
+{
+    makeMesh("lvGuard", geo::makeCube({}));
+    scene::Graph& g = scene::Graph::current();
+    ops::execute("sculptEnter", {{"args", {"lvGuard"}}, {"levels", 1}});
+    ops::execute("sculptExit", json::object());
+    std::vector<scene::NodeId> reported;
+    std::string by;
+    sculpt::setLevelsBrokenHandler([&](const std::vector<scene::NodeId>& ids, std::string_view command) {
+        reported = ids;
+        by = command;
+    });
+    ops::execute("select", {{"args", {"lvGuard"}}});
+    ops::execute("polyTriangulate", json::object());
+    sculpt::setLevelsBrokenHandler(nullptr);
+    REQUIRE(reported.size() == 1);
+    CHECK(reported[0] == g.find("lvGuard")->id());
+    CHECK(by == "polyTriangulate");
+    ops::execute("sculptDeleteLevels", {{"args", {"lvGuard"}}});
+    CHECK_FALSE(sculpt::storedLevels(*g.find("lvGuard")));
 }
 
 TEST_CASE("the mask and polypaint survive a trip down and up")
@@ -218,58 +287,95 @@ TEST_CASE("stepping down from half a million faces is quick enough to feel like 
     ops::execute("sculptCancel", json::object());
 }
 
-TEST_CASE("exit keeps the high poly by default, at any level, and the next enter gets every level back")
+TEST_CASE("duplicate copies a level beside the mesh, hidden and sculpting on, or selected and done")
 {
-    makeMesh("lvKeep", geo::makeCube({}));
     scene::Graph& g = scene::Graph::current();
-    ops::execute("sculptEnter", {{"args", {"lvKeep"}}, {"levels", 3}});
-    bump({0.0, 0.0, 50.0}, 8.0);
-    const std::vector<glm::dvec3> top = positions();
-    ops::execute("sculptLevel", {{"level", 2}});
-
-    json r = ops::execute("sculptExit", {{"high", "belowHighest"}, {"highLevel", 1}});
-    CHECK(r["high"]["level"].get<int>() == 2);
-    const auto keptMesh = [&] { return *std::get<scene::MeshPtr>(g.storedValue({g.find("lvKeep_high")->id(), scene::MeshNode::kInMesh, -1})); };
-    CHECK(keptMesh().numFaces() == 6 * 16);
-    auto kept = sculpt::keptSculpt(*g.find("lvKeep"));
-    REQUIRE(kept);
-    CHECK(kept->levels == 3);
-    CHECK(kept->level == 2);
-
-    ops::execute("sculptEnter", {{"args", {"lvKeep"}}});
-    CHECK(level() == 2);
-    ops::execute("sculptLevel", {{"level", 3}});
-    CHECK(maxGap(top, positions()) < 1e-4);
-
-    r = ops::execute("sculptExit", {{"high", "level"}, {"highLevel", 1}});
-    CHECK(keptMesh().numFaces() == 6 * 4);
-    r = ops::execute("sculptEnter", {{"args", {"lvKeep"}}});
-    CHECK(r["levels"].get<int>() == 3);
-
-    ops::execute("sculptExit", {{"high", "none"}});
-    CHECK_FALSE(g.find("lvKeep_high"));
-    CHECK_FALSE(sculpt::keptSculpt(*g.find("lvKeep")));
-}
-
-TEST_CASE("the low poly can come out at a higher level, and be duplicated at any level while sculpting")
-{
-    makeMesh("lvLow", geo::makeCube({}));
-    scene::Graph& g = scene::Graph::current();
-    ops::execute("sculptEnter", {{"args", {"lvLow"}}, {"levels", 3}});
+    makeMesh("lvDupBefore", geo::makeCube({}));
+    makeMesh("lvDup", geo::makeCube({}));
+    makeMesh("lvDupAfter", geo::makeCube({}));
+    ops::execute("sculptEnter", {{"args", {"lvDup"}}, {"levels", 3}});
     bump({0.0, 0.0, 50.0}, 10.0);
 
-    json copy = ops::execute("sculptDuplicateLowPoly", {{"level", 2}});
-    REQUIRE(g.find(copy.get<std::string>()));
-    CHECK(copy.get<std::string>() == "lvLow_low2");
-    g.evaluate();
-    CHECK(g.find("lvLow_low2")->as<scene::MeshPtr>(scene::MeshNode::kOutMesh)->numFaces() == 6 * 16);
+    json r = ops::execute("sculptDuplicate", {{"level", 2}, {"hide", true}});
+    CHECK(r["mesh"].get<std::string>() == "lvDup_level2");
+    scene::Node* copy = g.find("lvDup_level2");
+    REQUIRE(copy);
+    CHECK_FALSE(copy->as<bool>(scene::Transform::kVisibility));
     CHECK(sculpt::active());
+    g.evaluate();
+    CHECK(copy->as<scene::MeshPtr>(scene::MeshNode::kOutMesh)->numFaces() == 6 * 16);
+    CHECK_FALSE(sculpt::storedLevels(*copy));
+    auto indexOf = [&](const std::string& name) {
+        const auto& roots = g.roots();
+        return std::ranges::find(roots, g.find(name)->id()) - roots.begin();
+    };
+    CHECK(indexOf("lvDup_level2") == indexOf("lvDup") + 1);
 
-    ops::execute("sculptExit", {{"lowLevel", 1}});
-    const auto& low = *std::get<scene::MeshPtr>(g.storedValue({g.find("lvLow")->id(), scene::MeshNode::kInMesh, -1}));
-    CHECK(low.numFaces() == 6 * 4);
-    // The kept sculpt is now two levels above the subdivided low poly.
-    json r = ops::execute("sculptEnter", {{"args", {"lvLow"}}});
+    r = ops::execute("sculptDuplicate", json::object());
+    CHECK(r["mesh"].get<std::string>() == "lvDup_level3");
+    CHECK_FALSE(sculpt::active());
+    CHECK(g.selection() == std::vector<scene::NodeId>{g.find("lvDup_level3")->id()});
+    CHECK(indexOf("lvDup_level3") == indexOf("lvDup") + 1);
+    CHECK(sculpt::storedLevels(*g.find("lvDup"))->levels == 3);
+
+    ops::execute("sculptEnter", {{"args", {"lvDup"}}});
+    r = ops::execute("sculptDuplicate", json::object());
+    CHECK(r["mesh"].get<std::string>() == "lvDup_level3_2");
+}
+
+TEST_CASE("delete lower makes the current level the cage and keeps the detail above")
+{
+    makeMesh("lvLower", geo::makeCube({}));
+    ops::execute("sculptEnter", {{"args", {"lvLower"}}, {"levels", 3}});
+    bump({0.0, 0.0, 50.0}, 10.0);
+    const std::vector<glm::dvec3> top = positions();
+    ops::execute("sculptLevel", {{"level", 1}});
+    json r = ops::execute("sculptDeleteLower", json::object());
+    CHECK(r["level"].get<int>() == 0);
     CHECK(r["levels"].get<int>() == 2);
+    CHECK(r["faces"].get<int>() == 6 * 4);
+    ops::execute("sculptLevel", {{"level", 2}});
+    CHECK(maxGap(top, positions()) < 1e-4);
+    ops::execute("sculptExit", json::object());
+    ops::execute("sculptEnter", {{"args", {"lvLower"}}});
+    ops::execute("sculptLevel", {{"level", 0}});
+    CHECK(ops::execute("sculptState", json::object())["faces"].get<int>() == 6 * 4);
+    ops::execute("sculptCancel", json::object());
+}
+
+TEST_CASE("reconstruct rebuilds the levels below a mesh subdivided elsewhere")
+{
+    geo::SubdivideOptions o;
+    o.levels = 2;
+    const geo::Mesh fine = geo::subdivide(geo::makeCube({}), o);
+    makeMesh("lvRecon", fine);
+    json r = ops::execute("sculptEnter", {{"args", {"lvRecon"}}});
+    CHECK(r["faces"].get<int>() == 6 * 16);
+    r = ops::execute("sculptReconstruct", json::object());
+    CHECK(r["level"].get<int>() == 1);
+    CHECK(r["levels"].get<int>() == 1);
+    ops::execute("sculptLevel", {{"level", 0}});
+    r = ops::execute("sculptReconstruct", json::object());
+    CHECK(r["levels"].get<int>() == 2);
+    ops::execute("sculptLevel", {{"level", 0}});
+    CHECK(ops::execute("sculptState", json::object())["faces"].get<int>() == 6);
+    // The finest level is the mesh as it was, point for point in a new order.
+    ops::execute("sculptLevel", {{"level", 2}});
+    const std::vector<glm::dvec3> now = positions();
+    double worst = 0.0;
+    for (const glm::dvec3& p : fine.positions())
+    {
+        double best = 1e9;
+        for (const glm::dvec3& q : now)
+            best = std::min(best, glm::length(p - q));
+        worst = std::max(worst, best);
+    }
+    CHECK(worst < 1e-6);
+    ops::execute("sculptCancel", json::object());
+
+    // A mesh that isn't a subdivision says so.
+    makeMesh("lvNotSubd", geo::makeCube({.subdivX = 3}));
+    ops::execute("sculptEnter", {{"args", {"lvNotSubd"}}});
+    CHECK_THROWS(ops::execute("sculptReconstruct", json::object()));
     ops::execute("sculptCancel", json::object());
 }

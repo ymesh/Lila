@@ -110,6 +110,9 @@ LILA_UI_API void remember(const nlohmann::json& target);
 /** What Repeat Last (edit.repeatLast) would run, if anything repeatable has run. */
 LILA_UI_API std::optional<nlohmann::json> repeatTarget();
 
+/** The last action run through run() that started a viewport tool, for Repeat Last Tool (tool.repeatLast). */
+LILA_UI_API std::optional<std::string> lastToolAction();
+
 /** The label a menu shows for the action: its own, except Repeat Last names what it will repeat. */
 LILA_UI_API std::string displayLabel(const std::string& id);
 

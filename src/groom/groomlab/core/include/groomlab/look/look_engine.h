@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Modified for Lila (2026).
 #pragma once
 
 // The look engine: look.slang's kernels run over a look run (look_run.h) from the strands entering
@@ -20,7 +21,7 @@
 
 namespace groomlab::gpu {
 
-enum class GpuApi { D3D11, OpenGL, Cpu };
+enum class GpuApi { D3D11, OpenGL, Cpu, Vulkan };
 const char* apiName(GpuApi api);
 
 // Milliseconds on the GPU (timestamp queries) of the last run, per kind of node (summed over

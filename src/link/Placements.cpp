@@ -853,6 +853,7 @@ void registerPlacementCommands()
                    "meshes go with it, and its other children into the asset too).",
                    {"auto", "none", "box", "convex", "complexAsSimple", "ucx"}},
                   {"nanite", "na", T::Bool, false, "Build Nanite data for the assets."},
+                  {"hlodLayer", "hl", T::String, "", "HLOD layer asset path for the placed actors."},
                   {"validate", "va", T::Bool, true,
                    "Run the validators first: an issue blocking unrealPlaceInstances, \"unreal\" or \"*\" on what is sent stops "
                    "the send; other issues come back in the result's issues."},
@@ -920,7 +921,8 @@ void registerPlacementCommands()
                 plan["lights"] = json::array();
             }
 
-            auto job = [plan, meshes, alone, withChildren, dir = cacheDir()]() mutable {
+            const std::string hlod = a.get<std::string>("hlodLayer", "");
+            auto job = [plan, meshes, alone, withChildren, hlod, dir = cacheDir()]() mutable {
                 LILA_ZONE_N("Unreal placements");
                 std::shared_ptr<RpcClient> client = Link::get().client();
                 if (!client)
@@ -958,15 +960,17 @@ void registerPlacementCommands()
                     std::string mesh = grp["objectPath"].get<std::string>();
                     if (json assets = imported.result.value("assets", json::array()); assets.is_array() && !assets.empty() && assets[0].is_string())
                         mesh = assets[0].get<std::string>();
-                    RpcResult placed = client->call("placeInstances", {{"group", grp["key"]},
-                                                                       {"label", grp.value("label", source)},
-                                                                       {"mesh", mesh},
-                                                                       {"mode", grp["mode"]},
-                                                                       {"collision", grp["collision"]},
-                                                                       {"customData", grp.value("customData", json::array())},
-                                                                       {"components", grp.value("components", json::array())},
-                                                                       {"placements", grp["placements"]}},
-                                                       placementTimeoutMs(grp["placements"].size()));
+                    json params = {{"group", grp["key"]},
+                                   {"label", grp.value("label", source)},
+                                   {"mesh", mesh},
+                                   {"mode", grp["mode"]},
+                                   {"collision", grp["collision"]},
+                                   {"customData", grp.value("customData", json::array())},
+                                   {"components", grp.value("components", json::array())},
+                                   {"placements", grp["placements"]}};
+                    if (!hlod.empty())
+                        params["hlodLayer"] = hlod;
+                    RpcResult placed = client->call("placeInstances", params, placementTimeoutMs(grp["placements"].size()));
                     grp["placed"] = placed.ok ? placed.result : json{{"error", placed.error}};
                 }
                 // Meshes a source's geometry nodes no longer instance leave the level.

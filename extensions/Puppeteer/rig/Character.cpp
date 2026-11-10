@@ -177,6 +177,7 @@ bool registerTypes(ext::Context& ctx)
         text("templateId", "The rig template it was built from, when Rig Templates is loaded; empty for none."),
         text("poseLibrary", "Pose library group. Empty: the template id, else the root joint's name."),
         text("pins", "Joints full-body moves hold where they are, space separated."),
+        text("strings", "Strings rules set on this character (JSON: contacts, chains); what it leaves out comes from its template."),
     };
     lila::scene::relocate::registerNeutral(t.name);
     return types::registerType(ctx, std::move(t)) != nullptr;
@@ -266,6 +267,8 @@ std::vector<NodeId> characters(Graph& g)
     std::sort(out.begin(), out.end());
     return out;
 }
+
+std::vector<std::string> skeletonMeshes(Graph& g, NodeId root) { return skinnedMeshes(g, root); }
 
 NodeId characterFor(Graph& g, NodeId node)
 {

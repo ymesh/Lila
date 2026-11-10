@@ -119,17 +119,12 @@ struct Preset {
 struct Reference {
     GroomFile file;
     std::vector<Preset> presets;
-    std::set<std::string> compound;  // presets Lila can't load (test::presetUsesCompound)
 
     Reference() : file(readGroomFile(std::string(GROOMLAB_TEST_DATA) + "/strokes/strokes.groom")) {
         const std::optional<double> size = presetScalpSize(*file.data.scalp);
         // The shipped presets, and the test's own grooms of the nodes no preset uses yet
         // (tests/data/presets: parity_nodes, every node and param of batch N2).
         for (const PresetInfo& p : listPresets({kShipped, std::string(GROOMLAB_TEST_DATA) + "/presets"})) {
-            if (test::presetUsesCompound(p.path)) {
-                compound.insert(p.name);
-                continue;
-            }
             std::ifstream in(std::filesystem::u8path(p.path), std::ios::binary);
             std::stringstream text;
             text << in.rdbuf();
@@ -267,7 +262,7 @@ TEST(Determinism, CardsAndFeathersBuildTheSameOnAnyThreadCount) {
     for (const Preset& p : reference().presets) {
         if (p.graph.find("\"Cards\"") != std::string::npos || p.graph.find("\"Propagate\"") != std::string::npos) withCards.push_back(p);
     }
-    ASSERT_GE(withCards.size(), 2u);  // the presets without a Compound that build cards
+    ASSERT_GE(withCards.size(), 2u);
     std::size_t cardLayers = 0;
     for (const Preset& p : withCards) {
         const Made all = evaluatePreset(p, 0.0, true);
@@ -430,7 +425,6 @@ TEST(Determinism, EveryPresetMakesTheRecordedBitsOnEveryPlatform) {
     }
     for (const auto& [name, w] : want.items()) {
         if (!got.contains(name)) {
-            if (reference().compound.count(name)) continue;
             ADD_FAILURE() << name << " is recorded but no longer made: re-record";
             continue;
         }

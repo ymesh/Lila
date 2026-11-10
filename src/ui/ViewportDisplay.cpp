@@ -17,6 +17,7 @@
 #include "ui/Theme.h"
 #include "scene/SceneIndex.h"
 
+#include <atomic>
 #include <QGuiApplication>
 #include <QScreen>
 
@@ -43,6 +44,8 @@ void apply(render::FrameState& s)
     s.xray = p.value<bool>("general", kXray, false);
     s.greyBaseColor = p.value<bool>("general", kGreyBaseColor, false);
     s.lighting = render::lightingFromName(p.value<std::string>("general", kLighting, "environment"));
+    s.rigRotation = p.value<float>("general", kRigRotation, 0.0f);
+    s.rigTilt = p.value<float>("general", kRigTilt, float(kDefaultRigTilt));
     if (!p.value<bool>("general", kShadows, true))
         s.groundShadow = 0.0f;
     s.exposure = render::exposureScale(p.value<double>("general", kExposure, 0.0));
@@ -443,6 +446,37 @@ bool temporalAa()
     return PrefStore::get().value<std::string>("general", kAaMode, "multisample") == kAaTemporal;
 }
 
+void turnLight(double degrees)
+{
+    PrefStore& p = PrefStore::get();
+    const std::string mode = p.value<std::string>("general", kLighting, "environment");
+    if (mode == "flat")
+        return;
+    const char* pref = mode == "environment" ? kEnvRotation : kRigRotation;
+    p.set("general", pref, std::remainder(p.value<double>("general", pref, 0.0) + degrees, 360.0));
+}
+
+void resetLight()
+{
+    PrefStore& p = PrefStore::get();
+    const std::string mode = p.value<std::string>("general", kLighting, "environment");
+    if (mode == "environment")
+        p.set("general", kEnvRotation, 0.0);
+    else
+    {
+        p.set("general", kRigRotation, 0.0);
+        p.set("general", kRigTilt, kDefaultRigTilt);
+    }
+}
+
+void tiltLight(double degrees)
+{
+    PrefStore& p = PrefStore::get();
+    if (p.value<std::string>("general", kLighting, "environment") != "sculpt")
+        return;
+    p.set("general", kRigTilt, std::clamp(p.value<double>("general", kRigTilt, kDefaultRigTilt) + degrees, 0.0, 90.0));
+}
+
 Quality recommendedQuality()
 {
     const render::Renderer::GpuInfo gpu = render::Renderer::get().gpuInfo();
@@ -452,5 +486,20 @@ Quality recommendedQuality()
     if (!gpu.discrete || gpu.vramBytes < 4 * kGiB)
         return Quality::Fastest;
     return gpu.vramBytes < 8 * kGiB ? Quality::Balanced : Quality::Best;
+}
+
+namespace
+{
+std::atomic<bool> gViewSwitcherDefault{false};
+}
+
+void setViewSwitcherDefault(bool on)
+{
+    gViewSwitcherDefault = on;
+}
+
+bool viewSwitcherDefault()
+{
+    return gViewSwitcherDefault;
 }
 } // namespace lila::ui::viewportDisplay

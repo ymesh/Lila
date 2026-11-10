@@ -108,6 +108,12 @@ PlugRef plugArg(const std::string& path)
 
 using rigutil::guarded;
 
+bool isRotationInterpolation(const PlugRef& p)
+{
+    const Node* n = Graph::current().node(p.node);
+    return n && p.attr == Transform::kRotationInterpolation && p.component < 0 && dynamic_cast<const Transform*>(n);
+}
+
 NodeId parentArg(const Args& a)
 {
     if (!a.has("parent"))
@@ -401,7 +407,7 @@ void registerCommands()
 
     ops::registerCommand({
         .name = "group",
-        .doc = "Group objects under a new transform, or create an empty group with empty=True.",
+        .doc = "Group objects under a new transform (under their parent when they all share one), or create an empty group with empty=True.",
         .positionalDoc = "objects",
         .flags = {
             {"name", "n", T::String, nullptr, "Group name."},
@@ -414,6 +420,14 @@ void registerCommands()
             if (!c.has("name"))
                 c.flags["name"] = "Group";
             c.flags["skipSelect"] = true;
+            // Members that share a parent stay under it, inside the new group.
+            if (!c.has("parent") && !members.empty())
+            {
+                Graph& gr = Graph::current();
+                NodeId p = gr.parent(members[0]);
+                if (p != kNoNode && std::all_of(members.begin(), members.end(), [&](NodeId m) { return gr.parent(m) == p; }))
+                    c.flags["parent"] = gr.path(p);
+            }
             std::string name = create("transform", c).get<std::string>();
             NodeId g = Graph::current().find(name)->id();
             for (NodeId m : members)
@@ -576,7 +590,12 @@ void registerCommands()
                 AttrDef def = Graph::current().attr(p);
                 if (p.component >= 0)
                     def.type = PlugType::Float;
-                guarded([&] { Graph::current().setValue(p, fromJson(def, v)); return 0; });
+                const PlugValue value = guarded([&] { return fromJson(def, v); });
+                // The rotate animation follows the interpolation it is given, not only keys set later.
+                if (isRotationInterpolation(p) && std::holds_alternative<int64_t>(value))
+                    guarded([&] { return anim::convertRotationCurves(Graph::current(), p.node, RotationInterpolation(std::get<int64_t>(value))); });
+                else
+                    guarded([&] { Graph::current().setValue(p, value); return 0; });
             }
             if (a.has("lock") && a.get<bool>("lock"))
                 guarded([&] { Graph::current().setLocked(p, true); return 0; });

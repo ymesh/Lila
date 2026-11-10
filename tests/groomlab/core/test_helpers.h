@@ -4,10 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <filesystem>
-#include <fstream>
 #include <memory>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -156,14 +153,6 @@ inline float curlEase(float arc, float t, float frequency) {
 // it, but drawn in: each holds a copy of every fourth of the groom's guides (the hierarchy's, else
 // the flat ones), as an artist would draw a few hand-placed feathers, so what reads it grows
 // something. A group the groom has already is left alone.
-// GroomLab's Compound node isn't part of Lila's import, so a preset built on one can't load.
-inline bool presetUsesCompound(const std::string& path) {
-    std::ifstream in(std::filesystem::u8path(path), std::ios::binary);
-    std::stringstream text;
-    text << in.rdbuf();
-    return text.str().find("\"Compound\"") != std::string::npos;
-}
-
 inline void drawRequiredGroups(const std::string& presetJson, GroomData& data) {
     const std::vector<PresetGroup> groups = presetRequiredGroups(presetJson);
     if (groups.empty()) return;

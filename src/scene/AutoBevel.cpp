@@ -66,7 +66,7 @@ struct JsonData final : Data
     json toJson() const override { return {{"kind", kind()}, {"value", value}}; }
 };
 
-geo::Mesh bevelChosen(const geo::Mesh& in, const Node& n, std::span<const Index> edges);
+geo::Mesh bevelChosen(const geo::Mesh& in, const Node& n, std::span<const Index> edges, BevelEdgeSet* set = nullptr);
 std::vector<Index> chooseEdges(const geo::Mesh& m, const Node& n, int* lost);
 
 class AutoBevelNode final : public ModifierNode
@@ -168,17 +168,24 @@ std::vector<Index> chooseEdges(const geo::Mesh& m, const Node& n, int* lost)
     return out;
 }
 
-geo::Mesh bevelChosen(const geo::Mesh& in, const Node& n, std::span<const Index> edges)
+geo::Mesh bevelChosen(const geo::Mesh& in, const Node& n, std::span<const Index> edges, BevelEdgeSet* set)
 {
     geo::Mesh m = in;
     if (edges.empty())
         return m;
     geo::BevelOptions o;
+    if (set)
+    {
+        o.appliedOffset = &set->applied;
+        o.edgeLimits = &set->limits;
+    }
     o.offset = n.as<double>(kOffset);
     o.segments = int(std::clamp<int64_t>(n.as<int64_t>(kSegments), 1, 32));
     o.profile = n.as<double>(kProfile);
     o.clamp = n.as<bool>(kClamp);
     o.smoothingAngle = n.as<double>(kSmoothingAngle);
+    if (set)
+        set->offset = o.offset;
     geo::bevelEdges(m, edges, o);
     m.compact();
     return m;
@@ -206,12 +213,15 @@ void AutoBevelNode::compute(const EvalContext&)
         setOutput(kLostOverrides, int64_t(set->lost));
         if (as<bool>(kEditing))
         {
+            // Bevelled only for its limits, so the edges that hold the offset back show while editing.
+            if (!set->edges.empty())
+                bevelChosen(*modifiers::stackInput(*this, in), *this, set->edges, set.get());
             auto shown = std::make_shared<geo::Mesh>(*in);
             shown->pointAttrs().add(modifiers::kBypassLayer, geo::AttrType::Bool);
             setOutput(kOutMesh, MeshPtr(std::move(shown)));
         }
         else if (!set->edges.empty())
-            setOutput(kOutMesh, MeshPtr(std::make_shared<geo::Mesh>(bevelChosen(*in, *this, set->edges))));
+            setOutput(kOutMesh, MeshPtr(std::make_shared<geo::Mesh>(bevelChosen(*modifiers::stackInput(*this, in), *this, set->edges, set.get()))));
     }
     catch (const std::exception& e)
     {
@@ -492,14 +502,26 @@ void registerCommands()
 
     ops::registerCommand({
         .name = "bevelEdgeInfo",
-        .doc = "The edges an autoBevel modifier picks on its input mesh: {edges, count, lost, editing}.",
+        .doc = "The edges an autoBevel modifier picks on its input mesh: {edges, count, lost, editing, offset, applied, limiting}. "
+               "applied is the offset after the clamp; limiting lists the edges holding it there.",
         .positionalDoc = "modifier or mesh",
         .undoable = false,
         .run = [](const Args& a) -> json {
             Node& mod = modifierArg(a, "bevelEdgeInfo");
             auto set = chosen(Graph::current(), mod.id());
             json edges = set ? json(set->edges) : json::array();
-            return {{"edges", edges}, {"count", edges.size()}, {"lost", set ? set->lost : 0}, {"editing", editing(mod)}};
+            json limiting = json::array();
+            if (set && !set->limits.empty())
+                for (Index e : set->edges)
+                    if (e < set->limits.size() && set->limits[e] <= set->applied * 1.05)
+                        limiting.push_back(e);
+            return {{"edges", edges},
+                    {"count", edges.size()},
+                    {"lost", set ? set->lost : 0},
+                    {"editing", editing(mod)},
+                    {"offset", set ? set->offset : 0.0},
+                    {"applied", set ? set->applied : 0.0},
+                    {"limiting", limiting}};
         },
     });
 

@@ -1,5 +1,7 @@
 #include "ui/AgentCapture.h"
 
+#include "ui/CurveUi.h"
+
 #include "ops/Command.h"
 #include "core/Log.h"
 #include "core/PrefStore.h"
@@ -413,6 +415,10 @@ QImage render(const Options& o, Timing* timing, int repeat)
         view.camera = o.lookThrough.empty() && !o.yaw && !o.pitch ? (o.view == "side" ? "right" : o.view == "active" ? "persp" : o.view) : "persp";
         view.ortho = cam.ortho;
         view.film = cam.filmExtents();
+        // Groom strands show as hair, as in the viewport.
+        for (scene::NodeId id : g.nodes())
+            if (scene::Node* n = g.node(id); n && n->type().isA("curve") && scene::effectivelyVisible(g, id))
+                drawStrandsFor(s, *n, n->as<glm::dmat4>(scene::Transform::kWorldMatrix), view);
         // The first pass asks for the planes' pictures; the second draws them once they have loaded.
         imagePlanes::drawInto(s, view);
         textures::waitForLoads(30.0);

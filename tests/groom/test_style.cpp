@@ -36,7 +36,7 @@ double bulge(const Spline& s)
 }
 } // namespace
 
-TEST_CASE("styles: names round trip and node types")
+TEST_CASE("styles: names round trip")
 {
     for (int k = 0; k < int(Style::Count); ++k)
     {
@@ -44,8 +44,6 @@ TEST_CASE("styles: names round trip and node types")
         REQUIRE(parseStyle(styleName(Style(k)), &back));
         CHECK(back == Style(k));
     }
-    CHECK(styleNodeType(Style::Curl) == "groomCurl");
-    CHECK(styleNodeType(Style::Flyaways) == "groomFlyaways");
 }
 
 TEST_CASE("curl: helix of the given radius, root untouched, same result for the same ids")

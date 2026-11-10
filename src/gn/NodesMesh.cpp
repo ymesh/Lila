@@ -259,6 +259,8 @@ void meshOps()
         .label = "Subdivision Surface",
         .category = "Mesh",
         .doc = "Catmull-Clark subdivision. Edge \"crease\" attributes keep edges sharp.",
+        .props = {prop("uvs", {"fitSurface", "blend"}, "fitSurface", "Island interior uvs: spread evenly over the smoothed surface, or smoothed like the points."),
+                  prop("uvCorners", {"keep", "smooth"}, "keep", "Island corner uvs: kept where the input has them, or smoothed with the border.")},
         .sockets = {.inputs = {geoIn("mesh"), bounded(in("level", T::Int, 1), 0, 6)}, .outputs = {geoOut("mesh")}},
         .exec =
             [](ExecContext& c) {
@@ -272,6 +274,8 @@ void meshOps()
                 Geometry out = *g;
                 geo::SubdivideOptions o;
                 o.levels = level;
+                o.uvs = c.prop("uvs") == "blend" ? geo::SubdivideUvs::Blend : geo::SubdivideUvs::FitSurface;
+                o.uvCorners = c.prop("uvCorners") == "smooth" ? geo::SubdivideUvCorners::Smooth : geo::SubdivideUvCorners::Keep;
                 geo::Mesh m = geo::subdivide(*g->mesh, o);
                 m.compact();
                 out.mesh = std::make_shared<const geo::Mesh>(std::move(m));

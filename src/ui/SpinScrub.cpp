@@ -70,6 +70,10 @@ public:
 protected:
     bool eventFilter(QObject* obj, QEvent* e) override
     {
+        // As an app-wide filter it also sees each event on its way through the QWindow; eating the release there leaves
+        // Qt's implicit mouse grab on the field, so the cursor stays captured until focus moves.
+        if (!obj->isWidgetType())
+            return false;
         switch (e->type())
         {
         case QEvent::MouseButtonPress:

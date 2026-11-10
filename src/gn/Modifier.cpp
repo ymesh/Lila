@@ -1038,6 +1038,10 @@ Node* applyGroup(Graph& g, Node& groupNode, Node& mesh)
         g.setValue(top, scene::MeshPtr());
         g.connect({source->id(), scene::MeshSourceNode::kOutMesh, -1}, {mod->id(), mn->inAttr, -1});
     }
+    // Its owner and objects first: joining the mesh's stack can evaluate it straight away.
+    if (int owner = mod->type().attrIndex("ownerMatrix"); owner >= 0)
+        g.setValue({mod->id(), owner, -1}, std::get<glm::dmat4>(g.value({mesh.id(), scene::Transform::kWorldMatrix, -1})));
+    connectObjects(g, *mod, grp);
     g.connect({mod->id(), mn->outAttr, -1}, top);
     g.connect({groupNode.id(), kDefinitionAttr, -1}, {mod->id(), mod->type().attrIndex("groupDefinition"), -1});
     connectObjects(g, *mod, grp);

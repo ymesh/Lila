@@ -10,6 +10,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <QtCore/qnamespace.h>
 
 namespace lila::ui
 {
@@ -23,6 +24,8 @@ struct SculptSettings
     std::string preset;
     /** Shape brushes paint polypaint too; the Paint brush always does. */
     bool paint = false;
+    /** With paint: only where strokes dig in, more the deeper. */
+    bool cavityPaint = false;
     /** Polypaint color, linear RGB. */
     glm::vec3 color{1.0f};
     /** The current brush's radius (screen px), strength, spacing, falloff, pressure and the rest of the shared brush core. */
@@ -43,7 +46,6 @@ struct SculptSettings
     bool shareStrength = false;
     bool shareStroke = false;
     bool frontFacesOnly = false;
-    bool showCage = false;
     /** The red line along the mesh's mirror plane while sculpting. */
     bool symmetryLine = true;
     /** The sculpt mesh's wireframe (not the cage's). */
@@ -54,31 +56,14 @@ struct SculptSettings
     bool seeThrough = false;
     /** The surface's opacity while seeThrough is on, 0 to 1 (0 leaves the wireframe alone). */
     double seeThroughOpacity = 0.35;
-    /** A sculptMaterials() id. */
-    std::string material = "clay";
-    std::string proxyMode = "subdivide";
+    /** A sculptMaterials() id; "mesh" draws the mesh's own materials. */
+    std::string material = "mesh";
+    /** Subdivision levels Enter Sculpt adds to a mesh without any. */
     int levels = 0;
-    int resolution = 192;
-    std::string exitMethod = "closest";
-    /** sculptExit's high: highest, belowHighest, level or none. */
-    std::string highPoly = "highest";
-    /** sculptExit's highLevel. */
-    int highLevel = 1;
-    /** sculptExit's lowLevel, and the level Duplicate Low Poly and the preview use. */
-    int lowLevel = 0;
-    /** The low poly preview's wireframe. */
-    bool previewWireframe = false;
 };
 
 LILA_UI_API SculptSettings& sculptSettings();
 
-/**
- * Previewing the low poly: sculpt mode draws the mesh as Exit Sculpt would leave it, with its wireframe, in place of the
- * sculpt, and isolates it in the active view (unless that view already isolates something). Strokes wait until it ends.
- * It ends with the session.
- */
-LILA_UI_API bool sculptPreviewing();
-LILA_UI_API void setSculptPreview(bool on);
 /** Saves the settings and tells listeners (the panel, the viewports). */
 LILA_UI_API void sculptSettingsChanged();
 LILA_UI_API int addSculptSettingsListener(std::function<void()> fn);
@@ -88,8 +73,17 @@ LILA_UI_API void removeSculptSettingsListener(int id);
 LILA_UI_API void selectSculptBrush(sculpt::Brush brush, const std::string& custom = {});
 /** Picks a brush preset: its brush, with its stroke settings the first time and the user's tweaks to them after. False when it is gone. */
 LILA_UI_API bool selectSculptPreset(const std::string& id);
-/** The preview materials sculpt mode can draw with, as (id, label). */
+/** The materials sculpt mode can draw with, as (id, label), the mesh's own first. */
 LILA_UI_API std::vector<std::pair<std::string, std::string>> sculptMaterials();
+/**
+ * Whether a smoothing stroke started with mods keeps volume: Smooth's own Keep Volume, flipped by Ctrl, and by Shift
+ * when the Smooth brush itself is picked. Only asked when the stroke smooths.
+ */
+LILA_UI_API bool smoothStrokeKeepsVolume(const SculptSettings& st, Qt::KeyboardModifiers mods);
+/** Material ids starting with this are matcaps; kMatcapFileId is the user's own image at kMatcapFilePref. */
+inline constexpr const char* kMatcapPrefix = "matcap.";
+inline constexpr const char* kMatcapFileId = "matcap.file";
+inline constexpr const char* kMatcapFilePref = "/sculpt/matcapFile";
 
 /**
  * The sculpt viewport tool, on the open sculpt session:

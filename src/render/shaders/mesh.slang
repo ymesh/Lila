@@ -39,7 +39,7 @@ struct MeshPush
     float4x4 viewProj; // background: the inverse view-projection
     InstanceData* instances; // the frame's instance buffer
     uint firstInstance;      // this draw's first entry in it
-    uint instancePad;
+    float keyTilt;           // the sculpt rig's key angle off the view direction, radians
     uint* edgeMask;     // meshWirePS: polygon sides per triangle, 4 bits each (RenderMesh::edgeMask)
     uint firstTriangle; // meshWirePS: the section's first triangle, which SV_PrimitiveID counts from
     float wireWidth;    // meshWirePS: pixels
@@ -49,7 +49,7 @@ struct MeshPush
     float4 extra;   // x: live bevel radius (cm), y: 1 when the bevel pass ran this frame
     float4 eye;     // xyz camera position
     float4 base;    // rgb base color (linear), a: roughness. Background: x blur lod, y saturation, z exposure
-    float4 params;  // x: exposure, y: 1 if Z-up, z: highlight amount, w: 0 studio rig, 1 environment, 2 flat (unlit)
+    float4 params;  // x: exposure, y: 1 if Z-up, z: highlight amount, w: 0 studio rig, 1 environment, 2 flat (unlit), 3 sculpt rig
     float4 env;     // xy: cos/sin of the rotation, z: intensity, w: lod of the roughest mip
     float4 surface; // x metallic, y specular, z opacity, w opacity mask clip
     float3 emissive; // linear; scales the emissive map when there is one
@@ -885,24 +885,66 @@ float3 directLights(float3 n, float3 v, Surface s, float3 P, float3 ng)
     return sum;
 }
 
-float3 studioRig(float3 n, float3 v, Surface s)
+bool flatLighting() { return pc.params.w > 1.5 && pc.params.w < 2.5; }
+bool environmentLighting() { return pc.params.w > 0.5 && pc.params.w < 1.5; }
+
+/**
+ * Camera-relative rigs, so every side you look at is readable, turned around the view axis by pc.extra.w. The studio
+ * rig keys above-left with a fill opposite and a rim behind; the sculpt rig keys pc.keyTilt off the view over little
+ * fill or ambient, so small forms cast readable shading.
+ */
+float3 studioRig(float3 n, float3 v, Surface s, bool sculpt)
 {
     float3 up = pc.params.y > 0.5 ? float3(0, 0, 1) : float3(0, 1, 0);
-    // Camera-relative rig, so every side you look at is readable: key above-left, fill opposite, rim behind.
+    float3 fwd = -v;
+    float3 right0 = normalize(cross(fwd, up) + 1e-5);
+    float3 up0 = cross(right0, fwd);
+    float ca = cos(pc.extra.w), sa = sin(pc.extra.w);
+    float3 right = right0 * ca - up0 * sa;
+    float3 camUp = right0 * sa + up0 * ca;
+    float3 c;
+    float2 ambient;
+    if (sculpt)
+    {
+        float3 side = normalize(camUp * 0.8 - right * 0.6);
+        float3 key = normalize(-fwd * cos(pc.keyTilt) + side * sin(pc.keyTilt));
+        float3 fill = normalize(-fwd * 0.8 - side * 0.6);
+        float3 rim = normalize(fwd * 0.9 + camUp * 0.3 + right * 0.3);
+        c = light(n, v, key, float3(3.0), s);
+        c += light(n, v, fill, float3(0.35), s);
+        c += light(n, v, rim, float3(0.5), s);
+        ambient = float2(0.05, 0.12);
+    }
+    else
+    {
+        float3 key = normalize(-fwd * 0.6 + camUp * 0.7 - right * 0.5);
+        float3 fill = normalize(-fwd * 0.8 - camUp * 0.1 + right * 0.6);
+        float3 rim = normalize(fwd * 0.9 + camUp * 0.4);
+        c = light(n, v, key, float3(2.6), s);
+        c += light(n, v, fill, float3(0.9), s);
+        c += light(n, v, rim, float3(1.2), s);
+        ambient = float2(0.10, 0.28);
+    }
+    // Sky/ground hemisphere ambient, neutral gray; metals get theirs through f0.
+    float hemi = dot(n, up) * 0.5 + 0.5;
+    c += (s.diffuse * multiBounce(s.ssao, s.diffuse) + s.f0 * 0.5 * s.ssao) * lerp(ambient.x, ambient.y, hemi) * s.ao;
+    return c;
+}
+
+/**
+ * A matcap: the base colour map is a lit sphere, sampled where the normal points in a camera frame built per pixel, so
+ * shading holds steady toward the edges of a wide view. Tinted by the base colour (white, or polypaint).
+ */
+float3 matcapShade(float3 n, float3 v, float3 tint, uint flags)
+{
+    if ((flags & kBaseColorMap) == 0)
+        return tint;
+    float3 up = pc.params.y > 0.5 ? float3(0, 0, 1) : float3(0, 1, 0);
     float3 fwd = -v;
     float3 right = normalize(cross(fwd, up) + 1e-5);
     float3 camUp = cross(right, fwd);
-    float3 key = normalize(-fwd * 0.6 + camUp * 0.7 - right * 0.5);
-    float3 fill = normalize(-fwd * 0.8 - camUp * 0.1 + right * 0.6);
-    float3 rim = normalize(fwd * 0.9 + camUp * 0.4);
-
-    float3 c = light(n, v, key, float3(2.6), s);
-    c += light(n, v, fill, float3(0.9), s);
-    c += light(n, v, rim, float3(1.2), s);
-    // Sky/ground hemisphere ambient, neutral gray; metals get theirs through f0.
-    float hemi = dot(n, up) * 0.5 + 0.5;
-    c += (s.diffuse * multiBounce(s.ssao, s.diffuse) + s.f0 * 0.5 * s.ssao) * lerp(0.10, 0.28, hemi) * s.ao;
-    return c;
+    float2 at = float2(dot(n, right), -dot(n, camUp)) * 0.49 + 0.5;
+    return sampleMap(kBaseColorSlot, at).rgb * tint;
 }
 
 /** The vertex color as shown: one channel isolates as grayscale, display-encoded so a 0.5 mask reads as mid gray. */
@@ -973,7 +1015,8 @@ float4 shadeMesh(VSOut i, bool front, Centers center)
     }
     float3 baseColor = pc.base.rgb;
     float opacity = pc.surface.z;
-    if ((flags & kBaseColorMap) != 0)
+    // A matcap's base colour map is the lit sphere, looked up by the normal in matcapShade.
+    if ((flags & kBaseColorMap) != 0 && model != kMatcap)
     {
         float4 t = sampleMap(kBaseColorSlot, uv);
         if ((flags & kGreyBase) == 0)
@@ -1063,8 +1106,10 @@ float4 shadeMesh(VSOut i, bool front, Centers center)
 
     float3 v = normalize(pc.eye.xyz - i.worldPos);
     float3 c;
-    if (pc.params.w > 1.5 || model == kUnlit)
+    if (flatLighting() || model == kUnlit)
         c = baseColor;
+    else if (model == kMatcap)
+        c = matcapShade(n, v, baseColor, flags) * s.ao * multiBounce(s.ssao, baseColor);
     else if (model == kToon)
         c = toonShade(n, v, baseColor, s);
     else
@@ -1073,7 +1118,7 @@ float4 shadeMesh(VSOut i, bool front, Centers center)
             painterlySurface(stroke, n, v, baseColor, metallic, s);
         else if (model == kFoliage)
             foliageSurface(i, n, baseColor, metallic, s);
-        c = pc.params.w > 0.5 ? imageBased(n, v, s) : studioRig(n, v, s);
+        c = environmentLighting() ? imageBased(n, v, s) : studioRig(n, v, s, pc.params.w > 2.5);
         c += directLights(n, v, s, i.worldPos, front ? ng : -ng);
         if (model == kFoliage)
             c = foliageLight(c, n, v, s);
@@ -1082,7 +1127,7 @@ float4 shadeMesh(VSOut i, bool front, Centers center)
     if ((flags & kEmissiveMap) != 0)
         emissive *= sampleMap(kEmissiveSlot, i.uv).rgb;
     c += emissive;
-    if (model != kUnlit && pc.params.w < 1.5)
+    if (model != kUnlit && model != kMatcap && !flatLighting())
         c = applyFog(c, pc.eye.xyz, i.worldPos);
     c *= pc.params.x;
     float alpha = (flags & kTranslucent) != 0 ? saturate(opacity) : 1.0;

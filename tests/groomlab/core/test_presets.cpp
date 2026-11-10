@@ -94,7 +94,7 @@ TEST(Presets, ShippedPresetsAreFoundDescribedAndLoad) {
         std::stringstream text;
         text << in.rdbuf();
         const std::string graphText = presetGraphJson(text.str(), 20.0);
-        if (!test::presetUsesCompound(p.path)) EXPECT_NO_THROW(loadGraphJson(graphText)) << p.name;
+        EXPECT_NO_THROW(loadGraphJson(graphText)) << p.name;
         const json graph = json::parse(graphText);
         for (const std::string& field : presetFields()) {
             if (field != "backdrops") EXPECT_FALSE(graph.contains(field)) << p.name << " keeps " << field;
@@ -164,26 +164,24 @@ TEST(Presets, FittingScalesByUnitMapsIncluded) {
     EXPECT_THROW(fitPresetJson("[1, 2]", 1.0), std::runtime_error);
 }
 
-TEST(Presets, FittingReachesInsideCompoundsAndKeyedControls) {
-    // A feather design is a Compound: its inner nodes' lengths and its exposed params scale too.
+TEST(Presets, FittingReachesTheFeatherNodesAndKeyedControls) {
+    // A feather design's nodes (its Propagate, Noise and Width) have their lengths scaled.
     std::ifstream in(std::filesystem::u8path(presetPath("feathers_contour", {kShipped})));
     std::stringstream text;
     text << in.rdbuf();
     const json design = json::parse(text.str());
     ASSERT_DOUBLE_EQ(design["size"].get<double>(), 2.0);
     const json fitted = json::parse(fitPresetJson(text.str(), 20.0));
-    const json& node = nodeOfType(fitted, "Compound");
-    const json& original = nodeOfType(design, "Compound");
-    EXPECT_NEAR(node["params"]["vaneWidth"].get<double>(), original["params"]["vaneWidth"].get<double>() * 10.0, 1e-9);
-    EXPECT_NEAR(node["params"]["barbWidth"].get<double>(), original["params"]["barbWidth"].get<double>() * 10.0, 1e-9);
-    EXPECT_EQ(node["params"]["count"], original["params"]["count"]) << "no unit";
-    const json& inner = node["params"]["definition"]["graph"];
-    const json& was = original["params"]["definition"]["graph"];
-    EXPECT_NEAR(nodeNamed(inner, "propagate")["params"]["length"].get<double>(),
-                nodeNamed(was, "propagate")["params"]["length"].get<double>() * 10.0, 1e-9);
-    EXPECT_NEAR(nodeNamed(inner, "ruffle")["params"]["amplitude"].get<double>(),
-                nodeNamed(was, "ruffle")["params"]["amplitude"].get<double>() * 10.0, 1e-9);
-    EXPECT_EQ(nodeNamed(inner, "propagate")["params"]["angle"], nodeNamed(was, "propagate")["params"]["angle"]);
+    const json& propagate = nodeNamed(fitted, "contourFeather/propagate");
+    const json& was = nodeNamed(design, "contourFeather/propagate");
+    EXPECT_NEAR(propagate["params"]["length"].get<double>(), was["params"]["length"].get<double>() * 10.0, 1e-9);
+    EXPECT_NEAR(propagate["params"]["shaftWidth"].get<double>(), was["params"]["shaftWidth"].get<double>() * 10.0, 1e-9);
+    EXPECT_EQ(propagate["params"]["count"], was["params"]["count"]) << "no unit";
+    EXPECT_EQ(propagate["params"]["angle"], was["params"]["angle"]);
+    EXPECT_NEAR(nodeNamed(fitted, "contourFeather/width")["params"]["width"].get<double>(),
+                nodeNamed(design, "contourFeather/width")["params"]["width"].get<double>() * 10.0, 1e-9);
+    EXPECT_NEAR(nodeNamed(fitted, "contourFeather/ruffle")["params"]["amplitude"].get<double>(),
+                nodeNamed(design, "contourFeather/ruffle")["params"]["amplitude"].get<double>() * 10.0, 1e-9);
     EXPECT_NEAR(nodeOfType(fitted, "Scatter")["params"]["density"].get<double>(), 14.0 / 100.0, 1e-9);
 
     // A keyed length's control value scales like the length; a keyed count's does not.
@@ -463,12 +461,7 @@ TEST(PresetLooks, EveryShippedPresetMakesWhatItMadeBefore) {
     ASSERT_TRUE(reference.data.scalp);
     const std::optional<double> size = presetScalpSize(*reference.data.scalp);
     json looks = json::object();
-    std::set<std::string> compound;
     for (const PresetInfo& p : listPresets({kShipped})) {
-        if (test::presetUsesCompound(p.path)) {
-            compound.insert(p.name);
-            continue;
-        }
         std::ifstream in(std::filesystem::u8path(p.path));
         std::stringstream text;
         text << in.rdbuf();
@@ -497,7 +490,7 @@ TEST(PresetLooks, EveryShippedPresetMakesWhatItMadeBefore) {
         expectNear(look, recorded.at(name), name);
     }
     for (const auto& [name, look] : recorded.items()) {
-        EXPECT_TRUE(looks.contains(name) || compound.count(name)) << "preset " << name << " is recorded but no longer shipped: re-record";
+        EXPECT_TRUE(looks.contains(name)) << "preset " << name << " is recorded but no longer shipped: re-record";
     }
 }
 

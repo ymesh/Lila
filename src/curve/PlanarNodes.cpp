@@ -415,7 +415,7 @@ void registerTypesHere()
                    bp, bevelRun);
 }
 
-/** Flags for every editable attr of a node type (enums by name), with no defaults so only given ones apply. */
+/** Flags for every editable attr of a node type (enums by name), each defaulting to the attr's own default. */
 std::vector<FlagDef> attrFlagsWithDefaults(const std::string& type)
 {
     std::vector<FlagDef> out;
@@ -423,29 +423,8 @@ std::vector<FlagDef> attrFlagsWithDefaults(const std::string& type)
     {
         if (!(d.flags & AttrInput) || (d.flags & AttrHidden))
             continue;
-        FlagDef fd{d.name, "", T::Float, nullptr, d.doc};
-        fd.min = d.minValue;
-        fd.max = d.maxValue;
-        switch (d.type)
-        {
-        case PlugType::Bool: fd.type = T::Bool; break;
-        case PlugType::Int: fd.type = T::Int; break;
-        case PlugType::String: fd.type = T::String; break;
-        case PlugType::Vec3: fd.type = T::Vec3; break;
-        case PlugType::Enum:
-            fd.type = T::String;
-            fd.choices = d.enumNames;
-            break;
-        default: break;
-        }
-        // The attribute's default, so a field (the adjust popup's too) shows what the node gets when the flag isn't passed.
-        if (d.type == PlugType::Enum)
-        {
-            if (const int64_t* k = std::get_if<int64_t>(&d.defaultValue); k && *k >= 0 && size_t(*k) < d.enumNames.size())
-                fd.defaultValue = d.enumNames[size_t(*k)];
-        }
-        else if (d.type == PlugType::Float || d.type == PlugType::Bool || d.type == PlugType::Int || d.type == PlugType::String || d.type == PlugType::Vec3)
-            fd.defaultValue = toJson(d.defaultValue);
+        FlagDef fd = helpers::flagFromAttr(d);
+        fd.defaultValue = fd.shownDefault;
         out.push_back(std::move(fd));
     }
     return out;

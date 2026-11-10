@@ -18,6 +18,7 @@ out_dir = sys.argv[1] if len(sys.argv) > 1 else here
 SHEET_WIDTH = 1024  # px; at the ladder's 512 px per metre the sheet is 200 cm across
 ROSETTES = 5  # along the frieze; must divide the sheet's 200 cm so the strip tiles
 DENTILS = 20
+DENTIL_BEVEL = 0.0  # cm; bevelled sides show in the baked normal too, which hides the comparison
 MATERIAL = "Trim Sandstone"
 
 # The strips top to bottom after splitting the ladder's 512 px strip in two: (name, profile style).
@@ -73,9 +74,10 @@ for k in range(DENTILS):
     # On top of the step, which stands about 3.5 cm tall; sunk into it, a block bakes to nothing.
     ops.move(block, to=[width_cm / DENTILS * (k + 0.5), 3.5, dentil_z])
     dentils.append(block)
-# The bake looks straight down: bevelled sides show in the normal map, vertical ones don't.
-ops.select(dentils)
-ops.polyBevel(offset=1.2, segments=3)
+# Vertical sides, which a straight-down bake misses: Wall shows them rebuilt from the height, Wall_BakedNormal without.
+if DENTIL_BEVEL > 0:
+    ops.select(dentils)
+    ops.polyBevel(offset=DENTIL_BEVEL, segments=3)
 motifs += dentils
 ops.group(generated["high"], generated["low"], *motifs, name="SheetHigh")
 ops.hide("SheetHigh")
@@ -105,7 +107,39 @@ for name, y, height, depth, strip in BANDS:
     bands.append(band)
 ops.group(*bands, name="Wall")
 
+# The comparison: the same wall beside it with Normals From Height off, so the baked normal is painted on as is.
+COMPARE_OFFSET = 480
+plain = first(ops.duplicate("Wall", name="Wall_BakedNormal", translate=[COMPARE_OFFSET, 0, 0]))
+plain_bands = ops.listRelatives(plain)
+
+def baked_normal_copy(source):
+    copy = ops.rename(ops.createMaterial(), source + "_BakedNormal")
+    for attr in ops.listAttr(source):
+        ops.setAttr(f"{copy}.{attr}", ops.getAttr(f"{source}.{attr}"))
+    ops.setAttr(copy + ".normalFromHeight", False)
+    # The full baked normal, not the detail one; the base colour comes from the texture set's preview, since the
+    # original draws through the set and the copy has only its maps.
+    textures = os.path.dirname(ops.getAttr(source + ".heightMap"))
+    ops.setAttr(copy + ".normalMap", ops.getAttr(source + ".normalMap").replace("_detailnormal", "_normal"))
+    previews = os.path.join(out_dir, textures, "Preview")
+    colour = next((f for f in os.listdir(previews) if f.endswith("_baseColor.png")), None)
+    if colour:
+        ops.setAttr(copy + ".baseColorMap", f"{textures}/Preview/{colour}")
+    return copy
+
+
+copies = {}
+for entry in ops.listMaterials(*plain_bands):
+    (slot,) = entry["slots"]  # trimApply puts the sheet's one material on every face
+    source = slot["slot"]
+    if source not in copies:
+        copies[source] = baked_normal_copy(source)
+    ops.assignMaterial(copies[source], entry["object"])
+
 ops.select(clear=True)
+compare = ops.createNode("camera", name="Cam_Compare", skipSelect=True)
+# Close on the dentils and rosettes where the two walls' corners face each other, so both sides of each show.
+ops.viewPlace(compare, eye=(COMPARE_OFFSET / 2, 300, 260), lookAt=(COMPARE_OFFSET / 2, 245, 20), up=(0, 1, 0))
 cam = ops.createNode("camera", name="Cam_Wall", skipSelect=True)
 ops.viewPlace(cam, eye=(-420, 220, 740), lookAt=(0, 160, 0), up=(0, 1, 0))
 # The view the scene opens on: the whole wall, a little from the left. Batch runs have no view to set.

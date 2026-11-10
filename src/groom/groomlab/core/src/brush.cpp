@@ -1872,6 +1872,25 @@ GuideId placeGuide(GuideHierarchy& hierarchy, const ScalpMesh& scalp, const Plac
         if (matched) pts = hierarchy.withGroupSegments(gid, std::move(pts));
         if (!pts.empty()) pts = keepOffScalp(pts, scalp);
     }
+    if (pts.empty() && s.drape) {
+        // Out of the scalp, over onto it along the downhill tangent in the first third, then sagging under gravity (-Y),
+        // as hair lies with nothing to copy. Where the scalp faces straight up or down, any tangent is downhill.
+        const Vec3f down(0.0f, -1.0f, 0.0f);
+        Vec3f along = down - at.normal * at.normal.dot(down);
+        if (along.dot(along) < 1e-6f) along = at.normal.cross(std::abs(at.normal.x) < 0.9f ? Vec3f(1, 0, 0) : Vec3f(0, 0, 1));
+        along = along.normalized();
+        const float step = s.length / float(segments);
+        Vec3f p = at.position;
+        pts.push_back(p);
+        for (int i = 1; i <= segments; ++i) {
+            const float u = float(i - 1) / float(segments);
+            const Vec3f dir = u < 1.0f / 3.0f ? at.normal * (1.0f - 3.0f * u) + along * (3.0f * u)
+                                              : along * (1.0f - 0.7f * (1.5f * u - 0.5f)) + down * (0.7f * (1.5f * u - 0.5f));
+            p += dir.normalized() * step;
+            pts.push_back(p);
+        }
+        pts = keepOffScalp(pts, scalp);
+    }
     if (pts.empty()) {
         for (int i = 0; i <= segments; ++i) pts.push_back(at.position + at.normal * (s.length * i / segments));
     }

@@ -612,11 +612,53 @@ PlugValue revolveRun(const Node& n)
     return meshValue(std::move(out));
 }
 
+/**
+ * One curve's splines as loft sections: pieces that meet end to end (a half and its live symmetry mirror) join into
+ * one section, closed when the joined ends meet; pieces that don't touch stay sections of their own.
+ */
+std::vector<Spline> loftSectionsOf(std::vector<Spline> parts)
+{
+    if (parts.size() < 2)
+        return parts;
+    auto ends = [](const Spline& s) -> std::pair<glm::dvec3, glm::dvec3> {
+        std::vector<Piece> ps = pieces(s);
+        return ps.empty() ? std::pair{glm::dvec3(0.0), glm::dvec3(0.0)} : std::pair{ps.front().start(), ps.back().end()};
+    };
+    std::vector<Spline> out;
+    while (!parts.empty())
+    {
+        Spline cur = parts.front();
+        parts.erase(parts.begin());
+        for (bool grew = true; grew && !cur.closed;)
+        {
+            grew = false;
+            for (size_t k = 0; k < parts.size(); ++k)
+            {
+                if (parts[k].closed)
+                    continue;
+                auto [as, ae] = ends(cur);
+                auto [bs, be] = ends(parts[k]);
+                const double tol = 1e-5 * std::max({1.0, glm::length(as), glm::length(ae)});
+                if (std::min({glm::distance(ae, bs), glm::distance(ae, be), glm::distance(as, bs), glm::distance(as, be)}) > tol)
+                    continue;
+                cur = attach(cur, parts[k], false, AttachEnds::Nearest, tol);
+                parts.erase(parts.begin() + std::ptrdiff_t(k));
+                grew = true;
+                break;
+            }
+        }
+        if (auto [s, e] = ends(cur); !cur.closed && glm::distance(s, e) <= 1e-5 * std::max(1.0, glm::length(s)))
+            cur = closeCurve(cur, false);
+        out.push_back(std::move(cur));
+    }
+    return out;
+}
+
 PlugValue loftRun(const Node& n)
 {
     std::vector<Spline> secs, rails;
     for (const auto& [k, v] : n.elements(n.type().attrIndex("sections")))
-        for (const Spline& s : splinesOf(v))
+        for (const Spline& s : loftSectionsOf(splinesOf(v)))
             secs.push_back(s);
     for (int k = 0; k < 2; ++k)
         for (const Spline& s : in(n, ("rail" + std::to_string(k)).c_str()))

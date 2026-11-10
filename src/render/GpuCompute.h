@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 
 /**
@@ -38,6 +39,29 @@ enum class BufferKind : uint8_t
 };
 
 class Recorder;
+
+/** A resource a bound kernel reads through a descriptor (a shader written for D3D or OpenGL style bindings, set 0). */
+enum class SlotKind : uint8_t
+{
+    Uniform,
+    Storage,
+};
+
+struct Slot
+{
+    uint32_t binding = 0;
+    SlotKind kind = SlotKind::Storage;
+};
+
+/** What a bound dispatch puts at a binding: a buffer (whole, or bytes from offset), or -1 for a small zeroed one. */
+struct Bind
+{
+    uint32_t binding = 0;
+    int buffer = -1;
+    size_t offset = 0;
+    /** 0: to the end of the buffer. */
+    size_t bytes = 0;
+};
 
 /**
  * Owns buffers and kernels across runs, named by small non-negative ints the caller picks. Freed when the session is
@@ -94,6 +118,12 @@ public:
     void kernel(int id, const char* shader, const char* entry, uint32_t pushBytes);
     void dispatch(int kernel, const void* push, uint32_t groupsX, uint32_t groupsY = 1, uint32_t groupsZ = 1);
     void dispatchIndirect(int kernel, const void* push, int argsBuffer, size_t offset);
+    /** Kernel id reading its buffers through descriptors at slots (set 0), no push constants. Loaded once per session. */
+    void boundKernel(int id, const char* shader, const char* entry, std::span<const Slot> slots);
+    /** Dispatches a bound kernel with its slots filled from binds; a slot left out gets a small zeroed buffer. */
+    void dispatchBound(int kernel, std::span<const Bind> binds, uint32_t groupsX, uint32_t groupsY = 1, uint32_t groupsZ = 1);
+    /** The smallest step a uniform buffer offset may take on this device. */
+    size_t uniformAlignment() const;
     /** Every write recorded before is visible to all work recorded after, indirect arguments included. */
     void barrier();
     /** The largest group count of one dispatch dimension. */

@@ -450,7 +450,20 @@ QWidget* makeMixer(QWidget* parent)
     tree->setColumnCount(5);
     tree->setHeaderLabels({"", "Layer", "Weight", "Mode", ""});
     tree->setRootIsDecorated(false);
-    tree->header()->setSectionResizeMode(1, QHeaderView::Stretch);
+    // The name takes what the icon, weight and mode columns leave; those keep fixed widths so it is never squeezed.
+    QHeaderView* header = tree->header();
+    header->setStretchLastSection(false);
+    header->setMinimumSectionSize(24);
+    for (int c : {0, 4})
+    {
+        header->setSectionResizeMode(c, QHeaderView::Fixed);
+        header->resizeSection(c, 26);
+    }
+    header->setSectionResizeMode(1, QHeaderView::Stretch);
+    header->setSectionResizeMode(2, QHeaderView::Fixed);
+    header->resizeSection(2, 64);
+    header->setSectionResizeMode(3, QHeaderView::Fixed);
+    header->resizeSection(3, 92);
     tree->setSelectionMode(QAbstractItemView::ExtendedSelection);
     v->addWidget(tree, 1);
 
@@ -825,9 +838,9 @@ void registerUi(ext::Context& ctx)
     add("puppeteer.cycle.run", "Run Cycle", "Key a looping run into a new take for the selected character.",
         [] { onCharacter("walkCycle", {{"run", true}, {"stride", 90.0}, {"bounce", 6.0}, {"cycleLength", 20.0}}); });
 
-    panels::add(ctx, {.id = "puppeteerStacker", .title = "Stacker", .create = makeStacker, .icon = "list-numbers", .open = false});
-    panels::add(ctx, {.id = "puppeteerMixer", .title = "Mixer", .create = makeMixer, .icon = "stack-2", .open = false});
-    panels::add(ctx, {.id = "puppeteerAnimBank", .title = "Anim Bank", .create = makeBank, .icon = "movie", .open = false});
+    panels::add(ctx, {.id = "puppeteerStacker", .title = "Stacker", .create = makeStacker, .area = Qt::LeftDockWidgetArea, .icon = "list-numbers", .open = false});
+    panels::add(ctx, {.id = "puppeteerMixer", .title = "Mixer", .create = makeMixer, .area = Qt::LeftDockWidgetArea, .icon = "stack-2", .open = false});
+    panels::add(ctx, {.id = "puppeteerAnimBank", .title = "Anim Bank", .create = makeBank, .area = Qt::LeftDockWidgetArea, .icon = "movie", .open = false});
     panels::add(ctx, {.id = "puppeteerCycleMaker", .title = "Cycle Maker", .create = makeCycleMaker, .icon = "walk", .open = false});
 
     const std::string menu = "Animation/Animate";

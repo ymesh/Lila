@@ -124,6 +124,11 @@ public:
 
     /** Tried before the editor's own keys, so the host can claim chords like Ctrl+S. */
     std::function<bool(QKeyEvent*)> hostKeyHandler;
+    /**
+     * Off: typing opens no completion list or signature help on its own, for hosts that show their own (the command
+     * palette). Tab and Ctrl+Space still complete.
+     */
+    bool autoPopups = true;
     /** Tried before everything but the completion popup: a modal keymap such as VimBinding. */
     std::function<bool(QKeyEvent*)> modalKeyHandler;
 

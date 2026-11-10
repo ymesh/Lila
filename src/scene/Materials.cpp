@@ -910,6 +910,32 @@ void registerCommands()
     });
 
     ops::registerCommand({
+        .name = "clearMaterialTextures",
+        .doc = "Clear every texture map on the materials, keeping their values and sampling settings. Returns the "
+               "channels cleared.",
+        .positionalDoc = "material...",
+        .run = [](const Args& a) -> json {
+            Graph& g = Graph::current();
+            if (a.positional.empty())
+                throw CommandError("clearMaterialTextures: give a material name");
+            json cleared = json::array();
+            for (const json& name : a.positional)
+            {
+                if (!name.is_string())
+                    throw CommandError("clearMaterialTextures: material names are strings");
+                Node& n = materialArg(g, name.get<std::string>(), "clearMaterialTextures");
+                for (const auto& [channel, attr] : materials::textureChannels())
+                    if (!n.as<std::string>(attr).empty())
+                    {
+                        g.setValue({n.id(), attr, -1}, std::string());
+                        cleared.push_back(channel);
+                    }
+            }
+            return cleared;
+        },
+    });
+
+    ops::registerCommand({
         .name = "renameMaterial",
         .doc = "Rename a material and every slot bound to it. Returns the new name.",
         .positionalDoc = "material newName",

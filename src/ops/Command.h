@@ -64,6 +64,11 @@ struct FlagDef
     std::string nodeType;
     /** Values an Int or Float flag's option box field offers in a menu and steps through on the wheel; set it with presetFlag(). */
     std::vector<double> presets;
+    /**
+     * What leaving a null-default flag out means (the node attr's own default), shown by option boxes. Unlike
+     * defaultValue it never fills calls, so commands still see the flag as not given.
+     */
+    json shownDefault;
 };
 
 /** `flag` as one naming a scene node of `type` (see FlagDef::nodeType). */

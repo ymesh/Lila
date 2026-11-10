@@ -27,10 +27,13 @@ constexpr int msaaSamples(bool enabled, int requested, uint32_t supported)
     return n;
 }
 
-/** "environment", "studio" or "flat"; anything else is the environment. */
+/** "environment", "studio", "flat" or "sculpt"; anything else is the environment. */
 constexpr FrameState::Lighting lightingFromName(std::string_view name)
 {
-    return name == "studio" ? FrameState::Lighting::Studio : name == "flat" ? FrameState::Lighting::Flat : FrameState::Lighting::Environment;
+    return name == "studio"   ? FrameState::Lighting::Studio
+           : name == "flat"   ? FrameState::Lighting::Flat
+           : name == "sculpt" ? FrameState::Lighting::Sculpt
+                              : FrameState::Lighting::Environment;
 }
 
 /** Maya's viewport exposure is in stops. */

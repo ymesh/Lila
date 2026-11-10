@@ -205,7 +205,7 @@ TEST(Locality, AnEditOfTheScalpChangesEveryPresetOnlyNearIt) {
     const std::string hierarchy = guides();
     std::size_t checked = 0;
     for (const PresetInfo& p : listPresets(kPresetDirs)) {
-        if (kCannot.count(p.name) || test::presetUsesCompound(p.path)) continue;
+        if (kCannot.count(p.name)) continue;
         const std::string graph = presetGraph(p.name, round);
         const double seconds = secondsFor(graph);
         for (const bool pose : {false, true}) {

@@ -122,6 +122,8 @@ class CurveSculptTool final : public ViewportTool, public brush::DabSink
 {
 public:
     const char* name() const override { return "Sculpt Curves"; }
+    // The brush ring and its centre dot are the cursor.
+    std::optional<QCursor> cursor() const override { return QCursor(Qt::BlankCursor); }
     bool ownsBrushRadius() const override { return true; }
 
     void activate() override
@@ -133,6 +135,9 @@ public:
             {
                 if (n->type().isA("curve") && mNode == scene::kNoNode)
                     mNode = id;
+                else if (n->type().isA("groom") && mNode == scene::kNoNode)
+                    if (scene::Node* guides = groom::guidesOf(g, *n))
+                        mNode = guides->id();
                 else if (n->type().isA("mesh") && mesh.empty())
                     mesh = n->path();
             }
@@ -150,7 +155,9 @@ public:
         const scene::NodeId* target = &mNode;
         const bool* stroking = &mStroking;
         viewportHooks::setHideHook("lila.curveSculpt", [target, stroking](scene::NodeId id) { return *stroking && id == *target; });
-        showGroomPalette(false);
+        // On a groom's guides the lock brushes sit with the groom brushes.
+        scene::Node* curve = g.node(mNode);
+        showGroomPalette(curve && groom::groomOf(g, *curve) ? GroomPalettePage::Groom : GroomPalettePage::Sculpt);
     }
 
     void deactivate() override
@@ -431,7 +438,8 @@ private:
         UndoStack& u = UndoStack::get();
         const bool was = u.enabled();
         u.setEnabled(false);
-        g.setValue({mNode, curve::CurveShape::kCreate, -1}, curve::makeCurveData(mWork));
+        if (scene::Node* n = g.node(mNode))
+            groom::storeGuides(g, *n, mWork);
         u.setEnabled(was);
     }
 
@@ -443,7 +451,7 @@ private:
         UndoStack& u = UndoStack::get();
         const bool was = u.enabled();
         u.setEnabled(false);
-        scene::Graph::current().setValue({mNode, curve::CurveShape::kCreate, -1}, mLiveStart);
+        scene::Graph::current().setValue(mLiveAt, mLiveStart);
         u.setEnabled(was);
         mLiveStart = {};
     }
@@ -491,11 +499,13 @@ private:
             }
         }
         syncSurface(*n);
-        // Live only on guides that store their own splines, so putting the start value back restores them exactly.
-        mLive = groom::groomOf(g, *n) && !g.source({mNode, curve::CurveShape::kCreate, -1});
+        // Live on a groom's guides: the work goes into the groom's hierarchy, whose start value comes back after.
+        scene::Node* groomNode = groom::groomOf(g, *n);
+        mLive = groomNode != nullptr;
         if (mLive)
         {
-            mLiveStart = g.value({mNode, curve::CurveShape::kCreate, -1});
+            mLiveAt = {groomNode->id(), groomNode->type().attrIndex("hierarchy"), -1};
+            mLiveStart = g.value(mLiveAt);
             mLiveClock.invalidate();
         }
         mDabs = json::array();
@@ -567,6 +577,7 @@ private:
     curve::Splines mWork;
     json mDabs = json::array();
     bool mLive = false;
+    scene::PlugRef mLiveAt;
     scene::PlugValue mLiveStart;
     QElapsedTimer mLiveClock;
     QPointF mHover;
@@ -695,7 +706,18 @@ void registerCurveSculptTool()
     actions::add({.id = "curve.sculptCurves",
                   .label = "Sculpt Curves",
                   .category = "Curves",
-                  .run = [] { viewportTools::activate("curve.sculptCurves"); },
+                  .run =
+                      [] {
+                          // A groom is brushed with the groom brushes.
+                          scene::Graph& g = scene::Graph::current();
+                          for (scene::NodeId id : g.selection())
+                              if (scene::Node* n = g.node(id); n && n->type().isA("groom"))
+                              {
+                                  viewportTools::activate("groom.brushes");
+                                  return;
+                              }
+                          viewportTools::activate("curve.sculptCurves");
+                      },
                   .doc = "Combs, smooths, grows, puffs, adds, deletes, thins, cuts, pinches and slides the selected curve's many curves (hair) "
                          "with brushes; roots stay on its groom surface. Select a mesh too to make it the surface.",
                   .python = "lila.ui.run_action(\"curve.sculptCurves\")"});

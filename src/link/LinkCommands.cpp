@@ -3,6 +3,7 @@
 #include "core/Profile.h"
 #include "core/Workspace.h"
 #include "link/Exporters.h"
+#include "link/GroomSend.h"
 #include "link/SplineSend.h"
 #include "link/TextureSend.h"
 #include "link/TextureSetSend.h"
@@ -153,6 +154,7 @@ void registerCommands()
     registerTextureCommands();
     registerTextureSetCommands();
     registerSplineCommands();
+    registerGroomSendCommands();
     registerPlacementCommands();
     registerExpressionRigCommands();
     static const events::SubscriptionId adopt =

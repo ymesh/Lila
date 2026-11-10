@@ -72,7 +72,7 @@ std::string dockOf(QWidget* w)
 
 const std::vector<std::string>& sets()
 {
-    static const std::vector<std::string> all = {"Model", "UV", "Sculpt", "Texture", "Rig", "Animate", "Level",
+    static const std::vector<std::string> all = {"Model", "Sculpt", "UV", "Texture", "Rig", "Animate", "Level",
                                                  "Cloth", "Groom", "Effects", "Print", "Script"};
     return all;
 }

@@ -7,6 +7,7 @@
 #include "scene/Graph.h"
 #include "scene/Ik.h"
 #include "scene/Rig.h"
+#include "scene/RigElements.h"
 #include "ui/Actions.h"
 #include "ui/AnimProxyUi.h"
 #include "ui/CursorBadges.h"
@@ -258,9 +259,19 @@ void drawJoints(render::FrameState& s, OverlayPainter&, const ViewInfo&)
     }
 }
 
+/** A handle inside a rig element's IK chain: the chain's own controller is what gets drawn and picked instead. */
+bool rigElementHandle(scene::Graph& g, NodeId id)
+{
+    for (NodeId chain : scene::rigel::chains(g))
+        if (scene::rigel::handleOf(g, chain) == id)
+            return true;
+    return false;
+}
+
 bool isIkHandle(const scene::Node& n)
 {
-    return n.type().isA("ikHandle") && scene::effectivelyVisible(scene::Graph::current(), n.id());
+    scene::Graph& g = scene::Graph::current();
+    return n.type().isA("ikHandle") && scene::effectivelyVisible(g, n.id()) && !rigElementHandle(g, n.id());
 }
 
 /** IK handles: a cross at the target, a line from the chain's start to it, and the pole vector from the start. */
@@ -479,12 +490,38 @@ void registerRigActions()
         "Turns the selected pins or pinned objects into joints for Unreal: sockets where they ride a bone rigidly, else keyed bones.");
     add("rig.ikHandle", "IK Handle", [] { command("ikHandle"); }, "ikHandle()",
         "Solves the chain from the first selected joint to the last with an IK handle at its end.");
+    add("rig.bendBones", "Bind Bend Bones", [] { command("bendBones"); }, "bendBones()",
+        "Select a chain's joints from top to end, then the mesh: it bends along a smooth curve through them, the chain one influence.");
     add("rig.splineChain", "Spline Chain", [] { command("splineChain"); }, "splineChain()",
-        "Lays the joints from the first selected to the last along a curve with controls (or the selected curve).");
+        "A bend-bone chain led by a curve: lays the joints from the first selected to the last along it, with controls (or the selected curve).");
     add("rig.hoseLimb", "Rubber Hose Limb", [] { command("hoseLimb"); }, "hoseLimb()",
-        "Turns the limb from the selected shoulder or hip to the selected wrist or ankle into a rubber hose.");
+        "A bend-bone limb: turns the limb from the selected shoulder or hip to the selected wrist or ankle into a rubber hose.");
     add("rig.hoseFingers", "Rubber Hose Fingers", [] { command("hoseFingers"); }, "hoseFingers()",
-        "Makes the selected finger base joints rubber hose fingers with curl, spread and a hand fist.");
+        "Bend-bone fingers: makes the selected finger base joints rubber hose fingers with curl, spread and a hand fist.");
+    add("rig.bendBoneCV", "Add Bone CV", [] { command("bendBoneCV"); }, "bendBoneCV()",
+        "Adds a CV halfway along the selected joint's bend bone or spline chain bone, and on the other side's; on a hose limb, picks its bend control.");
+    add("rig.mirrorBoneCVs", "Mirror Bone CVs", [] { command("mirrorBendBoneCVs"); }, "mirrorBendBoneCVs()",
+        "Moves the other side's bone CVs to mirror the selected ones.");
+    add("rig.bakeBendBones", "Bake Bend Bones", [] { command("bakeBendBones"); }, "bakeBendBones()",
+        "Bakes the selected mesh's bend bones to segment joints and a fitted skin for Unreal, checked against Unreal's transforms.");
+    actions::add({.id = "rig.softNet",
+                  .label = "Soft Net",
+                  .category = "Rig",
+                  .run = [] { command("softNet"); },
+                  .doc = "Turns the selected mesh's Panel Layout lines into a net of curves that shapes the surface after the skin: "
+                         "every junction gets a knot control to move, turn or scale.",
+                  .python = "softNet()",
+                  .keywords = {"curvenet", "curve net", "profile curves", "face rig", "shaping", "knot", "surface curves"}});
+    add("rig.softNetRebind", "Rebind Soft Net", [] { command("softNetRebind"); }, "softNetRebind()",
+        "Binds the selected Soft Net again after its Panel Layout changed, keeping knot controls and their keys on the junctions that remain.");
+    add("rig.mirrorSoftNetKnots", "Mirror Soft Net Knots", [] { command("mirrorSoftNetKnots"); }, "mirrorSoftNetKnots()",
+        "Copies the selected Soft Net knots' poses to their partners across the mirror; on a whole net, the + side over the - side.");
+    add("rig.softNetShowAllKnots", "Show All Soft Net Knots", [] { command("softNetKnots", {{"toggleShowAll", true}}); }, "softNetKnots(toggleShowAll=True)",
+        "Shows or hides the selected Soft Net's knots inside lines; junctions and line ends always show.");
+    add("rig.softNetUnreal", "Soft Net to Unreal", [] { command("softNetUnreal"); }, "softNetUnreal()",
+        "Sends the selected mesh's Soft Net to Unreal: baked to knot joints, weights and correctives (default), live as a Deformer Graph, or as a geometry cache.");
+    add("rig.softNetLimbStations", "Soft Net Limb Stations", [] { command("softNetLimbStations"); }, "softNetLimbStations()",
+        "Lays rings and rails for a Soft Net round the selected mesh's limb, along the selected curve or joint chain (select the mesh, then the chain).");
     actions::add({.id = "rig.editSkeleton", .label = "Edit Skeleton", .category = "Rig", .run = [] { command("editSkeleton"); },
                   .doc = "Toggles skeleton editing: the skinned skeleton goes to bind pose so joints can be moved and reoriented "
                          "without deforming the mesh; turning it off rebinds and keeps the animation.",
@@ -510,6 +547,7 @@ void registerRigViewport()
     viewportHooks::addDrawer(drawIkHandles);
     viewportHooks::addPicker(pickIkHandles);
     registerRigActions();
+    registerWeightPaint();
     rigHandles::registerRigHandles();
     registerDominantInfluenceUi();
     registerAnimProxyUi();

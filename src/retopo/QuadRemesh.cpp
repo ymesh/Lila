@@ -1966,7 +1966,12 @@ QuadRemeshResult quadRemeshOnce(const geo::Mesh& source, const QuadRemeshOptions
         for (const DensityHandle& handle : opts.densityHandles)
             if (std::abs(std::log(std::max(handle.scale, 1e-3))) > std::log(1.3))
                 crosses.push_back(handle.position);
-        Extracted ex = layoutPatches(s, qLayout, scale, double(opts.targetFaces) * (symmetric ? 0.5 : 1.0), &why, crosses);
+        // An edge length asked for sets the count, as it does for the field.
+        const double half = symmetric ? 0.5 : 1.0;
+        const double patchFaces = opts.targetEdgeLength > 0.0
+                                      ? std::max(8.0, s.totalArea() * half / (opts.targetEdgeLength * opts.targetEdgeLength))
+                                      : double(opts.targetFaces) * half;
+        Extracted ex = layoutPatches(s, qLayout, scale, patchFaces, &why, crosses);
         clock.lap("patches");
         if (const char* raw = std::getenv("LILA_PATCH_RAW"); raw && ex.mesh.numFaces() > 0)
             dumpObj(ex.mesh, raw);
@@ -1984,8 +1989,8 @@ QuadRemeshResult quadRemeshOnce(const geo::Mesh& source, const QuadRemeshOptions
             if (field.ok() && (!best.ok() || (flawsOf(field) < patchFlaws && (!fewFlaws || field.metrics.irregular <= 3 * best.metrics.irregular / 2))))
             {
                 result.notes.push_back(best.ok() ? "the patch layout came out with " + std::to_string(patchFlaws) +
-                                                       (patchFlaws == 1 ? " flaw" : " flaws") + ", so this is the Field layout, with more poles"
-                                                 : "the patch layout didn't work out for this shape (" + why + "), so this is the Field layout");
+                                                       (patchFlaws == 1 ? " flaw" : " flaws") + ", so each point is placed from the flow near it instead, with more poles"
+                                                 : "the patch layout didn't work out for this shape (" + why + "), so each point is placed from the flow near it instead");
                 best = std::move(field);
             }
         }
@@ -2245,7 +2250,8 @@ void fitCount(const geo::Mesh& source, const QuadRemeshOptions& opts, QuadRemesh
         const auto started = std::chrono::steady_clock::now();
         QuadRemeshResult r = quadRemeshOnce(source, again);
         lastTook = secondsSince(started);
-        const bool take = r.ok() && r.defects <= result.defects && off(r) < off(result);
+        const auto nonQuads = [](const QuadRemeshResult& x) { return x.metrics.triangles + x.metrics.ngons; };
+        const bool take = r.ok() && r.defects <= result.defects && nonQuads(r) <= nonQuads(result) && off(r) < off(result);
         if (take)
             asked = again.targetFaces;
         keepOrMerge(result, std::move(r), take);

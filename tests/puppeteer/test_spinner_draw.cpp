@@ -206,3 +206,81 @@ TEST_CASE("spinner: entering Animate starts in Rotate, and moves track the curso
     gz->supports("rotate");
     ui::tools::setCurrent(ui::Tool::Select);
 }
+
+TEST_CASE("spinner: holding Summon brings it to the cursor, and it stays there")
+{
+    if (!qApp)
+    {
+        MESSAGE("no offscreen Qt platform: skipped");
+        return;
+    }
+    loadPuppeteer();
+    run("newScene");
+    run("autoKeyframe", {{"state", false}});
+    run("joint", {{"position", v3(0, 0, 0)}, {"name", "j"}});
+    run("select", {{"args", {"j"}}});
+    std::unique_ptr<ui::Gizmo> gz = ui::gizmos::create("puppeteer.spinner");
+    gz->setView(view("summonTest"));
+    REQUIRE(gz->supports("rotate"));
+    auto summonTo = [&](QPointF at) {
+        REQUIRE(ui::actions::run("puppeteer.spinner.summonDown"));
+        gz->setView(view("summonTest"));
+        gz->hover(at);
+        std::vector<render::OverlayVertex> tris;
+        ui::OverlayPainter p(tris, 1.0);
+        gz->draw(p);
+        REQUIRE(ui::actions::run("puppeteer.spinner.summonUp"));
+    };
+    const QPointF to(300.0, 260.0);
+    summonTo(to);
+    gz->setView(view("summonTest"));
+    // The X zone is now above the new centre.
+    const QPointF xZone = to + QPointF(0.0, -u(110.0));
+    REQUIRE(gz->press(xZone, Qt::LeftButton, Qt::NoModifier));
+    gz->drag(xZone + QPointF(0.0, -20.0), Qt::NoModifier);
+    gz->release();
+    Graph& g = Graph::current();
+    g.evaluate();
+    CHECK(std::get<glm::dvec3>(g.value(g.plug("j.rotate"))).x == Approx(10.0));
+    summonTo(kCenter);
+}
+
+// Writes the Spinner's triangles and the overlay atlas for each state to LILA_SPINNER_DUMP, for looking at offline.
+TEST_CASE("spinner draw: dump states for inspection" * doctest::skip(std::getenv("LILA_SPINNER_DUMP") == nullptr))
+{
+    REQUIRE(qApp);
+    const std::string dir = std::getenv("LILA_SPINNER_DUMP");
+    loadPuppeteer();
+    run("newScene");
+    run("autoKeyframe", {{"state", false}});
+    run("joint", {{"position", v3(0, 0, 0)}, {"name", "j"}});
+    run("select", {{"args", {"j"}}});
+    std::unique_ptr<ui::Gizmo> gz = ui::gizmos::create("puppeteer.spinner");
+    auto dump = [&](const std::string& name) {
+        std::vector<render::OverlayVertex> tris;
+        ui::OverlayPainter p(tris, 1.0);
+        gz->setView(view("drawTest"));
+        gz->draw(p);
+        const auto atlas = p.atlas();
+        std::FILE* f = std::fopen((dir + "/" + name + ".bin").c_str(), "wb");
+        REQUIRE(f);
+        const int32_t head[3] = {atlas ? atlas->width : 0, atlas ? atlas->height : 0, int32_t(tris.size())};
+        std::fwrite(head, sizeof(head), 1, f);
+        if (atlas)
+            std::fwrite(atlas->pixels.data(), 1, atlas->pixels.size(), f);
+        std::fwrite(tris.data(), sizeof(render::OverlayVertex), tris.size(), f);
+        std::fclose(f);
+    };
+    REQUIRE(gz->supports("rotate"));
+    dump("rotate");
+    gz->hover(kCenter + QPointF(0.0, -u(110.0)));
+    dump("rotate_hoverX");
+    gz->hover(kCenter + QPointF(u(177.0), 0.0));
+    dump("rotate_hoverSpace");
+    gz->hover(QPointF(5.0, 5.0));
+    REQUIRE(gz->supports("move"));
+    dump("move");
+    REQUIRE(gz->supports("scale"));
+    dump("scale");
+    gz->supports("rotate");
+}

@@ -6,8 +6,12 @@
 #include "core/MainQueue.h"
 #include "link/UnrealLink.h"
 #include "ops/Command.h"
+#include "rigmath/ExpressionVm.h"
 #include "rigmath/MathNodes.h"
 #include "scene/Graph.h"
+#include "geo/Mesh.h"
+#include "scene/Modifiers.h"
+#include "scene/Morphs.h"
 #include "scene/SceneCommands.h"
 
 using namespace lila;
@@ -33,6 +37,15 @@ void setupExpressionRigTest()
 }
 
 json rigCmd(const char* name, json call = json::object()) { return ops::execute(name, call); }
+
+void nudgePoint0(const std::string& mesh, const glm::dvec3& by)
+{
+    scene::Graph& g = scene::Graph::current();
+    const scene::PlugRef plug = scene::modifiers::editPlug(g, g.find(mesh)->id());
+    auto m = std::make_shared<geo::Mesh>(*std::get<scene::MeshPtr>(g.value(plug)));
+    m->setPosition(0, m->position(0) + by);
+    g.setValue(plug, scene::MeshPtr(m));
+}
 
 void buildCharacter()
 {
@@ -116,6 +129,100 @@ TEST_CASE("unrealExpressionRig binds bones, curves and controls and orders expre
             CHECK(b["target"]["bindTranslation"].size() == 3);
         }
     }
+}
+
+TEST_CASE("unrealExpressionRig turns a mapped morph target's weight curve into its shapes' curves")
+{
+    setupExpressionRigTest();
+    rigCmd("newScene");
+    rigCmd("group", {{"empty", true}, {"name", "Char"}});
+    rigCmd("joint", {{"position", {0, 0, 0}}, {"name", "root"}, {"parent", "Char"}});
+    const std::string face = rigCmd("polyCube", {{"name", "Face"}})[0];
+    const std::string lid = rigCmd("polyCube", {{"name", "Lid"}})[0];
+    const std::string half = rigCmd("polyCube", {{"name", "LidHalf"}})[0];
+    nudgePoint0(lid, {10, 10, 0});
+    nudgePoint0(half, {2.9289, 7.0711, 0});
+    rigCmd("parent", {{"args", {face, "Char"}}});
+    rigCmd("morph", {{"args", {lid, face}}});
+    const std::string t = rigCmd("morphTargets", {{"args", {face}}})[0]["node"];
+    rigCmd("addInBetween", {{"args", {t, half}}, {"weight", 0.5}});
+    rigCmd("morphPath", {{"args", {t}}, {"interpolation", "arc"}, {"response", "sineEaseInOut"}});
+
+    json r = rigCmd("unrealExpressionRig", {{"args", {"Char"}}, {"skeletalMesh", "/Game/Chars/SK_Char"}, {"dryRun", true}});
+    const json shapes = rigCmd("morphPath", {{"args", {t}}})["shapes"];
+    REQUIRE(shapes.size() >= 2);
+    CHECK(r["morphShapes"].size() == shapes.size());
+    // The shape named like the target reads and rewrites its curve, so it runs after the others.
+    CHECK(r["morphShapes"].back() == "Lid");
+
+    scene::Graph& g = scene::Graph::current();
+    const scene::NodeId target = g.find(t)->id();
+    for (const json& e : r["payload"]["expressions"])
+    {
+        const json& b = e["bindings"];
+        CHECK(b["inputs"][0] == json{{"kind", "curve"}, {"name", "Lid"}});
+        lila_expr::Program p;
+        std::string why;
+        REQUIRE_MESSAGE(lila_expr::parse(e["program"].get<std::string>(), p, &why), why);
+        const size_t k = std::find(shapes.begin(), shapes.end(), b["target"]["name"]) - shapes.begin();
+        REQUIRE(k < shapes.size());
+        for (double w : {0.0, 0.2, 0.5, 0.8, 1.0})
+        {
+            const double in[1] = {w};
+            CHECK(lila_expr::evaluate(p, in, 0.0) == doctest::Approx(scene::morphs::shapeWeights(g, target, w)[k]).epsilon(0.01));
+        }
+    }
+}
+
+TEST_CASE("unrealMorphPaths sends each mapped target's shape tables for the anim node")
+{
+    setupExpressionRigTest();
+    rigCmd("newScene");
+    rigCmd("group", {{"empty", true}, {"name", "Char"}});
+    rigCmd("joint", {{"position", {0, 0, 0}}, {"name", "root"}, {"parent", "Char"}});
+    const std::string face = rigCmd("polyCube", {{"name", "Face"}})[0];
+    const std::string brow = rigCmd("polyCube", {{"name", "Brow"}})[0];
+    const std::string plain = rigCmd("polyCube", {{"name", "Plain"}})[0];
+    nudgePoint0(brow, {0, 10, 0});
+    nudgePoint0(plain, {0, 0, 10});
+    rigCmd("parent", {{"args", {face, "Char"}}});
+    rigCmd("morph", {{"args", {brow, plain, face}}});
+    const std::string t = rigCmd("morphTargets", {{"args", {face}}})[0]["node"];
+
+    // Plain targets need no node.
+    CHECK_THROWS(rigCmd("unrealMorphPaths", {{"args", {"Char"}}, {"skeletalMesh", "/Game/Chars/SK_Char"}, {"dryRun", true}}));
+
+    rigCmd("morphPath", {{"args", {t}}, {"response", "quadraticEaseIn"}});
+    json r = rigCmd("unrealMorphPaths", {{"args", {"Char"}}, {"skeletalMesh", "/Game/Chars/SK_Char"}, {"dryRun", true}});
+    REQUIRE(r["paths"] == 1);
+    const json& path = r["payload"]["paths"][0];
+    CHECK(path["curve"] == "Brow");
+    REQUIRE(path["shapes"].size() == 1);
+    CHECK(path["shapes"][0]["name"] == "Brow");
+    const json& w = path["weights"];
+    const json& v = path["shapes"][0]["values"];
+    REQUIRE(w.size() == v.size());
+    for (size_t i = 0; i < w.size(); ++i)
+        CHECK(v[i].get<double>() == doctest::Approx(w[i].get<double>() * w[i].get<double>()));
+
+    FakeServer server([](const json& req) -> std::optional<json> {
+        const std::string m = req["method"];
+        if (m == "hello")
+            return FakeServer::reply(req, {{"project", "Chars"}, {"projectDir", "C:/Projects/Chars/"}, {"pluginVersion", "0.6.0"}, {"features", {"morphPaths"}}});
+        if (m == "morphPaths")
+        {
+            CHECK(req["params"]["skeletalMesh"] == "/Game/Chars/SK_Char");
+            CHECK(req["params"]["paths"].size() == 1);
+            return FakeServer::reply(req, {{"paths", 1}, {"animBlueprint", "/Game/Chars/ABP_Char_MorphPaths"}, {"warnings", json::array()}});
+        }
+        return json{{"jsonrpc", "2.0"}, {"id", req["id"]}, {"error", {{"code", -32601}, {"message", "Unknown method"}}}};
+    });
+    Link::ConnectOptions o;
+    o.port = server.port();
+    Link::get().connect(o);
+    r = rigCmd("unrealMorphPaths", {{"args", {"Char"}}, {"skeletalMesh", "/Game/Chars/SK_Char"}});
+    CHECK(r["animBlueprint"] == "/Game/Chars/ABP_Char_MorphPaths");
+    Link::get().disconnect();
 }
 
 TEST_CASE("unrealExpressionRig builds the rig over the link and wires the post-process Anim Blueprint")

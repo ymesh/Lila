@@ -4,6 +4,7 @@
 
 #include "geo/Mesh.h"
 #include "ops/Command.h"
+#include "ops/CommandOptions.h"
 #include "scene/Graph.h"
 #include "scene/MeshNodes.h"
 
@@ -71,6 +72,33 @@ TEST_CASE("array inputs: loft takes any number of sections, appended by connectA
 
     CHECK_THROWS(run("setAttr", {{"args", {op + ".sections", 1}}}));
     CHECK_THROWS(run("connectAttr", {{"args", {extra + ".worldSpace", op + ".samples[0]"}}}));
+}
+
+TEST_CASE("loft joins a half curve and its live symmetry mirror into one closed section")
+{
+    run("newScene");
+    json args = json::array();
+    for (double z : {0.0, 10.0, 25.0})
+    {
+        std::string half = run("curve", {{"type", "bezier"}, {"handleType", "auto"}, {"points", {{0, 10, z}, {10, 0, z}, {0, -10, z}}}});
+        run("curveSymmetry", {{"args", {half}}, {"axis", "x"}, {"space", "world"}});
+        args.push_back(half);
+    }
+    json lo = run("loft", {{"args", args}, {"samples", 16}, {"smooth", false}});
+    json check = run("meshCheck", {{"args", {lo[0]}}});
+    CHECK(facesOf(lo[0]) == 16 * 2);
+    CHECK(check["shells"] == 1);
+    CHECK(check["nonManifoldEdges"] == 0);
+    CHECK(check["borderEdges"] == 16 * 2);
+}
+
+TEST_CASE("option boxes built from node attrs show the attrs' defaults without passing them")
+{
+    json v = ops::options::values("loft");
+    CHECK(v["smooth"] == true);
+    CHECK(v["autoAlign"] == true);
+    CHECK(v["spansBetween"] == 1);
+    CHECK(ops::options::callWith("loft").empty());
 }
 
 TEST_CASE("array inputs survive save and load, and read the numbered attrs older files used")

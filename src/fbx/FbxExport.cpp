@@ -1125,6 +1125,15 @@ glm::dmat3 profileBasis(AxisProfile p, math::UpAxis up)
     return glm::transpose(rows);
 }
 
+glm::dmat3 characterTurn(math::UpAxis up)
+{
+    const math::AxisBasis& b = math::axisBasis(up);
+    // Columns are where right, up and forward go: right becomes forward, forward becomes -right.
+    const glm::dmat3 from(b.right, b.up, b.forward);
+    const glm::dmat3 to(b.forward, b.up, -b.right);
+    return to * glm::transpose(from);
+}
+
 bool parseKind(std::string_view name, ExportKind* out)
 {
     std::string n = toLower(name);
@@ -2244,7 +2253,9 @@ std::string encodeFbx(const ExportScene& sceneIn, const ExportOptions& opts)
         scaled = inUnits(sceneIn, opts.unitScale);
     const ExportScene& scene = scaled ? *scaled : sceneIn;
 
-    const glm::dmat3 basis3 = profileBasis(opts.profile, scene.upAxis);
+    const bool character = (opts.kind == ExportKind::Skeletal || opts.kind == ExportKind::Animation) && fileIsZUp(opts.profile, scene.upAxis);
+    const glm::dmat3 basis3 = character ? profileBasis(opts.profile, scene.upAxis) * glm::transpose(characterTurn(scene.upAxis))
+                                        : profileBasis(opts.profile, scene.upAxis);
     const glm::dmat4 basis(basis3);
     const glm::dmat4 basisInv = glm::transpose(basis);
     const AxisMap axes = axisMap(basis3);

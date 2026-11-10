@@ -43,9 +43,8 @@ void registerBuiltinOverrides(std::map<std::string, Override, std::less<>>& m)
     O remesh;
     remesh.order = {"symmetry", "method"};
     remesh.choices["symmetry"] = {{"off", "Off"}, {"x", "X"}, {"y", "Y"}, {"z", "Z"}};
-    remesh.choices["method"] = {{"patches", "Patches (Characters, Props)"}, {"field", "Field (Scans, Rocks)"}, {"grid", "Grid (Flat Sheets)"}};
+    remesh.choices["method"] = {{"patches", "Patches"}, {"grid", "Grid (Flat Sheets)"}};
     remesh.choiceDocs["method"] = {{"patches", "Loops run unbroken between a few poles. For anything that deforms, gets baked or edited by hand."},
-                                   {"field", "Each point follows the flow near it: loops wander and poles scatter. For rough surfaces nobody edits by hand."},
                                    {"grid", "A straight grid seen down the sheet's normal, for terrain tiles and panels. Closed shapes get Patches."}};
     for (const char* f : {"targetFaces", "countTolerance", "targetEdgeLength", "adaptivity", "jointDensity", "jointDensityReach", "edgesAround"})
         remesh.sections[f] = "Density";
@@ -382,7 +381,8 @@ Field fieldFor(const FlagDef& flag)
     f.max = flag.max.value_or(f.max);
     if (f.kind == FieldKind::Int || f.kind == FieldKind::Float)
         f.presets = flag.presets;
-    json def = flag.defaultValue.is_null() ? json(nullptr) : normalize(f, flag.defaultValue);
+    const json& given = flag.defaultValue.is_null() ? flag.shownDefault : flag.defaultValue;
+    json def = given.is_null() ? json(nullptr) : normalize(f, given);
     f.defaultValue = def.is_null() ? kindZero(f) : def;
     return f;
 }
@@ -420,7 +420,7 @@ std::vector<Field> fields(std::string_view command, const json& fixed)
                     f.choiceLabels.push_back(label);
                 }
                 f.choiceDocs = choiceDocs(flag.doc, f.choices);
-                json d = normalize(f, flag.defaultValue);
+                json d = normalize(f, flag.defaultValue.is_null() ? flag.shownDefault : flag.defaultValue);
                 f.defaultValue = d.is_null() ? kindZero(f) : d;
             }
             if (auto it = o->choiceDocs.find(flag.name); it != o->choiceDocs.end())
@@ -438,7 +438,7 @@ std::vector<Field> fields(std::string_view command, const json& fixed)
                 f.step = it->second.step;
                 f.suffix = it->second.suffix;
             }
-            if (auto it = o->editors.find(flag.name); it != o->editors.end() && f.kind == FieldKind::Text)
+            if (auto it = o->editors.find(flag.name); it != o->editors.end() && (f.kind == FieldKind::Text || f.kind == FieldKind::Choice))
                 f.editor = it->second;
             if (auto it = o->presets.find(flag.name); it != o->presets.end())
                 f.presets = it->second;

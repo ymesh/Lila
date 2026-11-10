@@ -13,6 +13,7 @@
 #include "groomlab/groom.h"
 #include "groomlab/groom_file.h"
 #include "groom/GroomEvaluator.h"
+#include "groom/GroomStrokeHost.h"
 #include "groomlab/guide_hierarchy.h"
 #include "groomlab/scalp_history.h"
 #include "groomlab/scalp_maps.h"
@@ -350,6 +351,29 @@ TEST(ScalpPieces, ScalpNodeNamingNoScalp) {
 
 // ---- Scripted strokes on the other scalps ------------------------------------------------------
 
+TEST(ScalpPieces, AScriptedStrokeReachesAnOtherScalp) {
+    // The scripted path (scriptedStroke through the session's host, as Python's StrokeHost drives
+    // it) brushes on the scalps joined, as the interactive brush does: a guide placed on the ears
+    // is rooted there.
+    const MeshPtr head = test::makeSphere(8, 16);
+    const MeshPtr ears = movedPlane({3, 0, 0});
+    GroomData data;
+    data.scalp = head;
+    data.scalps = {{"ears", ears}};
+    data.graphJson = branchesGraph(true);
+    GroomEvaluator session(data);
+    lila::groom::GroomStrokeHost host(session);
+    BrushToolSettings s;
+    s.setMode("place");
+    s.place.matchNeighbors = false;
+    const Vec3f at{3.4f, 0.0f, 0.6f};
+    scriptedStroke(host, s, {at});
+    const GuideHierarchy h = GuideHierarchy::fromJson(session.data().hierarchyJson);
+    ASSERT_EQ(h.guides().size(), 1u);
+    const HierarchyGuide& guide = h.guides().front();
+    EXPECT_GE(static_cast<std::size_t>(guide.root.face), head->triangleCount());
+    EXPECT_LT((session.scalp()->position(guide.root) - at).length(), 1e-4f);
+}
 
 // ---- Jiggle on the other scalps ----------------------------------------------------------------
 

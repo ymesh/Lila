@@ -14,6 +14,7 @@
 #include <QScreen>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <numbers>
 #include <string>
@@ -32,7 +33,7 @@ struct Glyph
 };
 
 /** The Tabler icons Lila's own cursor badges draw. */
-constexpr const char* kBuiltInIcons[] = {"grid-pattern", "line", "point", "angle", "target", "circle-dotted", "feather", "perspective"};
+constexpr const char* kBuiltInIcons[] = {"grid-pattern", "line", "point", "angle", "target", "circle-dotted", "feather", "perspective", "camera"};
 constexpr double kIconPx = 16.0; // logical size they are baked for
 } // namespace
 
@@ -393,6 +394,146 @@ void OverlayPainter::disc(QPointF center, float radius, const glm::vec4& color, 
         triangle(center, center + QPointF(std::cos(a0), std::sin(a0)) * radius, center + QPointF(std::cos(a1), std::sin(a1)) * radius,
                  color);
     }
+}
+
+void OverlayPainter::sector(QPointF center, double r0, double r1, double fromDeg, double toDeg, const glm::vec4& inner,
+                            const glm::vec4& outer, double corner, float feather)
+{
+    if (toDeg < fromDeg)
+        std::swap(fromDeg, toDeg);
+    r0 = std::max(0.0, r0);
+    if (r1 <= r0)
+        return;
+    const bool full = toDeg - fromDeg >= 360.0 - 1e-9;
+    const double f = std::max(0.0, double(feather));
+    corner = std::clamp(corner, 0.0, (r1 - r0) * 0.5);
+    const double rMid = (r0 + r1) * 0.5;
+    // Past each end the fringe continues for `f` px along the arc.
+    const double extend = full || rMid <= 1e-6 ? 0.0 : f / rMid * 180.0 / std::numbers::pi;
+    const double a0 = fromDeg - extend, a1 = toDeg + extend;
+    const double arcPx = (a1 - a0) * std::numbers::pi / 180.0 * (r1 + f);
+    const int steps = std::clamp(int(std::ceil(arcPx / 3.0)), 6, 720);
+    auto mix = [&](double r) {
+        const float t = float(std::clamp((r - r0) / (r1 - r0), 0.0, 1.0));
+        return inner + (outer - inner) * t;
+    };
+    struct Column
+    {
+        QPointF dir;
+        double lo, hi; // the solid span after rounding
+        float alpha;   // fades the tip past the ends
+    };
+    auto column = [&](double deg) {
+        const double rad = deg * std::numbers::pi / 180.0;
+        Column c{QPointF(std::cos(rad), std::sin(rad)), r0, r1, 1.0f};
+        if (full)
+            return c;
+        const double e = std::min(deg - fromDeg, toDeg - deg) * std::numbers::pi / 180.0 * rMid; // px from the nearer end
+        if (e < 0.0)
+        {
+            c.alpha = f > 0.0 ? float(std::clamp(1.0 + e / f, 0.0, 1.0)) : 0.0f;
+            c.lo = c.hi = rMid;
+            if (corner <= 0.0)
+            {
+                c.lo = r0;
+                c.hi = r1;
+            }
+            return c;
+        }
+        if (corner > 0.0 && e < corner)
+        {
+            const double k = corner - e;
+            const double shrink = corner - std::sqrt(std::max(0.0, corner * corner - k * k));
+            c.lo = r0 + shrink;
+            c.hi = r1 - shrink;
+        }
+        return c;
+    };
+    auto ring = [&](const Column& c) {
+        // Radii and colours across the column, inside to outside, fringes at both ends.
+        std::array<std::pair<double, glm::vec4>, 5> v;
+        glm::vec4 lo = mix(c.lo), mid = mix(rMid), hi = mix(c.hi);
+        lo.a *= c.alpha;
+        mid.a *= c.alpha;
+        hi.a *= c.alpha;
+        glm::vec4 loClear = lo, hiClear = hi;
+        loClear.a = 0.0f;
+        hiClear.a = 0.0f;
+        const bool innerFringe = c.lo > 1e-6 && f > 0.0;
+        v[0] = {innerFringe ? std::max(0.0, c.lo - f) : c.lo, innerFringe ? loClear : lo};
+        v[1] = {c.lo, lo};
+        v[2] = {std::clamp(rMid, c.lo, c.hi), mid};
+        v[3] = {c.hi, hi};
+        v[4] = {c.hi + f, f > 0.0 ? hiClear : hi};
+        return v;
+    };
+    // Rounded ends and the missing inner fringe of a disc collapse some cells to nothing; those are left out.
+    auto tri = [&](QPointF a, const glm::vec4& ca, QPointF b, const glm::vec4& cb, QPointF c, const glm::vec4& cc) {
+        if (std::abs((b.x() - a.x()) * (c.y() - a.y()) - (b.y() - a.y()) * (c.x() - a.x())) < 1e-9)
+            return;
+        vertex(a, {-1, 0}, ca);
+        vertex(b, {-1, 0}, cb);
+        vertex(c, {-1, 0}, cc);
+    };
+    Column prev = column(a0);
+    auto prevRing = ring(prev);
+    for (int i = 1; i <= steps; ++i)
+    {
+        const Column cur = column(a0 + (a1 - a0) * i / steps);
+        const auto curRing = ring(cur);
+        for (int k = 0; k < 4; ++k)
+        {
+            const QPointF p00 = center + prev.dir * prevRing[k].first, p01 = center + prev.dir * prevRing[k + 1].first;
+            const QPointF p10 = center + cur.dir * curRing[k].first, p11 = center + cur.dir * curRing[k + 1].first;
+            tri(p00, prevRing[k].second, p01, prevRing[k + 1].second, p11, curRing[k + 1].second);
+            tri(p00, prevRing[k].second, p11, curRing[k + 1].second, p10, curRing[k].second);
+        }
+        prev = cur;
+        prevRing = curRing;
+    }
+}
+
+void OverlayPainter::arc(QPointF center, double r, double fromDeg, double toDeg, float width, const glm::vec4& color, bool roundEnds)
+{
+    const double h = width * 0.5;
+    sector(center, r - h, r + h, fromDeg, toDeg, color, color, roundEnds ? h : 0.0);
+}
+
+void OverlayPainter::smoothLine(QPointF a, QPointF b, float width, const glm::vec4& color, float feather)
+{
+    const QPointF d = b - a;
+    const double len = std::hypot(d.x(), d.y());
+    if (len < 1e-6)
+        return;
+    const QPointF n(-d.y() / len, d.x() / len);
+    const double h = width * 0.5, f = std::max(0.0f, feather);
+    glm::vec4 clear = color;
+    clear.a = 0.0f;
+    // Across the stroke: clear, solid, solid, clear.
+    const std::array<std::pair<double, glm::vec4>, 4> across = {{{-h - f, clear}, {-h, color}, {h, color}, {h + f, clear}}};
+    for (size_t k = 0; k + 1 < across.size(); ++k)
+    {
+        const QPointF a0 = a + n * across[k].first, a1 = a + n * across[k + 1].first;
+        const QPointF b0 = b + n * across[k].first, b1 = b + n * across[k + 1].first;
+        vertex(a0, {-1, 0}, across[k].second);
+        vertex(a1, {-1, 0}, across[k + 1].second);
+        vertex(b1, {-1, 0}, across[k + 1].second);
+        vertex(a0, {-1, 0}, across[k].second);
+        vertex(b1, {-1, 0}, across[k + 1].second);
+        vertex(b0, {-1, 0}, across[k].second);
+    }
+}
+
+void OverlayPainter::smoothDisc(QPointF center, double radius, const glm::vec4& color, float feather)
+{
+    sector(center, 0.0, radius, 0.0, 360.0, color, color, 0.0, feather);
+}
+
+void OverlayPainter::softShadow(QPointF center, double radius, double spread, float alpha)
+{
+    const glm::vec4 dark{0.0f, 0.0f, 0.0f, alpha};
+    sector(center, 0.0, radius, 0.0, 360.0, dark, dark, 0.0, 0.0f);
+    sector(center, radius, radius + spread, 0.0, 360.0, dark, glm::vec4(0.0f), 0.0, 0.0f);
 }
 
 float OverlayPainter::textWidth(const QString& s)

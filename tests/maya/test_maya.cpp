@@ -427,7 +427,10 @@ TEST_CASE("maya import: units, DAG paths, namespaces and custom attributes")
     checkVec(vec(g, "b|leaf", Transform::kTranslate), {0, 0, 300});
     CHECK(g.parent(node(g, "kid")->id()) == node(g, "b|leaf")->id());
     CHECK(node(g, "props:barrel")->nameSpace() == "props");
-    CHECK(contains(r.skipped, "barrel.health"));
+    // Numeric custom attributes become Lila user attrs, with their values.
+    CHECK_FALSE(contains(r.skipped, "barrel.health"));
+    CHECK(std::get<double>(g.value(g.plug("props:barrel.health"))) == doctest::Approx(7.0));
+    CHECK(std::get<double>(g.value(g.plug("props:barrel.hp"))) == doctest::Approx(7.0));
     // Not centimetres, so the cube is baked at its size rather than kept as a live generator.
     MeshPtr box = outMesh(g, "props:box");
     CHECK(box->bounds().size().x == doctest::Approx(200.0));

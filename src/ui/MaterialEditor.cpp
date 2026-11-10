@@ -278,6 +278,33 @@ bool isDefaultRow(const QListWidgetItem* item)
     return item && item->data(Qt::UserRole).toBool();
 }
 
+bool hasTextureMaps(const scene::Node& material)
+{
+    for (const auto& channel : scene::materials::textureChannels())
+        if (!material.as<std::string>(channel.second).empty())
+            return true;
+    return false;
+}
+
+/** The selected rows' materials, in list order; the default row has none. */
+std::vector<scene::Node*> selectedMaterials(const QListWidget* list)
+{
+    std::vector<scene::Node*> out;
+    for (int i = 0; i < list->count(); ++i)
+        if (QListWidgetItem* item = list->item(i); item->isSelected() && !isDefaultRow(item))
+            if (scene::Node* n = scene::materials::find(scene::Graph::current(), item->text().toStdString()))
+                out.push_back(n);
+    return out;
+}
+
+json materialPaths(const std::vector<scene::Node*>& materials)
+{
+    json out = json::array();
+    for (const scene::Node* n : materials)
+        out.push_back(n->path());
+    return out;
+}
+
 /** The materials the meshes use, faces on a slot with no material counted under the default slot. */
 std::set<std::string> usedMaterials(scene::Graph& g, const std::vector<scene::NodeId>& meshes)
 {
@@ -291,6 +318,18 @@ std::set<std::string> usedMaterials(scene::Graph& g, const std::vector<scene::No
             for (const auto& [slot, faces] : scene::materials::slotUsage(*mesh))
                 out.insert(scene::materials::find(g, slot) ? slot : std::string(scene::materials::kDefaultSlot));
     }
+    return out;
+}
+
+/** The materials on the selected objects. */
+std::vector<scene::Node*> materialsOnSelection()
+{
+    scene::Graph& g = scene::Graph::current();
+    g.evaluate();
+    std::vector<scene::Node*> out;
+    for (const std::string& name : usedMaterials(g, {g.selection().begin(), g.selection().end()}))
+        if (scene::Node* n = scene::materials::find(g, name); n && n->type().isA("material"))
+            out.push_back(n);
     return out;
 }
 
@@ -390,6 +429,7 @@ MaterialEditor::MaterialEditor(QWidget* parent) : QWidget(parent)
     mList = new QListWidget(this);
     mList->setMaximumHeight(140);
     mList->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
+    mList->setSelectionMode(QAbstractItemView::ExtendedSelection);
     listColumn->addWidget(mList, 1);
     top->addLayout(listColumn, 1);
     connect(mFilter, &QLineEdit::textChanged, this, [this] { applyFilter(); });
@@ -439,8 +479,12 @@ MaterialEditor::MaterialEditor(QWidget* parent) : QWidget(parent)
             showMaterial(name.get<std::string>());
     });
     auto deleteMaterial = [this] {
-        if (scene::Node* n = current())
-            runUi("delete", {{"args", json::array({n->path()})}});
+        json paths = materialPaths(selectedMaterials(mList));
+        if (paths.empty())
+            if (scene::Node* n = current())
+                paths.push_back(n->path());
+        if (!paths.empty())
+            runUi("delete", {{"args", paths}});
     };
     connect(del, &QPushButton::clicked, this, deleteMaterial);
     deletion::claim(mList, deleteMaterial);
@@ -452,6 +496,31 @@ MaterialEditor::MaterialEditor(QWidget* parent) : QWidget(parent)
     connect(selectUsers, &QPushButton::clicked, this, [this] {
         if (std::string name = currentName(); !name.empty())
             runUi("selectByMaterial", {{"args", json::array({name})}});
+    });
+    mList->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(mList, &QListWidget::customContextMenuRequested, this, [this, deleteMaterial](const QPoint& at) {
+        QListWidgetItem* item = mList->itemAt(at);
+        if (!item)
+            return;
+        if (!item->isSelected())
+            mList->setCurrentItem(item);
+        const std::vector<scene::Node*> picked = selectedMaterials(mList);
+        if (picked.empty())
+            return;
+        const bool one = picked.size() == 1;
+        const std::string path = picked.front()->path();
+        QMenu menu(this);
+        menu.addAction(icon("brush"), "Assign", [path] { runUi("assignMaterial", {{"args", json::array({path})}}); })->setEnabled(one);
+        menu.addAction(icon("pointer"), "Select Users", [path] { runUi("selectByMaterial", {{"args", json::array({path})}}); })
+            ->setEnabled(one);
+        menu.addSeparator();
+        QAction* clear = menu.addAction(icon("photo-off"), one ? QString("Clear Texture Maps") : QString("Clear Texture Maps (%1)").arg(picked.size()),
+                                        [paths = materialPaths(picked)] { runUi("clearMaterialTextures", {{"args", paths}}); });
+        clear->setEnabled(std::any_of(picked.begin(), picked.end(), [](const scene::Node* n) { return hasTextureMaps(*n); }));
+        menu.addSeparator();
+        menu.addAction(icon("pencil"), "Rename", [this, item] { mList->editItem(item); })->setEnabled(one);
+        menu.addAction(icon("trash"), one ? QString("Delete") : QString("Delete (%1)").arg(picked.size()), deleteMaterial);
+        menu.exec(mList->viewport()->mapToGlobal(at));
     });
     connect(mList, &QListWidget::currentItemChanged, this, [this](QListWidgetItem* item) { pickRow(item); });
     connect(mList, &QListWidget::itemChanged, this, [this](QListWidgetItem* item) {
@@ -1155,6 +1224,20 @@ void registerMaterialUi()
                   },
                   .doc = "Create a material and assign it to the selected objects or faces.",
                   .python = "assignMaterial(createMaterial('M_Material'))"});
+    actions::add({.id = "material.clearTextures", .label = "Clear Texture Maps", .category = "Materials",
+                  .run =
+                      [] {
+                          json paths = materialPaths(materialsOnSelection());
+                          if (paths.empty())
+                              log::warn("Clear Texture Maps: the selection has no materials");
+                          else
+                              runUi("clearMaterialTextures", {{"args", paths}});
+                      },
+                  .enabled = actions::hasSelection,
+                  .doc = "Clear every texture map on the materials of the selected objects.",
+                  .python = "clearMaterialTextures('M_Material', 'M_Other')",
+                  .icon = "photo-off",
+                  .keywords = {"remove textures", "strip textures", "unassign textures"}});
     actions::add({.id = "material.assignDefault", .label = "Assign Default Material", .category = "Materials",
                   .run = [] { runUi("assignMaterial", {{"args", json::array({scene::materials::kDefaultSlot})}}); },
                   .enabled = actions::hasSelection,

@@ -18,7 +18,10 @@ namespace lila::scene
 class Graph;
 }
 
-/** V and C snapping: the world point nearest the cursor on screen among vertices and edges of meshes and curves. */
+/**
+ * V and C snapping: the world point nearest the cursor on screen among vertices and edges of meshes and curves, and
+ * the centers of locators and joints.
+ */
 namespace lila::ui::geometrySnap
 {
 /** Keeps whichever candidate projects closest to the cursor, within a pixel radius. */
@@ -46,4 +49,10 @@ private:
  * (curve component ids) are left out, and so are the shape and edit points of any spline holding one, as it is reshaping.
  */
 LILA_UI_API void addCurve(Nearest& n, scene::Graph& g, scene::NodeId id, unsigned snaps, const std::vector<uint32_t>& moving = {});
+
+/** Whether V snapping offers the node's world position: a visible locator or joint, shown by the active view's isolation. */
+LILA_UI_API bool isPointObject(scene::Graph& g, scene::NodeId id);
+
+/** Offers a locator's or joint's center (SnapVertex). Returns whether the node is one, offered or not. */
+LILA_UI_API bool addPointObject(Nearest& n, scene::Graph& g, scene::NodeId id, unsigned snaps);
 } // namespace lila::ui::geometrySnap

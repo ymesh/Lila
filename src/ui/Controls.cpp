@@ -13,6 +13,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QScrollArea>
@@ -482,5 +483,40 @@ bool stepPresets(QAbstractSpinBox* box, int steps)
         return true;
     setSpinValue(box, values[size_t(std::clamp<ptrdiff_t>(i, 0, ptrdiff_t(values.size()) - 1))]);
     return true;
+}
+
+namespace
+{
+class CycleBack : public QObject
+{
+public:
+    CycleBack(QAbstractButton* button, std::function<void(int)> step) : QObject(button), mStep(std::move(step)) {}
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* e) override
+    {
+        auto* b = static_cast<QAbstractButton*>(watched);
+        if (e->type() == QEvent::MouseButtonPress || e->type() == QEvent::MouseButtonRelease || e->type() == QEvent::MouseButtonDblClick)
+        {
+            auto* me = static_cast<QMouseEvent*>(e);
+            if (me->button() != Qt::RightButton)
+                return false;
+            if (e->type() == QEvent::MouseButtonRelease && b->isEnabled() && b->rect().contains(me->position().toPoint()))
+                mStep(-1);
+            return true;
+        }
+        return false;
+    }
+
+private:
+    std::function<void(int)> mStep;
+};
+} // namespace
+
+void cycle(QAbstractButton* button, std::function<void(int)> step)
+{
+    button->setContextMenuPolicy(Qt::PreventContextMenu);
+    button->installEventFilter(new CycleBack(button, step));
+    QObject::connect(button, &QAbstractButton::clicked, button, [step] { step(1); });
 }
 } // namespace lila::ui::controls

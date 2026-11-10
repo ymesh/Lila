@@ -313,8 +313,8 @@ struct HudButton
 const HudButton kHud[] = {
     {"prev", "chevron-left", "Prev", 0, "The previous overlay in this view"},
     {"next", "chevron-right", "Next", 0, "The next overlay in this view"},
-    {"fainter", "minus", "Fainter", 0, "Lower the opacity (or turn the wheel over the image)"},
-    {"stronger", "plus", "Stronger", 0, "Raise the opacity (or turn the wheel over the image)"},
+    {"fainter", "minus", "Fainter", 0, "Lower the opacity (or Ctrl-wheel over the image)"},
+    {"stronger", "plus", "Stronger", 0, "Raise the opacity (or Ctrl-wheel over the image)"},
     {"depth", "stack-front", "Front", 0, "Front draws over the model; Behind draws under it, so the model hides it"},
     {"mode", "photo", "Image", 0, "Image, Gray to judge values, or Outline: only the photo's edges, so the model stays visible"},
     {"flipH", "flip-vertical", "Flip H", 0, "Mirror the image left to right"},
@@ -419,7 +419,7 @@ void drawKeys(OverlayPainter& p, const ViewInfo& view)
         {"Drag a corner", "Scale"},
         {"Drag an edge", "Crop"},
         {"Drag the knob", "Rotate (Shift snaps to 15\u00B0)"},
-        {"Wheel over the image", "Opacity"},
+        {"Ctrl-wheel over the image", "Opacity"},
         {"Delete", "Remove"},
         {"Ctrl+D", "Duplicate"},
         {"H", "Hide or show it"},
@@ -1175,7 +1175,8 @@ bool wheel(QWheelEvent* e, const ViewInfo& view)
     if (!st.keyHeld)
     {
         const Overlay* o = refs::current().overlay(id);
-        const bool overImage = st.adjust && st.adjustView == view.camera && o &&
+        // Without O held it takes Ctrl, so the plain wheel stays the camera's.
+        const bool overImage = (e->modifiers() & Qt::ControlModifier) && st.adjust && st.adjustView == view.camera && o &&
                                hit(*o, glm::dvec2(view.width, view.height), glm::dvec2(e->position().x(), e->position().y()));
         if (!overImage)
             return false;

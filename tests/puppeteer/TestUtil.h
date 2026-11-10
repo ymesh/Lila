@@ -59,8 +59,8 @@ inline bool near(const glm::dmat4& a, const glm::dmat4& b, double eps = 1e-9)
 }
 
 /**
- * The Spinner sits 250 px right of the view's centre by default: (650, 300) in the 800 x 600 view. Its layout is
- * measured on a 424 px canvas, drawn at radius 120 px, so a canvas length L is L * 120 / 212 pixels.
+ * The Spinner sits 250 px right of the view's centre by default: (650, 300) in the 800 x 600 view. At size 1 its zones
+ * reach 72 px, the button ring is at 92 px and the plate ends at 107 px.
  */
 inline const QPointF kCenter(650.0, 300.0);
 
@@ -78,5 +78,13 @@ inline ui::ViewInfo view(const char* camera = "persp")
     return v;
 }
 
-inline double u(double canvas) { return canvas * 120.0 / 212.0; }
+/** A radius given on the Spinner's old 212-unit layout (zones to 143, buttons at 177, plate to 202), in pixels now. */
+inline double u(double canvas)
+{
+    if (canvas <= 143.0)
+        return canvas * 72.0 / 143.0;
+    if (canvas <= 177.0)
+        return 72.0 + (canvas - 143.0) * 20.0 / 34.0;
+    return 92.0 + (canvas - 177.0) * 15.0 / 25.0;
+}
 } // namespace puptest

@@ -109,6 +109,7 @@ private:
         glm::dvec3 startPivot{0.0};
         glm::dmat3 frame{1.0};
         bool pivotEdit = false;
+        bool gimbal = false;
         bool components = false; // dragging mesh components, not objects
         bool edgeOnPlane = false; // a plane drag whose plane the view looks along
         bool axisFromDrag = false; // Shift+MMB: no precision slow-down, axis picked from the drag direction
@@ -189,6 +190,8 @@ private:
     void syncHandleResets();
     bool handlesCurrent() const;
     std::vector<QPointF> ringPoints(int axisIndex, bool frontOnly) const;
+    /** Two orthonormal directions spanning ring i's plane. */
+    void ringBasis(int axisIndex, glm::dvec3& u, glm::dvec3& v) const;
     /** The pinned component pivot's Reset label beside the manipulator, when it shows. */
     std::optional<QRectF> badgeRect() const;
 
@@ -196,6 +199,7 @@ private:
     std::vector<scene::NodeId> mTargets;
     scene::NodeId mLead = scene::kNoNode;
     bool mComponents = false;
+    bool mGimbal = false; // rotate rings are the lead's rotate channels: the frame columns are its gimbal axes, not orthogonal
     bool mNormal = false; // the move tool's Normal orientation on components: a single N handle, frame[2]
     glm::dvec3 mPivot{0.0};
     glm::dmat3 mFrame{1.0};

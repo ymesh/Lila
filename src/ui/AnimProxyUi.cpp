@@ -195,7 +195,7 @@ SplitMeshTool* gActiveSplitTool = nullptr;
 
 /**
  * Split Mesh: drag a line across the view to place a plane through it, edge on to the view, at the mesh's depth; the
- * pieces preview in colours as you go. Drag a plane's rim or centre to move it, Ctrl-drag to turn it, wheel over it to
+ * pieces preview in colours as you go. Drag a plane's rim or centre to move it, Ctrl-drag to turn it, Ctrl-wheel over it to
  * size its disc. With symmetry on, each plane has a partner across the mesh's symmetry plane. Undo and redo step through
  * the plane edits first. Enter splits (or, as Anim Proxy, makes the proxy set).
  */
@@ -343,6 +343,9 @@ public:
 
     bool wheel(QWheelEvent* e, const ViewInfo& view) override
     {
+        // The plain wheel stays the camera's.
+        if (!(e->modifiers() & Qt::ControlModifier))
+            return false;
         const int at = planeAt(e->position(), view);
         if (at < 0)
             return false;
@@ -419,7 +422,7 @@ public:
                        {.tool = name(),
                         .fields = {{"pieces", QString::number(mPieces.size())}},
                         .prompt = "drag across the mesh to add a plane",
-                        .keys = {{"Rim-drag", "move"}, {"Ctrl-drag", "turn"}, {"Wheel", "size"}, {"Delete", "remove"}, {"S", "suggest at joints"},
+                        .keys = {{"Rim-drag", "move"}, {"Ctrl-drag", "turn"}, {"Ctrl-wheel", "size"}, {"Delete", "remove"}, {"S", "suggest at joints"},
                                  {"X", "symmetry"}, {"Enter", mAnimProxy ? "make proxy" : "split"}, {"Esc", "cancel"}},
                         .symmetry = ToolSymmetry{mSymmetryOn}});
     }

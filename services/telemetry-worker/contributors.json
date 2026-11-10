@@ -11,5 +11,12 @@
   {
     "name": "RD",
     "role": "Testing and feedback"
+  },
+  {
+    "name": "Lino",
+    "role": "UX and workflow design",
+    "areas": [
+      "Sculpting"
+    ]
   }
 ]

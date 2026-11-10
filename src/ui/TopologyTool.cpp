@@ -14,6 +14,7 @@
 #include "ui/NodeLookup.h"
 #include "ui/RetopoDrawTool.h"
 #include "ui/ToolColors.h"
+#include "ui/Tools.h"
 #include "ui/UiCommands.h"
 #include "ui/ViewportDisplay.h"
 #include "ui/ViewportToolMath.h"
@@ -23,6 +24,7 @@
 #include <QWidget>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 namespace lila::ui
@@ -39,9 +41,12 @@ constexpr const char* kQualityPref = "/topology/qualityOverlay";
 constexpr const char* kEvenSizePref = "/topology/relax/evenSize";
 constexpr const char* kSquarenessPref = "/topology/relax/squareness";
 constexpr const char* kStiffnessPref = "/topology/relax/stiffness";
+constexpr const char* kLazyPref = "/topology/pencil/lazy";
 
 // Overlay colours are sRGB; the 3D streams take linear.
-const glm::vec4 kLiveWireLinear(0.55f, 0.55f, 0.55f, 1.0f);
+const glm::vec4 kLiveWireLinear(1.0f, 1.0f, 1.0f, 1.0f);
+const glm::vec4 kRetopoWireLinear(0.6f, 0.6f, 0.6f, 1.0f);
+const glm::vec4 kRetopoHalo(0.0f, 0.0f, 0.0f, 0.8f);
 
 struct ModeInfo
 {
@@ -51,6 +56,7 @@ struct ModeInfo
 constexpr ModeInfo kModes[] = {
     {"Pencil", "topo.pencil"}, {"Patch", "topo.patch"},     {"Strip", "topo.strip"},     {"Stroke", "topo.stroke"},
     {"Cylinder", "topo.cylinder"}, {"Auto Region", "topo.region"}, {"Handles", "topo.handles"}, {"Relax", "topo.relax"},
+    {"Cap", "topo.cap"},
 };
 
 /** Esc and Enter reach the tool even when a hotkey would take them; Shift and Ctrl redraw the hints at once. */
@@ -143,6 +149,8 @@ void TopologyTool::setBrushRadius(double px)
 }
 double TopologyTool::edgeLength() { return std::max(0.0, PrefStore::get().value<double>("general", kEdgePref, 0.0)); }
 void TopologyTool::setEdgeLength(double cm) { PrefStore::get().set("general", kEdgePref, std::max(0.0, cm)); }
+double TopologyTool::pencilLazyRadius() { return std::clamp(PrefStore::get().value<double>("general", kLazyPref, 10.0), 0.0, 200.0); }
+double TopologyTool::pencilSmoothing() { return std::clamp(PrefStore::get().value<double>("general", "/topology/pencil/smoothing", 0.3), 0.0, 1.0); }
 bool TopologyTool::qualityOverlay() { return PrefStore::get().value<bool>("general", kQualityPref, false); }
 void TopologyTool::setQualityOverlay(bool on)
 {
@@ -198,6 +206,8 @@ void TopologyTool::refresh()
     scene::Node* n = retopoNode();
     if (!n)
     {
+        if (mRigMesh)
+            clearHandles();
         mGuides.clear();
         mRecords.clear();
         mGuidesText.clear();
@@ -208,6 +218,8 @@ void TopologyTool::refresh()
     mRetopoName = n->path();
     mRetopo = scene::modifiers::cage(g, n->id());
     mRetopoWorld = n->as<glm::dmat4>(scene::Transform::kWorldMatrix);
+    if (mRigMesh && mRetopo != mRigMesh)
+        clearHandles();
     if (int64_t axis = n->as<int64_t>(scene::MeshNode::kSymmetry); axis > 0 && axis <= 3)
     {
         glm::dvec3 nl(0.0);
@@ -304,6 +316,25 @@ std::vector<std::optional<QPointF>> TopologyTool::projectPoints(const ViewInfo& 
             if (visible(w, view))
                 out[p] = view.project(w);
         }
+    return out;
+}
+
+std::vector<glm::dvec3> TopologyTool::findGapFill(QPointF px, const ViewInfo& view) const
+{
+    if (!mRetopo || pick(px, view).face != kInvalid)
+        return {};
+    std::vector<std::optional<QPointF>> projected = projectPoints(view);
+    std::vector<QPointF> screen;
+    std::vector<Index> ids;
+    for (Index p = 0; p < projected.size(); ++p)
+        if (projected[p] && distPx(*projected[p], px) < 200.0)
+        {
+            screen.push_back(*projected[p]);
+            ids.push_back(p);
+        }
+    std::vector<glm::dvec3> out;
+    for (int i : smallestFillAround(px, screen))
+        out.push_back(pointWorld(ids[i]));
     return out;
 }
 
@@ -714,6 +745,12 @@ bool TopologyTool::mousePress(QMouseEvent* e, const ViewInfo& view)
     mStrokePx.clear();
     mPreviewId = 0;
 
+    if (tools::brushRadiusDrag(e, false))
+    {
+        mDrag = Drag::BrushSize;
+        mBrushStart = e->button() == Qt::MiddleButton ? 4.0 : brushRadius();
+        return true;
+    }
     if (e->type() == QEvent::MouseButtonDblClick && e->button() == Qt::LeftButton && !shift && !ctrl)
     {
         int construct = 0;
@@ -740,16 +777,35 @@ bool TopologyTool::mousePress(QMouseEvent* e, const ViewInfo& view)
                 return true;
             }
     }
-    if (ctrl && (mMods & Qt::AltModifier))
+    if (ctrl && (mMods & (Qt::AltModifier | Qt::ShiftModifier)))
     {
         mDrag = Drag::Delete;
         return true;
     }
+    if (shift && !ctrl && e->button() == Qt::LeftButton && mMode != TopoMode::Region)
+        if (std::vector<glm::dvec3> gap = findGapFill(e->position(), view); !gap.empty())
+        {
+            // Shift-click in a gap between retopo vertices fills it with a face, as in Retopo Draw.
+            run("retopoDrawAddFace", targetCall({{"points", vecListJson(gap)}, {"weld", view.unitsPerPixel(gap[0]) * 0.5}}));
+            refresh();
+            return true;
+        }
     if (shift && mMode != TopoMode::Region)
     {
         mDrag = Drag::RelaxBrush;
         beginRelax(view);
         relaxBrushAt(e->position(), view);
+        return true;
+    }
+    if (mMode == TopoMode::Cap)
+    {
+        if (e->button() != Qt::LeftButton)
+            return false;
+        if (Index edge = pickBorderEdge(e->position(), view); edge != kInvalid)
+            fillLoopAt(edge, view);
+        else
+            log::warn("Cap: click on an open border of the retopo mesh");
+        viewportTools::requestRedraw();
         return true;
     }
     if (mMode == TopoMode::Relax)
@@ -827,6 +883,7 @@ bool TopologyTool::mousePress(QMouseEvent* e, const ViewInfo& view)
     if (surfaceHit(e->position(), view, hit))
         mStroke.push_back(hit);
     mStrokePx.push_back(e->position());
+    mLazyPx = e->position();
     return true;
 }
 
@@ -842,6 +899,11 @@ bool TopologyTool::mouseMove(QMouseEvent* e, const ViewInfo& view)
         viewportTools::requestRedraw();
         return true;
     }
+    if (mDrag == Drag::BrushSize)
+    {
+        setBrushRadius(mBrushStart + (e->position().x() - mPressPx.x()));
+        return true;
+    }
     glm::dvec3 hit;
     switch (mDrag)
     {
@@ -852,12 +914,27 @@ bool TopologyTool::mouseMove(QMouseEvent* e, const ViewInfo& view)
             paintRegion(e->position(), view, false);
             break;
         }
-        if (distPx(e->position(), mStrokePx.empty() ? mPressPx : mStrokePx.back()) < 2.0)
+    {
+        QPointF at = e->position();
+        // Lazy pencil: the line follows a point trailing the cursor on a string, which steadies the hand.
+        if (const double lazy = pencilLazyRadius(); mMode == TopoMode::Pencil && mDrag == Drag::Stroke && lazy > 0.0)
+        {
+            const double d = distPx(at, mLazyPx);
+            if (d <= lazy)
+            {
+                viewportTools::requestRedraw();
+                break;
+            }
+            mLazyPx += (at - mLazyPx) * ((d - lazy) / d);
+            at = mLazyPx;
+        }
+        if (distPx(at, mStrokePx.empty() ? mPressPx : mStrokePx.back()) < 2.0)
             break;
-        mStrokePx.push_back(e->position());
-        if (surfaceHit(e->position(), view, hit))
+        mStrokePx.push_back(at);
+        if (surfaceHit(at, view, hit))
             mStroke.push_back(hit);
         break;
+    }
     case Drag::Line: break;
     case Drag::Paint: paintRegion(e->position(), view, true); break;
     case Drag::RelaxBrush:
@@ -949,24 +1026,56 @@ bool TopologyTool::mouseRelease(QMouseEvent* e, const ViewInfo& view)
     return true;
 }
 
+bool TopologyTool::hotkey(const QKeyEvent&, std::string_view action)
+{
+    if (action == "edit.undo" && mMode == TopoMode::Handles && mRigFresh && mRig.handleCount() > 0)
+    {
+        clearHandles();
+        return true;
+    }
+    return false;
+}
+
 bool TopologyTool::wheel(QWheelEvent* e, const ViewInfo& view)
 {
+    // Shift turns the wheel's vertical delta horizontal on some platforms.
     int delta = e->angleDelta().y() != 0 ? e->angleDelta().y() : e->angleDelta().x();
     int notches = delta > 0 ? 1 : delta < 0 ? -1 : 0;
     if (notches == 0)
         return false;
-    const bool shift = e->modifiers() & Qt::ShiftModifier, ctrl = e->modifiers() & Qt::ControlModifier;
-    if (shift && !ctrl)
-    {
-        setBrushRadius(brushRadius() * std::pow(1.1, delta / 120.0));
-        return true;
-    }
+    // The plain wheel always reaches the camera; every tool change needs a modifier.
+    const Qt::KeyboardModifiers mods = e->modifiers();
+    const bool shift = mods & Qt::ShiftModifier, ctrl = mods & Qt::ControlModifier, alt = mods & Qt::AltModifier;
+    if (!shift && !ctrl)
+        return false;
     refresh();
     QPointF px = e->position();
+    // Shift: sizes. Over a strip knot its width (Ctrl+Shift its twist), anywhere else the brush.
+    if (shift)
+    {
+        int knotConstruct = 0;
+        if (int knot = pickKnot(px, view, &knotConstruct); knot >= 0)
+        {
+            editConstruct(knotConstruct, [&](json& spec) {
+                size_t n = spec["knots"].size();
+                const char* key = ctrl ? "twists" : "scales";
+                if (!spec.contains(key) || !spec[key].is_array() || spec[key].size() != n)
+                    spec[key] = json(std::vector<double>(n, ctrl ? 0.0 : 1.0));
+                double v = spec[key][knot].get<double>();
+                spec[key][knot] = ctrl ? v + 5.0 * notches : std::clamp(v * std::pow(1.1, notches), 0.05, 20.0);
+            });
+            return true;
+        }
+        if (ctrl)
+            return false;
+        setBrushRadius(brushRadius() * std::pow(1.1, notches));
+        return true;
+    }
+    // Ctrl: counts (Ctrl+Alt the second count), or a handle's scale (Ctrl+Alt its turn).
     if (mMode == TopoMode::Handles)
         if (int hi = pickHandle(px, view); hi >= 0)
         {
-            if (ctrl)
+            if (alt)
                 mXforms[hi].rotate += 5.0 * notches;
             else
                 mXforms[hi].scale *= std::pow(1.05, notches);
@@ -974,28 +1083,49 @@ bool TopologyTool::wheel(QWheelEvent* e, const ViewInfo& view)
             commitHandles();
             return true;
         }
-    int knotConstruct = 0;
-    if (int knot = pickKnot(px, view, &knotConstruct); knot >= 0)
+    // A run of notches stays on the construct it started on, even when its faces move out from under the cursor.
+    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    int id = now - mWheelAt < 0.7 && record(mWheelId) && record(mWheelId)->live ? mWheelId : wheelTarget(px, view);
+    const retopo::ConstructRecord* rec = record(id);
+    if (!rec)
+        return false;
+    if (!rec->live)
     {
-        editConstruct(knotConstruct, [&](json& spec) {
-            size_t n = spec["knots"].size();
-            const char* key = ctrl ? "twists" : "scales";
-            if (!spec.contains(key) || !spec[key].is_array() || spec[key].size() != n)
-                spec[key] = json(std::vector<double>(n, ctrl ? 0.0 : 1.0));
-            double v = spec[key][knot].get<double>();
-            spec[key][knot] = ctrl ? v + 5.0 * notches : std::clamp(v * std::pow(1.1, notches), 0.05, 20.0);
-        });
+        log::warn("Topology: {} #{} was edited by hand, so its counts are fixed; delete and redraw it to change them", topoConstructLabel(rec->kind), rec->id);
         return true;
     }
-    int id = 0;
+    mWheelId = id;
+    mWheelAt = now;
+    return wheelConstruct(id, notches, alt, px, view);
+}
+
+int TopologyTool::wheelTarget(QPointF px, const ViewInfo& view) const
+{
     if (int stroke = pickPendingStroke(px, view); stroke > 0)
-        id = stroke;
-    else
-        id = pick(px, view).construct;
-    const retopo::ConstructRecord* rec = record(id);
-    if (!rec || !rec->live)
-        return false;
-    return wheelConstruct(id, notches, ctrl, px, view);
+        return stroke;
+    return pick(px, view).construct;
+}
+
+const char* topoConstructLabel(ConstructKind k)
+{
+    static const char* labels[] = {"Patch", "Strip", "Stroke", "Bridge", "Sweep", "Cylinder", "Region"};
+    return labels[size_t(k)];
+}
+
+/** What Ctrl-wheel and Ctrl+Alt-wheel change on a construct of this kind. */
+static std::pair<const char*, const char*> wheelCounts(ConstructKind k)
+{
+    switch (k)
+    {
+    case ConstructKind::Patch: return {"sides", "pattern"};
+    case ConstructKind::Strip: return {"loops", "rows"};
+    case ConstructKind::Stroke: return {"divisions", "divisions"};
+    case ConstructKind::Bridge: return {"loops", "rows"};
+    case ConstructKind::Sweep: return {"span", "rows"};
+    case ConstructKind::Cylinder: return {"points", "row density"};
+    case ConstructKind::Region: return {"faces", "faces, fine"};
+    }
+    return {"", ""};
 }
 
 bool TopologyTool::keyPress(QKeyEvent* e, const ViewInfo&)
@@ -1110,9 +1240,9 @@ void TopologyTool::drawRetopo(render::FrameState& s, OverlayPainter& p, const Vi
         });
         if (skip)
             continue;
-        glm::vec4 c = here && e == mHover.edge && mDrag == Drag::None ? kHotLinear : liveEdge ? kLiveWireLinear : kWireLinear;
-        s.linesOnTop.push_back({glm::vec3(world(m.edgePoint(e, 0))), c});
-        s.linesOnTop.push_back({glm::vec3(world(m.edgePoint(e, 1))), c});
+        const bool hot = here && e == mHover.edge && mDrag == Drag::None;
+        pushRetopoEdge(s, glm::vec3(world(m.edgePoint(e, 0))), glm::vec3(world(m.edgePoint(e, 1))),
+                       hot ? kHotLinear : liveEdge ? kLiveWireLinear : kRetopoWireLinear, hot);
     }
     auto screen = projectPoints(view);
     for (Index i = 0; i < screen.size(); ++i)
@@ -1176,6 +1306,22 @@ void TopologyTool::drawQuality(OverlayPainter& p, const ViewInfo& view) const
 void TopologyTool::drawSurfacePolyline(OverlayPainter& p, const ViewInfo& view, const std::vector<glm::dvec3>& pts, bool closed, float width,
                                        const glm::vec4& color, float dash) const
 {
+    drawVisiblePolyline(p, view, pts, closed, width, color, dash, [&](const glm::dvec3& w) { return visible(w, view); });
+}
+
+void pushRetopoEdge(render::FrameState& s, const glm::vec3& a, const glm::vec3& b, const glm::vec4& color, bool bold)
+{
+    std::vector<render::LineVertex>& halo = bold ? s.curveHaloBold : s.curveHalo;
+    std::vector<render::LineVertex>& line = bold ? s.curveLinesBold : s.curveLines;
+    halo.push_back({a, kRetopoHalo});
+    halo.push_back({b, kRetopoHalo});
+    line.push_back({a, color});
+    line.push_back({b, color});
+}
+
+void drawVisiblePolyline(OverlayPainter& p, const ViewInfo& view, const std::vector<glm::dvec3>& pts, bool closed, float width, const glm::vec4& color,
+                         float dash, const std::function<bool(const glm::dvec3&)>& visible)
+{
     std::vector<QPointF> run;
     auto flush = [&]() {
         if (run.size() > 1)
@@ -1191,7 +1337,7 @@ void TopologyTool::drawSurfacePolyline(OverlayPainter& p, const ViewInfo& view, 
     for (size_t i = 0; i < n + (closed && n > 2 ? 1 : 0); ++i)
     {
         const glm::dvec3& w = pts[i % n];
-        std::optional<QPointF> sp = visible(w, view) ? view.project(w) : std::nullopt;
+        std::optional<QPointF> sp = visible(w) ? view.project(w) : std::nullopt;
         if (sp)
             run.push_back(*sp);
         else
@@ -1202,16 +1348,85 @@ void TopologyTool::drawSurfacePolyline(OverlayPainter& p, const ViewInfo& view, 
 
 void TopologyTool::drawGuides(OverlayPainter& p, const ViewInfo& view) const
 {
+    drawRetopoGuides(
+        p, view, mGuides,
+        [this](const glm::dvec3& w) { return mSymmetry ? std::vector<glm::dvec3>{mSymmetry->reflect(w)} : std::vector<glm::dvec3>{}; },
+        [&](const glm::dvec3& w) { return visible(w, view); }, mMode == TopoMode::Pencil ? mDragGuide : -1);
+}
+
+void drawRetopoGuides(OverlayPainter& p, const ViewInfo& view, const std::vector<retopo::Guide>& guides,
+                      const std::function<std::vector<glm::dvec3>(const glm::dvec3&)>& images, const std::function<bool(const glm::dvec3&)>& visible,
+                      int hot)
+{
     const bool mono = viewportDisplay::monotone();
-    for (size_t i = 0; i < mGuides.size(); ++i)
+    for (size_t i = 0; i < guides.size(); ++i)
     {
-        const retopo::Guide& g = mGuides[i];
-        bool hot = mMode == TopoMode::Pencil && mDragGuide == int(i);
+        const retopo::Guide& g = guides[i];
         glm::vec4 c = mono ? glm::vec4(0.85f, 0.85f, 0.85f, 1.0f) : glm::vec4(g.color, 1.0f);
         // Monotone tells guides apart by dash length instead of hue.
         float dash = mono ? float(4 + (i % 4) * 4) : 0.0f;
-        drawSurfacePolyline(p, view, g.points, g.closed, hot ? 3.5f : 2.5f, c, dash);
+        float width = hot == int(i) ? 3.5f : 2.5f;
+        drawVisiblePolyline(p, view, g.points, g.closed, width, c, dash, visible);
+        std::vector<std::vector<glm::dvec3>> mirrored;
+        for (const glm::dvec3& w : g.points)
+        {
+            std::vector<glm::dvec3> im = images(w);
+            mirrored.resize(std::max(mirrored.size(), im.size()));
+            for (size_t k = 0; k < im.size(); ++k)
+                mirrored[k].push_back(im[k]);
+        }
+        for (const std::vector<glm::dvec3>& m : mirrored)
+            if (m.size() == g.points.size())
+                drawVisiblePolyline(p, view, m, g.closed, width, c, dash, visible);
     }
+}
+
+void TopologyTool::drawStripPreview(OverlayPainter& p, const ViewInfo& view) const
+{
+    const double r = brushRadius();
+    const int rows = std::max(1, PrefStore::get().value<int>("general", "/topology/stripRows", 1));
+    const glm::vec4 rail(0.95f, 0.95f, 0.95f, 0.9f), tick(0.95f, 0.95f, 0.95f, 0.5f);
+    if (mDrag == Drag::Stroke && mStrokePx.size() >= 2)
+    {
+        // The band the strip will fill: its two sides, and a tick where each loop will fall.
+        const size_t n = mStrokePx.size();
+        std::vector<QPointF> left, right;
+        for (size_t i = 0; i < n; ++i)
+        {
+            QPointF d = mStrokePx[std::min(i + 1, n - 1)] - mStrokePx[i > 0 ? i - 1 : 0];
+            const double len = std::hypot(d.x(), d.y());
+            if (len < 1e-6)
+                continue;
+            const QPointF nrm(-d.y() / len * r, d.x() / len * r);
+            left.push_back(mStrokePx[i] + nrm);
+            right.push_back(mStrokePx[i] - nrm);
+        }
+        p.polyline(left, 1.5f, rail);
+        p.polyline(right, 1.5f, rail);
+        const double step = 2.0 * r / rows;
+        double next = 0.0, walked = 0.0;
+        for (size_t i = 0; i + 1 < left.size() && i + 1 < right.size(); ++i)
+        {
+            const QPointF a = (left[i] + right[i]) * 0.5, b = (left[i + 1] + right[i + 1]) * 0.5;
+            const double seg = distPx(a, b);
+            while (seg > 0.0 && next <= walked + seg)
+            {
+                const double t = (next - walked) / seg;
+                p.line(left[i] + (left[i + 1] - left[i]) * t, right[i] + (right[i + 1] - right[i]) * t, 1.0f, tick);
+                next += step;
+            }
+            walked += seg;
+        }
+        return;
+    }
+    // Before drawing: the brush's diameter is the strip's width, marked and measured.
+    const QPointF a = mCursor - QPointF(r, 0.0), b = mCursor + QPointF(r, 0.0);
+    p.line(a, b, 1.5f, rail);
+    p.line(a - QPointF(0.0, 6.0), a + QPointF(0.0, 6.0), 1.5f, rail);
+    p.line(b - QPointF(0.0, 6.0), b + QPointF(0.0, 6.0), 1.5f, rail);
+    glm::dvec3 hit;
+    if (surfaceHit(mCursor, view, hit))
+        p.label(mCursor + QPointF(-r, r + 18.0), QString("width %1 cm, %2 row%3").arg(2.0 * brushWorld(hit, view), 0, 'f', 1).arg(rows).arg(rows == 1 ? "" : "s"), rail);
 }
 
 void TopologyTool::drawBrush(OverlayPainter& p, double radius) const
@@ -1220,7 +1435,7 @@ void TopologyTool::drawBrush(OverlayPainter& p, double radius) const
     for (int k = 0; k < 48; ++k)
     {
         double a = k / 48.0 * 6.283185307179586;
-        circle.push_back(mCursor + QPointF(std::cos(a), std::sin(a)) * radius);
+        circle.push_back((mDrag == Drag::BrushSize ? mPressPx : mCursor) + QPointF(std::cos(a), std::sin(a)) * radius);
     }
     p.polyline(circle, 1.5f, kTopoBrush, true);
 }
@@ -1230,7 +1445,7 @@ ToolStatus TopologyTool::status() const
     switch (mMode)
     {
     case TopoMode::Pencil:
-        return {.tool = "Topology", .mode = "pencil", .prompt = "drag to draw a guide", .keys = {{"Ctrl-drag", "erase"}, {"MMB-drag", "move guide"}}};
+        return {.tool = "Topology", .mode = "pencil", .prompt = "drag to draw a guide", .keys = {{"drag from an end", "continue"}, {"Ctrl-drag", "erase"}, {"MMB-drag", "move guide"}}};
     case TopoMode::Patch:
         return {.tool = "Topology",
                 .mode = "patch",
@@ -1240,7 +1455,7 @@ ToolStatus TopologyTool::status() const
         return {.tool = "Topology",
                 .mode = "strip",
                 .prompt = "sketch a path, brush sets width",
-                .keys = {{"drag knot", "move"}, {"wheel", "scale knot"}, {"Ctrl-wheel", "twist"}, {"double-click", "toggle corner"}}};
+                .keys = {{"drag knot", "move"}, {"Shift-wheel knot", "width there"}, {"Ctrl+Shift-wheel knot", "twist"}, {"double-click knot", "corner"}}};
     case TopoMode::Stroke:
         return {.tool = "Topology",
                 .mode = "stroke",
@@ -1260,7 +1475,9 @@ ToolStatus TopologyTool::status() const
         return {.tool = "Topology",
                 .mode = "handles",
                 .prompt = "drag across faces to place handles",
-                .keys = {{"drag one", "move"}, {"wheel", "scale"}, {"Ctrl-wheel", "turn"}, {"Esc", "clear"}}};
+                .keys = {{"drag one", "move"}, {"Ctrl-wheel one", "scale"}, {"Ctrl+Alt-wheel one", "turn"}, {"Esc", "clear"}}};
+    case TopoMode::Cap:
+        return {.tool = "Topology", .mode = "cap", .prompt = "click an open border to cap it", .keys = {{"Ctrl-wheel over cap", "next layout"}}};
     case TopoMode::Relax:
         return {.tool = "Topology",
                 .mode = "relax",
@@ -1286,6 +1503,22 @@ void TopologyTool::draw(render::FrameState& s, OverlayPainter& p, const ViewInfo
 
     if (here && !mStrokePx.empty() && (mDrag == Drag::Stroke || mDrag == Drag::Erase) && mMode != TopoMode::Region)
         p.polyline(mStrokePx, mDrag == Drag::Erase ? 1.5f : 2.0f, kHotColor);
+    if (here && mMode == TopoMode::Strip && !(mMods & (Qt::ShiftModifier | Qt::ControlModifier)) && (mDrag == Drag::None || mDrag == Drag::Stroke))
+        drawStripPreview(p, view);
+    if (here && mDrag == Drag::None && mMode == TopoMode::Cap && mRetopo)
+        if (Index edge = pickBorderEdge(mCursor, view); edge != kInvalid)
+        {
+            retopo::BorderRun run = retopo::walkBorder(*mRetopo, edge, 180.0);
+            std::vector<glm::dvec3> loop;
+            for (Index q : run.points)
+                loop.push_back(pointWorld(q));
+            drawSurfacePolyline(p, view, loop, run.closed, 3.0f, kHotColor);
+        }
+    if (here && mDrag == Drag::Stroke && mMode == TopoMode::Pencil && pencilLazyRadius() > 0.0)
+    {
+        p.line(mLazyPx, mCursor, 1.0f, kTopoBrush);
+        p.disc(mLazyPx, 3.0f, kHotColor, 12);
+    }
     if (here && mDrag == Drag::Line)
     {
         p.line(mPressPx, mCursor, 2.0f, kHotColor);
@@ -1293,7 +1526,19 @@ void TopologyTool::draw(render::FrameState& s, OverlayPainter& p, const ViewInfo
         p.disc(mCursor, 3.5f, kHotColor, 12);
     }
     const bool shift = mMods & Qt::ShiftModifier, ctrl = mMods & Qt::ControlModifier;
-    if (here && (mDrag == Drag::RelaxBrush || (mDrag == Drag::None && shift && !ctrl && mMode != TopoMode::Region) ||
+    std::vector<glm::dvec3> gap;
+    if (here && shift && !ctrl && mDrag == Drag::None && mMode != TopoMode::Region)
+        gap = findGapFill(mCursor, view);
+    if (!gap.empty())
+    {
+        std::vector<QPointF> poly;
+        for (const glm::dvec3& w : gap)
+            if (auto sp = view.project(w))
+                poly.push_back(*sp);
+        p.fill(poly, glm::vec4(kHotColor.r, kHotColor.g, kHotColor.b, 0.25f));
+        p.polyline(poly, 2.0f, kHotColor, true);
+    }
+    else if (here && (mDrag == Drag::RelaxBrush || mDrag == Drag::BrushSize || (mDrag == Drag::None && shift && !ctrl && mMode != TopoMode::Region) ||
                  (mDrag == Drag::None && (mMode == TopoMode::Relax || mMode == TopoMode::Region || mMode == TopoMode::Strip ||
                                           mMode == TopoMode::Handles)) ||
                  mDrag == Drag::Paint || (mDrag == Drag::Erase && mMode == TopoMode::Region) || (mDrag == Drag::Stroke && mMode == TopoMode::Strip)))
@@ -1301,7 +1546,60 @@ void TopologyTool::draw(render::FrameState& s, OverlayPainter& p, const ViewInfo
     if (mRefBvh.empty())
         drawToolStatus(p, view, {.tool = "Topology", .prompt = "select a reference mesh"});
     else if (here)
-        drawToolStatus(p, view, status());
+    {
+        ToolStatus st = status();
+        st.keys = contextKeys(st.keys, view);
+        if (mSymmetry)
+            st.symmetry = ToolSymmetry{true};
+        drawToolStatus(p, view, st);
+    }
+}
+
+std::vector<KeyHint> TopologyTool::contextKeys(std::vector<KeyHint> modeKeys, const ViewInfo& view) const
+{
+    const bool shift = mMods & Qt::ShiftModifier, ctrl = mMods & Qt::ControlModifier;
+    const bool strip = mMode == TopoMode::Strip;
+    // What the counts wheel would change under the cursor, named, so it is never a surprise.
+    std::vector<KeyHint> counts;
+    if (const retopo::ConstructRecord* r = record(wheelTarget(mCursor, view)); r && r->live)
+    {
+        auto [main, second] = wheelCounts(r->kind);
+        const QString name = QString("%1 #%2").arg(topoConstructLabel(r->kind)).arg(r->id);
+        counts = {{"wheel", name + " " + main}, {"+Alt wheel", name + " " + second}};
+    }
+    else
+        counts = {{"wheel over a construct", "its count"}, {"+Alt wheel", "its second count"}};
+    if (ctrl && shift)
+    {
+        std::vector<KeyHint> keys = {{"click", "delete what is under the cursor"}};
+        if (strip)
+            keys.push_back({"wheel over a knot", "twist"});
+        return keys;
+    }
+    if (shift)
+    {
+        std::vector<KeyHint> keys = {{"drag", "relax"}, {"click a gap", "fill it with a face"}, {"wheel", "brush size"}};
+        if (strip)
+            keys.push_back({"wheel over a knot", "strip width there"});
+        keys.push_back({"+Ctrl click", "delete"});
+        return keys;
+    }
+    if (ctrl)
+    {
+        std::vector<KeyHint> keys = counts;
+        if (mMode == TopoMode::Handles)
+            keys.insert(keys.begin(), {{"wheel over a handle", "scale"}, {"+Alt wheel over a handle", "turn"}});
+        if (mMode == TopoMode::Pencil)
+            keys.push_back({"drag", "erase guides"});
+        if (mMode == TopoMode::Region)
+            keys.push_back({"drag", "unmark"});
+        keys.push_back({"+Shift click", "delete"});
+        return keys;
+    }
+    // Nothing held: the mode's own keys, then the modifiers and what they open up.
+    std::vector<KeyHint> keys = std::move(modeKeys);
+    keys.insert(keys.end(), {{"Ctrl", "counts, delete"}, {"Shift", "relax, fill, brush size"}, {"B-drag", "brush size"}});
+    return keys;
 }
 
 TopologyTool* activeTopologyTool() { return dynamic_cast<TopologyTool*>(viewportTools::active()); }
@@ -1356,6 +1654,7 @@ void registerTopologyActions()
         "Paint part of the reference and auto retopologise it, stitched to the retopo faces around it.",
         "Drag across retopo faces to place handles, then move, scale and turn them to reshape that area.",
         "Physics relax: drag a vertex and its neighbours follow like cloth on the surface; drag elsewhere to relax under the brush.",
+        "Click an open border, such as a cylinder's end, to cap it with a live quad grid; wheel over the cap cycles its layouts.",
     };
     for (int i = 0; i < int(TopoMode::Count); ++i)
     {
@@ -1371,6 +1670,7 @@ void registerTopologyActions()
                 TopologyTool* t = activeTopologyTool();
                 return t && t->mode() == mode;
             },
+            .keywords = mode == TopoMode::Cap ? std::vector<std::string>{"fill hole", "grid fill", "cap", "close end"} : std::vector<std::string>{},
         });
     }
     actions::add({

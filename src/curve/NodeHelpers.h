@@ -148,30 +148,41 @@ inline const Splines& in(const scene::Node& n, const char* a) { return splinesOf
 inline scene::Graph& graph() { return scene::Graph::current(); }
 
 /** Option flags for every editable attr of a node type (enums by name), with no defaults so only given ones apply. */
+/** A flag for an editable attr (enums by name) with no default, so it applies only when given; shownDefault carries the attr's. */
+inline FlagDef flagFromAttr(const AttrDef& d)
+{
+    FlagDef fd{d.name, "", ArgType::Float, nullptr, d.doc};
+    fd.min = d.minValue;
+    fd.max = d.maxValue;
+    switch (d.type)
+    {
+    case PlugType::Bool: fd.type = ArgType::Bool; break;
+    case PlugType::Int: fd.type = ArgType::Int; break;
+    case PlugType::Vec3: fd.type = ArgType::Vec3; break;
+    case PlugType::String: fd.type = ArgType::String; break;
+    case PlugType::Enum:
+        fd.type = ArgType::String;
+        fd.choices = d.enumNames;
+        break;
+    default: break;
+    }
+    if (d.type == PlugType::Enum)
+    {
+        if (const int64_t* k = std::get_if<int64_t>(&d.defaultValue); k && *k >= 0 && size_t(*k) < d.enumNames.size())
+            fd.shownDefault = d.enumNames[size_t(*k)];
+    }
+    else if (d.type == PlugType::Float || d.type == PlugType::Bool || d.type == PlugType::Int || d.type == PlugType::String ||
+             d.type == PlugType::Vec3)
+        fd.shownDefault = scene::toJson(d.defaultValue);
+    return fd;
+}
+
 inline std::vector<FlagDef> attrFlags(const std::string& type)
 {
     std::vector<FlagDef> out;
     for (const AttrDef& d : scene::types::find(type)->ownAttrs)
-    {
-        if (!(d.flags & scene::AttrInput) || (d.flags & scene::AttrHidden))
-            continue;
-        FlagDef fd{d.name, "", ArgType::Float, nullptr, d.doc};
-        fd.min = d.minValue;
-        fd.max = d.maxValue;
-        switch (d.type)
-        {
-        case PlugType::Bool: fd.type = ArgType::Bool; break;
-        case PlugType::Int: fd.type = ArgType::Int; break;
-        case PlugType::Vec3: fd.type = ArgType::Vec3; break;
-        case PlugType::String: fd.type = ArgType::String; break;
-        case PlugType::Enum:
-            fd.type = ArgType::String;
-            fd.choices = d.enumNames;
-            break;
-        default: break;
-        }
-        out.push_back(std::move(fd));
-    }
+        if ((d.flags & scene::AttrInput) && !(d.flags & scene::AttrHidden))
+            out.push_back(flagFromAttr(d));
     return out;
 }
 

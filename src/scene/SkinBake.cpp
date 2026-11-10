@@ -514,7 +514,7 @@ bool needsRoute(Graph& g, NodeId skin)
     if (m == SkinClusterNode::kCentresOfRotation || m == SkinClusterNode::kDirectDeltaMush)
         return true;
     for (NodeId d : deformersAfter(g, skin))
-        if (active(*g.node(d)))
+        if (const auto* n = dynamic_cast<const DeformerNode*>(g.node(d)); active(*g.node(d)) && (!n || n->followsJoints()))
             return true;
     return false;
 }

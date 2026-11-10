@@ -820,6 +820,17 @@ PatchResult fillPatch(const PatchBoundary& boundary, const PatchOptions& opts, c
         }
         lean(built.pos, built.faces, nbr, n, pins, *opts.pull, pinned);
     }
+    if (surface && !surface->empty() && opts.lift && glm::length(*opts.lift) > 0.0)
+    {
+        const glm::dvec3 dir = glm::normalize(*opts.lift);
+        for (Index v = n; v < Index(built.pos.size()); ++v)
+        {
+            // Out along the cap first; back the other way only when nothing lies ahead.
+            geo::BvhHit hit;
+            if (surface->raycast(built.pos[v], dir, hit) || surface->raycast(built.pos[v], -dir, hit))
+                built.pos[v] = hit.point;
+        }
+    }
     if (surface && !surface->empty())
         relaxOnSurface(built.pos, built.faces, nbr, n, pinned, *surface, std::max(opts.relaxIterations, 0));
 

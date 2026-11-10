@@ -53,6 +53,8 @@ void StrokeSampler::begin(const BrushSettings& s, const StrokeInput& in, double 
     mDistance = 0.0;
     mIndex = 0;
     mOut.clear();
+    mPath = {in.position};
+    mPathPressure = {in.pressure};
     if (mMode == StrokeMode::Freehand)
         push(in.position, in.pressure, glm::dvec2(0.0));
 }
@@ -72,6 +74,16 @@ void StrokeSampler::move(const StrokeInput& in)
     if (mMode == StrokeMode::Line)
     {
         mBrush = mCursor;
+        return;
+    }
+    if (mMode == StrokeMode::Curve)
+    {
+        mBrush = mCursor;
+        if (glm::length(mCursor - mPath.back()) >= 2.0)
+        {
+            mPath.push_back(mCursor);
+            mPathPressure.push_back(in.pressure);
+        }
         return;
     }
     glm::dvec2 target = mCursor;
@@ -99,7 +111,76 @@ void StrokeSampler::end()
         push(mStart, mLastPressure, len > 0.0 ? d / len : glm::dvec2(0.0));
         stepTo(mCursor, mPressure);
     }
+    if (mMode == StrokeMode::Curve)
+    {
+        const std::vector<glm::dvec2> path = smoothedPath();
+        if (!path.empty())
+        {
+            const double pressure = mPathPressure.empty() ? mPressure : mPathPressure.front();
+            mLast = path.front();
+            mLastPressure = pressure;
+            const glm::dvec2 d = path.size() > 1 ? path[1] - path[0] : glm::dvec2(0.0);
+            push(path.front(), pressure, glm::length(d) > 0.0 ? glm::normalize(d) : glm::dvec2(0.0));
+            for (size_t k = 1; k < path.size(); ++k)
+            {
+                // Pressure follows the drawn path by how far along it each point lies.
+                const size_t at = std::min(mPathPressure.size() - 1, k * mPathPressure.size() / path.size());
+                stepTo(path[k], mPathPressure.empty() ? mPressure : mPathPressure[at]);
+            }
+        }
+    }
     mActive = false;
+}
+
+std::vector<glm::dvec2> StrokeSampler::smoothedPath() const
+{
+    std::vector<glm::dvec2> pts = mPath;
+    if (pts.size() < 3)
+        return pts;
+    // Even spacing first, so smoothing treats every part of the path alike, then relax with the ends held.
+    std::vector<glm::dvec2> even{pts.front()};
+    const double step = std::max(2.0, mStep * 0.5);
+    double carry = 0.0;
+    for (size_t k = 1; k < pts.size(); ++k)
+    {
+        const glm::dvec2 a = pts[k - 1], b = pts[k];
+        const double len = glm::length(b - a);
+        double t = step - carry;
+        while (t <= len)
+        {
+            even.push_back(a + (b - a) * (t / len));
+            t += step;
+        }
+        carry = len - (t - step);
+    }
+    if (glm::length(even.back() - pts.back()) > 1e-6)
+        even.push_back(pts.back());
+    const int iterations = std::clamp(int(even.size() / 4), 2, 40);
+    // The ends smooth too, toward their one neighbour, so their wobble goes; that also draws them in along the path, so
+    // afterwards each is carried back out along the smoothed direction to the reach the drawn end had.
+    const glm::dvec2 first = even.front(), last = even.back();
+    std::vector<glm::dvec2> next = even;
+    for (int it = 0; it < iterations; ++it)
+    {
+        const size_t n = even.size();
+        next[0] = (even[0] + even[1]) * 0.5;
+        next[n - 1] = (even[n - 1] + even[n - 2]) * 0.5;
+        for (size_t k = 1; k + 1 < n; ++k)
+            next[k] = even[k] * 0.5 + (even[k - 1] + even[k + 1]) * 0.25;
+        std::swap(even, next);
+    }
+    if (even.size() >= 3)
+    {
+        auto extend = [](const glm::dvec2& drawn, const glm::dvec2& a, const glm::dvec2& b) {
+            const glm::dvec2 dir = a - b;
+            const double len = glm::length(dir);
+            return len > 1e-9 ? a + dir / len * std::abs(glm::dot(drawn - a, dir / len)) : drawn;
+        };
+        const size_t n = even.size();
+        even[0] = extend(first, even[1], even[2]);
+        even[n - 1] = extend(last, even[n - 2], even[n - 3]);
+    }
+    return even;
 }
 
 void StrokeSampler::cancel()

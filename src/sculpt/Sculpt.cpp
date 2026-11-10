@@ -2,6 +2,7 @@
 
 #include "brush/Symmetry.h"
 #include "core/Profile.h"
+#include "geo/RenderMesh.h"
 
 #include <glm/gtc/quaternion.hpp>
 #include <tbb/blocked_range.h>
@@ -26,6 +27,10 @@ constexpr std::array<std::string_view, size_t(Falloff::Count)> kFalloffNames = {
 // a few tenths of a radius.
 constexpr double kDrawStep = 0.03;
 constexpr double kPinchStep = 0.15;
+/** Pinch also sinks the surface this far, so the crease it draws together deepens. */
+constexpr double kPinchDepth = 0.01;
+/** Smooth's bi-Laplacian gain: below 0.5 so even a checkerboard of noise settles rather than flipping. */
+constexpr double kSmoothGain = 0.45;
 constexpr double kClayDepth = 0.12;
 constexpr double kDamPinch = 0.25;
 constexpr double kTrimDepth = 0.04;
@@ -173,6 +178,7 @@ SculptMesh::SculptMesh(geo::Mesh mesh) : mMesh(std::move(mesh))
     mMaskDelta.assign(n, 0.0f);
     mFreezeSet.assign(n, 0);
     mPaint.assign(n, 0.0f);
+    mBlend.assign(n, 0.0);
 
     mAdjOffsets.assign(size_t(n) + 1, 0);
     for (Index e = 0; e < mMesh.edgeCapacity(); ++e)
@@ -404,6 +410,7 @@ void SculptMesh::touch(Index p)
     mMaskDelta[p] = 0.0f;
     mFreezeSet[p] = 0;
     mPaint[p] = 0.0f;
+    mBlend[p] = 0.0;
 }
 
 bool SculptMesh::painting() const
@@ -447,12 +454,35 @@ glm::dvec3 SculptMesh::projectToOriginal(Index p, const glm::dvec3& at) const
     return best;
 }
 
+glm::dvec3 SculptMesh::laplacian(Index p) const
+{
+    auto nb = neighbours(p);
+    if (nb.empty())
+        return glm::dvec3(0.0);
+    glm::dvec3 avg(0.0);
+    for (Index q : nb)
+        avg += mMesh.position(q);
+    return avg / double(nb.size()) - mMesh.position(p);
+}
+
+glm::dvec3 SculptMesh::smoothStep(Index p) const
+{
+    auto nb = neighbours(p);
+    if (nb.empty())
+        return glm::dvec3(0.0);
+    glm::dvec3 around(0.0);
+    for (Index q : nb)
+        around += laplacian(q);
+    return (laplacian(p) - around / double(nb.size())) * kSmoothGain;
+}
+
 void SculptMesh::addDisplacement(const Side& s)
 {
     LILA_ZONE();
 
     const size_t n = s.points.size();
     std::vector<glm::dvec3> out(n, glm::dvec3(0.0));
+    std::vector<uint8_t> reached(n, 0);
     const bool paint = painting();
     std::vector<float> paintOut(paint ? n : 0, 0.0f);
     const double r = s.dab.radius, sign = mSettings.invert ? -1.0 : 1.0, pressure = s.dab.opacity * s.dab.flow;
@@ -478,6 +508,7 @@ void SculptMesh::addDisplacement(const Side& s)
             double w = pointWeight(p, s.weights[i]) * pressure;
             if (w <= 0.0)
                 continue;
+            reached[i] = 1;
             if (paint)
                 paintOut[i] = float(std::min(w, 1.0));
             glm::dvec3 d(0.0);
@@ -485,7 +516,7 @@ void SculptMesh::addDisplacement(const Side& s)
             {
             case Brush::Draw: d = N * (w * r * kDrawStep * sign); break;
             case Brush::Inflate: d = glm::dvec3(mNormals[p]) * (w * r * kDrawStep * sign); break;
-            case Brush::Smooth:
+            case Brush::Smooth: d = (mSettings.keepVolume ? smoothStep(p) : laplacian(p)) * std::min(w, 1.0); break;
             case Brush::Relax:
             {
                 auto nb = neighbours(p);
@@ -495,11 +526,7 @@ void SculptMesh::addDisplacement(const Side& s)
                 for (Index q : nb)
                     avg += mMesh.position(q);
                 avg /= double(nb.size());
-                const double k = std::min(w, 1.0);
-                if (brush == Brush::Smooth)
-                    d = (avg - P) * k;
-                else
-                    d = projectToOriginal(p, P + tangential(avg - P, glm::dvec3(mNormals[p])) * k) - P;
+                d = projectToOriginal(p, P + tangential(avg - P, glm::dvec3(mNormals[p])) * std::min(w, 1.0)) - P;
                 break;
             }
             case Brush::Flatten: d = -N * (glm::dot(P - C, N) * std::min(w, 1.0) * sign); break;
@@ -520,7 +547,7 @@ void SculptMesh::addDisplacement(const Side& s)
                     d = -N * (dist * std::min(w * f, 1.0));
                 break;
             }
-            case Brush::Pinch: d = tangential(C - P, N) * (w * kPinchStep * sign); break;
+            case Brush::Pinch: d = tangential(C - P, N) * (w * kPinchStep * sign) - N * (w * r * kPinchDepth * mSettings.pinchDepth * sign); break;
             case Brush::DamStandard:
                 // The cut falls off faster than the pinch, so the groove stays a narrow V.
                 d = tangential(C - P, N) * (std::min(w, 1.0) * kDamPinch) - N * (w * w * r * kDrawStep * 1.5 * sign);
@@ -616,18 +643,22 @@ void SculptMesh::addDisplacement(const Side& s)
             case Brush::Count: break;
             }
             out[i] = d;
+            if (paint && mSettings.cavityPaint)
+            {
+                const double inward = -glm::dot(glm::dvec3(mNormals[p]), d);
+                paintOut[i] = inward > 0.0 ? float(std::min(1.0, inward / std::max(1e-9, r * kDrawStep * 0.5))) : 0.0f;
+            }
         }
     });
     for (size_t i = 0; i < n; ++i)
     {
-        if (out[i] != glm::dvec3(0.0))
+        // A point reached but left still counts toward the blend, so a copy's move fades out with it instead of jumping.
+        if (reached[i])
         {
-            // Where a dab and its mirror overlap (near the symmetry plane) a point takes the stronger move, not both:
-            // summed, smoothing brushes overshoot their target and spike the centre line.
             const Index p = s.points[i];
             touch(p);
-            if (glm::dot(out[i], out[i]) > glm::dot(mDisp[p], mDisp[p]))
-                mDisp[p] = out[i];
+            mDisp[p] += out[i] * s.weights[i];
+            mBlend[p] += s.weights[i];
         }
         if (paint && paintOut[i] > 0.0f)
         {
@@ -657,11 +688,33 @@ void SculptMesh::addMaskChange(const Side& s)
     {
         const Index p = s.points[i];
         touch(p);
-        if (mSettings.brush == Brush::Mask)
-            mMaskDelta[p] += float(s.weights[i] * mSettings.strength * s.dab.opacity * s.dab.flow * sign);
-        else
+        if (mSettings.brush != Brush::Mask)
+        {
             mFreezeSet[p] = mSettings.invert ? -1 : 1;
+            continue;
+        }
+        const double amount = s.weights[i] * mSettings.strength * s.dab.opacity * s.dab.flow;
+        double change = amount * sign;
+        if (mSettings.blur)
+        {
+            float sum = mMask[p];
+            for (Index q : neighbours(p))
+                sum += mMask[q];
+            change = (double(sum) / double(neighbours(p).size() + 1) - double(mMask[p])) * std::min(amount, 1.0);
+        }
+        mMaskDelta[p] += float(change * s.weights[i]);
+        mBlend[p] += s.weights[i];
     }
+}
+
+void SculptMesh::blendSides()
+{
+    for (Index p : mChanged)
+        if (mBlend[p] > 0.0)
+        {
+            mDisp[p] /= mBlend[p];
+            mMaskDelta[p] = float(double(mMaskDelta[p]) / mBlend[p]);
+        }
 }
 
 void SculptMesh::symmetrizeChanges()
@@ -737,12 +790,25 @@ void SculptMesh::commitChanges()
     std::vector<Index> moved, recolored, retinted;
     bool maskChanged = false;
     const glm::vec4 brushColor(mSettings.color, 1.0f);
-    for (Index p : mChanged)
+    // Blurring paint mixes each point toward its neighbours' colours as they stood before this dab.
+    const bool blurColor = mSettings.brush == Brush::Paint && mSettings.blur && !mColor.empty();
+    std::vector<glm::vec4> blurred(blurColor ? mChanged.size() : 0);
+    if (blurColor)
+        tbb::parallel_for(size_t(0), mChanged.size(), [&](size_t i) {
+            const Index p = mChanged[i];
+            glm::vec4 sum = mColor[p];
+            for (Index q : neighbours(p))
+                sum += mColor[q];
+            blurred[i] = sum / float(neighbours(p).size() + 1);
+        });
+    for (size_t i = 0; i < mChanged.size(); ++i)
     {
+        const Index p = mChanged[i];
+        const glm::vec4 target = blurColor ? blurred[i] : brushColor;
         const bool move = mDisp[p] != glm::dvec3(0.0);
         const float newMask = std::clamp(mMask[p] + mMaskDelta[p], 0.0f, 1.0f);
         const uint8_t newFrozen = mFreezeSet[p] > 0 ? 1 : mFreezeSet[p] < 0 ? 0 : mFrozen[p];
-        const bool recolor = mPaint[p] > 0.0f && !mColor.empty() && mColor[p] != brushColor;
+        const bool recolor = mPaint[p] > 0.0f && !mColor.empty() && mColor[p] != target;
         if (!move && !recolor && newMask == mMask[p] && newFrozen == mFrozen[p])
             continue;
         if (mStroking && mStrokeStamp[p] != mStroke)
@@ -767,7 +833,7 @@ void SculptMesh::commitChanges()
         mFrozen[p] = newFrozen;
         if (recolor)
         {
-            mColor[p] = glm::mix(mColor[p], brushColor, std::min(mPaint[p], 1.0f));
+            mColor[p] = glm::mix(mColor[p], target, std::min(mPaint[p], 1.0f));
             recolored.push_back(p);
         }
         else if (retint)
@@ -845,6 +911,7 @@ void SculptMesh::dab(const Dab& d)
             else
                 addMaskChange(s);
         }
+    blendSides();
     symmetrizeChanges();
     commitChanges();
 }
@@ -967,14 +1034,12 @@ void SculptMesh::addHeldDisplacement(Side& s, const glm::dvec3& delta, double am
         if (w <= 0.0)
             continue;
         touch(p);
+        glm::dvec3 d = brush == Brush::Grab && mSettings.invert ? N * (glm::dot(delta, N) * w) : delta * w;
+        // Absolute from where the stroke began, so the turn follows the cursor back as well as forward.
         if (brush == Brush::Rotate || brush == Brush::Pose)
-        {
-            // Absolute from where the stroke began, so the turn follows the cursor back as well as forward.
-            const glm::dvec3 start = originalPosition(p);
-            mDisp[p] = pivot + rotateAbout(start - pivot, axis, angle * std::min(w, 1.0)) - mMesh.position(p);
-        }
-        else
-            mDisp[p] += delta * w;
+            d = pivot + rotateAbout(originalPosition(p) - pivot, axis, angle * std::min(w, 1.0)) - mMesh.position(p);
+        mDisp[p] += d * s.weights[i];
+        mBlend[p] += s.weights[i];
     }
 }
 
@@ -1258,7 +1323,11 @@ void SculptMesh::writeVertices(std::span<const Index> points)
         v.normal = mNormals[p];
         v.tangent = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
         v.color = shownColor(p);
-        dv.write(p, v);
+        for (uint32_t k = mPointVertOffsets[p]; k < mPointVertOffsets[p + 1]; ++k)
+        {
+            v.uv = v.uv1 = mVertUv[mPointVerts[k]];
+            dv.write(mPointVerts[k], v);
+        }
     }
 }
 
@@ -1276,34 +1345,53 @@ std::shared_ptr<const render::RenderMesh> SculptMesh::renderMesh()
         return mRender;
     LILA_ZONE();
 
+    // Split at uv seams and grouped by face material, so the mesh's own materials and textures draw on the sculpt.
+    geo::RenderMeshOptions opts;
+    opts.maxUvSets = 1;
+    opts.colors = false;
+    opts.wireframe = false;
+    const geo::RenderMesh layout = geo::buildRenderMesh(mMesh, opts);
+    const Index n = layout.vertexCount();
+    const bool uvs = !layout.uvs.empty() && layout.uvs[0].size() == size_t(n);
+    mVertUv.assign(size_t(n), glm::vec2(0.0f));
+    mPointVertOffsets.assign(size_t(mMesh.pointCapacity()) + 1, 0);
+    for (Index v = 0; v < n; ++v)
+        ++mPointVertOffsets[size_t(layout.vertexPoint[v]) + 1];
+    for (size_t i = 1; i < mPointVertOffsets.size(); ++i)
+        mPointVertOffsets[i] += mPointVertOffsets[i - 1];
+    mPointVerts.resize(size_t(n));
+    {
+        std::vector<uint32_t> fill(mPointVertOffsets.begin(), mPointVertOffsets.end() - 1);
+        for (Index v = 0; v < n; ++v)
+            mPointVerts[fill[layout.vertexPoint[v]]++] = uint32_t(v);
+    }
+
     auto rm = std::make_shared<render::RenderMesh>();
     rm->dynamic = std::make_shared<render::DynamicVertices>();
-    const Index n = mMesh.pointCapacity();
     auto& verts = rm->dynamic->vertices;
-    verts.resize(n);
-    tbb::parallel_for(Index(0), n, [&](Index p) {
-        render::MeshVertex& v = verts[p];
+    verts.resize(size_t(n));
+    tbb::parallel_for(Index(0), n, [&](Index i) {
+        const Index p = layout.vertexPoint[i];
+        render::MeshVertex& v = verts[i];
         v.pos = glm::vec3(mMesh.position(p));
         v.normal = mNormals[p];
         v.tangent = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
-        v.uv = v.uv1 = glm::vec2(0.0f);
+        mVertUv[i] = uvs ? layout.uvs[0][i] : glm::vec2(0.0f);
+        v.uv = v.uv1 = mVertUv[i];
         v.color = shownColor(p);
     });
-    const auto& corners = mBvh.triangles().corners;
-    rm->indices.resize(corners.size());
-    tbb::parallel_for(size_t(0), corners.size(), [&](size_t i) { rm->indices[i] = uint32_t(mMesh.cornerPoint(corners[i])); });
+    rm->indices.assign(layout.indices.begin(), layout.indices.end());
+    for (const geo::RenderSection& sec : layout.sections)
+        rm->sections.push_back({uint32_t(std::max(0, sec.material)), sec.firstIndex, sec.indexCount});
     // Which triangle sides are polygon edges, so the shader draws the wireframe without the triangulation's diagonals.
-    const size_t tris = corners.size() / 3;
+    const size_t tris = layout.indices.size() / 3;
     rm->edgeMask.assign((tris + 7) / 8, 0u);
     tbb::parallel_for(size_t(0), rm->edgeMask.size(), [&](size_t w) {
         uint32_t word = 0;
         for (size_t t = w * 8; t < std::min(w * 8 + 8, tris); ++t)
             for (int k = 0; k < 3; ++k)
-            {
-                const Index a = corners[t * 3 + size_t(k)], b = corners[t * 3 + size_t((k + 1) % 3)];
-                if (mMesh.cornerNext(a) == b || mMesh.cornerNext(b) == a)
+                if (layout.triangleSides[t] & (1u << k))
                     word |= 1u << ((t & 7) * 4 + size_t(k));
-            }
         rm->edgeMask[w] = word;
     });
     // Strokes may push the surface past its starting bounds, so leave room.

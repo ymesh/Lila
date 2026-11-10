@@ -13,6 +13,8 @@
 
 namespace lila::geo
 {
+class SymmetryMap;
+
 /** How each column of the bridge runs from the source border to the target border. */
 enum class BridgeCurve : uint8_t
 {
@@ -105,6 +107,8 @@ struct BridgeOptions
     bool merge = false;
     double mergeFactor = 0.5;
     BridgeConnect connect = BridgeConnect::Pairs;
+    /** Mirror symmetry: a border on one side never pairs with one on the other, so each half bridges on its own. */
+    const SymmetryMap* symmetry = nullptr;
     /** Points that must pair: the source's and the target's start, then any further (source, target) pairs. */
     std::vector<std::pair<Index, Index>> pairs;
 };

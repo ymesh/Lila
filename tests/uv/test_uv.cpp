@@ -1,6 +1,7 @@
 #include "TestUtil.h"
 #include "geo/Ops.h"
 #include "geo/Primitives.h"
+#include "uv/Metrics.h"
 #include "uv/Uv.h"
 
 #include <doctest/doctest.h>
@@ -103,6 +104,39 @@ TEST_CASE("svd-free sanity: lscm flattens a planar grid exactly")
     CHECK(d.meanArea < 1e-3);
     CHECK(d.meanAngle < 1e-3);
     CHECK(d.folded == 0);
+}
+
+TEST_CASE("islands unwrapped in place that come out overlapping are packed at their size")
+{
+    // Two unit squares whose old uvs are squeezed into thin strips side by side: unwrapped square at each strip's place
+    // and area, they would cover each other.
+    const std::vector<glm::dvec3> pts = {{0, 0, 0}, {1, 0, 0}, {1, 0, 1}, {0, 0, 1}, {2, 0, 0}, {3, 0, 0}, {3, 0, 1}, {2, 0, 1}};
+    const std::vector<Index> sizes = {4, 4}, idx = {0, 3, 2, 1, 4, 7, 6, 5};
+    geo::Mesh m = geo::Mesh::fromPolygons(pts, sizes, idx);
+    std::span<glm::vec2> uv = m.cornerAttrs().getOrAdd<glm::vec2>("uv0");
+    for (Index f = 0; f < m.faceCapacity(); ++f)
+        if (m.faceValid(f))
+            m.forEachFaceCorner(f, [&](Index c) {
+                const glm::dvec3 p = m.position(m.cornerPoint(c));
+                const double left = p.x < 1.5 ? 0.0 : 2.0;
+                uv[c] = glm::vec2(float(0.1 * (p.x - left) + (left > 0.0 ? 0.12 : 0.0)), float(p.z));
+            });
+    uv::unwrapFaces(m, {}, "uv0");
+    std::vector<uint8_t> flags;
+    CHECK(uv::overlappingFaces(m, "uv0", flags) == 0);
+    const std::span<const glm::vec2> out = m.cornerAttrs().get<glm::vec2>("uv0");
+    for (Index f = 0; f < m.faceCapacity(); ++f)
+        if (m.faceValid(f))
+        {
+            double area = 0.0;
+            const std::vector<Index> fc = m.faceCorners(f);
+            for (size_t k = 0; k < fc.size(); ++k)
+            {
+                const glm::dvec2 a = out[fc[k]], b = out[fc[(k + 1) % fc.size()]];
+                area += 0.5 * (a.x * b.y - a.y * b.x);
+            }
+            CHECK(std::abs(area) == doctest::Approx(0.1).epsilon(0.01));
+        }
 }
 
 TEST_CASE("cylinder with one seam unwraps with low stretch")

@@ -2,6 +2,7 @@
 
 #include "core/Export.h"
 #include "core/Registry.h"
+#include "scene/Plug.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -61,8 +62,14 @@ struct Problem
     glm::dvec3 target{0.0};
     /** Where the chain's bend points; unset leaves the solver to keep the current bend plane. */
     std::optional<glm::dvec3> pole;
-    /** Roll of the bend plane around the start-to-target axis, radians. */
+    /** Roll of the bend plane around the start-to-target axis, radians. A spline solve twists the end this much past the start. */
     double twist = 0.0;
+    /** Spline solves: the curve the chain lies along, world space, densely sampled from its start. */
+    std::vector<glm::dvec3> curve;
+    /** Spline solves: turn of the whole chain about its bones, radians. */
+    double roll = 0.0;
+    /** Spline solves: spread the joints over the whole curve instead of keeping the bone lengths. */
+    bool fitCurve = false;
     int maxIterations = 20;
     double tolerance = 1e-4; // cm
     /** Empty, or one per joint but the end effector. */
@@ -78,6 +85,15 @@ struct Problem
  * solved world frame (the start joint's to parentWorld). Joints keep their translations and scales.
  */
 using Solution = std::vector<glm::dquat>;
+
+/** A curve as world points, the form an ikHandle's inCurve takes. Kind "curvePoints"; only ever connected, never stored. */
+struct LILA_SCENE_API CurvePoints final : Data
+{
+    std::vector<glm::dvec3> points;
+    const char* kind() const override { return "curvePoints"; }
+    nlohmann::json toJson() const override { return {{"kind", kind()}}; }
+    size_t bytes() const override { return points.size() * sizeof(glm::dvec3); }
+};
 
 /** An IK solver (Maya's MPxIkSolver): ikRPsolver, ikSCsolver, a spline solver, or an extension's own. */
 struct Solver

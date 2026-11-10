@@ -2,6 +2,7 @@
 #include "ui/AttrAuthoring.h"
 #include "ui/AttrView.h"
 #include "ui/ChoiceTips.h"
+#include "ui/Controls.h"
 #include "ui/DrivePopover.h"
 #include "ui/Tools.h"
 #include <QCheckBox>
@@ -460,13 +461,12 @@ ChannelBox::ChannelBox(QWidget* parent) : QWidget(parent)
     mNameMode->setAutoRaise(true);
     mNameMode->setIcon(icon("letter-case"));
     mNameMode->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    mNameMode->setToolTip("<b>Channel Names</b><br>Display (Translate X), long (translateX) or short (tx). Click to cycle.<br>"
-                          "Shared with the Attribute Editor.");
-    connect(mNameMode, &QToolButton::clicked, this, [] {
-        const attrView::NameMode m = attrView::nameMode();
-        attrView::setNameMode(m == attrView::NameMode::Nice ? attrView::NameMode::Long
-                              : m == attrView::NameMode::Long ? attrView::NameMode::Short
-                                                              : attrView::NameMode::Nice);
+    mNameMode->setToolTip("<b>Channel Names</b><br>Display (Translate X), long (translateX) or short (tx). Click to cycle, "
+                          "right-click to go back.<br>Shared with the Attribute Editor.");
+    controls::cycle(mNameMode, [](int step) {
+        static constexpr attrView::NameMode kOrder[] = {attrView::NameMode::Nice, attrView::NameMode::Long, attrView::NameMode::Short};
+        const int at = int(std::find(std::begin(kOrder), std::end(kOrder), attrView::nameMode()) - std::begin(kOrder));
+        attrView::setNameMode(kOrder[(at + step + 3) % 3]);
     });
     filterRow->addWidget(mNameMode);
     mSync = new QToolButton(this);
@@ -517,13 +517,13 @@ ChannelBox::ChannelBox(QWidget* parent) : QWidget(parent)
             const QString state = s == 1 ? "Showing only " + what + " channels."
                                   : s == 2 ? "Hiding " + what + " channels."
                                            : "Off.";
-            return QString("<b>%1</b><br>%2<br>Click to cycle: only %3, all but %3, off.").arg(chip.name, state, what);
+            return QString("<b>%1</b><br>%2<br>Click to cycle: only %3, all but %3, off. Right-click to go back.").arg(chip.name, state, what);
         };
         b->setToolTip(tip(0));
         mChips[chip.name] = 0;
-        connect(b, &QToolButton::clicked, this, [this, b, chip, tip] {
+        controls::cycle(b, [this, b, chip, tip](int step) {
             int& s = mChips[chip.name];
-            s = (s + 1) % 3;
+            s = (s + step + 3) % 3;
             b->setChecked(s != 0);
             b->setIcon(s != 2 ? icon(chip.on) : chip.off ? icon(chip.off) : cbCrossedIcon(chip.on));
             b->setToolTip(tip(s));

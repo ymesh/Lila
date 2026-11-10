@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 
 #include <array>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -138,6 +139,8 @@ enum class StrokeMode : uint8_t
     Freehand,
     /** Dabs from the press to the release in a straight line. */
     Line,
+    /** Draw freely; on release the path is smoothed into a clean curve and the dabs go along it. */
+    Curve,
 };
 
 struct LILA_SCENE_API BrushSettings
@@ -179,6 +182,13 @@ struct LILA_SCENE_API BrushSettings
     bool mirror = false;
     Radial radial;
     uint32_t seed = 0;
+    /** Values only one brush reads, by name (Smooth's keepVolume, Pinch's depth); a missing one is that brush's default. */
+    std::map<std::string, double> params;
+    double param(const std::string& name, double fallback) const
+    {
+        auto it = params.find(name);
+        return it == params.end() ? fallback : it->second;
+    }
 
     Falloff resolveFalloff() const { return Falloff::fromName(falloff); }
     /** Loads alpha from alphaPath when it is set and not loaded yet. */

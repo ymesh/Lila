@@ -207,3 +207,18 @@ TEST_CASE("pickWalk after a delete walks on from the deleted object's place")
     run("pickWalk", {{"direction", "right"}});
     CHECK(selection().empty());
 }
+
+TEST_CASE("group keeps objects that share a parent under that parent")
+{
+    run("newScene");
+    std::string a = run("polyCube")[0], b = run("polyCube")[0], c = run("polyCube")[0];
+    std::string outer = run("group", {{"args", {a, b}}});
+    const json kids = run("listRelatives", {{"args", {outer}}});
+    REQUIRE(kids.size() == 2);
+    std::string inner = run("group", {{"args", kids}});
+    CHECK(run("listRelatives", {{"args", {inner}}, {"parent", true}}).dump().find("Group") != std::string::npos);
+    CHECK(run("listRelatives", {{"args", {outer}}}).size() == 1);
+
+    std::string mixed = run("group", {{"args", {inner, c}}});
+    CHECK(run("listRelatives", {{"args", {mixed}}, {"parent", true}}).empty());
+}

@@ -14,7 +14,10 @@
 #include "scene/MeshNodes.h"
 #include "sculpt/SculptSession.h"
 #include "ui/Actions.h"
+#include "core/Paths.h"
 #include "ui/MeshCache.h"
+#include "ui/TextureCache.h"
+#include "ui/SculptPanel.h"
 #include "ui/ViewportHooks.h"
 #include "ui/ViewportToast.h"
 #include "ui/ViewportTool.h"
@@ -55,6 +58,7 @@ SculptSettings loadSettings()
     }
     s.preset = p.value<std::string>("general", "/sculpt/preset", s.preset);
     s.paint = p.value<bool>("general", "/sculpt/paint", s.paint);
+    s.cavityPaint = p.value<bool>("general", "/sculpt/cavityPaint", s.cavityPaint);
     if (json c = p.value("general", "/sculpt/color"); c.is_array() && c.size() == 3 && c[0].is_number() && c[1].is_number() && c[2].is_number())
         s.color = glm::vec3(c[0].get<float>(), c[1].get<float>(), c[2].get<float>());
     s.stroke.loadPrefs("/sculpt");
@@ -63,15 +67,7 @@ SculptSettings loadSettings()
     s.stroke.radius = std::clamp(s.stroke.radius, 2.0, 2000.0);
     s.stroke.spacing = std::clamp(s.stroke.spacing, 0.02, 2.0);
     s.frontFacesOnly = p.value<bool>("general", "/sculpt/frontFacesOnly", s.frontFacesOnly);
-    s.showCage = p.value<bool>("general", "/sculpt/showCage", s.showCage);
-    s.proxyMode = p.value<std::string>("general", "/sculpt/proxyMode", s.proxyMode);
     s.levels = std::clamp(p.value<int>("general", "/sculpt/startLevels", s.levels), 0, 6);
-    s.resolution = std::clamp(p.value<int>("general", "/sculpt/resolution", s.resolution), 16, 2048);
-    s.exitMethod = p.value<std::string>("general", "/sculpt/exitMethod", s.exitMethod);
-    s.highPoly = p.value<std::string>("general", "/sculpt/highPoly", s.highPoly);
-    s.highLevel = std::clamp(p.value<int>("general", "/sculpt/highLevel", s.highLevel), 0, 6);
-    s.lowLevel = std::clamp(p.value<int>("general", "/sculpt/lowLevel", s.lowLevel), 0, 6);
-    s.previewWireframe = p.value<bool>("general", "/sculpt/previewWireframe", s.previewWireframe);
     s.symmetryLine = p.value<bool>("general", "/sculpt/symmetryLine", s.symmetryLine);
     s.shareRadius = p.value<bool>("general", "/sculpt/shareRadius", s.shareRadius);
     s.shareStrength = p.value<bool>("general", "/sculpt/shareStrength", s.shareStrength);
@@ -185,12 +181,35 @@ const std::vector<SculptMaterial>& materialPresets()
     return presets;
 }
 
-const render::Material& sculptMaterial(const std::string& id)
+/** Lila's matcaps in resources/matcaps, by file stem and label. */
+constexpr std::pair<const char*, const char*> kMatcaps[] = {{"clay", "Clay"},   {"redWax", "Red Wax"}, {"skin", "Skin"},
+                                                            {"chalk", "Chalk"}, {"gloss", "Gloss"},    {"cavity", "Cavity"}};
+
+std::string matcapPath(const std::string& id)
+{
+    if (id == kMatcapFileId)
+        return PrefStore::get().value<std::string>("general", kMatcapFilePref, "");
+    return paths::toUtf8(paths::resourcesDir() / "matcaps" / (id.substr(std::string_view(kMatcapPrefix).size()) + ".png"));
+}
+
+/** The preset to draw with, or null for the mesh's own materials. */
+const render::Material* sculptMaterial(const std::string& id)
 {
     for (const SculptMaterial& m : materialPresets())
         if (id == m.id)
-            return m.material;
-    return materialPresets().front().material;
+            return &m.material;
+    if (!id.starts_with(kMatcapPrefix))
+        return nullptr;
+    static std::map<std::string, render::Material> matcaps;
+    render::Material& m = matcaps[id];
+    m.style.model = render::ShadingModel::Matcap;
+    m.baseColor = glm::vec3(1.0f);
+    // Null while the image loads; the viewport redraws when it arrives.
+    m.baseColorMap = textures::get(matcapPath(id), true);
+    if (m.baseColorMap)
+        m.flags |= render::MatBaseColorMap;
+    m.sampling = 0x5; // clamp U and V, so the sphere's rim never wraps to the far side
+    return &m;
 }
 
 glm::dvec3 xformPoint(const glm::dmat4& m, const glm::dvec3& p) { return glm::dvec3(m * glm::dvec4(p, 1.0)); }
@@ -200,19 +219,20 @@ class SculptTool final : public ViewportTool, public brush::DabSink
 {
 public:
     const char* name() const override { return "sculpt"; }
+    // The brush ring and its centre dot are the cursor.
+    std::optional<QCursor> cursor() const override { return QCursor(Qt::BlankCursor); }
+    std::string markingMenu(std::string_view base) const override { return base == "viewportShift" ? "sculptShift" : std::string(); }
 
     void activate() override
     {
         mControls.setStrengthTap([] {
             SculptSettings& s = sculptSettings();
-            // The preview and the sculpt each keep their own wireframe setting.
-            bool& wire = sculptPreviewing() ? s.previewWireframe : s.wireframe;
+            bool& wire = s.wireframe;
             wire = !wire;
             sculptSettingsChanged();
             viewportToast::showActive(wire ? "Wireframe on" : "Wireframe off", 1000);
         });
         mControls.activate();
-        mListener = sculpt::addListener([] { viewportTools::requestRedraw(); });
     }
 
     void deactivate() override
@@ -220,7 +240,6 @@ public:
         if (mStroking)
             endStroke();
         mControls.deactivate();
-        sculpt::removeListener(mListener);
         viewportTools::requestRedraw();
     }
 
@@ -236,12 +255,13 @@ public:
         auto s = sculpt::active();
         if (!s || !scene::Graph::current().node(s->node))
             return true;
-        if (sculptPreviewing())
-            return false;
         Hit hit;
-        const bool line = sculptSettings().stroke.mode == brush::StrokeMode::Line && !sculpt::dragsCursor(sculptSettings().brush);
-        if (!surfaceHit(*s, e->position(), view, hit) && !line)
-            return false;
+        const brush::StrokeMode mode = sculptSettings().stroke.mode;
+        const bool line = (mode == brush::StrokeMode::Line || mode == brush::StrokeMode::Curve) && !sculpt::dragsCursor(sculptSettings().brush);
+        // A press off the mesh never selects while sculpting: the stroke starts and takes effect once it reaches the
+        // surface. Brushes that hold the point under the cursor have nothing to hold, so the press does nothing.
+        if (!surfaceHit(*s, e->position(), view, hit) && !line && sculpt::dragsCursor(sculptSettings().brush))
+            return true;
         beginStroke(*s, e, view);
         return true;
     }
@@ -280,26 +300,13 @@ public:
         case Qt::Key_Escape:
             QTimer::singleShot(0, [] { viewportTools::set(nullptr); });
             return true;
-        case Qt::Key_V:
-            if ((e->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier | Qt::AltModifier)) != Qt::ShiftModifier)
-                return false;
-            if (!e->isAutoRepeat())
-                QTimer::singleShot(0, [] { actions::run(json("sculpt.previewLowPoly")); });
-            return true;
         default: return false;
         }
     }
 
-    /** ZBrush's level keys while a subdivision sculpt is open: D finer, Shift+D coarser, Ctrl+D adds a level. Shift+V previews the low poly. */
+    /** Level keys while sculpting: D finer, Shift+D coarser, Ctrl+D adds a level. */
     bool hotkey(const QKeyEvent& e, std::string_view) override
     {
-        if (e.key() == Qt::Key_V && e.type() == QEvent::KeyPress && sculpt::active() &&
-            (e.modifiers() & (Qt::ShiftModifier | Qt::ControlModifier | Qt::AltModifier)) == Qt::ShiftModifier)
-        {
-            if (!e.isAutoRepeat())
-                QTimer::singleShot(0, [] { actions::run(json("sculpt.previewLowPoly")); });
-            return true;
-        }
         if (e.key() == Qt::Key_X && e.type() == QEvent::KeyPress && sculpt::active() &&
             (e.modifiers() & (Qt::ShiftModifier | Qt::ControlModifier | Qt::AltModifier)) == Qt::AltModifier)
         {
@@ -332,19 +339,16 @@ public:
             drawToolStatus(p, view, {.tool = "Sculpt", .prompt = "select a mesh and Enter Sculpt"});
             return;
         }
-        if (sculptPreviewing())
-        {
-            drawToolStatus(p, view, {.tool = "Sculpt", .subject = QString::fromStdString(n->name()), .mode = "low poly preview",
-                                     .prompt = "Preview Low Poly again to sculpt"});
-            return;
-        }
         // Shift smooths and Ctrl inverts the next stroke, so the message names the brush that stroke would use.
         const Qt::KeyboardModifiers mods = QApplication::keyboardModifiers();
         sculpt::BrushSettings shown = mSettings;
+        const bool blurs = blursWithShift(mStroking ? mSettings.brush : st.brush);
         if (!mStroking)
         {
-            shown.brush = (mods & Qt::ShiftModifier) ? sculpt::Brush::Smooth : st.brush;
+            shown.brush = (mods & Qt::ShiftModifier) && !blurs ? sculpt::Brush::Smooth : st.brush;
+            shown.keepVolume = smoothStrokeKeepsVolume(st, mods);
             shown.custom = st.custom;
+            shown.blur = blurs && (mods & Qt::ShiftModifier);
         }
         const bool invert = mStroking ? mSettings.invert : (mods & Qt::ControlModifier) != 0;
         QString name = QString::fromStdString(sculpt::brushId(shown));
@@ -355,9 +359,17 @@ public:
             status.fields.push_back({"level", QString("%1/%2").arg(s->level).arg(s->stack->top())});
         status.fields.push_back({"radius", QString("%1 px").arg(int(std::lround(st.stroke.radius)))});
         status.fields.push_back({"strength", QString::number(st.stroke.strength, 'f', 2)});
-        status.flags = {{"invert", invert}};
+        const bool smoothing = shown.brush == sculpt::Brush::Smooth;
+        // Ctrl does nothing else to Smooth, so its flag reads as the flatten it gives.
+        status.flags = {smoothing ? ToolFlag{"flatten", !shown.keepVolume} : ToolFlag{"invert", invert}};
+        if (blurs)
+            status.flags.push_back({"blur", shown.blur});
         status.symmetry = ToolSymmetry{s->sculpt.symmetric()};
-        status.keys = {{"Shift", "smooth"}, {"Ctrl", "invert"}, {"B-drag", "radius"}, {"M-drag", "strength"}};
+        const QString flip = smoothStrokeKeepsVolume(st, {}) ? "flatten" : "keep volume";
+        status.keys = {{"Shift", blurs ? "blur" : st.brush == sculpt::Brush::Smooth ? flip : "smooth"},
+                       {"Ctrl", smoothing ? flip : shown.brush == sculpt::Brush::Grab ? "along normal" : "invert"},
+                       {"B-drag", "radius"},
+                       {"M-drag", "strength"}};
         drawToolStatus(p, view, status);
 
         const QPointF at = mControls.anchor(brush::ui::ringPosition(mStroke, mHover));
@@ -402,16 +414,22 @@ private:
         return true;
     }
 
+    /** Shift on these blurs what they lay down (colour, mask) instead of smoothing the shape. */
+    static bool blursWithShift(sculpt::Brush b) { return b == sculpt::Brush::Paint || b == sculpt::Brush::Mask; }
+
     void beginStroke(sculpt::Session& s, const QMouseEvent* e, const ViewInfo& view)
     {
         const Qt::KeyboardModifiers mods = e->modifiers();
         const SculptSettings& st = sculptSettings();
         mSession = sculpt::active();
         sculpt::syncSymmetry(s);
-        const bool smoothing = (mods & Qt::ShiftModifier) && st.brush != sculpt::Brush::Smooth;
+        const bool blurring = (mods & Qt::ShiftModifier) && blursWithShift(st.brush);
+        const bool smoothing = (mods & Qt::ShiftModifier) && st.brush != sculpt::Brush::Smooth && !blurring;
         mSettings.brush = smoothing ? sculpt::Brush::Smooth : st.brush;
+        mSettings.blur = blurring;
         mSettings.custom = st.custom;
         mSettings.paint = st.paint;
+        mSettings.cavityPaint = st.cavityPaint;
         mSettings.color = st.color;
         mSettings.falloff = st.stroke.resolveFalloff();
         mFalloffName = st.stroke.falloff;
@@ -422,6 +440,10 @@ private:
         mSettings.invert = (mods & Qt::ControlModifier) != 0;
         mSettings.frontFacesOnly = st.frontFacesOnly;
         mSettings.radial = st.stroke.radial;
+        auto smoothStroke = st.perBrush.find("smooth");
+        const brush::BrushSettings& own = smoothing && smoothStroke != st.perBrush.end() ? smoothStroke->second : st.stroke;
+        mSettings.keepVolume = smoothStrokeKeepsVolume(st, mods);
+        mSettings.pinchDepth = own.param("pinchDepth", 1.0);
         s.sculpt.beginStroke(mSettings);
         mPivotBefore = viewportTools::orbitPoint();
         mDabs = json::array();
@@ -515,6 +537,12 @@ private:
             d.normal = glm::dvec3(0.0, 1.0, 0.0);
             d.viewDir = glm::normalize(xformDir(inv, axis));
             d.delta = local - mGrabLocal;
+            if (mSettings.brush == sculpt::Brush::Grab && mSettings.invert)
+            {
+                // Ctrl-grab moves along the normal the stroke began on: dragging up the screen pulls out, down pushes in.
+                const glm::dvec3 up = glm::normalize(xformDir(inv, glm::dvec3(glm::inverse(view.view)[1])));
+                d.delta = glm::normalize(mGrab.normal) * glm::dot(d.delta, up);
+            }
             d.direction = local - mLastLocal;
             mLastLocal = local;
             send(d);
@@ -548,6 +576,9 @@ private:
                      {"falloff", mFalloffName},
                      {"strength", mSettings.strength},
                      {"invert", mSettings.invert},
+                     {"blur", mSettings.blur},
+                     {"keepVolume", mSettings.keepVolume},
+                     {"pinchDepth", mSettings.pinchDepth},
                      {"frontFacesOnly", mSettings.frontFacesOnly},
                      {"radialCount", mSettings.radial.count},
                      {"radialAxis", std::string(1, "xyz"[std::clamp(mSettings.radial.axis, 0, 2)])},
@@ -567,7 +598,6 @@ private:
 
     // The controls' changed callback saves the prefs on every step, as the panel needs them current.
     brush::ui::BrushControls mControls{[]() -> brush::BrushSettings& { return sculptSettings().stroke; }, [] { sculptSettingsChanged(); }, {}};
-    int mListener = 0;
 
     std::shared_ptr<sculpt::Session> mSession;
     sculpt::BrushSettings mSettings;
@@ -582,15 +612,18 @@ private:
     brush::Dab mGrab;
 };
 
-/** Viewport content for the open session: the proxy instead of its mesh, the cage wire and the mask shading. */
+/** Viewport content for the open session: the sculpt in place of its mesh, with the mask shading. */
 class SculptDrawer
 {
 public:
-    void draw(render::FrameState& s, OverlayPainter&, const ViewInfo&)
+    void draw(render::FrameState& s, OverlayPainter& p, const ViewInfo& view)
     {
         LILA_ZONE();
 
         auto session = sculpt::active();
+        // The panel is open but nothing is being sculpted: say so where the user is trying to draw.
+        if (!session && !sculptToolActive() && sculptPanelOpen())
+            drawToolStatus(p, view, {.tool = "Sculpt", .prompt = meshSelected() ? "not sculpting: pick a brush or Enter" : "not sculpting: select a mesh"});
         scene::Graph& g = scene::Graph::current();
         scene::Node* n = session ? g.node(session->node) : nullptr;
         if (!n || !scene::effectivelyVisible(g, session->node))
@@ -601,22 +634,6 @@ public:
         int smooth = int(n->as<int64_t>(scene::MeshNode::kSmoothPreview));
         auto shown = renderMeshFor(smoothedFor(n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh), smooth));
         auto isShown = [&](const render::MeshDraw& d) { return shown && d.mesh && (d.mesh == shown || d.mesh->shareVertices == shown); };
-        if (sculptPreviewing())
-        {
-            // The mesh's own draw, its materials kept, with the low poly Exit would leave.
-            auto low = renderMeshFor(previewMesh(*session, *n));
-            for (render::MeshDraw& d : s.meshes.edit())
-                if (isShown(d))
-                {
-                    d.mesh = low;
-                    if (sculptSettings().previewWireframe)
-                    {
-                        d.flags |= render::DrawWire;
-                        d.wireColor = glm::vec4(0.06f, 0.06f, 0.06f, 0.8f);
-                    }
-                }
-            return;
-        }
         const render::MeshDraw* replaced = nullptr;
         for (const render::MeshDraw& m : s.meshes)
             if (isShown(m))
@@ -634,24 +651,34 @@ public:
         render::MeshDraw d;
         d.mesh = session->sculpt.renderMesh();
         d.world = glm::mat4(world);
-        const render::Material& mat = sculptMaterial(st.material);
-        d.materials = {mat};
-        d.baseColor = mat.baseColor;
-        d.roughness = mat.roughness;
+        if (const render::Material* mat = sculptMaterial(st.material))
+        {
+            d.materials = {*mat};
+            d.baseColor = mat->baseColor;
+            d.roughness = mat->roughness;
+        }
+        else if (replaced)
+        {
+            // The mesh's own materials; the levels keep each face's material id.
+            d.materials = replaced->materials;
+            d.baseColor = replaced->baseColor;
+            d.roughness = replaced->roughness;
+        }
         // Polypaint tints the material: white paint shows the material as it is. The mask and freeze ride in the same colours.
         const bool painted = !session->sculpt.colors().empty();
         if (painted || marked(*session))
             d.vertexColors = render::VertexColorMode::Shaded;
-        if (painted && st.material == "clay")
+        if (painted && st.material == "clay" && !d.materials.empty())
             d.materials[0].baseColor = d.baseColor = glm::vec3(0.8f);
         // The sculpt mesh has no line list (strokes would leave it stale), so a wireframe view draws it as a clear surface
         // with the wire in its shader.
         const float opacity = wireframeView ? 0.0f : st.seeThrough ? float(std::clamp(st.seeThroughOpacity, 0.0, 1.0)) : 1.0f;
         if (opacity < 1.0f)
-        {
-            d.materials[0].flags |= render::MatTranslucent;
-            d.materials[0].opacity = opacity;
-        }
+            for (render::Material& m : d.materials)
+            {
+                m.flags |= render::MatTranslucent;
+                m.opacity = opacity;
+            }
         if (wireframeView)
         {
             d.flags |= viewWire | render::DrawWire;
@@ -663,89 +690,9 @@ public:
             d.wireColor = glm::vec4(0.06f, 0.06f, 0.06f, float(std::clamp(st.wireOpacity, 0.05, 1.0)));
         }
         s.meshes.push_back(std::move(d));
-
-        if (sculptSettings().showCage)
-            addCage(s, *session, *n, world);
     }
 
 private:
-    /** The mesh with the positions Exit Sculpt would give it, rebuilt when the sculpt or the Low poly choice changes. */
-    scene::MeshPtr previewMesh(sculpt::Session& session, const scene::Node& node)
-    {
-        const std::string& method = sculptSettings().exitMethod;
-        const int level = sculptSettings().lowLevel;
-        const int64_t symmetry = node.as<int64_t>(scene::MeshNode::kSymmetry);
-        if (mPreview && &session == mPreviewFor && session.sculpt.version() == mPreviewVersion && method == mPreviewMethod &&
-            symmetry == mPreviewSymmetry && level == mPreviewLevel)
-            return mPreview;
-        mPreviewFor = &session;
-        mPreviewVersion = session.sculpt.version();
-        mPreviewMethod = method;
-        mPreviewSymmetry = symmetry;
-        mPreviewLevel = level;
-        try
-        {
-            mPreview = std::make_shared<geo::Mesh>(sculpt::lowPoly(session, method, level));
-        }
-        catch (const std::exception& e)
-        {
-            log::warn("Sculpt low poly preview: {}", e.what());
-            mPreview = std::make_shared<geo::Mesh>(session.cage);
-        }
-        return mPreview;
-    }
-
-    /** The cage as Exit Sculpt will leave it, refitted as the sculpt changes. */
-    void addCage(render::FrameState& s, sculpt::Session& session, const scene::Node& node, const glm::dmat4& world)
-    {
-        LILA_ZONE();
-
-        const std::string& method = sculptSettings().exitMethod;
-        const int64_t symmetry = node.as<int64_t>(scene::MeshNode::kSymmetry);
-        const bool stale = &session != mCageFor || session.sculpt.version() != mCageVersion || method != mCageMethod ||
-                           symmetry != mCageSymmetry || world != mCageWorld;
-        if (stale && mCageClock.isValid() && mCageClock.elapsed() < mCageCost * 3)
-        {
-            // A slow fit (a remeshed proxy) refits a few times a second at most; the frame after catches up.
-            if (!mCageQueued)
-            {
-                mCageQueued = true;
-                QTimer::singleShot(int(mCageCost * 3 - mCageClock.elapsed()) + 1, [this] {
-                    mCageQueued = false;
-                    viewportTools::requestRedraw();
-                });
-            }
-        }
-        else if (stale)
-        {
-            mCageFor = &session;
-            mCageVersion = session.sculpt.version();
-            mCageMethod = method;
-            mCageSymmetry = symmetry;
-            mCageWorld = world;
-            mCage.clear();
-            mCageClock.start();
-            std::vector<glm::dvec3> pos;
-            try
-            {
-                pos = sculpt::exitPositions(session, method);
-            }
-            catch (const std::exception& e)
-            {
-                log::warn("Sculpt cage preview: {}", e.what());
-            }
-            mCageCost = mCageClock.elapsed();
-            const geo::Mesh& c = session.cage;
-            const glm::vec4 color(0.78f, 0.78f, 0.78f, 0.7f);
-            if (pos.size() >= c.pointCapacity())
-                for (geo::Index e = 0; e < c.edgeCapacity(); ++e)
-                    if (c.edgeValid(e))
-                        for (int k = 0; k < 2; ++k)
-                            mCage.push_back({glm::vec3(xformPoint(world, pos[c.edgePoint(e, k)])), color});
-        }
-        s.lines.insert(s.lines.end(), mCage.begin(), mCage.end());
-    }
-
     /** Whether any point is masked or frozen, so the sculpt draws its vertex colours, which carry both. */
     bool marked(const sculpt::Session& session)
     {
@@ -759,22 +706,6 @@ private:
         }
         return mMarked;
     }
-
-    const sculpt::Session* mPreviewFor = nullptr;
-    uint64_t mPreviewVersion = 0;
-    std::string mPreviewMethod;
-    int64_t mPreviewSymmetry = -1;
-    int mPreviewLevel = 0;
-    scene::MeshPtr mPreview;
-    const sculpt::Session* mCageFor = nullptr;
-    uint64_t mCageVersion = 0;
-    std::string mCageMethod;
-    int64_t mCageSymmetry = 0;
-    glm::dmat4 mCageWorld{0.0};
-    std::vector<render::LineVertex> mCage;
-    QElapsedTimer mCageClock;
-    int64_t mCageCost = 0;
-    bool mCageQueued = false;
 
     const sculpt::Session* mMaskFor = nullptr;
     uint64_t mMaskVersion = 0;
@@ -795,18 +726,11 @@ void sculptSettingsChanged()
     p.set("general", "/sculpt/brush", s.brush == sculpt::Brush::Custom ? s.custom : std::string(sculpt::brushName(s.brush)));
     p.set("general", "/sculpt/preset", s.preset);
     p.set("general", "/sculpt/paint", s.paint);
+    p.set("general", "/sculpt/cavityPaint", s.cavityPaint);
     p.set("general", "/sculpt/color", json::array({s.color.r, s.color.g, s.color.b}));
     s.stroke.savePrefs("/sculpt");
     p.set("general", "/sculpt/frontFacesOnly", s.frontFacesOnly);
-    p.set("general", "/sculpt/showCage", s.showCage);
-    p.set("general", "/sculpt/proxyMode", s.proxyMode);
     p.set("general", "/sculpt/startLevels", s.levels);
-    p.set("general", "/sculpt/resolution", s.resolution);
-    p.set("general", "/sculpt/exitMethod", s.exitMethod);
-    p.set("general", "/sculpt/highPoly", s.highPoly);
-    p.set("general", "/sculpt/highLevel", s.highLevel);
-    p.set("general", "/sculpt/lowLevel", s.lowLevel);
-    p.set("general", "/sculpt/previewWireframe", s.previewWireframe);
     p.set("general", "/sculpt/symmetryLine", s.symmetryLine);
     p.set("general", "/sculpt/shareRadius", s.shareRadius);
     p.set("general", "/sculpt/shareStrength", s.shareStrength);
@@ -891,11 +815,29 @@ bool selectSculptPreset(const std::string& id)
     return true;
 }
 
+bool smoothStrokeKeepsVolume(const SculptSettings& st, Qt::KeyboardModifiers mods)
+{
+    const bool smoothBrush = st.brush == sculpt::Brush::Smooth;
+    const bool own = [&] {
+        if (smoothBrush)
+            return st.stroke.param("keepVolume", 1.0) != 0.0;
+        auto it = st.perBrush.find("smooth");
+        return it == st.perBrush.end() || it->second.param("keepVolume", 1.0) != 0.0;
+    }();
+    // Shift on the Smooth brush has nothing else to do, so it flips too.
+    const bool flip = (mods & Qt::ControlModifier) || (smoothBrush && (mods & Qt::ShiftModifier));
+    return own != flip;
+}
+
 std::vector<std::pair<std::string, std::string>> sculptMaterials()
 {
-    std::vector<std::pair<std::string, std::string>> out;
+    std::vector<std::pair<std::string, std::string>> out{{"mesh", "Mesh Material"}};
     for (const SculptMaterial& m : materialPresets())
         out.emplace_back(m.id, m.label);
+    for (const auto& [stem, label] : kMatcaps)
+        out.emplace_back(std::string(kMatcapPrefix) + stem, std::string("Matcap: ") + label);
+    if (const std::string file = PrefStore::get().value<std::string>("general", kMatcapFilePref, ""); !file.empty())
+        out.emplace_back(kMatcapFileId, "Matcap: " + paths::toUtf8(paths::fromUtf8(file).stem()));
     return out;
 }
 
@@ -911,43 +853,10 @@ bool sculptToolActive()
     return t && std::string_view(t->name()) == "sculpt";
 }
 
-namespace
-{
-bool gPreview = false;
-/** The preview turned the active view's isolation on, so it turns it off again. */
-bool gPreviewIsolated = false;
-} // namespace
-
-bool sculptPreviewing() { return gPreview && sculpt::active(); }
-
-void setSculptPreview(bool on)
-{
-    auto session = sculpt::active();
-    on = on && session;
-    if (on == gPreview)
-        return;
-    gPreview = on;
-    const scene::isolation::Set* iso = scene::isolation::active();
-    scene::Graph& g = scene::Graph::current();
-    if (on && !(iso && iso->active()))
-    {
-        if (scene::Node* n = g.node(session->node); n && !g.isSelected(n->id()))
-            ops::execute("select", {{"args", {n->path()}}}, CallSource::UI);
-        actions::run(json("viewport.isolate"));
-        gPreviewIsolated = true;
-    }
-    else if (!on && std::exchange(gPreviewIsolated, false) && iso && iso->active())
-        actions::run(json("viewport.isolate"));
-    sculpt::notify();
-    viewportTools::requestRedraw();
-}
-
 void installSculptDrawer()
 {
-    sculpt::addListener([] {
-        if (gPreview && !sculpt::active())
-            setSculptPreview(false);
-    });
+    // Level changes, undo and session switches redraw whether or not the sculpt tool is active.
+    sculpt::addListener([] { viewportTools::requestRedraw(); });
     sculpt::setPivotHandler([](const std::optional<glm::dvec3>& p) {
         if (sculptToolActive() && PrefStore::get().value<bool>("general", viewportTools::kOrbitUndoPref, true))
             viewportTools::setOrbitPoint(p);

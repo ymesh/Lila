@@ -26,8 +26,6 @@ enum class Style : uint8_t
 
 LILA_SCENE_API const char* styleName(Style s);
 LILA_SCENE_API bool parseStyle(std::string_view name, Style* out);
-/** The node type of a style ("groomCurl"). */
-LILA_SCENE_API std::string styleNodeType(Style s);
 
 struct StyleOptions
 {

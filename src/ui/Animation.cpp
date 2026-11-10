@@ -10,6 +10,7 @@
 #include "ui/AudioUi.h"
 #include "ui/DockSidebar.h"
 #include "ui/GraphEditor.h"
+#include "ui/GraphModel.h"
 #include "ui/UiCommands.h"
 #include "ui/UiCommon.h"
 #include "ui/ViewportDisplay.h"
@@ -407,5 +408,6 @@ void registerAnimationUi()
                 ge->frame(false);
         }, "Fit the graph editor to every curve shown.", "");
     registerGraphEditorActions();
+    graphed::registerTangentActions();
 }
 } // namespace lila::ui

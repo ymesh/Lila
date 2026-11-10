@@ -114,6 +114,35 @@ glm::dvec3 rotatedEuler(Graph& g, NodeId id, const glm::dquat& rotation, Space s
     return closestEuler(next, order, v3(n, Transform::kRotate));
 }
 
+glm::dmat3 gimbalFrame(Graph& g, NodeId id)
+{
+    static constexpr int kAxes[6][3] = {{0, 1, 2}, {1, 2, 0}, {2, 0, 1}, {0, 2, 1}, {1, 0, 2}, {2, 1, 0}};
+    g.evaluate();
+    Node* n = g.node(id);
+    const auto order = RotateOrder(n->as<int64_t>(Transform::kRotateOrder));
+    const int* axes = kAxes[int(order)];
+    const glm::dvec3 r = v3(n, Transform::kRotate);
+    glm::dvec3 outer(0.0);
+    outer[axes[2]] = r[axes[2]];
+    glm::dvec3 outerTwo = r;
+    outerTwo[axes[0]] = 0.0;
+    const glm::dmat3 f =
+        orthonormal(glm::dmat3(n->as<glm::dmat4>(Transform::kParentMatrix))) * glm::dmat3(static_cast<Transform*>(n)->preRotation());
+    glm::dmat3 out;
+    out[axes[2]] = f[axes[2]];
+    out[axes[1]] = f * glm::dmat3(eulerToMatrix(outer, order))[axes[1]];
+    out[axes[0]] = f * glm::dmat3(eulerToMatrix(outerTwo, order))[axes[0]];
+    return out;
+}
+
+void rotateChannelsBy(Graph& g, const std::vector<NodeId>& ids, const glm::dvec3& degrees)
+{
+    LILA_ZONE();
+
+    for (NodeId id : topLevel(g, ids))
+        g.setValue({id, Transform::kRotate}, g.keepLocked({id, Transform::kRotate}, v3(g.node(id), Transform::kRotate) + degrees));
+}
+
 void rotateBy(Graph& g, const std::vector<NodeId>& ids, const glm::dquat& rotation, Space space)
 {
     LILA_ZONE();

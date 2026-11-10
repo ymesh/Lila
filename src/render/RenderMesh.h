@@ -192,6 +192,8 @@ enum class ShadingModel : uint32_t
     Clearcoat,
     Hair,
     Eye,
+    /** The base colour map is a lit sphere looked up by the view-space normal, unlit otherwise. Viewport only. */
+    Matcap,
 };
 
 /** The stylised models' inputs (colours linear). Each model reads only its own group; see scene::material for meanings. */

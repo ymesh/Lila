@@ -39,6 +39,8 @@ public:
         kStretch,
         kMaxStretch,
         kStretchFactor,
+        kInCurve,
+        kRoll,
         kSlots, // kMaxJoints * kSlotSize: rest layout, solvedRotate and the joint's IK limits
         kSlotSize = 13,
         kCount = kSlots + kMaxJoints * kSlotSize,
@@ -75,7 +77,7 @@ LILA_SCENE_API void refresh(Graph& g, NodeId handle);
 LILA_SCENE_API JointLimit limitOf(Graph& g, NodeId joint);
 } // namespace ik
 
-/** ikHandle type and the built-in solvers (ik2BoneSolver, ikFabrikSolver). Idempotent. */
+/** ikHandle type and the built-in solvers (ik2BoneSolver, ikFabrikSolver, ikSplineSolver). Idempotent. */
 LILA_SCENE_API void registerIkTypes();
 /** ikHandle. Idempotent. */
 LILA_SCENE_API void registerIkCommands();

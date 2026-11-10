@@ -15,14 +15,15 @@
     {"name": "layerRoots", "type": "Scatter", "params": {"density": 3.0, "length": 15.0, "seed": 1}, "ui": {"x": 240, "y": 360}},
     {"name": "layerShapes", "type": "Interpolate", "ui": {"x": 480, "y": 360}},
     {"name": "layerLonger", "type": "Transform", "params": {"scale": 1.12, "scaleRandom": 0.1}, "ui": {"x": 720, "y": 360}},
-    {"name": "wavyFrizz", "type": "Compound", "params": {"waveSize": 0.35, "waveCount": 2.0, "frizzShare": 0.15, "frizzSize": 0.15, "definition": {"graph": {"version": 1, "nodes": [{"name": "strands", "type": "Input", "params": {"name": "strands", "type": "Strands"}, "ui": {"x": 0, "y": 0}}, {"name": "waves", "type": "Noise", "params": {"amplitude": 0.35, "frequency": 2.0}, "ui": {"x": 240, "y": 0}}, {"name": "frizzNoise", "type": "Noise", "params": {"fraction": 0.15, "amplitude": 0.15, "frequency": 9.0, "octaves": 1, "seed": 1}, "ui": {"x": 480, "y": 0}}], "connections": [{"from": "strands", "to": "waves", "input": "strands"}, {"from": "waves", "to": "frizzNoise", "input": "strands"}], "output": "frizzNoise"}, "inputs": [{"name": "strands", "type": "Strands"}], "expose": {"waveSize": "waves.amplitude", "waveCount": "waves.frequency", "frizzShare": "frizzNoise.fraction", "frizzSize": "frizzNoise.amplitude"}}}, "ui": {"x": 960, "y": 360}},
     {"name": "mergeLayers", "type": "Merge", "ui": {"x": 1200, "y": 0}},
     {"name": "lightCull", "type": "Cull", "params": {"keep": 0.33}, "ui": {"x": 1200, "y": 180}},
     {"name": "pickLook", "type": "Switch", "params": {"index": 0}, "ui": {"x": 1440, "y": 0}},
     {"name": "width", "type": "Width", "params": {"width": 0.007, "profile": [[0, 1], [0.75, 0.75], [1, 0.25]]}, "ui": {"x": 1920, "y": 0}},
     {"name": "color", "type": "HairColor", "params": {"melanin": 0.7, "redness": 0.15, "melaninRandom": 0.08}, "ui": {"x": 1680, "y": 0}},
     {"name": "resample", "type": "Resample", "params": {"segments": 16}, "ui": {"x": 2160, "y": 0}},
-    {"name": "output", "type": "Output", "ui": {"x": 2400, "y": 0}}
+    {"name": "output", "type": "Output", "ui": {"x": 2400, "y": 0}},
+    {"name": "wavyFrizz/waves", "type": "Noise", "params": {"amplitude": 0.35, "frequency": 2.0}, "ui": {"x": 1000, "y": 400}},
+    {"name": "wavyFrizz/frizzNoise", "type": "Noise", "params": {"fraction": 0.15, "amplitude": 0.15, "frequency": 9.0, "octaves": 1, "seed": 1}, "ui": {"x": 1040, "y": 440}}
   ],
   "connections": [
     {"from": "scalp", "to": "scatter", "input": "scalp"},
@@ -35,16 +36,17 @@
     {"from": "guides", "to": "layerShapes", "input": "guides"},
     {"from": "scalp", "to": "layerShapes", "input": "scalp"},
     {"from": "layerShapes", "to": "layerLonger", "input": "strands"},
-    {"from": "layerLonger", "to": "wavyFrizz", "input": "strands"},
     {"from": "clump", "to": "mergeLayers", "input": "a"},
-    {"from": "wavyFrizz", "to": "mergeLayers", "input": "b"},
     {"from": "width", "to": "resample", "input": "strands"},
     {"from": "resample", "to": "output", "input": "strands"},
     {"from": "clump", "to": "lightCull", "input": "strands"},
     {"from": "mergeLayers", "to": "pickLook", "input": "a"},
     {"from": "lightCull", "to": "pickLook", "input": "b"},
     {"from": "pickLook", "to": "color", "input": "strands"},
-    {"from": "color", "to": "width", "input": "strands"}
+    {"from": "color", "to": "width", "input": "strands"},
+    {"from": "layerLonger", "to": "wavyFrizz/waves", "input": "strands"},
+    {"from": "wavyFrizz/waves", "to": "wavyFrizz/frizzNoise", "input": "strands"},
+    {"from": "wavyFrizz/frizzNoise", "to": "mergeLayers", "input": "b"}
   ],
   "output": "output",
   "backdrops": [

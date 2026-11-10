@@ -348,8 +348,11 @@ struct KitParams
     double sink = 0.1;
     /** A piece hanging more than this above the ground is floating, cm. */
     double floatTolerance = 25.0;
-    /** Deepest a piece may go into the ground at its back, as a fraction of its depth. */
-    double maxPenetration = 0.6;
+    /**
+     * Deepest the cliff face behind a piece may reach into it, as a fraction of its depth: past 1 its front is in the
+     * ground too. Without depthOf, the share of its samples under the ground.
+     */
+    double maxPenetration = 0.8;
     /**
      * How deep, cm, a piece's back sits in the ground: how far its hull (its samples, placed, in the ground's space, the
      * sunk base raised to the sink depth above its foot) must move along its outward facing to clear it. A physics check

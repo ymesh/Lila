@@ -331,6 +331,140 @@ StrandsPtr clumpedFur() {
     return GroomEvaluator(d).evaluate(1.0f, 0.0);
 }
 
+TEST(GameExports, CardsRoundTripThroughGlb) {
+    const StrandsPtr s = clumpedFur();
+    auto plane = std::make_shared<ScalpMesh>(*test::makePlane(16));
+    std::vector<ScalpMesh::UV> uvs;
+    for (const auto& t : plane->triangles()) {
+        for (const std::int32_t i : t) uvs.push_back({plane->points()[static_cast<std::size_t>(i)].x, plane->points()[static_cast<std::size_t>(i)].z});
+    }
+    plane->setCornerUVs(uvs);
+    CardSettings cardSettings;
+    cardSettings.widthSegments = 2;
+    const CardMesh cards = buildCards(*s, plane.get(), cardSettings);
+    ASSERT_GT(cards.cards.size(), 4u);
+    CardBakeSettings bake;
+    bake.size = 64;
+    bake.scalp = plane.get();
+    const CardTextures textures = bakeCardTextures(*s, cards, bake);
+    ScalpBakeSettings scalpBake;
+    scalpBake.size = 32;
+    const ScalpTextures scalpTextures = bakeScalpTextures(*s, *plane, scalpBake);
+
+    GltfDocument doc;
+    doc.rootName = "hair";
+    CardGltfSettings settings;
+    settings.name = "hair_cards";
+    settings.roughness = 0.35f;
+    const int mesh = addCardsToGltf(doc, cards, textures, settings);
+    CardGltfSettings capSettings = settings;
+    capSettings.name = "hair_scalpCap";
+    capSettings.rootToTip = false;
+    addScalpCapToGltf(doc, *plane, scalpTextures, 0.01f, capSettings);
+    EXPECT_EQ(mesh, 0);
+    const Glb g = parseGlb(encodeGlb(doc));
+    validate(g);
+    const json& d = g.doc;
+
+    // One node per mesh under the root; the cards mesh holds every card vertex.
+    ASSERT_EQ(d["meshes"].size(), 2u);
+    EXPECT_EQ(d["meshes"][0]["name"], "hair_cards");
+    EXPECT_EQ(d["meshes"][1]["name"], "hair_scalpCap");
+    EXPECT_EQ(d["nodes"].back()["name"], "hair");
+    EXPECT_EQ(d["nodes"].back()["children"].size(), 2u);
+    EXPECT_EQ(d["scenes"][0]["nodes"], json::array({d["nodes"].size() - 1}));
+    const json& p = d["meshes"][0]["primitives"][0];
+    const json& attributes = p["attributes"];
+    for (const char* name : {"POSITION", "NORMAL", "TANGENT", "TEXCOORD_0", "TEXCOORD_1"}) ASSERT_TRUE(attributes.contains(name)) << name;
+    const std::size_t n = cards.vertexCount();
+    EXPECT_EQ(d["accessors"][attributes["POSITION"].get<int>()]["count"], n);
+    const std::vector<std::uint32_t> indices = indicesOf(g, p["indices"]);
+    EXPECT_EQ(indices.size(), cards.quads.size() / 4 * 6);  // two triangles per quad
+    // Meters (x 0.01), Y up as Maya's; V flipped into glTF's orientation.
+    const std::vector<float> positions = floatsOf(g, attributes["POSITION"]);
+    const std::vector<float> uv0 = floatsOf(g, attributes["TEXCOORD_0"]);
+    const std::vector<float> uv1 = floatsOf(g, attributes["TEXCOORD_1"]);
+    for (std::size_t i = 0; i < n; ++i) {
+        EXPECT_NEAR(positions[3 * i + 1], cards.positions[i].y * 0.01f, 1e-7f);
+        EXPECT_FLOAT_EQ(uv0[2 * i], cards.u[i]);
+        EXPECT_FLOAT_EQ(uv0[2 * i + 1], 1.0f - cards.v[i]);
+        EXPECT_GE(uv1[2 * i], 0.0f);
+        EXPECT_LE(uv1[2 * i], 1.0f);
+        EXPECT_GE(uv1[2 * i + 1], 0.0f);
+        EXPECT_LE(uv1[2 * i + 1], 1.0f);
+    }
+    // Each card's tint (its own strands' color over its shared texture's) as _TINT, not COLOR_0
+    // (which viewers would multiply the base color by as it is).
+    ASSERT_TRUE(attributes.contains("_TINT"));
+    EXPECT_FALSE(attributes.contains("COLOR_0"));
+    const std::vector<float> tints = floatsOf(g, attributes["_TINT"]);
+    ASSERT_EQ(tints.size(), 3 * n);
+    for (std::size_t i = 0; i < 3 * n; ++i) EXPECT_FLOAT_EQ(tints[i], cards.tints[i / 3][i % 3]);
+    // TEXCOORD_1: the unique layout the world-space AO is baked in (every card its own cell, none
+    // shared or mirrored), V flipped as TEXCOORD_0's.
+    {
+        CardMesh unique = cards;
+        layoutCardsUnique(unique, unique.padding);
+        for (std::size_t i = 0; i < n; ++i) {
+            EXPECT_FLOAT_EQ(uv1[2 * i], unique.u[i]);
+            EXPECT_FLOAT_EQ(uv1[2 * i + 1], 1.0f - unique.v[i]);
+        }
+    }
+    // Triangles face the way their normals do.
+    const std::vector<float> normals = floatsOf(g, attributes["NORMAL"]);
+    auto vec = [](const std::vector<float>& a, std::size_t i) { return Vec3f(a[3 * i], a[3 * i + 1], a[3 * i + 2]); };
+    for (std::size_t t = 0; t < indices.size(); t += 3) {
+        const Vec3f a = vec(positions, indices[t]);
+        const Vec3f face = (vec(positions, indices[t + 1]) - a).cross(vec(positions, indices[t + 2]) - a);
+        const Vec3f nn = vec(normals, indices[t]) + vec(normals, indices[t + 1]) + vec(normals, indices[t + 2]);
+        EXPECT_GE(face.dot(nn), 0.0f);
+    }
+    // The tangent frame: xyz along +U; the bitangent (cross(n, t) * w) up the card, root to tip.
+    const std::vector<float> tangents = floatsOf(g, attributes["TANGENT"]);
+    const CardMesh::Card& card = cards.cards.front();
+    const std::size_t v0 = card.firstVertex;
+    const std::size_t up = v0 + static_cast<std::size_t>(card.across + 1);  // the next station
+    const Vec3f bitangent = vec(normals, v0).cross(Vec3f(tangents[4 * v0], tangents[4 * v0 + 1], tangents[4 * v0 + 2])) * tangents[4 * v0 + 3];
+    EXPECT_GT(bitangent.dot(vec(positions, up) - vec(positions, v0)), 0.0f);
+
+    // The material: masked, two-sided, the look's roughness, textures from the bake.
+    const json& material = d["materials"][p["material"].get<int>()];
+    EXPECT_EQ(material["alphaMode"], "MASK");
+    EXPECT_FLOAT_EQ(material["alphaCutoff"].get<float>(), 0.5f);
+    EXPECT_EQ(material["doubleSided"], true);
+    EXPECT_FLOAT_EQ(material["pbrMetallicRoughness"]["roughnessFactor"].get<float>(), 0.35f);
+    EXPECT_FLOAT_EQ(material["pbrMetallicRoughness"]["metallicFactor"].get<float>(), 0.0f);
+    EXPECT_EQ(material["occlusionTexture"]["index"], material["pbrMetallicRoughness"]["metallicRoughnessTexture"]["index"]);
+    ASSERT_TRUE(material.contains("normalTexture"));  // the strands' normal, glTF's green
+    EXPECT_NE(material["normalTexture"]["index"], material["pbrMetallicRoughness"]["baseColorTexture"]["index"]);
+    EXPECT_EQ(material["extras"]["groomlab"]["kind"], "cards");
+    const int baseColor = material["pbrMetallicRoughness"]["baseColorTexture"]["index"];
+    const json& image = d["images"][d["textures"][baseColor]["source"].get<int>()];
+    EXPECT_EQ(image["name"], "hair_cards_BaseColor");
+    const json& view = d["bufferViews"][image["bufferView"].get<int>()];
+    int w = 0, h = 0;
+    const std::vector<int> rgba = decodePng(g.bin.data() + view["byteOffset"].get<std::size_t>(), view["byteLength"], &w, &h, 4, "base");
+    ASSERT_EQ(w, 64);
+    ASSERT_EQ(h, 64);
+    for (std::size_t i = 0; i < 64u * 64u; ++i) {
+        ASSERT_EQ(rgba[4 * i], textures.color[3 * i]);
+        ASSERT_EQ(rgba[4 * i + 3], textures.coverage[i]);  // coverage in alpha
+    }
+    const int orm = material["occlusionTexture"]["index"];
+    const json& ormView = d["bufferViews"][d["images"][d["textures"][orm]["source"].get<int>()]["bufferView"].get<int>()];
+    const std::vector<int> ao = decodePng(g.bin.data() + ormView["byteOffset"].get<std::size_t>(), ormView["byteLength"], &w, &h, 3, "orm");
+    for (std::size_t i = 0; i < 64u * 64u; ++i) {
+        ASSERT_EQ(ao[3 * i], textures.occlusion[i]);  // R: occlusion
+        ASSERT_EQ(ao[3 * i + 1], 255);                 // G, B: the factors as they are
+    }
+
+    // The hair cap: the scalp lifted along its normal (+Y on the plane), blended, one texture.
+    const json& cap = d["meshes"][1]["primitives"][0];
+    const std::vector<float> capPoints = floatsOf(g, cap["attributes"]["POSITION"]);
+    for (std::size_t i = 1; i < capPoints.size(); i += 3) EXPECT_NEAR(capPoints[i], 0.01f * 0.01f, 1e-7f);
+    EXPECT_EQ(d["materials"][cap["material"].get<int>()]["alphaMode"], "BLEND");
+    EXPECT_EQ(d["accessors"][cap["attributes"]["POSITION"].get<int>()]["count"], plane->pointCount());  // one UV per point here
+}
 
 TEST(GameExports, ScalpCapIsTheSameForEveryHost) {
     // The cap every host's cards export writes (gltf_writer.h): Maya's resolution (its own, else
@@ -647,6 +781,17 @@ std::uint64_t texturesHash(const CardTextures& t) {
     return h;
 }
 
+TEST(Budget, CardBakeOfAHundredThousandStrandsAt2048) {
+    const GameCardsGroom& g = gameCardsGroom();
+    ASSERT_GT(g.strands->strandCount(), 90000u);
+    ASSERT_GT(g.cards->cards.size(), 100u);
+    const auto t0 = std::chrono::steady_clock::now();
+    const CardTextures t = bakeGameCards();
+    const double ms = millisecondsSince(t0);
+    std::printf("[ budget ] card bake: %zu strands, %zu cards, 2048 atlas: %.0f ms (textures %016llx)\n",
+                g.strands->strandCount(), g.cards->cards.size(), ms, static_cast<unsigned long long>(texturesHash(t)));
+    EXPECT_EQ(t.size, 2048);
+}
 
 // Unity's seven card maps (groomLabBakeCards -layout unity) at 2048, as PNGs.
 std::vector<std::pair<int, std::vector<std::uint8_t>>> unityMaps(const CardTextures& t) {

@@ -184,6 +184,8 @@ struct Builder
         return at[key] = add(p, n, s, u, c);
     }
     std::map<std::tuple<long long, long long, long long>, Index> at;
+    /** Per face and point: a normal for that one corner, where faces meeting at a point need their own. */
+    std::map<std::pair<Index, Index>, glm::dvec3> cornerNormal;
 
     Mesh build() const
     {
@@ -201,6 +203,11 @@ struct Builder
                 u[c] = uv[p];
                 col[c] = glm::vec4(color[p], side[p]);
             }
+        for (const auto& [key, normal] : cornerNormal)
+            if (key.first < m.numFaces())
+                for (Index c : m.faceCorners(key.first))
+                    if (m.cornerPoint(c) == key.second)
+                        n[c] = glm::vec3(normal);
         auto sd = m.pointAttrs().getOrAdd<float>("side");
         for (Index p = 0; p < m.pointCapacity(); ++p)
             sd[p] = side[p];
@@ -556,7 +563,7 @@ void cornerCap(Builder& b, const OuterCorner& oc, const std::vector<Index>& endA
     for (int k = 0; k <= fan; ++k)
     {
         const double s = double(k) / fan;
-        rows.push_back({oc.c, slerpDir(oc.tIn, oc.tOut, s), slerpDir(oc.nIn, oc.nOut, s), nc, 0.0, k > 0 && k < fan});
+        rows.push_back({oc.c, slerpDir(oc.tIn, oc.tOut, s), slerpDir(oc.nIn, oc.nOut, s), nc, 0.0, true});
     }
     for (int k = 1; k <= nb; ++k)
     {
@@ -564,6 +571,7 @@ void cornerCap(Builder& b, const OuterCorner& oc, const std::vector<Index>& endA
         rows.push_back({p, oc.tOut, oc.nOut, groundNormal(p)});
     }
     std::vector<std::vector<Index>> ids;
+    std::vector<glm::dvec3> wallNormals;
     std::vector<ProfilePoint> profile;
     for (size_t r = 0; r < rows.size(); ++r)
     {
@@ -571,10 +579,12 @@ void cornerCap(Builder& b, const OuterCorner& oc, const std::vector<Index>& endA
         if ((first && endA.size() >= 2) || (last && endB.size() >= 2))
         {
             ids.push_back(first ? endA : endB);
+            wallNormals.push_back(b.nrm[ids.back()[0]]);
             continue;
         }
         if (!profileRow(rows[r], wall, floor, o, profile))
             return;
+        wallNormals.push_back(profile.front().n);
         std::vector<Index>& row = ids.emplace_back();
         for (const ProfilePoint& q : profile)
             row.push_back(b.shared(q.p, q.n, q.side, glm::vec2(0.0f, float(q.side)), groundColor(ground, layers, o, q.p)));
@@ -587,7 +597,17 @@ void cornerCap(Builder& b, const OuterCorner& oc, const std::vector<Index>& endA
     const glm::dvec3 a0 = b.pts[r1[0]], a1 = b.pts[r1[1]], c0 = b.pts[r2[0]] == a0 ? b.pts[r2[1]] : b.pts[r2[0]];
     const bool flip = glm::dot(glm::cross(a1 - a0, c0 - a0), b.nrm[r1[1]]) < 0.0;
     for (size_t r = 0; r + 1 < ids.size(); ++r)
+    {
+        const Index firstFace = Index(b.sizes.size());
         stitchRows(b, ids[r], ids[r + 1], flip);
+        // The fan's rows all start at the wall's edge, one point: each face there takes its own rows' wall normal.
+        for (Index f = firstFace; f < Index(b.sizes.size()); ++f)
+        {
+            b.cornerNormal[{f, ids[r + 1][0]}] = wallNormals[r + 1];
+            b.cornerNormal[{f, ids[r][0]}] =
+                ids[r][0] == ids[r + 1][0] ? unitTo(wallNormals[r] + wallNormals[r + 1], wallNormals[r]) : wallNormals[r];
+        }
+    }
 }
 
 /** The object's ground skirt by boolean union with a fillet, cut back to the fillet band, outer corners capped round. False (with why) when it fails. */

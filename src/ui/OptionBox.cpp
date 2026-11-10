@@ -869,7 +869,8 @@ void install()
                                {"rig.parentConstraint", "parentConstraint"}, {"rig.pointConstraint", "pointConstraint"},
                                {"rig.orientConstraint", "orientConstraint"}, {"rig.aimConstraint", "aimConstraint"}, {"rig.pin", "pin"},
                                {"rig.bakePin", "bakePin"}, {"rig.splineChain", "splineChain"}, {"rig.hoseLimb", "hoseLimb"},
-                               {"rig.hoseFingers", "hoseFingers"}})
+                               {"rig.hoseFingers", "hoseFingers"}, {"rig.softNet", "softNet"}, {"rig.softNetLimbStations", "softNetLimbStations"},
+                               {"rig.mirrorSoftNetKnots", "mirrorSoftNetKnots"}, {"rig.softNetUnreal", "softNetUnreal"}})
         actions::bindCommand(id, command);
     actions::bindCommand("rig.bindSkinHeatmap", "skinCluster", {{"method", "heatmap"}});
 }

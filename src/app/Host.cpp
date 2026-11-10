@@ -7,6 +7,7 @@
 #include "batch/BatchRunner.h"
 #include "blend/Blend.h"
 #include "clay/ClayNodes.h"
+#include "layout/LayoutNode.h"
 #include "groom/GroomNodes.h"
 #include "core/CrashUpload.h"
 #include "core/Events.h"
@@ -176,6 +177,7 @@ void startCore()
     curve::registerTypes();
     tex::registerTypes();
     clay::registerTypes();
+    layout::registerTypes();
     groom::registerTypes();
     rigmath::registerTypes();
     scene::registerCommands();
@@ -194,6 +196,7 @@ void startCore()
     retopo::registerCommands();
     curve::registerCommands();
     clay::registerCommands();
+    layout::registerCommands();
     groom::registerCommands();
     sculpt::registerCommands();
     brush::presets::registerCommands();

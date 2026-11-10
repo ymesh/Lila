@@ -438,9 +438,11 @@ TEST_CASE("every node type is known to relocateScene or deliberately refused")
     curve::registerTypes();
     tex::registerTypes();
     bake::registerTypes();
-    // Types that build world-space geometry from world-space curves, or hold an edit in progress: relocateScene refuses
-    // scenes holding them rather than guess.
-    const std::set<std::string> refused = {"polyEdgeToCurve", "skeletonEdit", "relocateTestWorldThing"};
+    // Types that build world-space geometry from world-space curves, hold an edit in progress, or may hold a world-space
+    // matrix of their own (the matrix math nodes): relocateScene refuses scenes holding them rather than guess.
+    const std::set<std::string> refused = {"polyEdgeToCurve", "skeletonEdit", "relocateTestWorldThing", "addMatrix", "aimMatrix", "blendMatrix",
+                                           "composeMatrix", "decomposeMatrix", "fourByFourMatrix", "holdMatrix", "inverseMatrix", "multMatrix",
+                                           "pickMatrix", "transposeMatrix", "wtAddMatrix"};
     std::vector<std::string> unknown;
     for (const NodeType* t : types::all())
         if (!relocate::handles(t->name) && !refused.contains(t->name))

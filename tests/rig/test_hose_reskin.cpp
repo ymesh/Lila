@@ -166,3 +166,37 @@ TEST_CASE("hose reskin: the command does for an existing hose what hoseLimb does
         CHECK(glm::length(back[i] - rest[i]) < 1e-4);
     CHECK_THROWS_AS(run("hoseReskin", {{"args", {"elbow"}}}), CommandError);
 }
+
+TEST_CASE("bend-bone CVs on spline chains and hose limbs: a spline chain gains a curve point with a control, a hose answers with its bend control")
+{
+    curve::registerTypes();
+    if (!ops::find("curve"))
+        curve::registerCommands();
+    run("newScene");
+    run("autoKeyframe", {{"state", false}});
+    run("joint", {{"position", v3(0, 0, 0)}, {"name", "tail_01"}});
+    for (int i = 2; i <= 6; ++i)
+        run("joint", {{"position", v3(0, 0, -10.0 * (i - 1))}, {"name", "tail_0" + std::to_string(i)}});
+    run("splineChain", {{"args", {"tail_01", "tail_06"}}, {"controls", 3}});
+    const std::string cv = run("bendBoneCV", {{"args", {"tail_03"}}}).get<std::string>();
+    // The new control sits halfway along tail_03's bone, and moving it bows the chain there.
+    const auto at = run("xform", {{"args", {cv}}, {"query", true}, {"worldSpace", true}, {"translation", true}});
+    CHECK(at[2].get<double>() == doctest::Approx(-25.0).epsilon(0.05));
+    run("move", {{"args", {cv}}, {"by", v3(6, 0, 0)}});
+    const auto j = run("xform", {{"args", {"tail_04"}}, {"query", true}, {"worldSpace", true}, {"translation", true}});
+    CHECK(j[0].get<double>() > 1.0);
+
+    skinnedArm();
+    const std::string hose = run("hoseLimb", {{"args", {"shoulder", "wrist"}}, {"joints", 8}}).get<std::string>();
+    const std::string bend = run("bendBoneCV", {{"args", {"elbow"}}}).get<std::string>();
+    CHECK(run("listConnections", {{"args", {bend}}, {"destination", true}}).dump().find(hose) != std::string::npos);
+}
+
+TEST_CASE("bakeBendBones on a hose-skinned mesh: already joints, so it only runs the Unreal check")
+{
+    const std::string mesh = skinnedArm();
+    run("hoseLimb", {{"args", {"shoulder", "wrist"}}, {"joints", 8}});
+    const auto r = run("bakeBendBones", {{"args", {mesh}}});
+    CHECK(r["alreadyJoints"].get<bool>());
+    CHECK(r["unrealCheck"]["mismatches"].empty());
+}

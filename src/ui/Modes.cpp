@@ -186,7 +186,8 @@ bool activate(const std::string& id, bool restoring)
                 layoutBeforeModes() = layouts::current();
             applyLayout(id, next->layout);
         }
-        else if (!oldLayout.empty() && !layoutBeforeModes().empty())
+        // Only while the old mode's layout is still up: leaving because another layout was picked keeps that one.
+        else if (!oldLayout.empty() && !layoutBeforeModes().empty() && layouts::current() == oldLayout)
             applyLayout(id, layoutBeforeModes());
     }
     if (!next->shelf.empty())

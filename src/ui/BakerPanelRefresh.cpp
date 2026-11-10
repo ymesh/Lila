@@ -60,7 +60,7 @@ QString lintMetric(const LintIssue& li)
     if (li.check == "uvMissing")
         return num("count") >= 0 ? n("count", "zero-area tris") : QString("no uv0");
     if (li.check == "mirroredTangents")
-        return num("islands") >= 0 ? n("islands", "folded islands") : n("count", "tris");
+        return num("islands") >= 0 ? n("islands", "folded islands") : num("splitFaces") >= 0 ? n("splitFaces", "split faces") : n("count", "tris");
     if (li.check == "uvOverlap" && d.contains("other") && d["other"].is_string())
         return "with " + qs(shortName(d["other"].get<std::string>()));
     if (li.check == "texelDensity" && num("median") > 0)
@@ -333,6 +333,9 @@ void BakerPanel::refresh()
 
     mUpdating = true;
     refreshProjects();
+    updateLintWatch();
+    if (mProject != mLintedProject)
+        scheduleLint();
     refreshTargets();
     refreshGroups();
     refreshDetails();

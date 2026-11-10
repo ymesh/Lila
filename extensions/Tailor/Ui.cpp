@@ -175,6 +175,7 @@ void registerUi(ext::Context& ctx)
                        .command = "tailorClearBrush", .call = nlohmann::json::object()});
 
     registerPatternEditor(ctx);
+    registerToolkit(ctx);
     registerGrabTool(ctx);
     registerAnimation(ctx);
     menus::addMenu(ctx, {.id = "Tailor", .title = "Tailor", .before = "Rig", .sets = {"Cloth"}});
@@ -182,7 +183,7 @@ void registerUi(ext::Context& ctx)
     for (const char* a : {"tailor.mannequin", "tailor.createBlock", "tailor.drawPanel", "tailor.importGarmentCode", "", "tailor.simulate", "tailor.setFabric",
                           "tailor.sew", "tailor.autoSew", "tailor.check", "window.tailorPatternEditor", "", "tailor.live", "tailor.stopLive", "tailor.grab",
                           "tailor.pin", "tailor.fold", "tailor.shrink", "tailor.steam", "tailor.clearBrush", "", "tailor.freeze", "tailor.unfreeze", "", "tailor.addStitching",
-                          "tailor.bake", "layout.apply.Tailor"})
+                          "tailor.bake", "window.tailorToolkit", "layout.apply.Tailor"})
     {
         if (*a)
             menus::addItem(ctx, {.id = std::string("tailor.menu.") + a, .menu = "Tailor", .action = a});
@@ -212,9 +213,11 @@ void registerUi(ext::Context& ctx)
     layouts::add(ctx, "Tailor",
                  {{"version", 1},
                   {"preset",
-                   {{"open", {"outliner", "channelBox", "attributeEditor", "displayLayers", "tailorPatternEditor", "timeSlider"}},
-                    {"raise", {"tailorPatternEditor"}},
-                    {"size", {{"tailorPatternEditor", {{"width", 0.42}}}}}}},
+                   {{"open", {"outliner", "channelBox", "attributeEditor", "displayLayers", "tailorPatternEditor", "tailorToolkit", "timeSlider"}},
+                    {"raise", {"tailorPatternEditor", "tailorToolkit", "channelBox"}},
+                    {"size", {{"tailorPatternEditor", {{"width", 0.31}}}}},
+                    // The pattern takes its own full-height column beside the viewport, the outliner and inspector beyond it.
+                    {"columns", nlohmann::json::array({{"tailorPatternEditor"}, {"outliner", "channelBox"}})}}},
                   {"viewport", {{"quad", false}, {"camera", "persp"}}},
                   {"menuSet", "Cloth"},
                   {"shelf", {{"current", "Tailor"}}}});

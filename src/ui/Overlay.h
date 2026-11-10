@@ -44,6 +44,22 @@ public:
     void fill(const std::vector<QPointF>& pts, const glm::vec4& color);
     void rect(QRectF r, const glm::vec4& color);
     void disc(QPointF center, float radius, const glm::vec4& color, int segments = 20);
+    /**
+     * A ring segment between radii r0 and r1, from one screen angle to another in degrees (0 right, 90 down), shaded
+     * from `inner` at r0 to `outer` at r1. `corner` rounds its four corners (half the thickness gives round ends); every
+     * edge fades out over `feather` px so it stays smooth without multisampling. A span of 360 or more is a full ring,
+     * and r0 = 0 a disc.
+     */
+    void sector(QPointF center, double r0, double r1, double fromDeg, double toDeg, const glm::vec4& inner, const glm::vec4& outer,
+                double corner = 0.0, float feather = 1.0f);
+    /** A feathered arc stroke of `width` px along radius r; round ends when `roundEnds`. */
+    void arc(QPointF center, double r, double fromDeg, double toDeg, float width, const glm::vec4& color, bool roundEnds = false);
+    /** A straight stroke with feathered sides and square ends. */
+    void smoothLine(QPointF a, QPointF b, float width, const glm::vec4& color, float feather = 1.0f);
+    /** A feathered filled circle. */
+    void smoothDisc(QPointF center, double radius, const glm::vec4& color, float feather = 1.0f);
+    /** A soft round shadow: `alpha` black inside radius, fading to nothing over `spread` px beyond it. */
+    void softShadow(QPointF center, double radius, double spread, float alpha);
 
     enum Align
     {

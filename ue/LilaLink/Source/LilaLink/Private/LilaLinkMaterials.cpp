@@ -882,6 +882,12 @@ UMaterialInterface* Resolve(FName Slot, const FMaterialRequest& R, FProjectMater
 		OutHow = TEXT("default");
 		return UMaterial::GetDefaultMaterial(MD_Surface);
 	}
+	// Slots Lila names after one of its own materials (LilaSkirtBlend, LilaSeamStrip) take that master once it is built.
+	if (UMaterialInterface* Master = MaterialAt(MastersFolder, TEXT("M_") + Name))
+	{
+		OutHow = TEXT("master");
+		return Master;
+	}
 	for (const FString& Folder : {R.MaterialFolder, R.AssetFolder})
 	{
 		if (UMaterialInterface* Found = MaterialAt(Folder, Name))

@@ -63,6 +63,41 @@ struct PointDraw
     float selectedSize = 6.0f;
 };
 
+/**
+ * How hair strands are laid out, kept on the GPU while the strands only move: per segment its first point and its strand,
+ * per strand its first point, point count, thinning rank (float bits: the strand's place in its clump's thinning order, 0
+ * to 1, drawn while below the draw's keep) and sRGB colour (R in the low byte).
+ */
+struct StrandLayout
+{
+    std::vector<glm::uvec2> segments;
+    std::vector<glm::uvec4> strands;
+    size_t points = 0;
+    uint64_t key = nextResourceKey();
+};
+
+/** Hair strands: their points (xyz, world width) on a layout. A new cloud on the same layout uploads only the points. */
+struct StrandCloud
+{
+    std::vector<glm::vec4> points;
+    std::shared_ptr<const StrandLayout> layout;
+    uint64_t key = nextResourceKey();
+};
+
+/**
+ * Strands drawn as camera-facing ribbons with hair shading. Thinner than a pixel they draw a pixel wide and dither to
+ * their coverage; at a distance only the strands ranked under `keep` draw, widened by `widthScale` to cover the same.
+ */
+struct StrandDraw
+{
+    std::shared_ptr<const StrandCloud> cloud;
+    glm::mat4 world{1.0f};
+    float keep = 1.0f;
+    float widthScale = 1.0f;
+    /** Highlight colour (linear) mixed in for a selected or preselected node; black for none. */
+    glm::vec3 tint{0.0f};
+};
+
 /** Pixel-space triangle vertex for the 2D overlay (gizmos, HUD, text). */
 struct OverlayVertex
 {
@@ -322,14 +357,22 @@ struct FrameState
     bool xray = false;            // shaded meshes see-through
     /** Materials shade with a 50% grey base colour; their maps' alpha, normals, ORM, emission and shading models still apply. */
     bool greyBaseColor = false;
-    /** Shaded lighting: the environment (falls back to the studio rig while none is loaded), the studio rig, or flat. */
+    /**
+     * Shaded lighting: the environment (falls back to the studio rig while none is loaded), the studio rig, flat, or the
+     * sculpt rig (one grazing key and little ambient, so surface form reads).
+     */
     enum class Lighting
     {
         Environment,
         Studio,
-        Flat
+        Flat,
+        Sculpt
     };
     Lighting lighting = Lighting::Environment;
+    /** Degrees the camera-relative studio and sculpt rigs turn around the view axis; 0 keys from above left. */
+    float rigRotation = 0.0f;
+    /** Degrees the sculpt rig's key sits off the view direction: 0 lights from the camera, 90 grazes. */
+    float rigTilt = 45.0f;
 
     // Image-based lighting. An empty path is the built-in neutral studio; changing it loads the new HDRI off-thread.
     std::string envPath;
@@ -401,6 +444,7 @@ struct FrameState
     float curveWidth = 2.0f, curveBoldWidth = 3.0f, curveHaloWidth = 4.0f, curveHaloBoldWidth = 5.0f;
     std::vector<LineVertex> tris3d;     // world-space triangle list, blended and biased toward the camera, no depth write
     std::vector<PointDraw> points;      // component dots, drawn after tris3d
+    std::vector<StrandDraw> strands;    // hair, drawn in the scene pass after the meshes
     std::vector<LineVertex> linesXray;  // world-space lines with no depth test, over every surface (x-ray joints)
     /** Debug drawing (debug/DebugDraw.h), shared between frames while it doesn't change. Triangles are blended and depth tested. */
     std::shared_ptr<const std::vector<LineBatch>> debugLines;

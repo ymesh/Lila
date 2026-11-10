@@ -30,6 +30,7 @@
     { "separator": true },
     { "label": "Assign New Material", "action": "material.assignNew" },
     { "label": "Assign Existing Material", "children": { "overflow": [ { "insert": "materials" } ] } },
-    { "label": "Assign Default Material", "action": "material.assignDefault" }
+    { "label": "Assign Default Material", "action": "material.assignDefault" },
+    { "label": "Clear Texture Maps", "action": "material.clearTextures" }
   ]
 }

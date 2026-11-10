@@ -13,6 +13,7 @@
 #include "groomlab/display.h"
 #include "groomlab/follow_scalp.h"
 #include "groomlab/groom_file.h"
+#include "groom/GroomDisplay.h"
 #include "groom/GroomEvaluator.h"
 #include "groomlab/guide_hierarchy.h"
 #include "groomlab/random.h"
@@ -322,7 +323,98 @@ TEST(FollowScalp, MotionKeysShareTheRestEvaluation) {
     EXPECT_EQ(keys.evaluationCount(), runs) << "the graph ran once, on the rest pose";
 }
 
+TEST(FollowScalp, AHostCarryingTheStrandsGetsThemAtRestAndTheSameBounds) {
+    // GroomEvaluator::Request::hostCarries (Maya's viewport carrying on the GPU): the strands at rest with what
+    // carries them; placed() the strands the session carries itself, the bounds holding theirs, and the
+    // strands' version moving with the scalp as theirs does.
+    GroomData data = followData(kLookGraph);
+    data.followScalp = true;
+    GroomEvaluator carried(data), handed(data);
+    GroomEvaluator::Request request;
+    GroomEvaluator::Request hosted = request;
+    hosted.hostCarries = true;
+    std::uint64_t version = 0, versionCarried = 0;
+    StrandsPtr rest;
+    for (const int frame : {2, 3, 3}) {
+        SCOPED_TRACE("frame " + std::to_string(frame));
+        carried.updateScalpPoints(deformedPoints(*data.scalp, frame));
+        handed.updateScalpPoints(deformedPoints(*data.scalp, frame));
+        const GroomEvaluator::Result& a = carried.evaluate(request);
+        const GroomEvaluator::Result& b = handed.evaluate(hosted);
+        EXPECT_FALSE(a.follow);
+        ASSERT_TRUE(b.follow);
+        EXPECT_EQ(b.follow->to(), handed.last().scalp);
+        if (rest) {
+            EXPECT_EQ(b.strands, rest);  // the one rest evaluation
+        }
+        rest = b.strands;
+        EXPECT_EQ(b.placed()->contentHash(), a.strands->contentHash());
+        EXPECT_EQ(b.placed(), b.placed());  // carried once
+        // The bounds hold the carried strands' (each strand's box at rest carried), hardly more.
+        EXPECT_TRUE(b.bounds.valid);
+        const float diagonal = (a.bounds.hi - a.bounds.lo).length();
+        for (int c = 0; c < 3; ++c) {
+            EXPECT_LE((&b.bounds.lo.x)[c], (&a.bounds.lo.x)[c]);
+            EXPECT_GE((&b.bounds.hi.x)[c], (&a.bounds.hi.x)[c]);
+            EXPECT_LT((&a.bounds.lo.x)[c] - (&b.bounds.lo.x)[c], 0.05f * diagonal);
+            EXPECT_LT((&b.bounds.hi.x)[c] - (&a.bounds.hi.x)[c], 0.05f * diagonal);
+        }
+        // The strands' version moves as the session carrying them itself moves it (with the scalp).
+        EXPECT_EQ(b.versions.strands != version, a.versions.strands != versionCarried);
+        version = b.versions.strands;
+        versionCarried = a.versions.strands;
+    }
+    // At rest nothing is handed on (nothing to carry).
+    handed.updateScalpPoints(data.scalp->points());
+    EXPECT_FALSE(handed.evaluate(hosted).follow);
+}
 
+TEST(FollowScalp, AHostCarryingInstancedStrandsDrawsTheInstancesWhereTheSessionPlacesThem) {
+    // Instances on the strands (Instance after the look, randomly turned ones too): the host still
+    // gets the strands at rest to carry, and the display places the instances on their strands
+    // carried, as where they sit on the strands the session carries itself. A scale (bent onto the
+    // skin) leaves the carry to the session.
+    std::string graph = kLookGraph;
+    const std::string tail = R"({"from": "width", "to": "output", "input": "strands"})";
+    graph.replace(graph.find(tail), tail.size(),
+                  R"({"from": "width", "to": "snow", "input": "strands"}, {"from": "snow", "to": "dust", "input": "strands"},
+                     {"from": "dust", "to": "output", "input": "strands"})");
+    const std::string lastNode = R"({"name": "output", "type": "Output"})";
+    graph.replace(graph.find(lastNode), lastNode.size(),
+                  R"({"name": "snow", "type": "Instance", "params": {"probability": 0.4, "tMin": 0.3, "scale": 0.05}},
+                     {"name": "dust", "type": "Instance", "params": {"probability": 0.2, "orient": "random", "seed": 2}},
+                     {"name": "output", "type": "Output"})");
+    GroomData data = followData(graph.c_str());
+    data.followScalp = true;
+    GroomEvaluator carried(data), handed(data);
+    GroomEvaluator::Request hosted;
+    hosted.hostCarries = true;
+    DisplaySettings settings;
+    settings.instances = true;
+    DisplayBuilder fromSession, fromHost;
+    for (const int frame : {2, 3}) {
+        SCOPED_TRACE("frame " + std::to_string(frame));
+        carried.updateScalpPoints(deformedPoints(*data.scalp, frame));
+        handed.updateScalpPoints(deformedPoints(*data.scalp, frame));
+        const GroomEvaluator::Result& a = carried.evaluate(GroomEvaluator::Request{});
+        const GroomEvaluator::Result& b = handed.evaluate(hosted);
+        ASSERT_TRUE(a.strands && a.strands->instances() && !a.strands->instances()->empty());
+        ASSERT_TRUE(b.follow) << "instances on the strands: still the host's to carry";
+        const DisplayItem& want = fromSession.update(lila::groom::displayInputs(a), settings).item(DisplayItemId::InstanceMarkers);
+        const DisplayItem& got = fromHost.update(lila::groom::displayInputs(b), settings).item(DisplayItemId::InstanceMarkers);
+        ASSERT_TRUE(want.geometry && got.geometry);
+        EXPECT_GT(want.vertexCount, 0u);
+        EXPECT_EQ(got.geometry->digest(), want.geometry->digest());
+    }
+    // A scale: the session carries (it bends onto the skin as it is now).
+    std::string scaled = graph;
+    const std::string snow = R"("type": "Instance", "params": {"probability": 0.4, "tMin": 0.3, "scale": 0.05})";
+    scaled.replace(scaled.find(snow), snow.size(), R"("type": "Scales")");
+    data.graphJson = scaled;
+    GroomEvaluator scales(data);
+    scales.updateScalpPoints(deformedPoints(*data.scalp, 2));
+    EXPECT_FALSE(scales.evaluate(hosted).follow);
+}
 
 TEST(FollowScalp, PosesInWorldSpaceKeepTheirPlace) {
     // Every guide posed where it is on the moved scalp (a simulation that followed the head
@@ -405,6 +497,104 @@ TEST(FollowScalp, ReadsTimeKnowsWhatMoves) {
     EXPECT_TRUE(session.readsTime());
 }
 
+TEST(FollowScalp, AStrandMeshNodeFollowsWithAFixedTopology) {
+    // A StrandMesh node between Clump and Noise: the output is as without it; its strands are the
+    // clumped ones at its density, thinned to maxStrands, carried with the scalp frame after frame:
+    // the same strands and point counts (one topology key), other points.
+    std::string graph = kLookGraph;
+    const std::string noiseNode = R"({"name": "noise", "type": "Noise", "params": {"amplitude": 0.03}},)";
+    graph.replace(graph.find(noiseNode), noiseNode.size(),
+                  R"({"name": "tubes", "type": "ToMesh", "params": {"density": 0.5, "maxStrands": 120, "sides": 5}},)" +
+                      noiseNode);
+    const std::string toNoise = R"({"from": "clump", "to": "noise", "input": "strands"})";
+    graph.replace(graph.find(toNoise), toNoise.size(),
+                  R"({"from": "clump", "to": "tubes", "input": "strands"}, {"from": "tubes", "to": "noise", "input": "strands"})");
+    // Its params go through the graph's JSON.
+    const GraphDocument doc = loadGraphJson(graph);
+    const GraphDocument again = loadGraphJson(saveGraphJson(doc));
+    const StrandMeshSettings settings = strandMeshSettings(again.graph.node(again.node("tubes")).params());
+    EXPECT_EQ(settings.options.sides, 5);
+    EXPECT_EQ(settings.options.style, StrandMeshOptions::Style::Tube);
+    EXPECT_FLOAT_EQ(settings.density, 0.5f);
+    EXPECT_EQ(settings.maxStrands, 120u);
+
+    GroomData data = followData(graph.c_str());
+    EXPECT_EQ(GroomEvaluator(data).evaluate(1.0f, 0.0)->contentHash(),
+              GroomEvaluator(followData(kLookGraph)).evaluate(1.0f, 0.0)->contentHash());  // handed on as they came
+    data.followScalp = true;
+    GroomEvaluator session(data);
+    std::uint64_t key = 0;
+    StrandsPtr last;
+    int lastFrame = 0;
+    for (const int frame : {2, 3, 3}) {
+        SCOPED_TRACE("frame " + std::to_string(frame));
+        session.updateScalpPoints(deformedPoints(*data.scalp, frame));
+        session.evaluate(GroomEvaluator::Request{});
+        const auto sources = session.evaluateStrandMeshes(frame / 24.0);
+        ASSERT_EQ(sources.size(), 1u);
+        EXPECT_EQ(sources[0].node, "tubes");
+        EXPECT_EQ(sources[0].options.sides, 5);
+        const StrandsPtr strands = sources[0].strands;
+        ASSERT_TRUE(strands);
+        EXPECT_EQ(strands->strandCount(), 120u);
+        // The node's strands as evaluateNode gives them, thinned the same way.
+        const StrandsPtr node = std::get<StrandsPtr>(session.evaluateNode("tubes", 0.5f, frame / 24.0));
+        EXPECT_EQ(strands->contentHash(), node->subset(thinStrandsById(*node, 120)).contentHash());
+        const std::uint64_t k = strandMeshTopologyKey(*strands, sources[0].options);
+        if (last) {
+            EXPECT_EQ(k, key);
+            if (frame == lastFrame) {
+                EXPECT_EQ(strands, last);  // the same frame again: the same strands
+            } else {
+                EXPECT_GT(maxDistance(*strands, *last), 1e-3f);  // carried with the scalp
+            }
+        }
+        key = k;
+        last = strands;
+        lastFrame = frame;
+    }
+    // The view's (wantStrandMeshes): the same strands, a version that moves with them; drawn
+    // instead of the strands (DisplaySettings::strandMeshView) as lit triangles.
+    GroomEvaluator::Request request;
+    request.wantStrandMeshes = true;
+    EXPECT_TRUE(session.hasStrandMeshNode());
+    session.updateScalpPoints(deformedPoints(*data.scalp, 4));
+    const GroomEvaluator::Result first = session.evaluate(request);
+    ASSERT_EQ(first.strandMeshes.size(), 1u);
+    EXPECT_EQ(first.strandMeshes[0].strands->strandCount(), 120u);
+    EXPECT_EQ(session.evaluate(request).versions.strandMeshes, first.versions.strandMeshes);  // nothing moved
+    session.updateScalpPoints(deformedPoints(*data.scalp, 5));
+    const GroomEvaluator::Result moved = session.evaluate(request);
+    EXPECT_GT(moved.versions.strandMeshes, first.versions.strandMeshes);
+    EXPECT_GT(moved.versions.evaluation, first.versions.evaluation);
+    DisplayBuilder builder;
+    DisplaySettings shown;
+    shown.strandMeshView = shown.drawStrandMesh = true;
+    const DisplayFrame& frame = builder.update(lila::groom::displayInputs(moved), shown);
+    const DisplayItem& mesh = frame.item(DisplayItemId::StrandMesh);
+    ASSERT_TRUE(mesh.geometry);
+    const auto& strands = *moved.strandMeshes[0].strands;
+    EXPECT_EQ(mesh.vertexCount, strandMeshPointCount(strands, moved.strandMeshes[0].options));
+    EXPECT_TRUE(mesh.geometry->triangles && mesh.geometry->scaleSurface);
+    std::size_t triangles = 0;
+    for (std::size_t k = 0; k < strands.strandCount(); ++k) triangles += 2 * 5 * (strands.strandPointCount(k) - 1) + 5;
+    EXPECT_EQ(mesh.geometry->indices.size(), 3 * triangles);
+    EXPECT_FALSE(frame.item(DisplayItemId::Strands).shown);  // the mesh instead of the strands
+    // A mesh of the host's shows it (drawStrandMesh off): the strands still step aside.
+    shown.drawStrandMesh = false;
+    const DisplayFrame& hosted = builder.update(lila::groom::displayInputs(moved), shown);
+    EXPECT_FALSE(hosted.item(DisplayItemId::StrandMesh).shown);
+    EXPECT_FALSE(hosted.item(DisplayItemId::Strands).shown);
+    shown.strandMeshView = false;  // off: the strands
+    EXPECT_TRUE(builder.update(lila::groom::displayInputs(moved), shown).item(DisplayItemId::Strands).shown);
+    request.wantStrandMeshes = false;
+    EXPECT_TRUE(session.evaluate(request).strandMeshes.empty());
+
+    // No StrandMesh node: nothing.
+    session.setGraphJson(kLookGraph);
+    session.evaluate(GroomEvaluator::Request{});
+    EXPECT_TRUE(session.evaluateStrandMeshes(0.0).empty());
+}
 
 TEST(FollowScalp, GroomFilesKeepTheFlag) {
     GroomFile file;

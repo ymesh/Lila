@@ -38,6 +38,10 @@ struct BevelEdgeSet final : Data
     MeshPtr mesh;
     std::vector<geo::Index> edges;
     int lost = 0; // overrides that matched no edge
+    double offset = 0.0;  // asked for
+    double applied = 0.0; // after the clamp
+    /** Per edge of mesh, the largest offset the clamp leaves it; infinity where nothing limits it. Empty unclamped. */
+    std::vector<double> limits;
 
     const char* kind() const override { return "bevelEdgeSet"; }
     json toJson() const override { return {{"kind", kind()}, {"count", edges.size()}, {"lost", lost}}; }

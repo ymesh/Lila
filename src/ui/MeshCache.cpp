@@ -559,6 +559,8 @@ std::shared_ptr<const SmoothCage> smoothCageFor(const scene::MeshPtr& mesh, int 
     geo::SubdivideOptions o;
     o.levels = level;
     o.keepHardEdges = keepHardEdges;
+    // The preview rebuilds on every edit, and fitting island interiors costs a solve each time.
+    o.uvs = geo::SubdivideUvs::Blend;
     auto out = std::make_shared<SmoothCage>();
     auto smoothed = std::make_shared<const geo::Mesh>(geo::subdivide(*mesh, o, &out->map));
     out->cagePoints.assign(smoothed->pointCapacity(), geo::kInvalid);

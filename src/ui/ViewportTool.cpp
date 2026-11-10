@@ -2,6 +2,9 @@
 
 #include "core/Events.h"
 #include "core/Log.h"
+#include "core/PrefStore.h"
+#include "ui/Hotkeys.h"
+#include "ui/Layouts.h"
 #include "ui/Theme.h"
 #include "ui/ViewportDisplay.h"
 
@@ -24,6 +27,13 @@ struct QueuedMessage
 };
 std::vector<QueuedMessage> gMessages;
 std::vector<ToolStatus> gStatuses;
+/** A tool drew its own key list this frame, so the layout's keys stay out of the corner. */
+bool gCornerKeysDrawn = false;
+std::map<std::string, std::vector<viewportKeys::Provider>>& layoutKeys()
+{
+    static std::map<std::string, std::vector<viewportKeys::Provider>> keys;
+    return keys;
+}
 
 /** The widest each part of a tool's readout has been, by tool then part, so the readout only ever grows. */
 std::map<QString, std::map<QString, double>>& rememberedWidths()
@@ -107,8 +117,6 @@ std::vector<std::vector<Run>> hintLines(const ToolStatus& s, double maxWidth)
     };
     if (!s.prompt.isEmpty())
         place({{s.prompt, kStatusPrompt}});
-    for (const KeyHint& k : s.keys)
-        place({{k.keys, kStatusValue}, {k.what, kStatusLabel, kStatusPairGap}});
     if (lines.back().empty())
         lines.pop_back();
     return lines;
@@ -270,8 +278,15 @@ void flushToolMessages(OverlayPainter& p, const ViewInfo& view, const std::vecto
     gSelectionSymmetry.reset();
     if (sym)
         top = drawSymmetry(p, view, *sym, top, occupied) + 4.0;
+    // The corner key list follows what is active: the running tool's keys, which change with the modifiers held.
+    std::vector<KeyHint> toolKeys;
     for (const ToolStatus& s : gStatuses)
+    {
         top = drawStatus(p, view, s, top, occupied) + 4.0;
+        if (toolKeys.empty())
+            toolKeys = s.keys;
+    }
+    const bool toolActive = !gStatuses.empty();
     gStatuses.clear();
     double y = top + 16.0;
     for (const QueuedMessage& m : gMessages)
@@ -293,7 +308,61 @@ void flushToolMessages(OverlayPainter& p, const ViewInfo& view, const std::vecto
         y += 22.0;
     }
     gMessages.clear();
+    if (!gCornerKeysDrawn && keysShown())
+        if (const std::vector<KeyHint> keys = toolActive ? toolKeys : viewportKeys::forLayout(layouts::current()); !keys.empty())
+            drawKeyList(p, QPointF(16.0, view.height - 84.0), keys);
+    gCornerKeysDrawn = false;
 }
+
+bool keysShown() { return PrefStore::get().value<bool>("general", kShowKeysPref, true); }
+
+namespace viewportKeys
+{
+void add(const std::string& layout, Provider provider) { layoutKeys()[layout].push_back(std::move(provider)); }
+
+std::vector<KeyHint> forLayout(const std::string& layout)
+{
+    std::vector<KeyHint> out;
+    if (auto it = layoutKeys().find(layout); it != layoutKeys().end())
+        for (const Provider& p : it->second)
+            for (KeyHint& k : p())
+                out.push_back(std::move(k));
+    return out;
+}
+
+void addAction(std::vector<KeyHint>& out, const std::string& actionId, const QString& what)
+{
+    if (const QString key = Hotkeys::get().keyFor(actionId); !key.isEmpty())
+        out.push_back({key, what});
+}
+
+void registerBuiltins()
+{
+    using Keys = std::vector<std::pair<const char*, const char*>>;
+    // Read at draw time, so the list follows the user's bindings.
+    auto fromActions = [](Keys keys) {
+        return [keys] {
+            std::vector<KeyHint> out;
+            for (const auto& [id, what] : keys)
+                addAction(out, id, what);
+            addAction(out, "window.searchMenus", "Search");
+            return out;
+        };
+    };
+    const Keys transform = {{"tool.move", "Move"}, {"tool.rotate", "Rotate"}, {"tool.scale", "Scale"}};
+    Keys model = transform;
+    model.insert(model.end(), {{"mesh.extrude", "Extrude"}, {"mesh.bevel", "Bevel"}, {"mesh.insertLoop", "Insert Loop"}, {"display.smoothOn", "Smooth preview"}});
+    add("Model", fromActions(model));
+    add("UV", fromActions({{"uv.unwrap", "Unwrap"}, {"uv.pack", "Pack"}, {"uv.islandMode", "Islands"}}));
+    Keys rig = transform;
+    rig.insert(rig.end(), {{"edit.parent", "Parent"}, {"edit.unparent", "Unparent"}});
+    add("Rig", fromActions(rig));
+    add("Animate", fromActions({{"anim.setKey", "Set key"}, {"anim.play", "Play"}, {"anim.nextKey", "Next key"}, {"anim.prevKey", "Previous key"}}));
+    Keys level = transform;
+    level.insert(level.end(), {{"edit.duplicateWithTransform", "Duplicate again"}, {"viewport.frameSelected", "Frame"}});
+    add("Level", fromActions(level));
+}
+} // namespace viewportKeys
 
 namespace
 {
@@ -320,6 +389,9 @@ double keyListWidth(const std::vector<KeyHint>& hints)
 
 void drawKeyList(OverlayPainter& p, QPointF bottomLeft, const std::vector<KeyHint>& hints, float alpha)
 {
+    gCornerKeysDrawn = true;
+    if (!keysShown())
+        return;
     const double keyWidth = widestKey(hints);
     double y = bottomLeft.y() - keyListHeight(hints.size()) + 4.0;
     const glm::vec4 key(0.3f, 0.75f, 1.0f, alpha), white(0.95f, 0.95f, 0.95f, alpha);

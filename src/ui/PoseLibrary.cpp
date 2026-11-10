@@ -1,6 +1,7 @@
 #include "ui/PoseLibrary.h"
 
 #include "ops/Command.h"
+#include "ops/Undo.h"
 #include "core/Log.h"
 #include "core/Workspace.h"
 #include "scene/Graph.h"
@@ -33,12 +34,78 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
+#include <map>
+#include <utility>
+#include <vector>
+
 namespace lila::ui
 {
 namespace
 {
 namespace poses = scene::poses;
 constexpr int kPoseThumb = 96;
+
+/** How every pose picture is taken: the whole character from the front, shaded, nothing else drawn. */
+QImage renderPoseShot()
+{
+    capture::Options o;
+    o.view = "front";
+    o.width = o.height = 2 * kPoseThumb;
+    o.display = "shaded";
+    o.grid = false;
+    o.showSelection = false;
+    o.label = false;
+    return capture::render(o);
+}
+
+/** Renders of poses that carry no thumbnail (template poses), keyed by character, tier and the pose itself. */
+std::map<std::string, QPixmap>& previews()
+{
+    static std::map<std::string, QPixmap> cache;
+    return cache;
+}
+
+std::string previewKey(const poses::Entry& e)
+{
+    return e.pose.character + "|" + poses::tierName(e.tier) + "|" + e.pose.toJson().dump();
+}
+
+/**
+ * The character posed as e, rendered from the front. The pose goes on with undo off and comes off again, so nothing in
+ * the scene changes. A null pixmap when the selection isn't on that character.
+ */
+QPixmap renderPreview(const poses::Entry& e)
+{
+    scene::Graph& g = scene::Graph::current();
+    if (g.selection().empty())
+        return {};
+    const poses::Character ch = poses::characterOf(g, g.selection().front());
+    if (ch.nodes.empty() || ch.id != e.pose.character)
+        return {};
+    UndoStack& undo = UndoStack::get();
+    const bool was = undo.enabled();
+    undo.setEnabled(false);
+    QPixmap out;
+    const poses::Pose before = poses::capture(g, ch.nodes);
+    try
+    {
+        poses::ApplyOptions opts;
+        opts.scope = ch.nodes;
+        poses::apply(g, e.pose, opts);
+        g.evaluate();
+        out = QPixmap::fromImage(renderPoseShot());
+    }
+    catch (const std::exception& ex)
+    {
+        log::warn("Pose preview for {} failed: {}", e.pose.name, ex.what());
+    }
+    poses::ApplyOptions back;
+    back.scope = ch.nodes;
+    poses::apply(g, before, back);
+    g.evaluate();
+    undo.setEnabled(was);
+    return out;
+}
 constexpr int kNameRole = Qt::UserRole;
 constexpr int kTierRole = Qt::UserRole + 1;
 constexpr int kCharacterRole = Qt::UserRole + 2;
@@ -217,6 +284,7 @@ private:
     void refresh()
     {
         refreshCharacters();
+        mPendingPreviews.clear();
         QString keep = mList->currentItem() ? mList->currentItem()->data(kNameRole).toString() : QString();
         mList->clear();
         std::string character = currentCharacter();
@@ -235,6 +303,10 @@ private:
             QPixmap thumb;
             if (!e.pose.thumbnail.empty())
                 thumb.loadFromData(reinterpret_cast<const uchar*>(e.pose.thumbnail.data()), uint(e.pose.thumbnail.size()), "PNG");
+            else if (auto it = previews().find(previewKey(e)); it != previews().end())
+                thumb = it->second;
+            else
+                mPendingPreviews.push_back(e);
             auto* item = new QListWidgetItem(thumb.isNull() ? icon(poses::isReserved(e.pose.name) ? "lock" : "man") : QIcon(thumb), name);
             item->setData(kNameRole, name);
             item->setData(kTierRole, QString(poses::tierName(e.tier)));
@@ -249,6 +321,19 @@ private:
             if (name == keep)
                 mList->setCurrentItem(item);
         }
+        if (!mPendingPreviews.empty())
+            QTimer::singleShot(0, this, [this] { renderPending(); });
+    }
+
+    /** Renders the poses refresh found without a picture, then shows them; one that can't render keeps its icon. */
+    void renderPending()
+    {
+        if (mPendingPreviews.empty())
+            return;
+        const std::vector<poses::Entry> todo = std::exchange(mPendingPreviews, {});
+        for (const poses::Entry& e : todo)
+            previews()[previewKey(e)] = renderPreview(e);
+        refresh();
     }
 
     json poseCall(QListWidgetItem* item) const
@@ -338,6 +423,7 @@ private:
     QComboBox* mSaveTier = nullptr;
     QLineEdit* mSearch = nullptr;
     QListWidget* mList = nullptr;
+    std::vector<poses::Entry> mPendingPreviews;
     controls::SliderField* mBlend = nullptr;
     int mPoseListener = 0;
     int mGraphListener = 0;
@@ -348,14 +434,7 @@ std::string thumbnail(const std::vector<scene::NodeId>&)
 {
     try
     {
-        capture::Options o;
-        o.width = o.height = 2 * kPoseThumb;
-        o.display = "shaded";
-        o.frameSelection = true;
-        o.grid = false;
-        o.showSelection = false;
-        o.label = false;
-        return capture::png(capture::render(o));
+        return capture::png(renderPoseShot());
     }
     catch (const std::exception& e)
     {
@@ -374,7 +453,7 @@ void registerPoseLibraryUi()
 {
     poses::setThumbnailProvider(thumbnail);
     panels::add({.id = kPoseLibraryDock, .title = "Pose Library", .create = [](QWidget* parent) { return createPoseLibraryPanel(parent); },
-                 .area = Qt::RightDockWidgetArea, .icon = "man", .open = false, .toggleAction = "window.poseLibrary"});
+                 .area = Qt::LeftDockWidgetArea, .icon = "man", .open = false, .toggleAction = "window.poseLibrary"});
     actions::add({.id = "pose.mirror", .label = "Mirror Pose", .category = "Animation", .run = [] { tryRunUi("mirrorPose", json::object()); },
                   .doc = "Mirror the selected character's current pose: left and right swap, the centre reflects.",
                   .python = "mirrorPose()"});

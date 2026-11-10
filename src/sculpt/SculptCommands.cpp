@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstring>
 #include <map>
 #include <optional>
 
@@ -53,7 +54,7 @@ void setActive(std::shared_ptr<Session> s)
 /** Rough: the cage, the proxy and the per-point layers the proxy carries (normals, mask, adjacency, BVH). */
 size_t sessionBytes(const Session& s)
 {
-    return sizeof(Session) + s.cage.memoryBytes() + s.sculpt.mesh().memoryBytes() * 2;
+    return sizeof(Session) + s.sculpt.mesh().memoryBytes() * 2;
 }
 
 size_t stackBytes(const SubdStack& stack)
@@ -180,39 +181,25 @@ geo::Mesh meshInSpaceOf(const Node& src, const Node& space)
     return out;
 }
 
-Node* keptProxy(const Node& n)
+/** A hidden attr on a mesh with stored levels, added on first use. */
+int levelAttr(Node& n, const char* name, scene::PlugType type, scene::PlugValue def, const char* doc)
 {
-    Graph& g = graph();
-    const std::string want = n.name() + kProxySuffix;
-    for (NodeId c : g.children(n.id()))
-        if (Node* child = g.node(c); child && child->type().isA("mesh") && child->name() == want)
-            return child;
-    return nullptr;
-}
-
-/** The kept high poly's hidden attr, added on first use. */
-int keptAttr(Node& kept, const char* name, scene::PlugType type, scene::PlugValue def, const char* doc)
-{
-    int i = kept.type().attrIndex(name);
+    int i = n.type().attrIndex(name);
     if (i < 0)
-        i = graph().addAttr(kept.id(), scene::AttrDef{.name = name, .type = type, .defaultValue = std::move(def), .flags = scene::AttrHidden, .doc = doc});
+        i = graph().addAttr(n.id(), scene::AttrDef{.name = name, .type = type, .defaultValue = std::move(def), .flags = scene::AttrHidden, .doc = doc});
     return i;
 }
 
-int64_t keptInt(const Node& kept, const char* name, int64_t fallback)
+int64_t intAttr(const Node& n, const char* name, int64_t fallback)
 {
-    const int i = kept.type().attrIndex(name);
-    return i < 0 ? fallback : kept.as<int64_t>(i);
+    const int i = n.type().attrIndex(name);
+    return i < 0 ? fallback : n.as<int64_t>(i);
 }
 
-/** The mesh a resume rebuilds the levels from: the finest level, which the kept high poly holds itself unless it is a lower one. */
-MeshPtr keptFinest(const Node& kept)
+MeshPtr meshAttr(const Node& n, const char* name)
 {
-    if (const int i = kept.type().attrIndex(kFinestAttr); i >= 0)
-        if (const MeshPtr& m = std::get<MeshPtr>(graph().storedValue({kept.id(), i, -1})); m)
-            return m;
-    const MeshPtr& m = std::get<MeshPtr>(graph().storedValue({kept.id(), MeshNode::kInMesh, -1}));
-    return m ? m : std::make_shared<geo::Mesh>();
+    const int i = n.type().attrIndex(name);
+    return i < 0 ? nullptr : std::get<MeshPtr>(graph().storedValue({n.id(), i, -1}));
 }
 
 glm::dvec3 vec3(const json& j, const glm::dvec3& fallback = glm::dvec3(0.0))
@@ -247,6 +234,9 @@ BrushSettings settingsFrom(const Args& a)
     s.radial = {std::clamp(a.get<int>("radialCount", 1), 1, 64), axis == "x" ? 0 : axis == "z" ? 2 : 1};
     s.strength = std::clamp(a.get<double>("strength", 0.5), 0.0, 1.0);
     s.invert = a.get<bool>("invert");
+    s.blur = a.get<bool>("blur");
+    s.keepVolume = a.get<bool>("keepVolume", true);
+    s.pinchDepth = std::clamp(a.get<double>("pinchDepth", 1.0), 0.0, 4.0);
     s.frontFacesOnly = a.get<bool>("frontFacesOnly");
     return s;
 }
@@ -283,8 +273,6 @@ std::vector<Dab> dabsFrom(const json& list, const glm::dmat4& world)
 
 std::atomic<uint64_t> gLiveToken{1};
 
-constexpr int kMaxLevels = 6;
-
 void loadLayers(SculptMesh& sm, const LevelLayers& layers)
 {
     if (!layers.mask.empty())
@@ -317,6 +305,40 @@ LevelLayers layersOf(const SculptMesh& sm)
     return out;
 }
 
+/** The layers a stored finest level carries as point attrs and its polypaint color set. */
+LevelLayers layersFrom(const geo::Mesh& m)
+{
+    LevelLayers out;
+    if (auto mask = m.pointAttrs().get<float>(kMaskLayer); !mask.empty())
+        out.mask.assign(mask.begin(), mask.end());
+    if (auto freeze = m.pointAttrs().get<float>(kFreezeLayer); !freeze.empty())
+        out.freeze.assign(freeze.begin(), freeze.end());
+    if (colors::has(m, kColorSet))
+        out.color = colors::pointColors(m, kColorSet);
+    return out;
+}
+
+/** A new session for s's mesh sculpting level `level` of stack at these positions and layers. */
+std::shared_ptr<Session> sessionAt(const Session& s, std::shared_ptr<const SubdStack> stack, int level, std::span<const glm::dvec3> pos,
+                                   const LevelLayers& layers, std::vector<DetailPtr> detail = {})
+{
+    auto out = std::make_shared<Session>();
+    out->node = s.node;
+    out->basePoints = s.basePoints;
+    out->baseFaces = s.baseFaces;
+    out->base = s.base;
+    out->stack = std::move(stack);
+    out->level = level;
+    detail.resize(size_t(out->stack->top()) + 1);
+    out->detail = std::move(detail);
+    geo::Mesh mesh = out->stack->levels[size_t(level)]->mesh;
+    std::ranges::copy(pos, mesh.positions().begin());
+    out->sculpt = SculptMesh(std::move(mesh));
+    loadLayers(out->sculpt, layers);
+    syncSymmetry(*out);
+    return out;
+}
+
 /**
  * The session sculpting `target` of stack, carrying s's sculpt there: down by least squares, recording the detail each
  * level adds, or up through the detail recorded before.
@@ -337,53 +359,18 @@ std::shared_ptr<Session> atLevel(const Session& s, int target, std::shared_ptr<c
         stepUp(*stack, l + 1, detail[size_t(l) + 1], pos, layers);
         detail[size_t(l) + 1] = nullptr;
     }
-
-    auto out = std::make_shared<Session>();
-    out->node = s.node;
-    out->mode = s.mode;
-    out->subdivide = stack->opts;
-    out->cage = s.cage;
-    out->proxyNode = s.proxyNode;
-    out->stack = stack;
-    out->level = target;
-    out->detail = std::move(detail);
-    if (stack == s.stack)
-        out->exitSolver = s.exitSolver;
-    geo::Mesh mesh = stack->levels[size_t(target)]->mesh;
-    std::ranges::copy(pos, mesh.positions().begin());
-    out->sculpt = SculptMesh(std::move(mesh));
-    loadLayers(out->sculpt, layers);
-    syncSymmetry(*out);
-    return out;
+    return sessionAt(s, std::move(stack), target, pos, layers, std::move(detail));
 }
 
-/** The level sculptExit's high and highLevel pick, from 1 to top. */
-int highLevel(const std::string& high, int x, int top)
+/** s, or the session at its finest level. */
+std::shared_ptr<Session> atTop(const std::shared_ptr<Session>& s)
 {
-    const int level = high == "belowHighest" ? top - x : high == "level" ? x : top;
-    return std::clamp(level, std::min(1, top), top);
+    return s->level == s->stack->top() ? s : atLevel(*s, s->stack->top(), s->stack);
 }
 
 json levelJson(const Session& s)
 {
-    return {{"level", s.level},
-            {"levels", s.stack ? s.stack->top() : 0},
-            {"points", s.sculpt.mesh().numPoints()},
-            {"faces", s.sculpt.mesh().numFaces()}};
-}
-
-/** The finest level's positions, the ones Exit Sculpt fits the cage to. */
-std::vector<glm::dvec3> topPositions(const Session& s)
-{
-    std::vector<glm::dvec3> pos(s.sculpt.mesh().positions().begin(), s.sculpt.mesh().positions().end());
-    if (!s.stack)
-        return pos;
-    for (int l = s.level + 1; l <= s.stack->top(); ++l)
-    {
-        LevelLayers none;
-        stepUp(*s.stack, l, s.detail[size_t(l)], pos, none);
-    }
-    return pos;
+    return {{"level", s.level}, {"levels", s.stack->top()}, {"points", s.sculpt.mesh().numPoints()}, {"faces", s.sculpt.mesh().numFaces()}};
 }
 
 /** Level `level`'s positions: stepped down from the sculpted level by least squares, or up through the detail. */
@@ -404,116 +391,41 @@ std::vector<glm::dvec3> positionsAt(const Session& s, int level)
     return pos;
 }
 
-/** Builds the proxy for a new session. */
-void buildProxy(Session& s, const Args& a, Node& n)
+/** Per point of dst, the polypaint of src at the closest point of its surface. */
+std::vector<glm::vec4> sampleColors(const SculptMesh& src, const geo::Mesh& dst)
 {
     LILA_ZONE();
 
-    Graph& g = graph();
-    const std::string mode = a.get<std::string>("mode", "subdivide");
-    const int levels = std::clamp(a.get<int>("levels", 0), 0, 6);
-    s.subdivide.levels = levels;
-    geo::Mesh proxy;
-    bool resumed = false;
-
-    if (a.get<bool>("resume", true) && mode != "direct")
-        if (Node* kept = keptProxy(n))
-        {
-            proxy = *keptFinest(*kept);
-            // A kept subdivision sculpt is recognised by its point count, provided the cage kept its topology.
-            s.mode = ProxyMode::Remesh;
-            geo::SubdivideOptions o = s.subdivide;
-            o.levels = 0;
-            std::shared_ptr<const SubdStack> stack = buildSubdStack(s.cage, o);
-            while (stack->top() < kMaxLevels)
-            {
-                stack = addSubdLevel(*stack);
-                const geo::Mesh& sub = stack->levels.back()->mesh;
-                if (sub.pointCapacity() == proxy.pointCapacity() && sub.numFaces() == proxy.numFaces())
-                {
-                    s.mode = ProxyMode::Subdivide;
-                    s.subdivide = stack->opts;
-                    s.stack = std::move(stack);
-                    break;
-                }
-                if (sub.pointCapacity() > proxy.pointCapacity())
-                    break;
-            }
-            s.proxyNode = kept->id();
-            resumed = true;
-        }
-
-    if (!resumed)
-    {
-        if (mode == "subdivide")
-        {
-            s.mode = ProxyMode::Subdivide;
-            s.stack = buildSubdStack(s.cage, s.subdivide);
-            proxy = s.stack->levels.back()->mesh;
-        }
-        else if (mode == "remesh")
-        {
-            s.mode = ProxyMode::Remesh;
-            retopo::VoxelOptions vo;
-            vo.resolution = std::clamp(a.get<int>("resolution", 192), 16, 2048);
-            proxy = retopo::voxelRemesh(geo::subdivide(s.cage, s.subdivide), vo);
-        }
-        else if (mode == "direct")
-        {
-            s.mode = ProxyMode::Direct;
-            proxy = s.cage;
-        }
-        else
-            throw CommandError("sculptEnter: mode must be subdivide, remesh or direct");
-        if (s.mode != ProxyMode::Direct)
-            geo::clearSymmetryKeys(proxy, 0);
-    }
-    if (proxy.numFaces() == 0)
-        throw CommandError("sculptEnter: " + n.path() + " has no faces");
-    if (s.stack)
-    {
-        s.level = s.stack->top();
-        s.detail.assign(size_t(s.level) + 1, nullptr);
-    }
-
-    LevelLayers layers;
-    if (auto m = std::as_const(proxy).pointAttrs().get<float>(kMaskLayer); !m.empty())
-        layers.mask.assign(m.begin(), m.end());
-    if (auto f = std::as_const(proxy).pointAttrs().get<float>(kFreezeLayer); !f.empty())
-        layers.freeze.assign(f.begin(), f.end());
-    if (colors::has(proxy, kColorSet))
-        layers.color = colors::pointColors(proxy, kColorSet);
-    s.sculpt = SculptMesh(std::move(proxy));
-    loadLayers(s.sculpt, layers);
-    (void)g;
-}
-
-/** Each cage point's polypaint: the sculpt's color at the closest point of its surface. */
-void paintCage(const Session& s, geo::Mesh& cage)
-{
-    LILA_ZONE();
-
-    const SculptMesh& sm = s.sculpt;
-    const auto& corners = sm.bvh().triangles().corners;
-    std::vector<glm::vec4> perPoint(cage.pointCapacity(), glm::vec4(1.0f));
-    tbb::parallel_for(Index(0), cage.pointCapacity(), [&](Index p) {
+    const auto& corners = src.bvh().triangles().corners;
+    std::vector<glm::vec4> out(dst.pointCapacity(), glm::vec4(1.0f));
+    tbb::parallel_for(Index(0), dst.pointCapacity(), [&](Index p) {
         geo::BvhClosest hit;
-        if (!cage.pointValid(p) || !sm.bvh().closestPoint(cage.position(p), hit))
+        if (!dst.pointValid(p) || !src.bvh().closestPoint(dst.position(p), hit))
             return;
         glm::vec4 c(0.0f);
         for (int k = 0; k < 3; ++k)
-            c += sm.colors()[sm.mesh().cornerPoint(corners[size_t(hit.triangle) * 3 + k])] * float(hit.bary[k]);
-        perPoint[p] = c;
+            c += src.colors()[src.mesh().cornerPoint(corners[size_t(hit.triangle) * 3 + k])] * float(hit.bary[k]);
+        out[p] = c;
     });
-    colors::add(cage, kColorSet);
-    colors::setFromPoints(cage, kColorSet, perPoint);
-    colors::settle(cage, kColorSet);
+    return out;
 }
 
-/** The proxy as a mesh to keep in the scene, with its mask and freeze state. */
-MeshPtr proxyToKeep(const Session& s)
+/** The sculpt as a mesh to leave in the scene: its polypaint on the polypaint color set. */
+geo::Mesh withPolypaint(geo::Mesh m, const SculptMesh& sm)
 {
-    auto m = std::make_shared<geo::Mesh>(s.sculpt.mesh());
+    if (sm.painted())
+    {
+        colors::add(m, kColorSet);
+        colors::setFromPoints(m, kColorSet, sm.colors());
+        colors::settle(m, kColorSet);
+    }
+    return m;
+}
+
+/** The finest level to store, with its mask and freeze state as point layers. */
+MeshPtr finestToStore(const Session& s)
+{
+    auto m = std::make_shared<geo::Mesh>(withPolypaint(s.sculpt.mesh(), s.sculpt));
     auto mask = m->pointAttrs().getOrAdd<float>(kMaskLayer);
     auto freeze = m->pointAttrs().getOrAdd<float>(kFreezeLayer);
     for (Index p = 0; p < m->pointCapacity(); ++p)
@@ -521,37 +433,219 @@ MeshPtr proxyToKeep(const Session& s)
         mask[p] = s.sculpt.mask()[p];
         freeze[p] = s.sculpt.frozen()[p] ? 1.0f : 0.0f;
     }
-    if (s.sculpt.painted())
+    return m;
+}
+
+/** Tells an exit's positions apart from later edits: FNV-1a over the point positions. */
+int64_t positionStamp(const geo::Mesh& m)
+{
+    uint64_t h = 1469598103934665603ull;
+    for (const glm::dvec3& p : m.positions())
+        for (double v : {p.x, p.y, p.z})
+        {
+            uint64_t bits;
+            std::memcpy(&bits, &v, sizeof bits);
+            h = (h ^ bits) * 1099511628211ull;
+        }
+    return int64_t(h);
+}
+
+/** The mesh's stored levels: its cage, finest level, and the counts of the level it is at. */
+struct Stored
+{
+    MeshPtr cage, finest;
+    int level = 0, levels = 0;
+    int64_t points = -1, faces = -1, stamp = 0;
+};
+
+/** Levels between a cage and its subdivision: the first splits each face into one quad per corner, each after it quadruples. */
+int levelsBetween(const geo::Mesh& cage, const geo::Mesh& finest)
+{
+    if (cage.numFaces() > 0)
+        for (Index faces = cage.numCorners(), l = 1; l <= kMaxLevels; ++l, faces *= 4)
+            if (faces == finest.numFaces())
+                return int(l);
+    return 0;
+}
+
+std::optional<Stored> stored(const Node& n)
+{
+    if (!n.type().isA("mesh"))
+        return std::nullopt;
+    Stored s;
+    s.cage = meshAttr(n, kCageAttr);
+    s.finest = meshAttr(n, kFinestAttr);
+    if (!s.cage || !s.finest || (s.levels = levelsBetween(*s.cage, *s.finest)) == 0)
+        return std::nullopt;
+    s.level = int(std::clamp<int64_t>(intAttr(n, kLevelAttr, 0), 0, s.levels));
+    s.points = intAttr(n, kPointsAttr, -1);
+    s.faces = intAttr(n, kFacesAttr, -1);
+    s.stamp = intAttr(n, kStampAttr, 0);
+    return s;
+}
+
+bool fits(const Stored& s, const geo::Mesh& base) { return base.numPoints() == s.points && base.numFaces() == s.faces; }
+
+void clearStored(Node& n)
+{
+    Graph& g = graph();
+    for (const char* name : {kStampAttr, kFacesAttr, kPointsAttr, kLevelAttr, kFinestAttr, kCageAttr})
+        if (const int i = n.type().attrIndex(name); i >= 0)
+            g.deleteAttr({n.id(), i, -1});
+}
+
+void store(Node& n, const std::shared_ptr<Session>& s, const geo::Mesh& written)
+{
+    Graph& g = graph();
+    const NodeId id = n.id();
+    g.setValue({id, levelAttr(n, kCageAttr, scene::PlugType::Mesh, MeshPtr(), "Sculpt level 0."), -1},
+               MeshPtr(std::make_shared<geo::Mesh>(s->stack->levels.front()->mesh)));
+    g.setValue({id, levelAttr(n, kFinestAttr, scene::PlugType::Mesh, MeshPtr(), "The finest sculpt level."), -1}, finestToStore(*atTop(s)));
+    g.setValue({id, levelAttr(n, kLevelAttr, scene::PlugType::Int, int64_t(0), "The sculpt level the mesh is at."), -1}, int64_t(s->level));
+    g.setValue({id, levelAttr(n, kPointsAttr, scene::PlugType::Int, int64_t(-1), "The points at that level."), -1}, int64_t(written.numPoints()));
+    g.setValue({id, levelAttr(n, kFacesAttr, scene::PlugType::Int, int64_t(-1), "The faces at that level."), -1}, int64_t(written.numFaces()));
+    g.setValue({id, levelAttr(n, kStampAttr, scene::PlugType::Int, int64_t(0), "The level's positions at exit."), -1}, positionStamp(written));
+}
+
+/** The session Enter Sculpt opens on n: its stored levels when they still fit its topology, else its mesh at level 0. */
+std::shared_ptr<Session> openSession(Node& n, int startLevels)
+{
+    LILA_ZONE();
+
+    Graph& g = graph();
+    g.evaluate();
+    MeshPtr base = scene::modifiers::cage(g, n.id());
+    if (!base || base->numFaces() == 0)
+        throw CommandError("sculptEnter: " + n.path() + " has no faces");
+    auto s = std::make_shared<Session>();
+    s->node = n.id();
+    s->basePoints = base->pointCapacity();
+    s->baseFaces = base->numFaces();
+
+    if (std::optional<Stored> st = stored(n))
     {
-        colors::add(*m, kColorSet);
-        colors::setFromPoints(*m, kColorSet, s.sculpt.colors());
+        geo::SubdivideOptions o;
+        o.levels = st->levels;
+        std::shared_ptr<const SubdStack> stack = fits(*st, *base) ? buildSubdStack(*st->cage, o) : nullptr;
+        const geo::Mesh* at = stack ? &stack->levels[size_t(st->level)]->mesh : nullptr;
+        if (at && stack->levels.back()->mesh.pointCapacity() == st->finest->pointCapacity() && at->pointCapacity() == base->pointCapacity())
+        {
+            s->base = stack->levels[size_t(st->level)];
+            const auto& finest = st->finest->positions();
+            s = atLevel(*sessionAt(*s, stack, stack->top(), finest, layersFrom(*st->finest)), st->level, stack);
+            // Points moved outside sculpt mode: the finer levels' detail rides on the moved shape.
+            if (positionStamp(*base) != st->stamp)
+                s = sessionAt(*s, stack, st->level, base->positions(), layersOf(s->sculpt), s->detail);
+            return s;
+        }
+        log::warn("sculptEnter: {} changed topology since its {} sculpt levels were stored; they no longer fit and were removed",
+                  n.path(), st->levels);
+        clearStored(n);
+    }
+
+    geo::SubdivideOptions o;
+    o.levels = 0;
+    s->stack = buildSubdStack(*base, o);
+    s->base = s->stack->levels.front();
+    LevelLayers layers;
+    if (colors::has(*base, kColorSet))
+        layers.color = colors::pointColors(*base, kColorSet);
+    s = sessionAt(*s, s->stack, 0, base->positions(), layers);
+    for (int i = 0; i < std::clamp(startLevels, 0, kMaxLevels); ++i)
+    {
+        std::shared_ptr<const SubdStack> stack = addSubdLevel(*s->stack);
+        s = atLevel(*s, stack->top(), stack);
+    }
+    return s;
+}
+
+/** Writes the sculpted level into the mesh and stores the levels on it. Returns the mesh as written. */
+geo::Mesh writeBack(const Session& s, Node& n)
+{
+    Graph& g = graph();
+    PlugRef plug = scene::modifiers::editPlug(g, n.id());
+    geo::Mesh mesh = storedMesh(plug);
+    const geo::Mesh& at = s.sculpt.mesh();
+    // The level the mesh was at keeps the mesh itself (its UVs and any edits since), its points moved.
+    if (s.base == s.stack->levels[size_t(s.level)] && mesh.pointCapacity() == at.pointCapacity() && mesh.numFaces() == at.numFaces())
+    {
+        for (Index p = 0; p < mesh.pointCapacity(); ++p)
+            if (mesh.pointValid(p))
+                mesh.setPosition(p, at.position(p));
+        mesh = withPolypaint(std::move(mesh), s.sculpt);
     }
     else
-        colors::remove(*m, kColorSet);
-    return m;
+        mesh = withPolypaint(at, s.sculpt);
+    g.setValue(plug, MeshPtr(std::make_shared<geo::Mesh>(mesh)));
+    return mesh;
+}
+
+/** Records the switch to `to` as an undo step and makes it the open session. */
+json switchTo(const std::shared_ptr<Session>& from, std::shared_ptr<Session> to, const char* undoName)
+{
+    UndoChunk chunk(undoName);
+    UndoStack::get().record(std::make_unique<SwitchAction>(from, to));
+    setActive(to);
+    return levelJson(*to);
+}
+
+/** Meshes whose stored levels a top-level command left not fitting their topology. */
+struct LevelsGuard
+{
+    std::function<void(const std::vector<NodeId>&, std::string_view)> handler;
+    bool watching = false;
+    bool touched = false;
+    bool dirty = true;
+    std::vector<NodeId> leveled;
+};
+
+LevelsGuard& guard()
+{
+    static LevelsGuard g;
+    return g;
+}
+
+void checkLevels(std::string_view command)
+{
+    LevelsGuard& lg = guard();
+    Graph& g = graph();
+    if (lg.dirty)
+    {
+        lg.leveled.clear();
+        for (NodeId id : g.nodes())
+            if (Node* n = g.node(id); n && n->type().isA("mesh") && n->type().attrIndex(kFinestAttr) >= 0)
+                lg.leveled.push_back(id);
+        lg.dirty = false;
+    }
+    std::vector<NodeId> broken;
+    const std::shared_ptr<Session> open = activeRef();
+    for (NodeId id : lg.leveled)
+        if (Node* n = g.node(id); n && !(open && open->node == id))
+            if (std::optional<Stored> st = stored(*n))
+                if (MeshPtr base = scene::modifiers::cage(g, id); base && !fits(*st, *base))
+                    broken.push_back(id);
+    if (!broken.empty())
+    {
+        for (NodeId id : broken)
+            log::warn("{}: {} changed its topology, so its sculpt levels no longer fit", g.node(id)->path(), command);
+        if (lg.handler)
+            lg.handler(broken, command);
+    }
 }
 } // namespace
 
 std::shared_ptr<Session> active() { return activeRef(); }
 
-std::optional<KeptSculpt> keptSculpt(const scene::Node& mesh)
+std::optional<StoredLevels> storedLevels(const scene::Node& mesh)
 {
-    Node* kept = keptProxy(mesh);
-    if (!kept)
+    std::optional<Stored> st = stored(mesh);
+    if (!st)
         return std::nullopt;
-    KeptSculpt k;
-    k.node = kept->id();
-    k.level = int(keptInt(*kept, kResumeLevelAttr, -1));
-    // The finest level's face count names how many levels it has: the first splits each face into one quad per corner,
-    // each after it quadruples.
-    const MeshPtr finest = keptFinest(*kept);
-    const MeshPtr cage = scene::modifiers::cage(graph(), mesh.id());
-    if (cage && cage->numFaces() > 0)
-        for (Index faces = cage->numCorners(), l = 1; l <= kMaxLevels; ++l, faces *= 4)
-            if (faces == finest->numFaces())
-                k.levels = int(l);
-    return k;
+    MeshPtr base = scene::modifiers::cage(graph(), mesh.id());
+    return StoredLevels{.level = st->level, .levels = st->levels, .fits = base && fits(*st, *base)};
 }
+
+void setLevelsBrokenHandler(std::function<void(const std::vector<scene::NodeId>&, std::string_view)> fn) { guard().handler = std::move(fn); }
 
 int addListener(std::function<void()> fn)
 {
@@ -584,105 +678,6 @@ uint64_t nextLiveToken() { return gLiveToken.fetch_add(1); }
 
 void setPivotHandler(std::function<void(const std::optional<glm::dvec3>&)> handler) { pivotHandler() = std::move(handler); }
 
-struct ExitSolver
-{
-    /** The symmetry layer the map keyed (empty without symmetry) and its plane offset. */
-    std::string symmetryKey;
-    double offset = 0.0;
-    /** The cage the symmetry map keyed, kept apart from the session's. */
-    geo::Mesh keyed;
-    std::optional<geo::SymmetryMap> map;
-    /** The cage's own subdivision, for fitting a remeshed proxy. */
-    std::vector<geo::PointStencil> stencils;
-    std::unique_ptr<CageFitter> fitter;
-};
-
-std::vector<glm::dvec3> exitPositions(Session& s, const std::string& method, int iterations)
-{
-    LILA_ZONE();
-
-    const geo::Mesh& proxy = s.sculpt.mesh();
-    // With no levels above the cage the proxy is the cage, point for point.
-    if (s.mode == ProxyMode::Direct || (s.stack && s.stack->top() == 0))
-        return {proxy.positions().begin(), proxy.positions().end()};
-    const Node* n = graph().node(s.node);
-    const std::optional<geo::SymmetrySpec> spec = n ? scene::symmetrySpec(*n) : std::nullopt;
-    const std::string key = !spec ? std::string() : spec->radial ? geo::radialLayerName(*spec->radial) : geo::symmetryLayerName(spec->axis);
-    const double offset = spec && !spec->radial ? scene::symmetryOffset(*n, spec->axis) : 0.0;
-    std::shared_ptr<ExitSolver>& x = s.exitSolver;
-    if (!x || x->symmetryKey != key || x->offset != offset)
-    {
-        x = std::make_shared<ExitSolver>();
-        x->symmetryKey = key;
-        x->offset = offset;
-        if (spec)
-        {
-            x->keyed = s.cage;
-            x->map = scene::symmetryMapFor(*n, x->keyed);
-        }
-    }
-    FitOptions fo;
-    fo.method = method == "closest" ? FitMethod::Closest : method == "normal" ? FitMethod::Normal : FitMethod::LeastSquares;
-    fo.subdivide = s.subdivide;
-    fo.iterations = iterations;
-    fo.symmetry = x->map ? &*x->map : nullptr;
-    const bool belowTop = s.stack && s.level < s.stack->top();
-    if (fo.method != FitMethod::LeastSquares)
-    {
-        if (!belowTop)
-        {
-            geo::Mesh fitted = fitCageToSurface(s.cage, proxy, s.sculpt.bvh(), fo);
-            return {fitted.positions().begin(), fitted.positions().end()};
-        }
-        geo::Mesh top = s.stack->levels.back()->mesh;
-        std::ranges::copy(topPositions(s), top.positions().begin());
-        geo::MeshBvh bvh(top);
-        geo::Mesh fitted = fitCageToSurface(s.cage, top, bvh, fo);
-        return {fitted.positions().begin(), fitted.positions().end()};
-    }
-    if (!x->fitter)
-    {
-        if (s.mode != ProxyMode::Subdivide)
-            x->stencils = geo::subdivideStencils(s.cage, s.subdivide);
-        x->fitter = std::make_unique<CageFitter>(s.cage, s.mode == ProxyMode::Subdivide ? s.stack->stencils : x->stencils, fo);
-    }
-    if (s.mode == ProxyMode::Subdivide && belowTop)
-        return x->fitter->solve(s.cage.positions(), topPositions(s));
-    if (s.mode == ProxyMode::Subdivide)
-        return x->fitter->solve(s.cage.positions(), proxy.positions());
-    return fitToSurface(*x->fitter, x->stencils, s.cage.positions(), s.sculpt.bvh(), iterations);
-}
-
-geo::Mesh lowPoly(Session& s, const std::string& method, int level, int iterations)
-{
-    LILA_ZONE();
-
-    if (!s.stack || level <= 0)
-    {
-        geo::Mesh m = s.cage;
-        const std::vector<glm::dvec3> pos = exitPositions(s, method, iterations);
-        for (Index p = 0; p < m.pointCapacity() && p < pos.size(); ++p)
-            if (m.pointValid(p))
-                m.setPosition(p, pos[p]);
-        return m;
-    }
-    const int top = s.stack->top();
-    level = std::min(level, top);
-    geo::Mesh m = s.stack->levels[size_t(level)]->mesh;
-    std::ranges::copy(positionsAt(s, level), m.positions().begin());
-    // A level's own points are its subdivision cage; the finest level is the sculpt itself.
-    if (method == "fit" || level == top)
-        return m;
-    FitOptions fo;
-    fo.method = method == "normal" ? FitMethod::Normal : FitMethod::Closest;
-    if (s.level == top)
-        return fitCageToSurface(m, s.sculpt.mesh(), s.sculpt.bvh(), fo);
-    geo::Mesh surface = s.stack->levels.back()->mesh;
-    std::ranges::copy(topPositions(s), surface.positions().begin());
-    const geo::MeshBvh bvh(surface);
-    return fitCageToSurface(m, surface, bvh, fo);
-}
-
 void registerCommands()
 {
     using T = ArgType;
@@ -690,187 +685,84 @@ void registerCommands()
     graph().addListener([](scene::Change c, NodeId) {
         if (c == scene::Change::Cleared && activeRef())
             setActive(nullptr);
+        LevelsGuard& lg = guard();
+        if (c == scene::Change::Value && lg.watching)
+            lg.touched = true;
+        if (c == scene::Change::Created || c == scene::Change::Deleted || c == scene::Change::Cleared || c == scene::Change::Reset ||
+            c == scene::Change::Attrs)
+            lg.dirty = true;
     }, true);
+
+    ops::addExecuteListener([](const ExecuteEvent& e) {
+        LevelsGuard& lg = guard();
+        if (!e.done)
+        {
+            lg.watching = true;
+            lg.touched = false;
+            return;
+        }
+        lg.watching = false;
+        // Sculpt commands keep the stored levels in step themselves; undo and redo restore a state where they fit.
+        if (e.ok && lg.touched && !e.name.starts_with("sculpt") && e.name != "undo" && e.name != "redo")
+            checkLevels(e.name);
+    });
 
     ops::registerCommand({
         .name = "sculptEnter",
-        .doc = "Enter sculpt mode on a mesh: builds a high-resolution copy of its cage to sculpt on, outside the scene. "
-               "mode='subdivide' gives Catmull-Clark levels to step between (sculptLevel) and fits back exactly on exit; "
-               "'remesh' sculpts a uniform voxel remesh; 'direct' sculpts the mesh itself. Resumes from the high poly a previous "
-               "exit kept (<mesh>_high). Returns {mesh, mode, level, levels, points, faces}.",
+        .doc = "Enter sculpt mode on a mesh: strokes sculpt the mesh itself. Levels stored by an earlier sculptExit come back, "
+               "at the level the mesh is at; edits made to the mesh since that keep its topology carry into them. levels adds "
+               "that many subdivision levels to a mesh without any. Returns {mesh, level, levels, points, faces}.",
         .positionalDoc = "mesh",
-        .flags = {{"mode", "", T::String, "subdivide", "subdivide, remesh or direct.", {"subdivide", "remesh", "direct"}},
-                  {"levels", "", T::Int, 0, "Subdivision levels to start with, 0 to 6: 0 sculpts the cage until sculptAddLevel adds some.", {}, {}, 0.0, 6.0},
-                  {"resolution", "", T::Int, 192, "Voxels along the longest side, for mode='remesh'.", {}, {}, 16.0, 2048.0},
-                  {"resume", "", T::Bool, true, "Continue from the mesh's kept high poly when it has one."}},
+        .flags = {{"levels", "", T::Int, 0, "Subdivision levels to add to a mesh without stored levels, 0 to 6.", {}, {}, 0.0, double(kMaxLevels)}},
         .run = [](const Args& a) -> json {
             auto objs = a.objects();
             if (objs.empty())
                 throw CommandError("sculptEnter: select a mesh");
-            Graph& g = graph();
             Node& n = meshArg(objs.front(), "sculptEnter");
-            UndoChunk chunk("Enter Sculpt");
             std::shared_ptr<Session> prev = activeRef();
             if (prev && prev->node == n.id())
-                return {{"mesh", n.path()}, {"points", prev->sculpt.mesh().numPoints()}};
+            {
+                json out = levelJson(*prev);
+                out["mesh"] = n.path();
+                return out;
+            }
+            UndoChunk chunk("Enter Sculpt");
             if (prev)
                 ops::execute("sculptExit", json::object());
-
-            g.evaluate();
-            MeshPtr cage = scene::modifiers::cage(g, n.id());
-            if (!cage || cage->numFaces() == 0)
-                throw CommandError("sculptEnter: " + n.path() + " has no faces");
-            auto s = std::make_shared<Session>();
-            s->node = n.id();
-            s->cage = *cage;
-            buildProxy(*s, a, n);
-            syncSymmetry(*s);
-            if (Node* kept = s->proxyNode != scene::kNoNode ? g.node(s->proxyNode) : nullptr; kept && s->stack)
-                if (const int64_t at = keptInt(*kept, kResumeLevelAttr, -1); at >= 0 && at < s->stack->top())
-                    s = atLevel(*s, int(at), s->stack);
+            std::shared_ptr<Session> s = openSession(n, a.get<int>("levels"));
             UndoStack::get().record(std::make_unique<SwitchAction>(activeRef(), s));
             setActive(s);
-            const char* modes[] = {"subdivide", "remesh", "direct"};
-            log::info("sculptEnter {}: {}, {} points, {} faces", n.path(), modes[int(s->mode)], s->sculpt.mesh().numPoints(),
+            log::info("sculptEnter {}: level {} of {}, {} points, {} faces", n.path(), s->level, s->stack->top(), s->sculpt.mesh().numPoints(),
                       s->sculpt.mesh().numFaces());
-            return {{"mesh", n.path()},
-                    {"mode", modes[int(s->mode)]},
-                    {"level", s->stack ? s->level : 0},
-                    {"levels", s->stack ? s->stack->top() : 0},
-                    {"points", s->sculpt.mesh().numPoints()},
-                    {"faces", s->sculpt.mesh().numFaces()}};
+            json out = levelJson(*s);
+            out["mesh"] = n.path();
+            return out;
         },
     });
 
     ops::registerCommand({
         .name = "sculptExit",
-        .doc = "Leave sculpt mode, moving the mesh (the low poly) onto the sculpt. method='closest' moves each point to the "
-               "nearest spot on the sculpt and 'normal' along its normal onto it: a game mesh to bake onto. 'fit' solves for "
-               "the cage whose subdivision best matches the sculpt, its points off the surface: a mesh to subdivide again. "
-               "The fit is to the finest level from any level. Only positions change: UVs and other attributes stay, except "
-               "that polypaint lands on the mesh's polypaint color set. high keeps the sculpt as the hidden child <mesh>_high "
-               "to bake from, at the finest level, highLevel levels below it, or level highLevel; the next sculptEnter gets "
-               "every level back from it, less the levels lowLevel moved into the low poly. Returns {mesh, maxMove, high: "
-               "{mesh, level, levels} or null}.",
-        .flags = {{"method", "", T::String, "closest", "closest, normal or fit.", {"closest", "normal", "fit"}},
-                  {"high", "", T::String, "highest", "Which level <mesh>_high keeps: highest, belowHighest, level, or none to keep nothing.",
-                   {"highest", "belowHighest", "level", "none"}},
-                  {"highLevel", "", T::Int, 1, "Levels below the highest (belowHighest), or the level (level).", {}, {}, 0.0, double(kMaxLevels)},
-                  {"lowLevel", "", T::Int, 0, "The level the low poly comes out at: 0 keeps the mesh's topology, higher subdivides it "
-                                               "that many times (its UVs with it).", {}, {}, 0.0, double(kMaxLevels)},
-                  {"iterations", "", T::Int, 3, "Project-and-fit rounds for remeshed proxies.", {}, {}, 1.0, 20.0}},
-        .run = [](const Args& a) -> json {
+        .doc = "Leave sculpt mode. The mesh stays at the level being sculpted, and every level is stored on it for the next "
+               "sculptEnter (sculptDeleteLevels removes them). Polypaint lands on the mesh's polypaint color set. Returns "
+               "{mesh, level, levels}.",
+        .run = [](const Args&) -> json {
             std::shared_ptr<Session> s = requireSession("sculptExit");
-            const std::shared_ptr<Session> open = s;
-            if (s->stack && s->level < s->stack->top())
-                s = atLevel(*s, s->stack->top(), s->stack);
-            Graph& g = graph();
-            Node& n = *g.node(s->node);
-            std::string method = a.get<std::string>("method", "closest");
-            if (method != "fit" && method != "closest" && method != "normal")
-                throw CommandError("sculptExit: method must be fit, closest or normal");
-            const std::string high = a.get<std::string>("high", "highest");
-            if (high != "highest" && high != "belowHighest" && high != "level" && high != "none")
-                throw CommandError("sculptExit: high must be highest, belowHighest, level or none");
+            Node& n = *graph().node(s->node);
             UndoChunk chunk("Exit Sculpt");
-            PlugRef base = scene::modifiers::editPlug(g, n.id());
-            geo::Mesh mesh = storedMesh(base);
-            if (mesh.pointCapacity() != s->cage.pointCapacity() || mesh.numFaces() != s->cage.numFaces())
-                throw CommandError("sculptExit: " + n.path() + "'s topology changed since sculptEnter; undo that edit or run sculptCancel");
-
-            const int iterations = std::clamp(a.get<int>("iterations"), 1, 20);
-            const int lowLevel = s->stack ? std::clamp(a.get<int>("lowLevel"), 0, s->stack->top()) : 0;
-            double maxMove = 0.0;
-            if (lowLevel == 0)
-            {
-                std::vector<glm::dvec3> pos = exitPositions(*s, method, iterations);
-                for (Index p = 0; p < mesh.pointCapacity() && p < pos.size(); ++p)
-                    if (mesh.pointValid(p))
-                    {
-                        maxMove = std::max(maxMove, glm::length(pos[p] - s->cage.position(p)));
-                        mesh.setPosition(p, pos[p]);
-                    }
-            }
+            const geo::Mesh written = writeBack(*s, n);
+            if (s->stack->top() > 0)
+                store(n, s, written);
             else
-                mesh = lowPoly(*s, method, lowLevel, iterations);
-            if (s->sculpt.painted())
-                paintCage(*s, mesh);
-            g.setValue(base, MeshPtr(std::make_shared<geo::Mesh>(std::move(mesh))));
-
-            Node* kept = s->proxyNode != scene::kNoNode ? g.node(s->proxyNode) : nullptr;
-            if (!kept)
-                kept = keptProxy(n);
-            json keptOut = nullptr;
-            // With no levels above the cage the mesh is the sculpt, so there is nothing to keep.
-            if (high != "none" && s->mode != ProxyMode::Direct && !(s->stack && s->stack->top() == 0))
-            {
-                if (!kept)
-                {
-                    kept = g.createNode(*scene::types::find("mesh"), n.name() + kProxySuffix, n.id(), false);
-                    g.setValue({kept->id(), Transform::kVisibility, -1}, false);
-                }
-                const int top = s->stack ? s->stack->top() : 0;
-                const int level = s->stack ? highLevel(high, a.get<int>("highLevel"), top) : 0;
-                g.setValue({kept->id(), MeshNode::kInMesh, -1}, proxyToKeep(level == top ? *s : *atLevel(*s, level, s->stack)));
-                // A lower level keeps the finest beside it, so the next Enter Sculpt gets every level back.
-                const bool lower = s->stack && level < top;
-                if (lower || kept->type().attrIndex(kFinestAttr) >= 0)
-                    g.setValue({kept->id(), keptAttr(*kept, kFinestAttr, scene::PlugType::Mesh, MeshPtr(), "The sculpt's finest level."), -1},
-                               lower ? proxyToKeep(*s) : MeshPtr());
-                if (s->stack)
-                    g.setValue({kept->id(), keptAttr(*kept, kResumeLevelAttr, scene::PlugType::Int, int64_t(-1), "The level Enter Sculpt resumes at."), -1},
-                               int64_t(std::max(open->level - lowLevel, 0)));
-                keptOut = {{"mesh", kept->path()}, {"level", level}, {"levels", top}};
-            }
-            else if (kept)
-                g.deleteNode(kept->id());
-
-            UndoStack::get().record(std::make_unique<SwitchAction>(open, nullptr));
+                clearStored(n);
+            UndoStack::get().record(std::make_unique<SwitchAction>(s, nullptr));
             setActive(nullptr);
-            return {{"mesh", n.path()}, {"maxMove", maxMove}, {"high", keptOut}};
-        },
-    });
-
-    ops::registerCommand({
-        .name = "sculptDuplicateLowPoly",
-        .doc = "Without leaving sculpt mode, duplicate the mesh as the low poly sculptExit would leave with this method at this "
-               "level, next to it. The copy keeps the mesh's materials, transform and modifiers. Returns its name.",
-        .flags = {{"method", "", T::String, "closest", "closest, normal or fit.", {"closest", "normal", "fit"}},
-                  {"level", "", T::Int, 0, "0 keeps the mesh's topology; higher subdivides it that many times.", {}, {}, 0.0, double(kMaxLevels)},
-                  {"name", "", T::String, "", "Name for the copy; default <mesh>_low<level>."}},
-        .run = [](const Args& a) -> json {
-            std::shared_ptr<Session> s = requireSession("sculptDuplicateLowPoly");
-            const std::string method = a.get<std::string>("method", "closest");
-            if (method != "fit" && method != "closest" && method != "normal")
-                throw CommandError("sculptDuplicateLowPoly: method must be fit, closest or normal");
-            const int level = s->stack ? std::clamp(a.get<int>("level"), 0, s->stack->top()) : 0;
-            Graph& g = graph();
-            Node& n = *g.node(s->node);
-            std::string name = a.get<std::string>("name", "");
-            if (name.empty())
-                name = n.name() + "_low" + std::to_string(level);
-            UndoChunk chunk("Duplicate Low Poly");
-            json made = ops::execute("duplicate", {{"args", {n.path()}}, {"name", name}});
-            const std::string path = made.is_array() && !made.empty() ? made[0].get<std::string>() : std::string();
-            Node* copy = g.find(path);
-            if (!copy)
-                throw CommandError("sculptDuplicateLowPoly: duplicating " + n.path() + " failed");
-            // The kept high poly belongs to the mesh, not to its copies.
-            const std::string keptName = n.name() + kProxySuffix;
-            for (NodeId c : std::vector<NodeId>(g.children(copy->id())))
-                if (Node* child = g.node(c); child && child->type().isA("mesh") && child->name().starts_with(keptName))
-                    g.deleteNode(c);
-            geo::Mesh low = lowPoly(*s, method, level);
-            if (s->sculpt.painted())
-                paintCage(*s, low);
-            g.setValue(scene::modifiers::editPlug(g, copy->id()), MeshPtr(std::make_shared<geo::Mesh>(std::move(low))));
-            return copy->path();
+            return {{"mesh", n.path()}, {"level", s->level}, {"levels", s->stack->top()}};
         },
     });
 
     ops::registerCommand({
         .name = "sculptCancel",
-        .doc = "Leave sculpt mode without changing the mesh, discarding the sculpt (a kept <mesh>_high stays as it was).",
+        .doc = "Leave sculpt mode without changing the mesh or its stored levels, discarding this session's sculpting.",
         .run = [](const Args&) -> json {
             std::shared_ptr<Session> s = activeRef();
             if (!s)
@@ -879,6 +771,56 @@ void registerCommands()
             UndoStack::get().record(std::make_unique<SwitchAction>(s, nullptr));
             setActive(nullptr);
             return nullptr;
+        },
+    });
+
+    ops::registerCommand({
+        .name = "sculptDuplicate",
+        .doc = "Copy the mesh at a sculpt level as a new mesh beside it in the outliner, with its materials, transform and "
+               "modifiers but no levels of its own. Without hide, the copy is selected and sculpt mode ends; with hide, the "
+               "copy is hidden and sculpting carries on. Returns {mesh, level}.",
+        .flags = {{"level", "", T::Int, -1, "The level to copy; -1 for the one being sculpted.", {}, {}, -1.0, double(kMaxLevels)},
+                  {"hide", "", T::Bool, false, "Hide the copy and stay in sculpt mode."},
+                  {"name", "", T::String, "", "Name for the copy; default <mesh>_level<N>."}},
+        .run = [](const Args& a) -> json {
+            std::shared_ptr<Session> s = requireSession("sculptDuplicate");
+            const int want = a.get<int>("level");
+            const int level = want < 0 ? s->level : std::min(want, s->stack->top());
+            Graph& g = graph();
+            Node& n = *g.node(s->node);
+            std::string name = a.get<std::string>("name", "");
+            if (name.empty())
+            {
+                // A suffix after the level number, so a second copy of level 1 isn't named as level 2.
+                const std::string base = n.name() + "_level" + std::to_string(level);
+                name = base;
+                for (int i = 2; g.find(name); ++i)
+                    name = base + "_" + std::to_string(i);
+            }
+            const std::shared_ptr<Session> at = level == s->level ? s : atLevel(*s, level, s->stack);
+            UndoChunk chunk("Duplicate Sculpt Level");
+            json made = ops::execute("duplicate", {{"args", {n.path()}}, {"name", name}});
+            const std::string path = made.is_array() && !made.empty() ? made[0].get<std::string>() : std::string();
+            Node* copy = g.find(path);
+            if (!copy)
+                throw CommandError("sculptDuplicate: duplicating " + n.path() + " failed");
+            const NodeId copyId = copy->id();
+            for (NodeId c : std::vector<NodeId>(g.children(copyId)))
+                g.deleteNode(c);
+            clearStored(*copy);
+            g.setValue(scene::modifiers::editPlug(g, copyId), MeshPtr(std::make_shared<geo::Mesh>(withPolypaint(at->sculpt.mesh(), at->sculpt))));
+            const NodeId parent = g.parent(n.id());
+            const std::vector<NodeId>& siblings = parent == scene::kNoNode ? g.roots() : g.children(parent);
+            const size_t index = size_t(std::ranges::find(siblings, n.id()) - siblings.begin());
+            g.setParent(copyId, parent, false, index + 1);
+            if (a.get<bool>("hide"))
+                g.setValue({copyId, Transform::kVisibility, -1}, false);
+            else
+            {
+                ops::execute("sculptExit", json::object());
+                g.select({copyId});
+            }
+            return {{"mesh", g.node(copyId)->path()}, {"level", level}};
         },
     });
 
@@ -894,7 +836,10 @@ void registerCommands()
                   {"color", "", T::List, json::array({1.0, 1.0, 1.0}), "Paint color, linear [r, g, b]."},
                   {"falloff", "", T::String, "smooth", "Falloff: smooth, sphere, root, sharp, linear, constant, bell, or a soft select preset name."},
                   {"strength", "", T::Float, 0.5, "0 to 1.", {}, {}, 0.0, 1.0},
-                  {"invert", "", T::Bool, false, "Dig, unmask, unfreeze or magnify instead."},
+                  {"invert", "", T::Bool, false, "Dig, unmask, unfreeze or magnify instead; grab moves only along the surface normal."},
+                  {"blur", "", T::Bool, false, "Paint and mask: blur the color or mask under the brush instead of laying it down."},
+                  {"keepVolume", "", T::Bool, true, "Smooth: keep the form's volume; off averages points, which also flattens it."},
+                  {"pinchDepth", "", T::Float, 1.0, "Pinch: how far it presses the surface in, 0 for none."},
                   {"frontFacesOnly", "", T::Bool, false, "Leave points facing away from the view."},
                   {"radialCount", "", T::Int, 1, "Copies of every dab turned evenly about an object axis; 1 is off.", {}, {}, 1.0, 64.0},
                   {"radialAxis", "", T::String, "y", "The object axis radial copies turn about.", {"x", "y", "z"}},
@@ -984,19 +929,11 @@ void registerCommands()
                   {"step", "", T::Int, 0, "Move this many levels from the current one instead (1 up, -1 down)."}},
         .run = [](const Args& a) -> json {
             std::shared_ptr<Session> s = requireSession("sculptLevel");
-            if (!s->stack)
-                throw CommandError("sculptLevel: levels need a subdivide sculpt; this one is remeshed or direct");
             const int step = a.get<int>("step");
             const int target = std::clamp(step != 0 ? s->level + step : a.get<int>("level"), 0, s->stack->top());
-            if (target != s->level)
-            {
-                UndoChunk chunk("Sculpt Level");
-                std::shared_ptr<Session> to = atLevel(*s, target, s->stack);
-                UndoStack::get().record(std::make_unique<SwitchAction>(s, to));
-                setActive(to);
-                s = to;
-            }
-            return levelJson(*s);
+            if (target == s->level)
+                return levelJson(*s);
+            return switchTo(s, atLevel(*s, target, s->stack), "Sculpt Level");
         },
     });
 
@@ -1006,63 +943,171 @@ void registerCommands()
                "Returns {level, levels, points, faces}.",
         .run = [](const Args&) -> json {
             std::shared_ptr<Session> s = requireSession("sculptAddLevel");
-            if (!s->stack)
-                throw CommandError("sculptAddLevel: levels need a subdivide sculpt; this one is remeshed or direct");
             if (s->stack->top() >= kMaxLevels)
                 throw CommandError("sculptAddLevel: already at the most levels, " + std::to_string(kMaxLevels));
-            UndoChunk chunk("Add Sculpt Level");
             std::shared_ptr<const SubdStack> stack = addSubdLevel(*s->stack);
-            std::shared_ptr<Session> to = atLevel(*s, stack->top(), stack);
-            UndoStack::get().record(std::make_unique<SwitchAction>(s, to));
-            setActive(to);
-            return levelJson(*to);
+            return switchTo(s, atLevel(*s, stack->top(), stack), "Add Sculpt Level");
         },
     });
 
     ops::registerCommand({
         .name = "sculptDeleteHigher",
-        .doc = "Delete the levels above the one being sculpted, and their detail; at level 0, every level. Returns {level, levels, points, faces}.",
+        .doc = "Delete the levels above the one being sculpted, and their detail. Returns {level, levels, points, faces}.",
         .run = [](const Args&) -> json {
             std::shared_ptr<Session> s = requireSession("sculptDeleteHigher");
-            if (!s->stack)
-                throw CommandError("sculptDeleteHigher: levels need a subdivide sculpt; this one is remeshed or direct");
             if (s->level == s->stack->top())
                 return levelJson(*s);
-            UndoChunk chunk("Delete Higher Levels");
             std::shared_ptr<const SubdStack> stack = truncateSubdStack(*s->stack, s->level);
-            std::shared_ptr<Session> to = atLevel(*s, s->level, stack);
-            UndoStack::get().record(std::make_unique<SwitchAction>(s, to));
-            setActive(to);
-            return levelJson(*to);
+            return switchTo(s, atLevel(*s, s->level, stack), "Delete Higher Levels");
+        },
+    });
+
+    ops::registerCommand({
+        .name = "sculptDeleteLower",
+        .doc = "Delete the levels below the one being sculpted: it becomes level 0, the mesh's new topology on exit. The "
+               "levels above keep their detail. Returns {level, levels, points, faces}.",
+        .run = [](const Args&) -> json {
+            std::shared_ptr<Session> s = requireSession("sculptDeleteLower");
+            if (s->level == 0)
+                return levelJson(*s);
+            const std::shared_ptr<Session> top = atTop(s);
+            std::shared_ptr<const SubdStack> stack = dropSubdLevelsBelow(*s->stack, s->level);
+            std::shared_ptr<Session> to = sessionAt(*s, stack, stack->top(), top->sculpt.mesh().positions(), layersOf(top->sculpt));
+            return switchTo(s, atLevel(*to, 0, stack), "Delete Lower Levels");
+        },
+    });
+
+    ops::registerCommand({
+        .name = "sculptReconstruct",
+        .doc = "Rebuild a level below level 0 from a mesh that was subdivided elsewhere: the new cage is the mesh before "
+               "that subdivision, its UVs and materials taken from the fine mesh. Level 0 must be all quads laid out the way "
+               "a subdivision lays them out. Sculpting carries on at the same level, one number higher. Returns {level, "
+               "levels, points, faces}.",
+        .run = [](const Args&) -> json {
+            std::shared_ptr<Session> s = requireSession("sculptReconstruct");
+            Node& n = *graph().node(s->node);
+            const int oldTop = s->stack->top();
+            if (oldTop >= kMaxLevels)
+                throw CommandError("sculptReconstruct: already at the most levels, " + std::to_string(kMaxLevels));
+            geo::Mesh fine = s->stack->levels.front()->mesh;
+            {
+                const std::vector<glm::dvec3> pos = positionsAt(*s, 0);
+                std::ranges::copy(pos, fine.positions().begin());
+            }
+            std::vector<Index> coarseOf;
+            std::optional<geo::Mesh> cage = reconstructCage(fine, coarseOf);
+            if (!cage)
+                throw CommandError("sculptReconstruct: level 0 of " + n.path() + " isn't a subdivided mesh: it needs all quads, "
+                                   "laid out the way a subdivision lays them out");
+            geo::SubdivideOptions o = s->stack->opts;
+            o.levels = oldTop + 1;
+            std::shared_ptr<const SubdStack> stack = buildSubdStack(*cage, o);
+            // Each old level k is new level k + 1, in the new level's point order.
+            std::vector<Index> perm = matchSubdivisions(fine, coarseOf, stack->levels[1]->mesh, coarsePoints(*stack->levels[1]));
+            for (int k = 1; k <= oldTop && !perm.empty(); ++k)
+            {
+                std::vector<Index> coarse = coarsePoints(*s->stack->levels[size_t(k)]);
+                for (Index& c : coarse)
+                    if (c != geo::kInvalid)
+                        c = perm[c];
+                perm = matchSubdivisions(s->stack->levels[size_t(k)]->mesh, coarse, stack->levels[size_t(k) + 1]->mesh,
+                                         coarsePoints(*stack->levels[size_t(k) + 1]));
+            }
+            if (perm.empty())
+                throw CommandError("sculptReconstruct: " + n.path() + "'s levels don't line up with the rebuilt cage's subdivision");
+            const std::shared_ptr<Session> top = atTop(s);
+            const geo::Mesh& finest = top->sculpt.mesh();
+            const LevelLayers from = layersOf(top->sculpt);
+            const Index count = stack->levels.back()->mesh.pointCapacity();
+            std::vector<glm::dvec3> pos(count, glm::dvec3(0.0));
+            LevelLayers layers;
+            layers.color.resize(from.color.empty() ? 0 : count, glm::vec4(1.0f));
+            layers.mask.resize(from.mask.empty() ? 0 : count, 0.0f);
+            layers.freeze.resize(from.freeze.empty() ? 0 : count, 0.0f);
+            for (Index p = 0; p < finest.pointCapacity(); ++p)
+            {
+                if (!finest.pointValid(p))
+                    continue;
+                const Index q = perm[p];
+                pos[q] = finest.position(p);
+                if (!layers.color.empty())
+                    layers.color[q] = from.color[p];
+                if (!layers.mask.empty())
+                    layers.mask[q] = from.mask[p];
+                if (!layers.freeze.empty())
+                    layers.freeze[q] = from.freeze[p];
+            }
+            std::shared_ptr<Session> to = sessionAt(*s, stack, stack->top(), pos, layers);
+            return switchTo(s, atLevel(*to, s->level + 1, stack), "Reconstruct Sculpt Level");
+        },
+    });
+
+    ops::registerCommand({
+        .name = "sculptRemesh",
+        .doc = "Replace the sculpt with an even voxel remesh of its finest level, free of the mesh's topology, as level 0 "
+               "with no levels above. Polypaint carries over; UVs, the mask and freeze don't. Returns {level, levels, points, faces}.",
+        .flags = {{"resolution", "", T::Int, 192, "Voxels along the longest side.", {}, {}, 16.0, 2048.0}},
+        .run = [](const Args& a) -> json {
+            std::shared_ptr<Session> s = requireSession("sculptRemesh");
+            const std::shared_ptr<Session> top = atTop(s);
+            retopo::VoxelOptions vo;
+            vo.resolution = std::clamp(a.get<int>("resolution"), 16, 2048);
+            geo::Mesh remeshed = retopo::voxelRemesh(top->sculpt.mesh(), vo);
+            if (remeshed.numFaces() == 0)
+                throw CommandError("sculptRemesh: the remesh came out empty; raise resolution");
+            LevelLayers layers;
+            if (top->sculpt.painted())
+                layers.color = sampleColors(top->sculpt, remeshed);
+            geo::SubdivideOptions o = s->stack->opts;
+            o.levels = 0;
+            std::shared_ptr<const SubdStack> stack = buildSubdStack(remeshed, o);
+            return switchTo(s, sessionAt(*s, stack, 0, remeshed.positions(), layers), "Remesh Sculpt");
+        },
+    });
+
+    ops::registerCommand({
+        .name = "sculptDeleteLevels",
+        .doc = "Remove the sculpt levels stored on meshes, leaving each at the level it is at. Returns the meshes that had levels.",
+        .positionalDoc = "meshes...",
+        .run = [](const Args& a) -> json {
+            json out = json::array();
+            UndoChunk chunk("Delete Sculpt Levels");
+            for (const std::string& name : a.objects())
+            {
+                Node& n = meshArg(name, "sculptDeleteLevels");
+                if (std::shared_ptr<Session> s = activeRef(); s && s->node == n.id())
+                    throw CommandError("sculptDeleteLevels: " + n.path() + " is being sculpted; use sculptDeleteHigher and sculptDeleteLower");
+                if (n.type().attrIndex(kFinestAttr) < 0)
+                    continue;
+                clearStored(n);
+                out.push_back(n.path());
+            }
+            return out;
         },
     });
 
     ops::registerCommand({
         .name = "sculptState",
-        .doc = "The open sculpt session: {active, mesh, mode, level, levels, points, faces, symmetry, masked, frozen, painted}.",
+        .doc = "The open sculpt session: {active, mesh, level, levels, points, faces, symmetry, masked, frozen, painted}.",
         .undoable = false,
         .run = [](const Args&) -> json {
             std::shared_ptr<Session> s = activeRef();
             Node* n = s ? graph().node(s->node) : nullptr;
             if (!s || !n)
                 return {{"active", false}};
-            const char* modes[] = {"subdivide", "remesh", "direct"};
             size_t masked = 0, frozen = 0;
             for (float m : s->sculpt.mask())
                 masked += m > 0.0f;
             for (uint8_t f : s->sculpt.frozen())
                 frozen += f != 0;
-            return {{"active", true},
-                    {"mesh", n->path()},
-                    {"mode", modes[int(s->mode)]},
-                    {"level", s->stack ? s->level : 0},
-                    {"levels", s->stack ? s->stack->top() : 0},
-                    {"points", s->sculpt.mesh().numPoints()},
-                    {"faces", s->sculpt.mesh().numFaces()},
-                    {"symmetry", s->sculpt.symmetric()},
-                    {"masked", masked},
-                    {"frozen", frozen},
-                    {"painted", s->sculpt.painted()}};
+            json out = {{"active", true},
+                        {"mesh", n->path()},
+                        {"symmetry", s->sculpt.symmetric()},
+                        {"masked", masked},
+                        {"frozen", frozen},
+                        {"painted", s->sculpt.painted()}};
+            out.update(levelJson(*s));
+            return out;
         },
     });
 

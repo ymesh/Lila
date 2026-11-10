@@ -127,6 +127,19 @@ TEST_CASE("sceneGraphInfo: Upstream and Downstream follow the selection to a dep
     CHECK(nodeNames(viewOf("Downstream", {{"depth", 5}})) == std::vector<std::string>{"A", "B", "C", "D"});
 }
 
+TEST_CASE("sceneGraphInfo: History shows the whole modifier stack from the mesh or any modifier")
+{
+    sgCmd("newScene");
+    sgCmd("polyCube");
+    for (const char* kind : {"bevel", "array", "bevel"})
+        sgCmd("addModifier", {{"args", {"Cube"}}, {"kind", kind}});
+    const std::vector<std::string> stack{"ArrayModifier", "BevelModifier", "BevelModifier1", "Cube", "PolyCube"};
+    selectOnly("Cube");
+    CHECK(nodeNames(viewOf("History")) == stack);
+    selectOnly("BevelModifier");
+    CHECK(nodeNames(viewOf("History")) == stack);
+}
+
 TEST_CASE("sceneGraphInfo: anim curves are looked through unless all is on")
 {
     buildChain();

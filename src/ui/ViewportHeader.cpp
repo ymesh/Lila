@@ -581,6 +581,11 @@ void ViewportHeader::buildEntry(const json& e)
             optionBox::decorateMenu(overlays->menu());
             add(overlays, true, 7, [this](QMenu* m) { hdrSubmenu(m, "Overlays", [this](QMenu* s) { fillOverlaysMenu(s); }); }, {overlays});
         }
+        else if (id == "lighting")
+        {
+            QToolButton* lighting = popover("sun", "Lighting", [this](QMenu* m) { fillLightingMenu(m); });
+            add(lighting, true, 6, [this](QMenu* m) { hdrSubmenu(m, "Lighting", [this](QMenu* s) { fillLightingMenu(s); }); }, {lighting});
+        }
         else if (id == "jointSize")
         {
             QToolButton* joints = popover("bone", "Joint Size", [this](QMenu* m) { addJointSizeRow(m); }, false);
@@ -1149,7 +1154,7 @@ void ViewportHeader::fillSnapMenu(QMenu* m)
         row->addWidget(hdrPresetButton(holder, angle, {}, true, QString(QChar(0x00B0))));
 
         const scene::Node* ref = scene::Graph::current().node(tool->reference());
-        QAction* surface = m->addAction(icon("target"), "Surface: " + (ref ? QString::fromStdString(ref->name()) : QString("None")));
+        QAction* surface = m->addAction(icon("target"), "Reference: " + (ref ? QString::fromStdString(ref->name()) : QString("None")));
         surface->setToolTip(hdrTip("retopo.setReference"));
         connect(surface, &QAction::triggered, this, [this] {
             activateView();
@@ -1162,23 +1167,8 @@ void ViewportHeader::fillOverlaysMenu(QMenu* m)
 {
     namespace vc = viewportContext;
     m->setToolTipsVisible(true);
-    auto before = [this] { activateView(); };
     const bool lilaDraws = viewportRenderers::selected(mView->hudPanel()) == viewportRenderers::kLila;
-    auto row = [this, m, before](const std::string& id, bool enabled = true) {
-        QAction* a = m->addAction(hdrLabel(id));
-        std::optional<bool> on = viewportActionState(id, mView);
-        a->setCheckable(on.has_value());
-        a->setChecked(on.value_or(false));
-        a->setEnabled(enabled);
-        a->setToolTip(hdrTip(id));
-        a->setData(QString::fromStdString(id));
-        a->setProperty(kStateProp, QString::fromStdString(id));
-        connect(a, &QAction::triggered, this, [id, before] {
-            before();
-            actions::run(id);
-        });
-        return a;
-    };
+    auto row = [this, m](const std::string& id, bool enabled = true) { return actionRow(m, id, enabled); };
 
     m->addSection("Shading");
     row("viewport.wireOnShaded");
@@ -1202,42 +1192,13 @@ void ViewportHeader::fillOverlaysMenu(QMenu* m)
     row("viewport.toggleOutline");
     row("viewport.toggleKuwahara");
 
-    m->addSection("Lighting and Renderer");
+    m->addSection("Renderer");
     hdrSubmenu(m, "Renderer", [this](QMenu* s) { fillRendererMenu(s); });
-    auto* lighting = new QActionGroup(m);
-    for (const char* mode : {"environment", "studio", "flat"})
-        row(std::string("viewport.lighting.") + mode, lilaDraws)->setActionGroup(lighting);
-    row("viewport.toggleShadows", lilaDraws);
-    row("viewport.toggleAO", lilaDraws);
     row("viewport.toggleAA", lilaDraws);
     QMenu* samples = hdrSubmenu(m, "Antialiasing Samples", [this](QMenu* s) {
         hdrRadioRows(s, {"viewport.aaSamples2", "viewport.aaSamples4", "viewport.aaSamples8", "viewport.aaTemporal"}, mView, {});
     });
     samples->setEnabled(lilaDraws && generalPref(vd::kAaEnabled, true));
-    row("viewport.toggleEnvBackground");
-    hdrSubmenu(m, "Environment", [](QMenu* s) { fillEnvironmentMenu(s); });
-    {
-        QWidget* holder = nullptr;
-        QHBoxLayout* r = hdrRow(m, "Exposure", &holder);
-        QDoubleSpinBox* exposure = controls::valueField(-10.0, 10.0, 2, "EV", holder);
-        exposure->setSingleStep(0.1);
-        setSpinDefault(exposure, 0.0);
-        exposure->setValue(PrefStore::get().value<double>("general", vd::kExposure, 0.0));
-        exposure->setToolTip("Exposure (stops)");
-        connect(exposure, &QDoubleSpinBox::valueChanged, this, [](double v) { PrefStore::get().set("general", vd::kExposure, v); });
-        r->addWidget(exposure, 1);
-        QHBoxLayout* g = hdrRow(m, "Gamma", &holder);
-        QDoubleSpinBox* gamma = controls::valueField(0.1, 4.0, 2, {}, holder);
-        gamma->setSingleStep(0.05);
-        setSpinDefault(gamma, 1.0);
-        gamma->setValue(PrefStore::get().value<double>("general", vd::kGamma, 1.0));
-        gamma->setToolTip("Gamma");
-        connect(gamma, &QDoubleSpinBox::valueChanged, this, [](double v) { PrefStore::get().set("general", vd::kGamma, v); });
-        g->addWidget(gamma, 1);
-        QAction* reset = m->addAction(hdrLabel("viewport.resetExposure"));
-        reset->setToolTip(hdrTip("viewport.resetExposure"));
-        connect(reset, &QAction::triggered, this, [] { actions::run("viewport.resetExposure"); });
-    }
 
     m->addSection("Show");
     for (const char* id : {"viewport.show.mesh", "viewport.show.curve", "viewport.show.joint", "viewport.show.light", "viewport.toggleGrid",
@@ -1261,10 +1222,116 @@ void ViewportHeader::fillOverlaysMenu(QMenu* m)
         row(std::string("select.mask.") + sm::name(k));
 
     m->addSection("HUD");
+    row("viewport.toggleKeys");
     row("viewport.hud.originAxis");
     QMenu* hudMenu = hdrSubmenu(m, "Heads Up Display", [this](QMenu* s) { hud::fillMenu(s, mView); });
     // Decorated after the fill above is connected, so the option box marks go onto the rows it just made.
     optionBox::decorateMenu(hudMenu);
+}
+
+QAction* ViewportHeader::actionRow(QMenu* m, const std::string& id, bool enabled)
+{
+    QAction* a = m->addAction(hdrLabel(id));
+    std::optional<bool> on = viewportActionState(id, mView);
+    a->setCheckable(on.has_value());
+    a->setChecked(on.value_or(false));
+    a->setEnabled(enabled);
+    a->setToolTip(hdrTip(id));
+    a->setData(QString::fromStdString(id));
+    a->setProperty(kStateProp, QString::fromStdString(id));
+    connect(a, &QAction::triggered, this, [this, id] {
+        activateView();
+        actions::run(id);
+    });
+    return a;
+}
+
+void ViewportHeader::fillLightingMenu(QMenu* m)
+{
+    m->setToolTipsVisible(true);
+    const bool lilaDraws = viewportRenderers::selected(mView->hudPanel()) == viewportRenderers::kLila;
+    static constexpr const char* kModes[] = {"environment", "studio", "sculpt", "flat"};
+    static constexpr const char* kModeLabels[] = {"Environment", "Studio", "Sculpt", "Flat"};
+    const std::string mode = PrefStore::get().value<std::string>("general", vd::kLighting, "environment");
+
+    QWidget* holder = nullptr;
+    QHBoxLayout* modeRow = hdrRow(m, "Mode", &holder);
+    auto* modes = new controls::Segmented(holder);
+    for (int i = 0; i < 4; ++i)
+    {
+        const std::string id = std::string("viewport.lighting.") + kModes[i];
+        modes->add(kModeLabels[i], {}, hdrTip(id), i);
+        if (mode == kModes[i])
+            modes->setCurrent(i);
+    }
+    modes->setEnabled(lilaDraws);
+    modeRow->addWidget(modes, 1);
+
+    // One rotation field for whichever light the mode uses: the HDRI turns around the up axis, the rigs around the view.
+    QHBoxLayout* rotRow = hdrRow(m, "Rotation", &holder);
+    QDoubleSpinBox* rotation = controls::valueField(-360.0, 360.0, 0, QString(QChar(0x00B0)), holder);
+    rotation->setSingleStep(5.0);
+    setSpinDefault(rotation, 0.0);
+    rotation->setToolTip("Turns the light. Shift+Alt+right-drag in the viewport does the same.");
+    rotRow->addWidget(rotation, 1);
+    QHBoxLayout* tiltRow = hdrRow(m, "Angle", &holder);
+    QDoubleSpinBox* tilt = controls::valueField(0.0, 90.0, 0, QString(QChar(0x00B0)), holder);
+    tilt->setSingleStep(5.0);
+    setSpinDefault(tilt, vd::kDefaultRigTilt);
+    tilt->setToolTip("Sculpt lighting: how far the key light sits off your view. 0 lights from the camera, 90 grazes. "
+                     "Shift+Alt+drag up or down in the viewport does the same.");
+    tiltRow->addWidget(tilt, 1);
+    connect(tilt, &QDoubleSpinBox::valueChanged, this, [](double v) { PrefStore::get().set("general", vd::kRigTilt, v); });
+    auto showRotation = [rotation, tilt](const std::string& mode) {
+        QSignalBlocker b(rotation), t(tilt);
+        const char* pref = mode == "environment" ? vd::kEnvRotation : vd::kRigRotation;
+        rotation->setValue(PrefStore::get().value<double>("general", pref, 0.0));
+        rotation->setEnabled(mode != "flat");
+        tilt->setValue(PrefStore::get().value<double>("general", vd::kRigTilt, vd::kDefaultRigTilt));
+        tilt->setEnabled(mode == "sculpt");
+    };
+    showRotation(mode);
+    connect(rotation, &QDoubleSpinBox::valueChanged, this, [](double v) {
+        const bool env = PrefStore::get().value<std::string>("general", vd::kLighting, "environment") == "environment";
+        PrefStore::get().set("general", env ? vd::kEnvRotation : vd::kRigRotation, v);
+    });
+    connect(modes, &controls::Segmented::picked, this, [this, showRotation](int i) {
+        activateView();
+        actions::run(std::string("viewport.lighting.") + kModes[i]);
+        showRotation(kModes[i]);
+    });
+
+    actionRow(m, "viewport.resetLight");
+
+    m->addSection("Environment");
+    hdrSubmenu(m, "HDRI", [](QMenu* s) { fillEnvironmentMenu(s); });
+    actionRow(m, "viewport.toggleEnvBackground");
+
+    m->addSection("Shadows");
+    actionRow(m, "viewport.toggleShadows", lilaDraws);
+    actionRow(m, "viewport.toggleAO", lilaDraws);
+
+    m->addSection("Exposure");
+    QHBoxLayout* r = hdrRow(m, "Exposure", &holder);
+    QDoubleSpinBox* exposure = controls::valueField(-10.0, 10.0, 2, "EV", holder);
+    exposure->setSingleStep(0.1);
+    setSpinDefault(exposure, 0.0);
+    exposure->setValue(PrefStore::get().value<double>("general", vd::kExposure, 0.0));
+    exposure->setToolTip("Exposure (stops)");
+    connect(exposure, &QDoubleSpinBox::valueChanged, this, [](double v) { PrefStore::get().set("general", vd::kExposure, v); });
+    r->addWidget(exposure, 1);
+    QHBoxLayout* g = hdrRow(m, "Gamma", &holder);
+    QDoubleSpinBox* gamma = controls::valueField(0.1, 4.0, 2, {}, holder);
+    gamma->setSingleStep(0.05);
+    setSpinDefault(gamma, 1.0);
+    gamma->setValue(PrefStore::get().value<double>("general", vd::kGamma, 1.0));
+    gamma->setToolTip("Gamma");
+    connect(gamma, &QDoubleSpinBox::valueChanged, this, [](double v) { PrefStore::get().set("general", vd::kGamma, v); });
+    g->addWidget(gamma, 1);
+    actionRow(m, "viewport.resetExposure");
+
+    m->addSeparator();
+    actionRow(m, "window.preferences");
 }
 
 void ViewportHeader::fillRendererMenu(QMenu* s)
@@ -1427,11 +1494,11 @@ QSize ViewportHeader::minimumSizeHint() const
 void ViewportHeader::layoutItems()
 {
     const size_t n = mItems.size();
-    // The width each item's labels add beside their icons, as QToolButton sizes TextBesideIcon.
-    auto labelWidth = [this](const Item& item) {
+    // The width each item's labels add beside their icons, as QToolButton sizes TextBesideIcon (it pads the text by two spaces).
+    auto labelWidth = [](const Item& item) {
         int w = 0;
         for (QToolButton* b : item.labelled)
-            w += 4 + b->fontMetrics().size(Qt::TextShowMnemonic, b->text()).width();
+            w += 4 + b->fontMetrics().size(Qt::TextShowMnemonic, b->text()).width() + 2 * b->fontMetrics().horizontalAdvance(QLatin1Char(' '));
         return w;
     };
     auto isCompact = [](const Item& item) { return !item.labelled.empty() && item.labelled.front()->toolButtonStyle() == Qt::ToolButtonIconOnly; };
@@ -1439,10 +1506,16 @@ void ViewportHeader::layoutItems()
     std::vector<int> full(n), compact(n);
     for (size_t i = 0; i < n; ++i)
     {
-        const int now = mItems[i].widget->sizeHint().width();
-        const int extra = labelWidth(mItems[i]);
-        full[i] = isCompact(mItems[i]) ? now + extra : now;
-        compact[i] = isCompact(mItems[i]) || mItems[i].labelled.empty() ? now : now - extra;
+        Item& item = mItems[i];
+        const int now = item.widget->sizeHint().width();
+        const int extra = labelWidth(item);
+        if (item.labelText != extra)
+            item.measured[0] = item.measured[1] = 0;
+        item.labelText = extra;
+        // Estimates are only a first guess: a wrong one flips the row between labelled and icon-only every pass.
+        item.measured[isCompact(item) ? 1 : 0] = now;
+        full[i] = item.measured[0] ? item.measured[0] : now + extra;
+        compact[i] = item.labelled.empty() ? now : item.measured[1] ? item.measured[1] : std::max(0, now - extra);
     }
 
     std::vector<bool> kept(n, true);

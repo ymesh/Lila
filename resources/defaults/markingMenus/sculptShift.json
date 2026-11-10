@@ -1,0 +1,207 @@
+{
+    "N": {
+        "label": "Clay Strips",
+        "action": "sculpt.brush.clayStrips"
+    },
+    "NE": {
+        "label": "Draw",
+        "action": "sculpt.brush.draw"
+    },
+    "E": {
+        "label": "Grab",
+        "action": "sculpt.brush.grab"
+    },
+    "SE": {
+        "label": "Inflate",
+        "action": "sculpt.brush.inflate"
+    },
+    "S": {
+        "label": "Flatten",
+        "action": "sculpt.brush.flatten"
+    },
+    "SW": {
+        "label": "Mask",
+        "children": {
+            "S": {
+                "label": "Mask Brush",
+                "action": "sculpt.brush.mask"
+            },
+            "E": {
+                "label": "Invert",
+                "action": "sculpt.maskInvert"
+            },
+            "SE": {
+                "label": "Blur",
+                "action": "sculpt.maskBlur"
+            },
+            "SW": {
+                "label": "Mask All",
+                "action": "sculpt.maskFill"
+            },
+            "W": {
+                "label": "Clear",
+                "action": "sculpt.maskClear"
+            },
+            "N": {
+                "label": "Freeze Brush",
+                "action": "sculpt.brush.freeze"
+            },
+            "NW": {
+                "label": "Unfreeze All",
+                "action": "sculpt.freezeClear"
+            }
+        }
+    },
+    "W": {
+        "label": "Dam Standard",
+        "action": "sculpt.brush.damStandard"
+    },
+    "NW": {
+        "label": "Pinch",
+        "action": "sculpt.brush.pinch"
+    },
+    "overflow": [
+        {
+            "label": "Brushes",
+            "children": {
+                "N": {
+                    "label": "Clay",
+                    "action": "sculpt.brush.clay"
+                },
+                "NE": {
+                    "label": "Blob",
+                    "action": "sculpt.brush.blob"
+                },
+                "E": {
+                    "label": "Layer",
+                    "action": "sculpt.brush.layer"
+                },
+                "SE": {
+                    "label": "Snake Hook",
+                    "action": "sculpt.brush.snakeHook"
+                },
+                "S": {
+                    "label": "Smooth",
+                    "action": "sculpt.brush.smooth"
+                },
+                "SW": {
+                    "label": "Scrape",
+                    "action": "sculpt.brush.scrape"
+                },
+                "W": {
+                    "label": "Crease",
+                    "action": "sculpt.brush.crease"
+                },
+                "NW": {
+                    "label": "Trim Dynamic",
+                    "action": "sculpt.brush.trimDynamic"
+                },
+                "overflow": [
+                    {
+                        "label": "Elastic Grab",
+                        "action": "sculpt.brush.elasticGrab"
+                    },
+                    {
+                        "label": "Nudge",
+                        "action": "sculpt.brush.nudge"
+                    },
+                    {
+                        "label": "Thumb",
+                        "action": "sculpt.brush.thumb"
+                    },
+                    {
+                        "label": "Rotate",
+                        "action": "sculpt.brush.rotate"
+                    },
+                    {
+                        "label": "Pose",
+                        "action": "sculpt.brush.pose"
+                    },
+                    {
+                        "separator": true
+                    },
+                    {
+                        "label": "Relax",
+                        "action": "sculpt.brush.relax"
+                    },
+                    {
+                        "label": "Planar",
+                        "action": "sculpt.brush.planar"
+                    },
+                    {
+                        "label": "Fill",
+                        "action": "sculpt.brush.fill"
+                    },
+                    {
+                        "label": "Polish",
+                        "action": "sculpt.brush.polish"
+                    },
+                    {
+                        "label": "Magnify",
+                        "action": "sculpt.brush.magnify"
+                    },
+                    {
+                        "label": "Fold",
+                        "action": "sculpt.brush.fold"
+                    },
+                    {
+                        "label": "Boundary",
+                        "action": "sculpt.brush.boundary"
+                    },
+                    {
+                        "separator": true
+                    },
+                    {
+                        "label": "Paint",
+                        "action": "sculpt.brush.paint"
+                    }
+                ]
+            }
+        },
+        {
+            "separator": true
+        },
+        {
+            "label": "Level Up",
+            "action": "sculpt.levelUp"
+        },
+        {
+            "label": "Level Down",
+            "action": "sculpt.levelDown"
+        },
+        {
+            "label": "Add Level",
+            "action": "sculpt.addLevel"
+        },
+        {
+            "separator": true
+        },
+        {
+            "label": "See-Through",
+            "action": "sculpt.toggleSeeThrough"
+        },
+        {
+            "label": "Voxel Remesh",
+            "action": "sculpt.remesh"
+        },
+        {
+            "label": "Layout Pencil",
+            "action": "layout.pencil"
+        },
+        {
+            "label": "Plates",
+            "action": "layout.plates"
+        },
+        {
+            "label": "Fasteners",
+            "action": "layout.fasteners"
+        },
+        {
+            "separator": true
+        },
+        {
+            "label": "Exit Sculpt",
+            "action": "sculpt.exit"
+        }
+    ]
+}

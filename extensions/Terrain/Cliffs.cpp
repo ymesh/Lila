@@ -1699,11 +1699,17 @@ KitResult fitKit(const Heightfield& ground, const Region& region, const std::vec
             bool buried = false;
             if (p.depthOf)
             {
-                // The base is sunk on purpose, and the ground in front of it is never flat: only what stands more than
-                // the sink above the foot is measured.
-                const double foot = ground.heightAt(g.x, g.y) + std::max(1.0, p.sink * piece.size.y * scale);
+                // The base is sunk on purpose and the ground under a wide piece is never level: each point is measured
+                // from the ground at its own place on the piece's front, so only the face rising behind it counts.
+                const double sunk = std::max(1.0, p.sink * piece.size.y * scale);
+                double front = -1e300;
+                for (const glm::dvec3& q : placed)
+                    front = std::max(front, glm::dot(q, fwd));
                 for (glm::dvec3& q : placed)
-                    q.y = std::max(q.y, foot);
+                {
+                    const glm::dvec3 atFront = q + fwd * (front - glm::dot(q, fwd));
+                    q.y = std::max(q.y, ground.heightAt(atFront.x, atFront.z) + sunk);
+                }
                 buried = p.depthOf(placed, fwd) > p.maxPenetration * piece.size.z * scale;
             }
             else

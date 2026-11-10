@@ -3,6 +3,7 @@
 #include "core/Profile.h"
 #include "core/Progress.h"
 
+#include <algorithm>
 #include <charconv>
 #include <format>
 #include <fstream>
@@ -548,6 +549,35 @@ File readAscii(std::string_view text)
                     a.shortName = std::string(t[++i].text);
                 else if (fl == "-at" || fl == "-attributeType" || fl == "-dt" || fl == "-dataType")
                     a.type = std::string(t[++i].text);
+                else if (fl == "-p" || fl == "-parent")
+                    a.parent = std::string(t[++i].text);
+                else if (fl == "-en" || fl == "-enumName")
+                {
+                    std::string_view names = t[++i].text;
+                    for (size_t at = 0; at <= names.size();)
+                    {
+                        size_t end = std::min(names.find(':', at), names.size());
+                        std::string_view one = names.substr(at, end - at);
+                        one = one.substr(0, one.find('='));
+                        if (!one.empty())
+                            a.enumNames.emplace_back(one);
+                        at = end + 1;
+                    }
+                }
+                else if (fl == "-dv" || fl == "-defaultValue" || fl == "-min" || fl == "-minValue" || fl == "-max" || fl == "-maxValue" ||
+                         fl == "-smn" || fl == "-softMinValue" || fl == "-smx" || fl == "-softMaxValue")
+                {
+                    double v = 0.0;
+                    std::string_view num = t[++i].text;
+                    if (std::from_chars(num.data(), num.data() + num.size(), v).ec != std::errc())
+                        continue;
+                    std::optional<double>& slot = fl == "-dv" || fl == "-defaultValue" ? a.defaultValue
+                                                  : fl == "-min" || fl == "-minValue"  ? a.min
+                                                  : fl == "-max" || fl == "-maxValue"  ? a.max
+                                                  : fl == "-smn" || fl == "-softMinValue" ? a.softMin
+                                                                                          : a.softMax;
+                    slot = v;
+                }
             }
             if (a.shortName.empty())
                 a.shortName = a.longName;

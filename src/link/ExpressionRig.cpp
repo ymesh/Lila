@@ -5,13 +5,17 @@
 #include "math/MathCore.h"
 #include "rigmath/Expressions.h"
 #include "scene/Anim.h"
+#include "scene/Deformers.h"
 #include "scene/Graph.h"
+#include "scene/Modifiers.h"
 #include "scene/Morphs.h"
 #include "scene/RigElements.h"
 #include "scene/Skin.h"
 #include "scene/Transform.h"
 
 #include <algorithm>
+#include <cmath>
+#include <format>
 #include <map>
 #include <set>
 
@@ -156,13 +160,13 @@ struct RigBuild
     }
 };
 
-NodeId skeletalRoot(Graph& g, const Args& a, json& mapping)
+NodeId skeletalRoot(Graph& g, const Args& a, json& mapping, const std::string& cmd = "unrealExpressionRig")
 {
     if (!a.positional.empty())
     {
         Node* n = g.find(a.positional[0].get<std::string>());
         if (!n)
-            throw CommandError("unrealExpressionRig: no node named '" + a.positional[0].get<std::string>() + "'");
+            throw CommandError(cmd + ": no node named '" + a.positional[0].get<std::string>() + "'");
         mapping = mappingOf(n->path());
         return n->id();
     }
@@ -171,7 +175,7 @@ NodeId skeletalRoot(Graph& g, const Args& a, json& mapping)
         if (m.value("kind", "") == "skeletal")
         {
             if (found != kNoNode)
-                throw CommandError("unrealExpressionRig: several skeletal mappings; give the node");
+                throw CommandError(cmd + ": several skeletal mappings; give the node");
             Node* n = g.find(m.value("node", ""));
             if (n)
             {
@@ -180,8 +184,172 @@ NodeId skeletalRoot(Graph& g, const Args& a, json& mapping)
             }
         }
     if (found == kNoNode)
-        throw CommandError("unrealExpressionRig: give the character's root node, or map it with unrealMap kind=skeletal");
+        throw CommandError(cmd + ": give the character's root node, or map it with unrealMap kind=skeletal");
     return found;
+}
+
+/** A lila_expr program of input i0 through samples (w, v): straight between them, the end lines extended. */
+std::string tableProgram(const std::vector<double>& w, const std::vector<double>& v)
+{
+    std::string out = "inputs 1\n";
+    int step = 0;
+    std::string value;
+    for (size_t j = 0; j + 1 < w.size(); ++j)
+    {
+        const double slope = (v[j + 1] - v[j]) / (w[j + 1] - w[j]);
+        const double offset = v[j] - slope * w[j];
+        out += std::format("multiply i0 {}\n", slope);
+        out += std::format("add n{}.0 {}\n", step, offset);
+        const std::string line = std::format("n{}.0", step + 1);
+        step += 2;
+        if (j == 0)
+        {
+            value = line;
+            continue;
+        }
+        out += std::format("greaterEqual i0 {}\n", w[j]);
+        out += std::format("select {} {} n{}.0\n", line, value, step);
+        value = std::format("n{}.0", step + 1);
+        step += 2;
+    }
+    return out + "= " + (value.empty() ? std::format("{}", v.empty() ? 0.0 : v[0]) : value) + "\n";
+}
+
+/** A mapped morph target's exported shapes' weights, sampled over its slider's range (and at its in-betweens). */
+struct MorphTable
+{
+    NodeId target = kNoNode;
+    std::string control;
+    std::vector<double> weights;
+    std::vector<std::string> names;
+    std::vector<std::vector<double>> values; // per shape, per weight
+};
+
+/** Every mapped target on a morph of a mesh under the root or skinned to its bones. */
+std::vector<MorphTable> morphTables(Graph& g, const RigBuild& rig)
+{
+    std::vector<MorphTable> out;
+    auto onRig = [&](NodeId mesh) {
+        if (mesh == kNoNode)
+            return false;
+        if (rig.under(mesh))
+            return true;
+        const NodeId s = skin::find(g, mesh);
+        if (s == kNoNode)
+            return false;
+        for (const skin::Influence& inf : skin::influences(g, s))
+            if (rig.bones.count(inf.joint))
+                return true;
+        return false;
+    };
+    for (NodeId id : g.nodes())
+    {
+        const Node* m = g.node(id);
+        if (!m || !m->type().isA("morph") || !modifiers::exportEnabled(*m) || !onRig(modifiers::meshOf(g, id)))
+            continue;
+        const double envelope = m->as<double>(DeformerNode::kEnvelope);
+        for (NodeId t : morphs::targetNodes(g, id))
+        {
+            const Node& n = *g.node(t);
+            if (!morphs::mapped(n))
+                continue;
+            MorphTable tab;
+            tab.target = t;
+            tab.control = n.as<std::string>(morphs::kMorphName);
+            if (tab.control.empty())
+                tab.control = n.name();
+            const double lo = std::min(n.as<double>(morphs::kSliderMin), 0.0), hi = std::max(n.as<double>(morphs::kSliderMax), 1.0);
+            const int steps = std::clamp(int(std::ceil((hi - lo) * 32.0)), 32, 512);
+            for (int j = 0; j <= steps; ++j)
+                tab.weights.push_back(lo + (hi - lo) * double(j) / double(steps));
+            if (const auto* ib = dynamic_cast<const MorphInBetweens*>(n.as<DataPtr>(morphs::kInBetweens).get()))
+                for (const MorphInBetweens::Shape& s : ib->shapes)
+                    tab.weights.push_back(s.weight);
+            std::sort(tab.weights.begin(), tab.weights.end());
+            tab.weights.erase(std::unique(tab.weights.begin(), tab.weights.end(), [](double a, double b) { return std::abs(a - b) < 1e-9; }),
+                              tab.weights.end());
+            tab.names = morphs::shapeNames(g, t);
+            tab.values.resize(tab.names.size());
+            for (double w : tab.weights)
+            {
+                const std::vector<double> c = morphs::shapeWeights(g, t, w);
+                for (size_t k = 0; k < tab.names.size(); ++k)
+                    tab.values[k].push_back((k < c.size() ? c[k] : 0.0) * envelope);
+            }
+            out.push_back(std::move(tab));
+        }
+    }
+    return out;
+}
+
+/**
+ * Programs that turn each mapped morph target's weight curve into its exported shapes' curves. The shape named like
+ * the target reads and writes the same curve, so it runs last.
+ */
+std::vector<json> morphPrograms(Graph& g, RigBuild& rig)
+{
+    std::vector<json> out;
+    for (const MorphTable& tab : morphTables(g, rig))
+    {
+        rig.curves.insert(tab.control);
+        json self;
+        for (size_t k = 0; k < tab.names.size(); ++k)
+        {
+            rig.curves.insert(tab.names[k]);
+            json bindings = {{"basis", rows(rig.basis)},
+                             {"unitScale", 1.0},
+                             {"inputs", json::array({{{"kind", "curve"}, {"name", tab.control}}})},
+                             {"target", {{"kind", "curve"}, {"name", tab.names[k]}}}};
+            json e = {{"name", "morph_" + tab.names[k]},
+                      {"plug", g.plugName({tab.target, morphs::kWeight, -1})},
+                      {"text", "morph " + tab.control + " > " + tab.names[k]},
+                      {"program", tableProgram(tab.weights, tab.values[k])},
+                      {"bindings", bindings}};
+            if (tab.names[k] == tab.control)
+                self = std::move(e);
+            else
+                out.push_back(std::move(e));
+        }
+        if (!self.is_null())
+            out.push_back(std::move(self));
+    }
+    return out;
+}
+
+/** The root's deform joints and their bind matrices, for bindings and for finding the meshes on the rig. */
+void collectBones(RigBuild& rig)
+{
+    Graph& g = rig.g;
+    for (NodeId id : g.descendants(rig.root))
+        if (Node* n = g.node(id); n && n->type().isA("joint") && rigel::isDeform(*n))
+            rig.bones[id] = n->name();
+    if (Node* n = g.node(rig.root); n->type().isA("joint") && rigel::isDeform(*n))
+        rig.bones[rig.root] = n->name();
+    for (NodeId id : g.nodes())
+        if (Node* n = g.node(id); n && n->type().isA("skinCluster"))
+            for (const skin::Influence& inf : skin::influences(g, id))
+                if (inf.joint != kNoNode && rig.bones.count(inf.joint) && !rig.bindWorld.count(inf.joint))
+                    rig.bindWorld[inf.joint] = glm::inverse(g.node(inf.link)->as<glm::dmat4>(SkinInfluenceNode::kBindPreMatrix));
+}
+
+/** The connected Unreal editor's client, checked for a LilaLink feature. */
+std::shared_ptr<RpcClient> unrealClient(const std::string& cmd, const char* feature, const std::string& what)
+{
+    std::shared_ptr<RpcClient> client;
+    try
+    {
+        Link::get().ensureConnected();
+        client = Link::get().client();
+    }
+    catch (const std::runtime_error& e)
+    {
+        throw CommandError(cmd + ": not connected to Unreal: " + e.what());
+    }
+    if (!client)
+        throw CommandError(cmd + ": not connected to Unreal");
+    if (const json features = Link::get().status().value("features", json::array()); std::ranges::find(features, json(feature)) == features.end())
+        throw CommandError(cmd + ": the LilaLink plugin in Unreal predates " + what + "; rebuild it from Lila's ue/LilaLink");
+    return client;
 }
 
 /** Expressions in an order where each runs after the ones whose targets it reads. */
@@ -217,8 +385,10 @@ void registerExpressionRigCommands()
         .doc = "Build a Control Rig in Unreal that runs the character's expressions live: one Lila Expression node each, "
                "evaluating exactly as Lila does. Targets are bone channels, morph target weights (as curves) or attributes under "
                "the root (as curves named node_attr); inputs that aren't bones, morph weights or time become float controls. "
-               "Expressions that run as Python stay in Lila. Returns {rig, animBlueprint, expressions, skipped, controls, curves, "
-               "warnings, unreal}.",
+               "Expressions that run as Python stay in Lila. Morph targets with in-betweens, a path or a response curve get a node "
+               "per exported shape that turns the target's weight curve into the shape's (morphShapes), so the curve named "
+               "after the target drives it as in Lila. Returns {rig, animBlueprint, expressions, morphShapes, skipped, controls, "
+               "curves, warnings, unreal}.",
         .positionalDoc = "root",
         .flags = {{"skeletalMesh", "sm", T::String, nullptr, "The skeletal mesh asset. Default: the root's skeletal mapping."},
                   {"rig", "r", T::String, nullptr, "The Control Rig asset to create or update. Default: CR_<mesh>_Expressions beside the mesh."},
@@ -226,6 +396,9 @@ void registerExpressionRigCommands()
                    "Run the rig from the mesh's post-process Anim Blueprint (made as ABP_<name>_Expressions) so the expressions play "
                    "wherever the mesh does, and make it the mesh's default animating rig. A post-process Anim Blueprint you made is "
                    "left alone, with a warning to add a Control Rig node to it."},
+                  {"morphShapes", "", T::Bool, true,
+                   "Drive mapped morph targets' shapes from the rig. Turn off when the mesh runs the Lila Morph Paths anim node "
+                   "(unrealMorphPaths) instead."},
                   {"dryRun", "dry", T::Bool, false, "Return what would be sent without connecting to Unreal."}},
         .undoable = false,
         .run = [](const Args& a) -> json {
@@ -252,16 +425,7 @@ void registerExpressionRigCommands()
             RigBuild rig{g};
             rig.root = root;
             rig.basis = unrealBasis();
-            for (NodeId id : g.descendants(root))
-                if (Node* n = g.node(id); n && n->type().isA("joint") && rigel::isDeform(*n))
-                    rig.bones[id] = n->name();
-            if (Node* n = g.node(root); n->type().isA("joint") && rigel::isDeform(*n))
-                rig.bones[root] = n->name();
-            for (NodeId id : g.nodes())
-                if (Node* n = g.node(id); n && n->type().isA("skinCluster"))
-                    for (const skin::Influence& inf : skin::influences(g, id))
-                        if (inf.joint != kNoNode && rig.bones.count(inf.joint) && !rig.bindWorld.count(inf.joint))
-                            rig.bindWorld[inf.joint] = glm::inverse(g.node(inf.link)->as<glm::dmat4>(SkinInfluenceNode::kBindPreMatrix));
+            collectBones(rig);
 
             json skipped = json::array();
             std::vector<json> exprs;
@@ -304,6 +468,13 @@ void registerExpressionRigCommands()
             json ordered = json::array();
             for (size_t i : dependencyOrder(exprs))
                 ordered.push_back(exprs[i]);
+            // After every expression, so the shapes follow whatever sets the target's weight curve.
+            json morphShapes = json::array();
+            for (json& e : a.get<bool>("morphShapes") ? morphPrograms(g, rig) : std::vector<json>())
+            {
+                morphShapes.push_back(e["bindings"]["target"]["name"]);
+                ordered.push_back(std::move(e));
+            }
 
             json payload = {{"skeletalMesh", mesh},
                             {"rig", rigPath},
@@ -313,8 +484,8 @@ void registerExpressionRigCommands()
             json plugs = json::array();
             for (const json& e : ordered)
                 plugs.push_back(e["plug"]);
-            json out = {{"rig", rigPath},         {"skeletalMesh", mesh}, {"expressions", plugs}, {"skipped", skipped},
-                        {"controls", rig.controls}, {"curves", payload["curves"]}, {"warnings", rig.warnings}};
+            json out = {{"rig", rigPath},          {"skeletalMesh", mesh},     {"expressions", plugs}, {"skipped", skipped},
+                        {"morphShapes", morphShapes}, {"controls", rig.controls}, {"curves", payload["curves"]}, {"warnings", rig.warnings}};
             if (a.get<bool>("dryRun"))
             {
                 out["payload"] = payload;
@@ -324,20 +495,7 @@ void registerExpressionRigCommands()
                 throw CommandError("unrealExpressionRig: no expressions under " + g.node(root)->name() + " reach Unreal" +
                                    (skipped.empty() ? "" : " (" + skipped[0]["plug"].get<std::string>() + ": " + skipped[0]["why"].get<std::string>() + ")"));
 
-            std::shared_ptr<RpcClient> client;
-            try
-            {
-                Link::get().ensureConnected();
-                client = Link::get().client();
-            }
-            catch (const std::runtime_error& e)
-            {
-                throw CommandError(std::string("unrealExpressionRig: not connected to Unreal: ") + e.what());
-            }
-            if (!client)
-                throw CommandError("unrealExpressionRig: not connected to Unreal");
-            if (const json features = Link::get().status().value("features", json::array()); std::ranges::find(features, json("expressionRig")) == features.end())
-                throw CommandError("unrealExpressionRig: the LilaLink plugin in Unreal predates expression rigs; rebuild it from Lila's ue/LilaLink");
+            std::shared_ptr<RpcClient> client = unrealClient("unrealExpressionRig", "expressionRig", "expression rigs");
             // Reloaded so a LilaLink update takes effect without restarting the editor.
             const std::string code = "import importlib, lila_link_expressions\nimportlib.reload(lila_link_expressions)\n"
                                      "lila_link_expressions.build_and_print(" +
@@ -369,6 +527,63 @@ void registerExpressionRigCommands()
                 for (const json& w : pp.result.value("warnings", json::array()))
                     out["warnings"].push_back(w);
             }
+            return out;
+        },
+    });
+
+    ops::registerCommand({
+        .name = "unrealMorphPaths",
+        .doc = "Keep the character's morph paths on its skeletal mesh in Unreal for the Lila Morph Paths anim node: each morph target "
+               "with in-betweens, a path or a response curve, as its exported shapes' weights against the curve named after the "
+               "target. With postProcess, a mesh with no post-process Anim Blueprint gets ABP_<name>_MorphPaths running the node, "
+               "so the curves drive the shapes wherever the mesh plays; otherwise add a Lila Morph Paths node to your Anim "
+               "Blueprint. Use this or unrealExpressionRig's morph shapes, not both. Returns {skeletalMesh, paths, animBlueprint, "
+               "warnings}.",
+        .positionalDoc = "root",
+        .flags = {{"skeletalMesh", "sm", T::String, nullptr, "The skeletal mesh asset. Default: the root's skeletal mapping."},
+                  {"postProcess", "pp", T::Bool, true, "Make a post-process Anim Blueprint running the node when the mesh has none."},
+                  {"dryRun", "dry", T::Bool, false, "Return what would be sent without connecting to Unreal."}},
+        .undoable = false,
+        .run = [](const Args& a) -> json {
+            LILA_ZONE();
+            Graph& g = Graph::current();
+            g.evaluate();
+            json mapping;
+            const NodeId root = skeletalRoot(g, a, mapping, "unrealMorphPaths");
+            std::string mesh = a.get<std::string>("skeletalMesh", "");
+            if (mesh.empty() && mapping.is_object())
+                mesh = mapping.value("contentPath", "");
+            if (mesh.empty())
+                throw CommandError("unrealMorphPaths: " + g.node(root)->name() + " has no skeletal mapping; give skeletalMesh");
+
+            RigBuild rig{g};
+            rig.root = root;
+            collectBones(rig);
+            json paths = json::array();
+            for (const MorphTable& tab : morphTables(g, rig))
+            {
+                json shapes = json::array();
+                for (size_t k = 0; k < tab.names.size(); ++k)
+                    shapes.push_back({{"name", tab.names[k]}, {"values", tab.values[k]}});
+                paths.push_back({{"curve", tab.control}, {"weights", tab.weights}, {"shapes", shapes}});
+            }
+            if (paths.empty())
+                throw CommandError("unrealMorphPaths: no morph target under " + g.node(root)->name() +
+                                   " has in-betweens, a path or a response curve; plain targets need no node");
+            json payload = {{"skeletalMesh", mesh}, {"paths", paths}, {"postProcess", a.get<bool>("postProcess")}};
+            json out = {{"skeletalMesh", mesh}, {"paths", paths.size()}, {"warnings", json::array()}};
+            if (a.get<bool>("dryRun"))
+            {
+                out["payload"] = payload;
+                return out;
+            }
+            std::shared_ptr<RpcClient> client = unrealClient("unrealMorphPaths", "morphPaths", "morph paths");
+            RpcResult r = client->call("morphPaths", payload, 120000);
+            if (!r.ok)
+                throw CommandError("unrealMorphPaths: " + r.error);
+            if (r.result.contains("animBlueprint"))
+                out["animBlueprint"] = r.result["animBlueprint"];
+            out["warnings"] = r.result.value("warnings", json::array());
             return out;
         },
     });

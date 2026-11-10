@@ -1,7 +1,6 @@
 #pragma once
 
 #include "scene/Graph.h"
-#include "sculpt/SculptSession.h"
 
 #include <algorithm>
 #include <set>
@@ -41,14 +40,10 @@ inline bool hiddenInHierarchy(scene::Graph& g, scene::NodeId id)
     return false;
 }
 
-/** Tabler icon for a node's row: its type's icon, with the high poly a sculpt keeps under its mesh called out. */
+/** Tabler icon for a node's row: its type's icon. */
 inline std::string iconName(const scene::Node& n)
 {
     static const std::string kFallback = "point";
-    const scene::Graph& g = scene::Graph::current();
-    const scene::Node* parent = g.node(g.parent(n.id()));
-    if (parent && n.type().isA("mesh") && parent->type().isA("mesh") && n.name() == parent->name() + sculpt::kProxySuffix)
-        return "brush";
     return scene::types::iconFor(n.type(), kFallback);
 }
 

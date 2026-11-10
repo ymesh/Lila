@@ -18,6 +18,7 @@ namespace
 Tool gTool = Tool::Select;
 bool gPivotEdit = false;
 bool gCloneDrag = false;
+bool gCloneKeyUsed = false;
 unsigned gHandleResets = 0;
 unsigned gSnaps = SnapNone;
 std::map<int, std::function<void()>> gListeners;
@@ -84,6 +85,8 @@ void setCloneDrag(bool on)
     gCloneDrag = on;
     notify();
 }
+
+void markCloneDragUsed() { gCloneKeyUsed = true; }
 
 unsigned snaps() { return gSnaps; }
 
@@ -171,6 +174,27 @@ void registerActions()
                   .doc = "While held, dragging a manipulator handle duplicates the selected objects and moves the copies."});
     actions::add({.id = "tool.cloneDragOff", .label = "End Clone Drag", .category = "Tools", .run = [] { setCloneDrag(false); },
                   .doc = "Returns manipulator drags to moving the selected objects themselves."});
+    // Y: held, a manipulator drag clones; a tap without one reactivates the last viewport tool.
+    actions::add({.id = "tool.cloneKeyDown", .label = "Clone Key Down", .category = "Tools", .run = [] {
+                      gCloneKeyUsed = false;
+                      setCloneDrag(true);
+                  },
+                  .doc = "Press half of the clone key: hold and drag a manipulator handle to clone the selected objects."});
+    actions::add({.id = "tool.cloneKeyUp", .label = "Clone Key Up", .category = "Tools", .run = [] {
+                      setCloneDrag(false);
+                      if (!gCloneKeyUsed)
+                          actions::run("tool.repeatLast");
+                  },
+                  .doc = "Release half of the clone key: a tap without a clone drag runs Repeat Last Tool."});
+    actions::add({.id = "tool.repeatLast", .label = "Repeat Last Tool", .category = "Tools",
+                  .run = [] {
+                      if (auto id = actions::lastToolAction())
+                          actions::run(*id);
+                  },
+                  .enabled = [] { return actions::lastToolAction().has_value(); },
+                  .doc = "Reactivates the last viewport tool, such as the Distance Tool, ready for a new use.",
+                  .python = "lila.ui.run_action(\"tool.repeatLast\")",
+                  .keywords = {"reactivate", "again", "last tool"}});
     actions::add({.id = "tool.pivotEditToggle", .label = "Toggle Pivot Edit", .category = "Tools", .run = [] { setPivotEdit(!pivotEdit()); },
                   .doc = "Switches the manipulator between moving the object and moving its pivot.", .checked = [] { return pivotEdit(); }});
 
@@ -201,6 +225,13 @@ void registerActions()
                          "their own axes.",
                   .python = "lila.prefs.set(\"general\", \"/manipulator/rotateSpace\", \"component\")",
                   .checked = spaceIs("/manipulator/rotateSpace", "component")});
+    actions::add({.id = "manip.rotate.gimbal", .label = "Gimbal", .category = "Tools",
+                  .run = [] { PrefStore::get().set("general", "/manipulator/rotateSpace", "gimbal"); },
+                  .doc = "Each ring turns one rotate channel about its own Euler axis, in the object's rotate order. Two rings "
+                         "lining up shows gimbal lock.",
+                  .python = "lila.prefs.set(\"general\", \"/manipulator/rotateSpace\", \"gimbal\")",
+                  .checked = spaceIs("/manipulator/rotateSpace", "gimbal"),
+                  .keywords = {"euler", "gimbal lock", "local"}});
     actions::add({.id = "manip.move.component", .label = "Component", .category = "Tools",
                   .run = [] { PrefStore::get().set("general", "/manipulator/moveSpace", "component"); },
                   .doc = "Moves components together along their average normal and tangent (on a curve, its tangent frame). Objects move "
@@ -260,7 +291,7 @@ void registerActions()
                   .doc = "Release half of the soft select key: a tap without a drag bridges two or more selected edges in edge mode, "
                          "otherwise toggles soft select."});
     snap("edge", "Snap to Edge (hold)", SnapEdge, "While held, moves snap onto the nearest edge under the cursor.");
-    snap("vertex", "Snap to Vertex (hold)", SnapVertex, "While held, moves snap to the nearest vertex under the cursor.");
+    snap("vertex", "Snap to Vertex (hold)", SnapVertex, "While held, moves snap to the nearest vertex, locator or joint under the cursor.");
     snap("surface", "Snap to Surface (hold)", SnapSurface, "While held, moves slide along the mesh surface under the cursor.");
     snap("rotateHold", "Toggle Rotate Snap (hold)", SnapRotateHold, "While held, flips rotate snapping on or off.");
 

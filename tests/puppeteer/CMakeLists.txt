@@ -1,8 +1,9 @@
 # The Puppeteer extension's rig side: its maths directly, the rest loaded as the extension.
-add_executable(lila_puppeteer_tests main.cpp test_puppeteer_math.cpp test_puppeteer_rig.cpp test_spinner.cpp test_spinner_draw.cpp)
+add_executable(lila_puppeteer_tests main.cpp test_puppeteer_math.cpp test_puppeteer_rig.cpp test_spinner.cpp test_spinner_draw.cpp test_strings_pose.cpp)
 target_link_libraries(lila_puppeteer_tests PRIVATE LilaUI doctest::doctest)
 target_include_directories(lila_puppeteer_tests PRIVATE ${CMAKE_SOURCE_DIR}/extensions/Puppeteer)
-add_dependencies(lila_puppeteer_tests lila_puppeteer_extension)
+add_dependencies(lila_puppeteer_tests lila_puppeteer_extension lila_rig_templates_extension)
+target_compile_definitions(lila_puppeteer_tests PRIVATE LILA_TEST_RIG_TEMPLATES_PACKAGE="${CMAKE_BINARY_DIR}/bin/$<CONFIG>/extensions/RigTemplates.lilaext")
 target_compile_definitions(lila_puppeteer_tests PRIVATE LILA_TEST_PUPPETEER_PACKAGE="$<TARGET_FILE_DIR:lila_puppeteer_extension>")
 if(WIN32)
     cmake_path(GET Python_EXECUTABLE PARENT_PATH _pyhome)

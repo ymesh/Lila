@@ -52,10 +52,13 @@ LILA_UI_API void setPivotEdit(bool on);
 
 /**
  * Clone drag: hold Y. A drag on a manipulator handle in object mode duplicates the objects first (in the duplicate
- * option box's mode) and moves the copies, leaving the originals where they were.
+ * option box's mode) and moves the copies, leaving the originals where they were. A tap of Y without a clone drag runs
+ * Repeat Last Tool instead.
  */
 LILA_UI_API bool cloneDrag();
 LILA_UI_API void setCloneDrag(bool on);
+/** Called when a clone drag happens, so releasing the clone key doesn't count as a tap. */
+LILA_UI_API void markCloneDragUsed();
 
 LILA_UI_API unsigned snaps();
 LILA_UI_API void setSnap(SnapFlags flag, bool on);

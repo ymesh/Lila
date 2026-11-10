@@ -5,12 +5,14 @@
   "requires": {"groups": [{"name": "feathers", "draw": true}]},
   "nodes": [
     {"name": "featherGuides", "type": "Guides", "params": {"group": "feathers"}, "ui": {"x": 0, "y": 0}},
-    {"name": "flightFeather", "type": "Compound", "params": {"count": 70, "vaneWidth": 0.2, "angle": 38.0, "asymmetry": 0.45, "splits": 2.0, "barbWidth": 0.003, "shaftWidth": 0.024, "definition": {"graph": {"version": 1, "nodes": [{"name": "shafts", "type": "Input", "params": {"name": "shafts", "type": "Curves"}, "ui": {"x": 0, "y": 0}}, {"name": "propagate", "type": "Propagate", "params": {"shaftWidth": 0.024, "sides": "both", "count": 70, "start": 0.18, "segments": 6, "length": 0.2, "lengthProfile": [[0, 0.3], [0.15, 0.85], [0.7, 1], [1, 0.3]], "asymmetry": 0.45, "angle": 38.0, "angleProfile": [[0, 1.4], [1, 0.75]], "curl": 8.0, "droop": 4.0, "splits": 2.0, "splitAmount": 0.3, "lengthRandom": 0.03, "angleRandom": 1.0, "groupId": 1, "groupName": "flight"}, "ui": {"x": 240, "y": 0}}, {"name": "width", "type": "Width", "params": {"width": 0.003, "profile": [[0, 1], [1, 0.5]]}, "ui": {"x": 480, "y": 0}}], "connections": [{"from": "shafts", "to": "propagate", "input": "shafts"}, {"from": "propagate", "to": "width", "input": "strands"}], "output": "width"}, "inputs": [{"name": "shafts", "type": "Curves"}], "expose": {"shaftWidth": "propagate.shaftWidth", "count": "propagate.count", "vaneWidth": "propagate.length", "angle": "propagate.angle", "asymmetry": "propagate.asymmetry", "splits": "propagate.splits", "barbWidth": "width.width"}}}, "ui": {"x": 240, "y": 0}},
-    {"name": "output", "type": "Output", "ui": {"x": 480, "y": 0}}
+    {"name": "output", "type": "Output", "ui": {"x": 480, "y": 0}},
+    {"name": "flightFeather/propagate", "type": "Propagate", "params": {"shaftWidth": 0.024, "sides": "both", "count": 70, "start": 0.18, "segments": 6, "length": 0.2, "lengthProfile": [[0, 0.3], [0.15, 0.85], [0.7, 1], [1, 0.3]], "asymmetry": 0.45, "angle": 38.0, "angleProfile": [[0, 1.4], [1, 0.75]], "curl": 8.0, "droop": 4.0, "splits": 2.0, "splitAmount": 0.3, "lengthRandom": 0.03, "angleRandom": 1.0, "groupId": 1, "groupName": "flight"}, "ui": {"x": 280, "y": 40}},
+    {"name": "flightFeather/width", "type": "Width", "params": {"width": 0.003, "profile": [[0, 1], [1, 0.5]]}, "ui": {"x": 320, "y": 80}}
   ],
   "connections": [
-    {"from": "featherGuides", "to": "flightFeather", "input": "shafts"},
-    {"from": "flightFeather", "to": "output", "input": "strands"}
+    {"from": "featherGuides", "to": "flightFeather/propagate", "input": "shafts"},
+    {"from": "flightFeather/propagate", "to": "flightFeather/width", "input": "strands"},
+    {"from": "flightFeather/width", "to": "output", "input": "strands"}
   ],
   "output": "output"
 }

@@ -97,7 +97,6 @@ struct Settings
     bool plane = false;
     std::string mask = "paint";
     int iterations = 10;
-    bool showKeys = true;
 };
 
 Settings& settings()
@@ -124,7 +123,6 @@ Settings& settings()
         c.plane = p.value<bool>("general", key("plane"), c.plane);
         c.mask = p.value<std::string>("general", key("mask"), c.mask);
         c.iterations = std::clamp(p.value<int>("general", key("iterations"), c.iterations), 1, 200);
-        c.showKeys = p.value<bool>("general", key("showKeys"), c.showKeys);
         return c;
     }();
     return s;
@@ -149,7 +147,6 @@ void save()
     p.set("general", key("plane"), c.plane);
     p.set("general", key("mask"), c.mask);
     p.set("general", key("iterations"), c.iterations);
-    p.set("general", key("showKeys"), c.showKeys);
     syncPalette();
     viewportTools::requestRedraw();
 }
@@ -370,7 +367,7 @@ public:
             return c;
         };
         mAfter = check("After Erosion", "strokes stay as drawn; off, erosion shapes them", [](bool on) { settings().afterErosion = on; });
-        mKeys = check("Show Keys", "list the tool's keys in the corner of the view", [](bool on) { settings().showKeys = on; });
+        mKeys = check("Show Keys", "key hints on screen, in every tool", [](bool on) { PrefStore::get().set("general", kShowKeysPref, on); });
         mRegion = new QToolButton(optionsBox);
         mRegion->setText("Sculpt Region");
         mRegion->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -428,7 +425,7 @@ public:
         }
         mPlane->setChecked(s.plane);
         mAfter->setChecked(s.afterErosion || s.op == SculptOp::Uplift);
-        mKeys->setChecked(s.showKeys);
+        mKeys->setChecked(keysShown());
         mRegion->setChecked(regionArmed());
     }
 
@@ -487,7 +484,7 @@ public:
 
     bool ownsBrushRadius() const override { return true; }
 
-    std::optional<QCursor> cursor() const override { return QCursor(Qt::CrossCursor); }
+    std::optional<QCursor> cursor() const override { return QCursor(Qt::BlankCursor); }
 
     bool mousePress(QMouseEvent* e, const ViewInfo& view) override
     {
@@ -606,8 +603,7 @@ public:
                         .flags = {{"after erosion", st.afterErosion && st.op != SculptOp::Uplift}},
                         .prompt = regionArmed() ? QString("click the patch to sculpt") : QString(),
                         .symmetry = st.mirror != "off" ? std::optional<ToolSymmetry>(ToolSymmetry{true, QString::fromStdString(st.mirror).toUpper()}) : std::nullopt});
-        if (st.showKeys)
-            drawKeyList(p, QPointF(16.0, view.height - 84.0), keyHints());
+        drawKeyList(p, QPointF(16.0, view.height - 84.0), keyHints());
         const QPointF at = mControls.anchor(brush::ui::ringPosition(mStroke, mHover));
         std::optional<brush::ui::CursorSurface> cs;
         brush::SurfaceHit hit;

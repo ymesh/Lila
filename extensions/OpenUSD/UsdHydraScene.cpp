@@ -348,6 +348,7 @@ std::shared_ptr<const LilaSceneIndex::MeshData> LilaSceneIndex::meshData(const s
     {
         geo::SubdivideOptions so;
         so.levels = level;
+        so.uvs = geo::SubdivideUvs::Blend;
         refined = geo::subdivide(*mesh, so, &map);
     }
     const geo::Mesh& m = level > 0 ? refined : *mesh;

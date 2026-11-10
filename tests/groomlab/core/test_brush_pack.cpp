@@ -12,9 +12,12 @@
 #include <stdexcept>
 
 #include "groomlab/brush.h"
+#include "groomlab/brush_catalog.h"
 #include "groomlab/curve.h"
 #include "groomlab/frames.h"
 #include "groomlab/graph_io.h"
+#include "groom/GroomEvaluator.h"
+#include "groom/GroomStrokeHost.h"
 #include "groomlab/random.h"
 #include "groomlab/scalp_maps.h"
 #include "groomlab/scalp_mirror.h"
@@ -22,6 +25,8 @@
 #include "test_helpers.h"
 
 #include <nlohmann/json.hpp>
+
+using lila::groom::GroomEvaluator;
 
 namespace groomlab {
 namespace {
@@ -43,6 +48,29 @@ struct Field {
 };
 
 std::shared_ptr<const Ramp> ramp(std::initializer_list<std::pair<float, float>> keys) { return std::make_shared<const Ramp>(keys); }
+
+// A groom on a sphere with the default graph (Scatter, Width...), 30 primaries, as a session and
+// its host.
+struct Session {
+    GroomData data;
+    std::unique_ptr<GroomEvaluator> session;
+    std::unique_ptr<lila::groom::GroomStrokeHost> host;
+    explicit Session(const std::string& graphJson = {}) {
+        data.scalp = test::makeSphere(24, 48);
+        data.graphJson = graphJson;
+        GuideHierarchy h;
+        const GroupId g = h.addGroup("primary");
+        Rng rng(3);
+        for (int i = 0; i < 30; ++i) {
+            const Vec3f n = Vec3f(rng.uniform(-1, 1), rng.uniform(0.3f, 1), rng.uniform(0.2f, 1)).normalized();
+            h.addGuide(g, test::straightCurve(n, n * 0.6f, 10));
+        }
+        h.evaluate(data.scalp.get());
+        data.hierarchyJson = h.toJson();
+        session = std::make_unique<GroomEvaluator>(data);
+        host = std::make_unique<lila::groom::GroomStrokeHost>(*session);
+    }
+};
 
 ToolView frontView() { return ToolView::fromMatrix(test::lookAtProjection({0, 1.2f, 4}, {0, 0.6f, 0}, 40.0, 1.0), 800, 800); }
 
@@ -182,9 +210,61 @@ TEST(BrushPack, FalloffCurveReplacesTheSmoothFalloff) {
     EXPECT_NEAR(sphereWeight({0, 0, 0}, 2.0f, linear)({1.0f, 0.0f, 0.0f}), 0.5f, 1e-6f);
 }
 
+TEST(BrushPack, AFlatFalloffCurveIsAHardBrushOnScreenToo) {
+    // A curve of 1 all the way to the edge weighs every point as hardness 1 does: the same
+    // stroke through the screen brush gives the same guides.
+    const ToolView view = frontView();
+    std::string results[2];
+    for (int k = 0; k < 2; ++k) {
+        Session g;
+        BrushTool tool;
+        tool.settings.setMode("comb");
+        tool.settings.screenRadius = 120.0f;
+        if (k == 0) {
+            tool.settings.setHardness(1.0f);
+        } else {
+            tool.settings.setFalloffProfile("[[0, 1], [1, 1]]");
+        }
+        ASSERT_TRUE(tool.stroke(*g.host, view, acrossTheFront()));
+        results[k] = g.session->data().hierarchyJson;
+    }
+    EXPECT_EQ(results[0], results[1]);
+}
+
+
 // ---- Direction and Noise ----------------------------------------------------------------------
 
+TEST(BrushPack, CurlDirectionAndNoiseBrushesAreGone) {
+    // Removed 2026-10-30 (not useful enough): no tile, no mode; the Curl and Noise nodes stay.
+    for (const char* brush : {"curl", "direction", "noise"}) {
+        BrushToolSettings s;
+        EXPECT_THROW(s.setMode(brush), std::invalid_argument) << brush;
+        EXPECT_EQ(brushEntry(brush), nullptr) << brush;
+    }
+    for (const char* shaping : {"comb", "smooth", "lift", "twist", "attract"}) {
+        EXPECT_TRUE(brushEntry(shaping)->hasSetting("strengthProfile")) << shaping;
+        EXPECT_TRUE(brushEntry(shaping)->hasSetting("falloffProfile")) << shaping;
+    }
+    EXPECT_FALSE(brushEntry("slide")->hasSetting("strengthProfile"));
+    EXPECT_TRUE(brushEntry("paint")->hasSetting("falloffProfile"));
+}
+
 // ---- A setting's map (+ New Map > for a setting) ------------------------------------------------
+
+TEST(BrushPack, WidthAndDensityBrushesAreGoneAndSayWhereTheyWent) {
+    for (const char* brush : {"width", "density"}) {
+        BrushToolSettings s;
+        try {
+            s.setMode(brush);
+            ADD_FAILURE() << brush << " is no brush any more";
+        } catch (const std::invalid_argument& e) {
+            EXPECT_NE(std::string(e.what()).find("+ New Map > for a setting"), std::string::npos) << e.what();
+        }
+        EXPECT_EQ(brushEntry(brush), nullptr);
+    }
+    EXPECT_EQ(brushSettingSpec("paramMap"), nullptr);
+    EXPECT_NE(std::string(brushEntry("erase")->hint).find("density map"), std::string::npos);
+}
 
 TEST(BrushPack, PaintableSettingsAreMappableParams) {
     const nlohmann::json specs = nlohmann::json::parse(operatorSpecsJson());
@@ -274,6 +354,62 @@ TEST(BrushPack, BindParamMapFindsOrWiresTheMap) {
     for (const nlohmann::json& n : layer["nodes"]) {
         if (n["name"] == "noise") EXPECT_EQ(n["params"]["amplitude"]["guide"], "wild");
     }
+}
+
+// The new flow end to end on a session: the map made, linked and picked in one undo step; strokes
+// paint it; Ctrl lowers it (no hair where it reaches 0).
+TEST(BrushPack, PaintParamMapMakesLinksPicksThenCtrlLowers) {
+    Session g;
+    const std::string graphBefore = g.session->data().graphJson;
+    const ToolView view = frontView();
+    BrushTool tool;
+    tool.settings.setMode("comb");
+    tool.settings.brush.value = 0.25f;
+    const ParamMapBinding b = paintParamMap(*g.host, tool.settings, "scatter", "density");
+    EXPECT_EQ(b.map, "scatter_density");
+    EXPECT_FALSE(b.graphJson.empty()) << "made";
+    ASSERT_EQ(g.host->edits().size(), 1u) << "the map and the link: one step";
+    EXPECT_TRUE(g.host->edits()[0].text(StrokeField::Graph).set);
+    EXPECT_TRUE(g.host->edits()[0].text(StrokeField::ScalpMaps).set);
+    EXPECT_EQ(tool.settings.modeName(), "paint");
+    EXPECT_EQ(tool.settings.brush.attribute, "scatter_density");
+    EXPECT_EQ(tool.settings.paintKind, "vertices");
+    EXPECT_EQ(tool.settings.brush.value, 1.0f);
+    EXPECT_EQ(paramMapOf(g.session->data().graphJson, g.session->scalpMaps(), nullptr, "scatter", "density").map, "scatter_density");
+    // Picked again: the same map, no new step.
+    BrushToolSettings other;
+    EXPECT_EQ(paintParamMap(*g.host, other, "scatter", "density").map, "scatter_density");
+    EXPECT_EQ(g.host->edits().size(), 1u);
+
+    // Ctrl: toward 0, hair removed where the brush passes.
+    tool.settings.screenRadius = 80.0f;
+    tool.settings.brush.strength = 1.0f;
+    ASSERT_TRUE(tool.stroke(*g.host, view, acrossTheFront(), 1.0f, kStrokeCtrl));
+    ASSERT_EQ(g.host->edits().size(), 2u);
+    EXPECT_FALSE(g.host->edits()[1].text(StrokeField::Graph).set) << "a stroke paints, it wires nothing";
+    {
+        const std::vector<float>& values = g.session->scalpMaps().maps.at("scatter_density").values;
+        ASSERT_EQ(values.size(), g.data.scalp->pointCount());
+        EXPECT_LT(*std::min_element(values.begin(), values.end()), 0.5f) << "painted away under the stroke";
+        EXPECT_EQ(*std::max_element(values.begin(), values.end()), 1.0f) << "white elsewhere: the density as it was";
+    }
+    // A value under a half still lowers with Ctrl (1 - value would paint hair back in).
+    tool.settings.brush.value = 0.3f;
+    ASSERT_TRUE(tool.stroke(*g.host, view, acrossTheFront(), 1.0f, kStrokeCtrl));
+    {
+        const std::vector<float>& values = g.session->scalpMaps().maps.at("scatter_density").values;
+        EXPECT_LT(*std::min_element(values.begin(), values.end()), 0.25f);
+    }
+    // Undo: the strokes, then the map and its link in one step.
+    ASSERT_TRUE(g.host->undo());
+    ASSERT_TRUE(g.host->undo());
+    EXPECT_TRUE(g.session->scalpMaps().maps.count("scatter_density"));
+    ASSERT_TRUE(g.host->undo());
+    EXPECT_EQ(g.session->data().graphJson, graphBefore);
+    EXPECT_FALSE(g.session->scalpMaps().maps.count("scatter_density"));
+
+    // A node the graph lacks: refused, nothing done.
+    EXPECT_THROW(paintParamMap(*g.host, other, "curl", "affect"), std::runtime_error);
 }
 
 // ---- Topological symmetry -----------------------------------------------------------------------
@@ -439,6 +575,50 @@ TEST(BrushPack, SoloFreezesEveryOtherGuideAndUnfreezeAllFreesThem) {
     EXPECT_FALSE(unfreezeAll(f.h)) << "nothing frozen any more";
 }
 
+TEST(BrushPack, PlaceSolosItsNewGuidesInTheSameStep) {
+    Session g;
+    const ToolView view = frontView();
+    BrushTool tool;
+    tool.settings.setMode("place");
+    tool.settings.place.soloNewGuides = true;
+    tool.settings.place.matchNeighbors = false;
+    ASSERT_TRUE(tool.stroke(*g.host, view, {{400.0f, 430.0f}}));
+    ASSERT_EQ(g.host->edits().size(), 1u) << "one undo step for the guide and the freeze";
+    const GuideHierarchy h = GuideHierarchy::fromJson(g.session->data().hierarchyJson);
+    ASSERT_EQ(h.guides().size(), 31u);
+    const GuideId made = h.guides().back().id;
+    for (const HierarchyGuide& guide : h.guides()) EXPECT_EQ(frozen(h, guide.id), guide.id == made ? 0.0f : 1.0f);
+    ASSERT_TRUE(g.host->undo());
+    EXPECT_EQ(GuideHierarchy::fromJson(g.session->data().hierarchyJson).attributeNames().size(), 0u);
+    // Off (the core's default, and scripts'): nothing is frozen.
+    BrushToolSettings s;
+    s.setMode("place");
+    scriptedStroke(*g.host, s, {Vec3f(0.2f, 0.9f, 0.4f).normalized()});
+    EXPECT_EQ(GuideHierarchy::fromJson(g.session->data().hierarchyJson).attributeNames().size(), 0u);
+    s.place.soloNewGuides = true;
+    scriptedStroke(*g.host, s, {Vec3f(-0.2f, 0.9f, 0.4f).normalized()});
+    const GuideHierarchy after = GuideHierarchy::fromJson(g.session->data().hierarchyJson);
+    EXPECT_EQ(frozen(after, after.guides().back().id), 0.0f);
+    EXPECT_EQ(frozen(after, after.guides().front().id), 1.0f);
+}
+
+TEST(BrushPack, AShiftClickDoesNothingAShiftDragSmooths) {
+    // Shift is smoothing alone: a Shift+click (pressed and released in place) starts no stroke,
+    // commits nothing and leaves the brush's group as it was (selecting guides is the hosts'
+    // Ctrl+Shift).
+    Session g;
+    const ToolView view = frontView();
+    BrushTool tool;
+    tool.settings.setMode("comb");
+    tool.settings.screenRadius = 40.0f;
+    tool.settings.brush.group = "nothing";
+    tool.press(*g.host, view, 400.0f, 450.0f, 1.0f, kStrokeShift);
+    EXPECT_FALSE(tool.stroking()) << "no stroke starts on the click";
+    EXPECT_EQ(tool.release(*g.host, view), StrokeRelease::None);
+    EXPECT_TRUE(g.host->edits().empty());
+    EXPECT_EQ(tool.settings.brush.group, "nothing");
+}
+
 TEST(BrushPack, FreezeToSelectionFollowsTheSelection) {
     Field f;
     const GuideId a = f.add(0.2f, 0.2f), b = f.add(0.5f, 0.5f), c = f.add(0.8f, 0.8f);
@@ -488,6 +668,22 @@ TEST(BrushPack, SoloHonoursSymmetry) {
     EXPECT_EQ(frozen(h, h.guides()[0].id), 0.0f);
     EXPECT_EQ(frozen(h, h.guides()[1].id), 0.0f) << "its mirror twin stays live too";
     EXPECT_EQ(frozen(h, h.guides()[2].id), 1.0f);
+}
+
+TEST(BrushPack, PlaceWithSymmetrySolosBothNewGuides) {
+    Session g;
+    BrushToolSettings s;
+    s.setMode("place");
+    s.setSymmetry("x");
+    s.place.soloNewGuides = true;
+    scriptedStroke(*g.host, s, {Vec3f(0.4f, 0.8f, 0.45f).normalized()});
+    const GuideHierarchy h = GuideHierarchy::fromJson(g.session->data().hierarchyJson);
+    ASSERT_EQ(h.guides().size(), 32u) << "the guide and its mirror image";
+    std::size_t live = 0;
+    for (const HierarchyGuide& guide : h.guides()) live += frozen(h, guide.id) == 0.0f;
+    EXPECT_EQ(live, 2u);
+    EXPECT_EQ(frozen(h, h.guides()[30].id), 0.0f);
+    EXPECT_EQ(frozen(h, h.guides()[31].id), 0.0f);
 }
 
 }  // namespace

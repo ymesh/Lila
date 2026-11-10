@@ -1963,7 +1963,22 @@ void registerNodeEditorActions()
                       if (showHook())
                           showHook()();
                   },
-                  .doc = "Geometry-nodes editor.", .python = "lila.ui.run_action(\"window.nodeEditor\")"});
+                  .doc = "Node graph editor: geometry nodes, scene history and other graph types.",
+                  .python = "lila.ui.run_action(\"window.nodeEditor\")"});
+    actions::add({.id = "nodeEditor.showHistory", .label = "Show in Node Editor", .category = "Node Editor",
+                  .run =
+                      [] {
+                          if (showHook())
+                              showHook()();
+                          for (NodeEditor* e : editors())
+                              if (auto* d = qobject_cast<QDockWidget*>(e->parentWidget()); d && d->objectName() == kNodeEditorDock)
+                              {
+                                  e->setBackend(kSceneGraphBackend);
+                                  e->setGroup("History");
+                              }
+                      },
+                  .doc = "Open the Node Editor on the selection's history: its generator, modifiers and connections.",
+                  .python = "lila.ui.run_action(\"nodeEditor.showHistory\")"});
     actions::add({.id = "gn.newGroup", .label = "New Geometry Nodes Group", .category = "Geometry Nodes",
                   .run =
                       [] {

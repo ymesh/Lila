@@ -6,6 +6,7 @@
 
 #include <lila/Actions.h>
 #include <lila/Command.h>
+#include <lila/Controls.h>
 #include <lila/Extension.h>
 #include <lila/Graph.h>
 #include <lila/LevelToolkit.h>
@@ -63,10 +64,25 @@ std::vector<std::string> selectedDetail()
     catch (const std::exception&)
     {
     }
+    // Meshes mapped onto a sheet are its users, not detail modelled on its high.
+    auto mapped = [&](scene::NodeId id) {
+        for (scene::NodeId at : {id, g.parent(id)})
+            if (scene::Node* n = g.node(at))
+                try
+                {
+                    const scene::PlugValue v = g.value(g.plug(n->path() + "." + kNodeSheet));
+                    if (const std::string* p = std::get_if<std::string>(&v); p && !p->empty())
+                        return true;
+                }
+                catch (const std::exception&)
+                {
+                }
+        return false;
+    };
     std::vector<std::string> out;
     auto add = [&](scene::NodeId id) {
         scene::Node* n = g.node(id);
-        if (!n || !n->type().isA("mesh") || n->name() == sheet + "_High" || n->name() == sheet + "_Low")
+        if (!n || !n->type().isA("mesh") || n->name() == sheet + "_High" || n->name() == sheet + "_Low" || mapped(id))
             return;
         if (std::ranges::find(out, n->path()) == out.end())
             out.push_back(n->path());
@@ -80,7 +96,7 @@ std::vector<std::string> selectedDetail()
     return out;
 }
 
-/** How many times Cycle Trim has run since the last Auto Trim: each press takes the next-best match. */
+/** How many times Next Best Trim has run since the last Auto Trim: each press takes the next-best match. */
 int gCycle = 0;
 
 /** The painted preview the Trim Sheet Editor keeps when the sheet is textured, else the baked normal map. */
@@ -109,8 +125,11 @@ public:
     bool hasHeightForWidth() const override { return true; }
     int heightForWidth(int w) const override { return mSheet ? int(double(w) * mSheet->height / std::max(1, mSheet->width)) : w; }
 
-    /** Reloads when the current sheet or its textures changed on disk. */
-    void refresh()
+    /** Called after each reload with the sheet, or null when there is none. */
+    std::function<void(const Sheet*)> onSheet;
+
+    /** Reloads when the current sheet or its textures changed on disk, or always when forced. */
+    void refresh(bool force = false)
     {
         const std::string path = currentSheet();
         std::error_code ec;
@@ -121,7 +140,7 @@ public:
         long long texStamp = 0;
         if (mSheet)
             texStamp = stamp(shownFile(*mSheet, path));
-        if (path == mPath && sheetStamp == mSheetStamp && texStamp == mTexStamp)
+        if (!force && path == mPath && sheetStamp == mSheetStamp && texStamp == mTexStamp)
             return;
         mPath = path;
         mSheetStamp = sheetStamp;
@@ -142,6 +161,8 @@ public:
                 log::write(LogLevel::Warning, e.what());
             }
         }
+        if (onSheet)
+            onSheet(mSheet ? &*mSheet : nullptr);
         updateGeometry();
         update();
     }
@@ -155,7 +176,7 @@ protected:
         if (!mSheet)
         {
             p.setPen(palette().color(QPalette::PlaceholderText));
-            p.drawText(rect(), Qt::AlignCenter | Qt::TextWordWrap, "No trim sheet yet.\nPick a preset and press New.");
+            p.drawText(rect(), Qt::AlignCenter | Qt::TextWordWrap, "No trim sheet.\nPick a preset and click New.");
             return;
         }
         if (!mImage.isNull())
@@ -193,7 +214,7 @@ protected:
             const Trim& t = mSheet->trims[size_t(hit)];
             const glm::dvec2 w = mSheet->worldSize(t);
             QToolTip::showText(e->globalPosition().toPoint(),
-                               QString::fromStdString(std::format("{}  {}: {} x {} px, {:.0f} x {:.0f} cm\nClick to map the selection onto it.", hit,
+                               QString::fromStdString(std::format("{}  {}: {} x {} px, {:.0f} x {:.0f} cm\nClick to map the selected faces or meshes onto it.", hit,
                                                                   t.name, t.sizePx().x, t.sizePx().y, w.x, w.y)),
                                this);
         }
@@ -259,21 +280,40 @@ QWidget* sectionWidget(QWidget* parent)
     auto* v = new QVBoxLayout(w);
     v->setContentsMargins(0, 0, 0, 0);
 
+    v->setSpacing(4);
+
     auto* row = new QHBoxLayout();
     auto* presetBox = new QComboBox(w);
+    presetBox->setToolTip("Preset for a new sheet");
     for (const PresetInfo& p : presets())
     {
         presetBox->addItem(QString::fromStdString(p.label), QString::fromStdString(p.id));
         presetBox->setItemData(presetBox->count() - 1, QString::fromStdString(p.doc), Qt::ToolTipRole);
     }
     auto* make = new QPushButton("New", w);
-    make->setToolTip("Make and bake a trim sheet from this preset (kept and reused if it already exists).");
+    make->setToolTip("New sheet from the preset, generated and baked; an existing one of that name is reused");
     QObject::connect(make, &QPushButton::clicked, w, [presetBox] { run("trimSheetCreate", {{"preset", presetBox->currentData().toString().toStdString()}}); });
     row->addWidget(presetBox, 1);
     row->addWidget(make);
     v->addLayout(row);
 
-    v->addWidget(new SheetView(w));
+    auto* name = new QLabel(w);
+    name->setContentsMargins(2, 4, 0, 0);
+    controls::setRole(name, "dim");
+    v->addWidget(name);
+    auto* view = new SheetView(w);
+    v->addWidget(view);
+    auto* hint = new QLabel("Click a trim to map the selection onto it", w);
+    hint->setContentsMargins(2, 0, 0, 0);
+    controls::setRole(hint, "hint");
+    v->addWidget(hint);
+    view->onSheet = [name, hint](const Sheet* s) {
+        name->setVisible(s);
+        hint->setVisible(s);
+        if (s)
+            name->setText(QString::fromStdString(std::format("{}  {} x {} px", s->name, s->width, s->height)));
+    };
+    view->refresh(true);
     return w;
 }
 } // namespace
@@ -291,46 +331,49 @@ void registerUi(ext::Context& ctx)
     };
     const Def defs[] = {
         {"trims.create", "New Trim Sheet", "trimSheetCreate", json{{"preset", "industrialMetal"}},
-         "Make a trim sheet from a preset and bake it: generator, bake and material in one step.", "trimSheetCreate(preset='industrialMetal')"},
-        {"trims.bake", "Bake Trim Sheet", "trimSheetBake", json::object(), "Rebake the current trim sheet's textures.", "trimSheetBake()"},
-        {"trims.generate", "Show Trim Sheet High/Low", "trimSheetGenerate", json::object(),
-         "Put the current sheet's generated high and low in the scene to look at or sculpt.", "trimSheetGenerate()"},
-        {"trims.test", "Trim Test Blockout", "trimSheetTest", json::object(),
+         "A new trim sheet from a preset: generated, baked and given its material in one step.", "trimSheetCreate(preset='industrialMetal')"},
+        {"trims.bake", "Bake Trim Sheet", "trimSheetBake", json::object(),
+         "Rebake the current sheet's maps (normal, AO, curvature, height, cavity) after changing its layout or detail.", "trimSheetBake()"},
+        {"trims.generate", "Show Sheet High/Low", "trimSheetGenerate", json::object(),
+         "Put the current sheet's high and low poly in the scene, lying flat at the origin, to model detail on.", "trimSheetGenerate()"},
+        {"trims.test", "Test Blockout", "trimSheetTest", json::object(),
          "Put a test blockout (wall, beam, steps, pillar, slab) in the scene, auto trimmed onto the current sheet, to see how it reads.",
          "trimSheetTest()"},
         {"trims.auto", "Auto Trim", "trimAuto", json::object(),
-         "Hotspot the selected faces or meshes onto the current trim sheet: each island goes to the trim that fits its shape and size.", "trimAuto()"},
-        {"trims.live", "Live Trim", "trimLive", json::object(), "Keep the selected meshes trimmed as they are edited: adds a live hotspot modifier.",
+         "Map the selected faces or meshes onto the current sheet: each island goes to the trim that best fits its shape and size.", "trimAuto()"},
+        {"trims.live", "Live Trim", "trimLive", json::object(), "Keep the selected meshes trimmed while you edit them (a live Auto Trim modifier).",
          "trimLive()"},
         {"trims.check", "Check Trims", "trimCheck", json{{"showIssues", true}},
-         "Check the selected meshes' trim mapping: density, alignment, orientation, stretch, readability and repetition, painted red where wrong.",
+         "Paint red where the selected meshes' trims are wrong: texel density, alignment, orientation, stretch, repetition.",
          "trimCheck(showIssues=True)"},
-        {"trims.shiftUp", "Shift Trim Up", "trimShift", json{{"steps", -1}}, "Move the selected faces to the trim above.", "trimShift(steps=-1)"},
-        {"trims.shiftDown", "Shift Trim Down", "trimShift", json{{"steps", 1}}, "Move the selected faces to the trim below.", "trimShift(steps=1)"},
-        {"trims.edges", "Trim Edges", "trimEdges", json::object(),
-         "Chamfer the selected edges, map the chamfers onto the sheet's edge trims and set weighted normals.", "trimEdges(width=1.0)"},
+        {"trims.shiftUp", "Shift Trim Up", "trimShift", json{{"steps", -1}}, "Move the selected faces to the trim above theirs on the sheet.",
+         "trimShift(steps=-1)"},
+        {"trims.shiftDown", "Shift Trim Down", "trimShift", json{{"steps", 1}}, "Move the selected faces to the trim below theirs on the sheet.",
+         "trimShift(steps=1)"},
+        {"trims.edges", "Chamfer Edges to Trim", "trimEdges", json::object(),
+         "Chamfer the selected edges and map the chamfers onto the sheet's edge trims, so hard corners read bevelled.", "trimEdges(width=1.0)"},
         {"trims.curve", "Trim Along Curve", "trimAlongCurve", json::object(),
-         "Lay a tiling trim along the selected curves, with caps at the ends: kerbs, edging, skirting, cornices.", "trimAlongCurve(width=15)"},
-        {"trims.decal", "Trim Decal", "trimDecal", json::object(), "Float a trim strip over the selected edges, its crest on the edge.",
-         "trimDecal(width=2)"},
-        {"trims.cut", "Trim Cut", "trimDecal", json{{"cut", true}}, "Carve a trim groove along the selected edges, its floor and walls on the trim.",
+         "Build a strip of trim along the selected curves, capped at the ends: kerbs, edging, skirting, cornices.", "trimAlongCurve(width=15)"},
+        {"trims.decal", "Edge Strip", "trimDecal", json::object(),
+         "Float a thin trim strip over the selected edges, as a separate mesh: piping, seams, worn edges.", "trimDecal(width=2)"},
+        {"trims.cut", "Edge Groove", "trimDecal", json{{"cut", true}}, "Carve a groove along the selected edges, its floor and walls on an edge trim.",
          "trimDecal(cut=True, depth=0.5)"},
-        {"trims.decalSend", "Send Decals to Unreal", "trimDecalSend", json::object(),
+        {"trims.decalSend", "Send Edge Strips to Unreal", "trimDecalSend", json::object(),
          "Send the placed unique decals to Unreal as deferred decal actors with the generated decal material.", "trimDecalSend()"},
         {"trims.weightedNormals", "Weighted Normals", "polyWeightedNormals", json::object(),
          "Face-weighted normals: big faces stay flat beside chamfers and bevels.", "polyWeightedNormals()"},
         {"trims.texture", "Texture Trim Sheet", "trimSheetTexture", json::object(),
-         "Put the sheet's smart material on its texture set: wear, dirt and chips follow the baked bevels on every mesh using it.",
+         "Put a smart material on the sheet: wear, dirt and chips follow its baked bevels on every mesh using it.",
          "trimSheetTexture(material='Rusty Iron')"},
         {"trims.export", "Export Trim Layout", "trimSheetExport", json::object(), "Write the current sheet's layout as a Valve .rect, SVG, ID map or JSON.",
          "trimSheetExport(format='rect')"},
         {"trims.send", "Send Trim Sheet to Unreal", "trimSheetSend", json::object(),
-         "Send the sheet's textures, generate the trim master material and an instance, and put it on mapped meshes.", "trimSheetSend()"},
+         "Send the sheet's textures and material to Unreal and put it on the meshes using it.", "trimSheetSend()"},
     };
     for (const Def& d : defs)
     {
         Action act{.id = d.id, .label = d.label, .category = "Trim Sheets", .doc = d.doc, .python = d.python, .command = d.command, .call = d.call};
-        // Auto Trim starts a new cycle; Cycle Trim continues it.
+        // Auto Trim starts a new cycle; Next Best Trim continues it.
         if (std::string_view(d.id) == "trims.auto")
             act.run = [] {
                 gCycle = 0;
@@ -365,7 +408,8 @@ void registerUi(ext::Context& ctx)
                                const std::vector<std::string> detail = selectedDetail();
                                if (detail.empty())
                                {
-                                   log::write(LogLevel::Warning, "Select the meshes you modelled on the sheet's high poly.");
+                                   log::write(LogLevel::Warning, "Select the meshes you modelled on the sheet's high poly (Show Sheet High/Low); meshes "
+                                                                 "mapped onto the sheet don't count.");
                                    return;
                                }
                                run("trimSheetBake", {{"high", detail}});
@@ -374,7 +418,7 @@ void registerUi(ext::Context& ctx)
                               "keeps them for every later bake.",
                        .python = "trimSheetBake(high=['Rosette', 'Dentil'])"});
     actions::add(ctx, {.id = "trims.detailClear",
-                       .label = "Bake Without Detail",
+                       .label = "Bake Without Sheet Detail",
                        .category = "Trim Sheets",
                        .run = [] { run("trimSheetBake", {{"high", json::array()}}); },
                        .doc = "Forget the sheet's detail meshes and bake its generated relief alone.",
@@ -386,36 +430,51 @@ void registerUi(ext::Context& ctx)
                        .doc = "Lay out the current sheet: drag borders to resize strips, split and retype trims, set bevels and tags.",
                        .python = "lila.ui.run_action('trims.editor')"});
     actions::add(ctx, {.id = "trims.cycle",
-                       .label = "Cycle Trim",
+                       .label = "Next Best Trim",
                        .category = "Trim Sheets",
                        .run = [] { run("trimAuto", {{"cycle", ++gCycle}}); },
-                       .doc = "Map the selection onto its next-best trims: press again to keep going.",
+                       .doc = "Move the selection to its next-best fitting trims; press again for the ones after.",
                        .python = "trimAuto(cycle=1)"});
 
     registerEditor(ctx);
 
+    using Item = levelToolkit::Item;
     levelToolkit::add(ctx, {.id = "trims",
                             .title = "Trim Sheets",
-                            .items = {{"trims.auto", "wand", "Auto", "Trim"},
-                                      {"trims.cycle", "refresh", "Cycle"},
-                                      {"trims.shiftUp", "arrow-up", "Up"},
-                                      {"trims.shiftDown", "arrow-down", "Down"},
-                                      {""},
-                                      {"trims.edges", "border-sides", "Edges"},
-                                      {"trims.decal", "sticker", "Decal"},
-                                      {"trims.curve", "route", "Curve"},
-                                      {"trims.editor", "layout-rows", "Edit"},
-                                      {"trims.test", "box", "Test"},
-                                      {"trims.bake", "flame", "Bake"},
-                                      {"trims.texture", "brush", "Texture"},
-                                      {"trims.paint", "paint", "Paint"},
-                                      {"trims.send", "send", "Unreal"}},
+                            .items = {Item{.action = "trims.auto", .icon = "wand", .text = "Auto Trim", .shelf = "Trim", .group = "Map"},
+                                      Item{.action = "trims.cycle", .icon = "refresh", .text = "Next Best", .group = "Map"},
+                                      Item{.action = "trims.shiftUp", .icon = "arrow-up", .text = "Shift Up", .group = "Map"},
+                                      Item{.action = "trims.shiftDown", .icon = "arrow-down", .text = "Shift Down", .group = "Map"},
+                                      Item{.action = "trims.edges", .icon = "border-sides", .text = "Chamfer", .group = "Edges"},
+                                      Item{.action = "trims.decal", .icon = "sticker", .text = "Strip", .group = "Edges"},
+                                      Item{.action = "trims.cut", .icon = "line-dashed", .text = "Groove", .group = "Edges"},
+                                      Item{.action = "trims.curve", .icon = "route", .text = "Curve", .group = "Edges"},
+                                      Item{.action = "trims.editor", .icon = "layout-rows", .text = "Layout", .group = "Sheet"},
+                                      Item{.action = "trims.bake", .icon = "flame", .text = "Bake", .group = "Sheet"},
+                                      Item{.action = "trims.texture", .icon = "brush", .text = "Texture", .group = "Sheet"},
+                                      Item{.action = "trims.paint", .icon = "paint", .text = "Paint", .group = "Sheet"},
+                                      Item{.action = "trims.live", .text = "Live Trim"},
+                                      Item{.action = "trims.check", .text = "Check Trims"},
+                                      Item{.action = "trims.send", .text = "Send to Unreal"},
+                                      Item{.action = "trims.generate", .rare = true},
+                                      Item{.action = "trims.detail", .rare = true},
+                                      Item{.action = "trims.detailClear", .rare = true},
+                                      Item{.action = "trims.test", .rare = true},
+                                      Item{.action = "trims.weightedNormals", .rare = true},
+                                      Item{.action = "trims.decalSend", .rare = true},
+                                      Item{.action = "trims.export", .rare = true}},
                             .create = sectionWidget,
-                            .order = 60, .docs = "trim-sheets"});
+                            .createFirst = true,
+                            .order = 60,
+                            .docs = "trim-sheets"});
 
     menus::addItem(ctx, {.id = "trims.menu", .menu = levelToolkit::kMenu, .kind = menus::Kind::Submenu, .label = "Trim Sheets"});
-    const char* order[] = {"trims.create", "trims.test", "trims.editor", "trims.bake", "trims.generate", "trims.detail", "trims.detailClear", "trims.texture", "trims.paint", "", "trims.auto", "trims.cycle", "trims.shiftUp", "trims.shiftDown",
-                           "trims.edges", "trims.decal", "trims.cut", "trims.curve", "trims.weightedNormals", "", "trims.export", "trims.send"};
+    const char* order[] = {"trims.create",  "trims.editor",   "trims.bake",      "trims.texture",   "trims.paint",
+                           "",              "trims.generate", "trims.detail",    "trims.detailClear", "",
+                           "trims.auto",    "trims.cycle",    "trims.shiftUp",   "trims.shiftDown", "trims.live",
+                           "trims.check",   "",               "trims.edges",     "trims.decal",     "trims.cut",
+                           "trims.curve",   "trims.weightedNormals", "",          "trims.test",      "trims.export",
+                           "trims.send",    "trims.decalSend"};
     int sep = 0;
     for (const char* a : order)
     {

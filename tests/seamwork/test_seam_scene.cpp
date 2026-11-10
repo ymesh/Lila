@@ -182,6 +182,29 @@ TEST_CASE("overlap: Stagehand measures how deep a box sits in a heightfield")
     for (int k = 0; k < 8; ++k)
         pushed.push_back({(k & 1) ? 40.0 : -60.0, 10.0 + ((k & 2) ? 100.0 : 0.0), (k & 4) ? 50.0 : -50.0});
     CHECK(wall->depth(pushed, glm::dvec3(-1.0, 0.0, 0.0)) == doctest::Approx(64.5).epsilon(0.05));
+    // Another rise further out doesn't count: the first clear pose is the depth.
+    for (int z = 0; z < step.nz; ++z)
+        for (int x = 0; x < step.nx; ++x)
+            if (step.samplePos(x, z).x <= -400.0)
+                step.heights[step.index(x, z)] = 500.0f;
+    std::unique_ptr<overlap::Session> gully = overlap::open(step);
+    CHECK(gully->depth(pushed, glm::dvec3(-1.0, 0.0, 0.0)) == doctest::Approx(64.5).epsilon(0.05));
+}
+
+TEST_CASE("terrainCliffKit: with Stagehand's physics, full-size pieces dress a noise-terrain cliff")
+{
+    load();
+    run("newScene");
+    const json t = run("terrainCreate", {{"size", {20000.0, 20000.0}}, {"resolution", 129}, {"amplitude", 6000.0}, {"featureSize", 6000.0}, {"seed", 3}, {"name", "Hills"}});
+    run("terrainCliffs", {{"args", {t["mesh"]}}, {"slope", 40.0}, {"minHeight", 300.0}, {"minArea", 10.0}});
+    const json big = run("polyCube", {{"name", "RockBig"}, {"width", 600.0}, {"height", 1000.0}, {"depth", 400.0}});
+    const json small = run("polyCube", {{"name", "RockSmall"}, {"width", 250.0}, {"height", 300.0}, {"depth", 200.0}});
+    const json k = run("terrainCliffKit", {{"args", {t["mesh"]}}, {"region", "cliff_1"}, {"kit", {big[0], small[0]}}});
+    INFO(k.dump());
+    CHECK(k["penetrationCheck"] == "stagehand");
+    CHECK(k["placed"].get<int>() - k["fillers"].get<int>() >= 20);
+    CHECK(k["coverage"].get<double>() > 0.95);
+    CHECK(k["rejectedPenetrating"].get<int>() > 0);
 }
 
 TEST_CASE("seamFind: tags leave objects out and seamCheck reports floating and open joins")

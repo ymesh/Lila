@@ -4,6 +4,7 @@
 #include "core/Log.h"
 #include "core/Profile.h"
 #include "geo/Mesh.h"
+#include "geo/Ops.h"
 #include "scene/DeformEval.h"
 #include "scene/Deformers.h"
 #include "scene/Graph.h"
@@ -210,12 +211,18 @@ MeshPtr exportMesh(Graph& g, NodeId mesh)
         }
         try
         {
-            cur = std::make_shared<geo::Mesh>(mod->apply(*cur, *mod));
+            cur = std::make_shared<geo::Mesh>(mod->apply(*stackInput(*mod, cur), *mod));
         }
         catch (const std::exception& e)
         {
             log::warn("{}: {}", mod->path(), e.what());
         }
+    }
+    if (cur && geo::hasFitSpacing(*cur))
+    {
+        auto bare = std::make_shared<geo::Mesh>(*cur);
+        geo::removeFitSpacing(*bare);
+        cur = bare;
     }
     return cur;
 }

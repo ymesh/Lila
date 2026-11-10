@@ -183,9 +183,9 @@ TEST_CASE("rig templates: building UE5 Manny matches the source skeleton")
     for (const char* n : {"t_pelvis", "t_hand_l", "t_foot_r"})
         CHECK(glm::length(graph().find(n)->as<glm::dvec3>(Transform::kRotate)) == 0.0);
 
-    // UE bones aim down their X, which is local Z in Lila once the FBX import has converted the axes.
+    // UE bones aim down their X, which stays local X in Lila once the FBX import has turned the character to face forward.
     const glm::dmat4 upper = world("t_upperarm_l"), lower = world("t_lowerarm_l");
-    CHECK(glm::dot(glm::normalize(glm::dvec3(upper[2])), glm::normalize(glm::dvec3(lower[3] - upper[3]))) > 0.999);
+    CHECK(glm::dot(glm::normalize(glm::dvec3(upper[0])), glm::normalize(glm::dvec3(lower[3] - upper[3]))) > 0.999);
 }
 
 TEST_CASE("rig templates: templateFromSkeleton labels Manny's main bones")
@@ -320,11 +320,11 @@ TEST_CASE("rig templates: markers centre in a bound mesh, and bind, unbind and m
     json built = run("buildRigSkeleton", {{"args", {"spine_03_marker"}}, {"prefix", "c_"}});
     CHECK(glm::length(glm::dvec3(world("c_spine_03")[3] - world("spine_03_marker")[3])) < 1e-6);
 
-    // Mirror: the right hand marker becomes the left one reflected across the lateral axis (Lila Z for Manny).
+    // Mirror: the right hand marker becomes the left one reflected across the lateral axis (Lila X for Manny).
     run("move", {{"args", {"hand_l_marker"}}, {"by", {0.0, 4.0, 2.0}}});
     run("mirrorRigMarkers", {{"args", {root}}});
     glm::dvec3 l(world("hand_l_marker")[3]), r(world("hand_r_marker")[3]);
-    CHECK(glm::length(glm::dvec3(l.x, l.y, -l.z) - r) < 1e-6);
+    CHECK(glm::length(glm::dvec3(-l.x, l.y, l.z) - r) < 1e-6);
 
     run("unbindRigTemplate", {{"args", {root}}});
     CHECK(rig::centerMeshes(g, g.find("spine_03_marker")->id()).empty());
@@ -342,8 +342,8 @@ TEST_CASE("rig templates: template poses apply to a built skeleton, and the pick
     json report = run("applyPose", {{"args", {"T"}}, {"character", "UE5_Manny"}});
     CHECK(report["missing"].empty());
     const glm::dmat4 upper = world("upperarm_l"), lower = world("lowerarm_l"), hand = world("hand_l");
-    CHECK(glm::dot(glm::normalize(glm::dvec3(lower[3] - upper[3])), glm::dvec3(0, 0, 1)) > 0.999);
-    CHECK(glm::dot(glm::normalize(glm::dvec3(hand[3] - lower[3])), glm::dvec3(0, 0, 1)) > 0.999);
+    CHECK(glm::dot(glm::normalize(glm::dvec3(lower[3] - upper[3])), glm::dvec3(1, 0, 0)) > 0.999);
+    CHECK(glm::dot(glm::normalize(glm::dvec3(hand[3] - lower[3])), glm::dvec3(1, 0, 0)) > 0.999);
     run("applyPose", {{"args", {"bind"}}, {"character", "UE5_Manny"}});
     CHECK(glm::length(graph().find("upperarm_l")->as<glm::dvec3>(Transform::kRotate)) < 1e-9);
 

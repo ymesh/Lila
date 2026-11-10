@@ -48,6 +48,7 @@ public:
         kTargetOffset, // targets[n].offset: parent constraint, the object relative to the target
         kConstraintTranslate,
         kConstraintRotate,
+        kPivotOffsets,
         // aimConstraint only
         kAimVector,
         kUpVector,

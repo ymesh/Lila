@@ -37,8 +37,9 @@ inline constexpr const char* kDressSection = "level.dress";
 inline constexpr const char* kAssetsSection = "level.assets";
 
 /**
- * One button in a section. Items with a shelf label are the section's daily tools and show as tiles at its top; the rest
- * are labelled buttons, two to a row, and past six they go in the section's overflow menu.
+ * One button in a section. Items in a group show as tiles under the group's title; ungrouped items with a shelf label
+ * are the section's daily tools and show as tiles at its top; the rest are labelled buttons, two to a row, and rare
+ * ones (or any past six) go in the section's overflow menu.
  */
 struct Item
 {
@@ -47,6 +48,10 @@ struct Item
     std::string icon; // Tabler name, for a tile; empty falls back to the action's icon
     std::string text; // short button text; empty for the action's label
     std::string shelf; // label of a button for it on the Level shelf; empty for none
+    /** A titled tile group within the section; items naming the same group share a grid under that title. */
+    std::string group;
+    /** Rare: always in the section's overflow menu instead of a button. */
+    bool rare = false;
 };
 
 struct Section
@@ -56,6 +61,8 @@ struct Section
     std::vector<Item> items;
     /** Extra content under the buttons, such as a settings form; parent is the section's box. Empty for none. */
     std::function<QWidget*(QWidget* parent)> create;
+    /** The create content goes above the buttons instead of under them. */
+    bool createFirst = false;
     /** Lower comes first; equal orders keep registration order. */
     int order = 100;
     /** A docs page ("masonry", "stagehand?id=tune-it") for a docs button on the section's header; empty for none. */

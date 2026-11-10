@@ -36,6 +36,15 @@ LILA_SCENE_API void moveBy(Graph& g, const std::vector<NodeId>& ids, const glm::
 /** Rotates each object about its own pivot. `rotation` is in `space` (world, or each object's own frame). */
 LILA_SCENE_API void rotateBy(Graph& g, const std::vector<NodeId>& ids, const glm::dquat& rotation, Space space = Space::World);
 
+/**
+ * World axes (columns, one per channel) the rotate channels turn about, in the object's rotate order: the outermost is the
+ * parent's own, each inner one carried round by the outer angles. Two columns go parallel at gimbal lock.
+ */
+LILA_SCENE_API glm::dmat3 gimbalFrame(Graph& g, NodeId id);
+
+/** Adds `degrees` to each object's rotate channels, so a turn about one gimbal axis changes that channel only. */
+LILA_SCENE_API void rotateChannelsBy(Graph& g, const std::vector<NodeId>& ids, const glm::dvec3& degrees);
+
 /** The rotate channels rotateBy would give one object, before its locked channels are kept. */
 LILA_SCENE_API glm::dvec3 rotatedEuler(Graph& g, NodeId id, const glm::dquat& rotation, Space space = Space::World);
 

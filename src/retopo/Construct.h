@@ -59,6 +59,8 @@ struct PatchSpec
     int padding = -1;
     int variant = 0;
     std::optional<glm::dvec3> pull;
+    /** A cap's outward direction; see PatchOptions::lift. */
+    std::optional<glm::dvec3> lift;
 };
 
 /** A band of quads along a path, its knots the handles that shape it. */
@@ -144,6 +146,8 @@ struct RegionSpec
     std::vector<Index> faces;
     Index referenceFaces = 0;
     double edgeLength = 1.0;
+    /** Positive sets the density from the region's area, overriding edgeLength. */
+    int targetFaces = 0;
     std::vector<std::vector<glm::dvec3>> guides;
     /** Existing retopo border points the region's border must keep, in loop order; may be empty. */
     std::vector<glm::dvec3> border;
@@ -195,10 +199,11 @@ struct StitchResult
 /**
  * Adds generated faces to the mesh tagged with id: positions within weld of an existing point reuse it, faces wind to
  * agree with neighbours they share edges with, faces that already exist or would make a non-manifold edge are skipped.
- * With a symmetry plane, points near it land on it and the mirrored faces are added too.
+ * With a symmetry plane, points within snap of it land on it and the mirrored faces are added too. The construct's own
+ * border points within snap of an open border point of the mesh join it, one each, nearest first.
  */
 LILA_SCENE_API StitchResult stitchConstruct(geo::Mesh& mesh, const GenResult& gen, int id, double weld,
-                                            const std::optional<geo::SymmetryPlane>& symmetry);
+                                            const std::optional<geo::SymmetryPlane>& symmetry, double snap = 0.0);
 
 /** Faces tagged with a construct id, ascending. */
 LILA_SCENE_API std::vector<Index> constructFaces(const geo::Mesh& mesh, int id);

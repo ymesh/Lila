@@ -70,6 +70,9 @@ struct Item
     std::function<void(QMenu*)> setup;
 };
 
+/** Items under this path show in the time slider's context menu while a range is selected on it. */
+inline constexpr const char* kTimeSliderRange = "TimeSliderRange";
+
 LILA_UI_API Registry<Menu>& menuRegistry();
 LILA_UI_API Registry<Item>& itemRegistry();
 

@@ -795,6 +795,13 @@ class TexturePaintTool final : public ViewportTool, public brush::DabSink
 {
 public:
     const char* name() const override { return "texturePaint"; }
+    // The brush ring and its centre dot are the cursor.
+    std::optional<QCursor> cursor() const override
+    {
+        const TexturePaintSettings& st = texturePaintState();
+        const bool ring = st.tool != "fill" && !(st.tool == "project" && (st.transform || st.warp));
+        return ring ? std::optional<QCursor>(QCursor(Qt::BlankCursor)) : std::nullopt;
+    }
 
     void activate() override
     {

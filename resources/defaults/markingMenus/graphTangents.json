@@ -1,0 +1,12 @@
+{
+  "N": { "label": "Auto", "action": "graphTangents.auto" },
+  "NE": { "label": "Spline", "action": "graphTangents.spline" },
+  "E": { "label": "Linear", "action": "graphTangents.linear" },
+  "SE": { "label": "Stepped", "action": "graphTangents.step" },
+  "S": { "label": "Flat", "action": "graphTangents.flat" },
+  "W": { "label": "Break", "action": "graphTangents.break" },
+  "NW": { "label": "Unify", "action": "graphTangents.unify" },
+  "overflow": [
+    { "label": "Clamped", "action": "graphTangents.clamped" }
+  ]
+}

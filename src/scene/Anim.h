@@ -40,6 +40,20 @@ LILA_SCENE_API void playbackChanged();
 LILA_SCENE_API int addPlaybackListener(std::function<void()> fn);
 LILA_SCENE_API void removePlaybackListener(int id);
 
+/**
+ * The time slider's selected range (Shift + drag on it), for edits that act across frames, such as Strings poses.
+ * A UI selection, not scene data: it is never saved. Falloff, in frames, eases those edits out either side.
+ */
+struct TimeSelection
+{
+    bool active = false;
+    double start = 0.0, end = 0.0; // seconds, start <= end
+    double falloff = 0.0;           // frames
+};
+LILA_SCENE_API TimeSelection& timeSelection();
+/** How much of an edit across the selection lands at time: 1 inside, easing to 0 over the falloff, 0 beyond. */
+LILA_SCENE_API double timeSelectionWeight(const TimeSelection& s, double seconds);
+
 LILA_SCENE_API double frameOf(double seconds);
 LILA_SCENE_API double secondsOf(double frame);
 /** Nearest whole frame, in seconds. */

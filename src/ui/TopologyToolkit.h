@@ -50,6 +50,8 @@ private:
                               QWidget* parent);
     void refreshState();
     void rebuildConstructPanel();
+    /** Deletes the active construct and makes its neighbour in the list active. */
+    void deleteActiveConstruct();
 
     QLabel* mReference = nullptr;
     QLabel* mRetopo = nullptr;

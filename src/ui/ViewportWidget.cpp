@@ -528,7 +528,7 @@ render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
             o->draw(dc);
         }
     }
-    renderPasses::Context passes{.frame = s, .painter = painter, .view = view, .panel = mHudPanel};
+    renderPasses::Context passes{.frame = s, .painter = painter, .view = view, .panel = mHudPanel, .widget = this};
     renderPasses::run(renderPasses::Stage::Scene, passes);
     {
         const std::vector<viewportHooks::Drawer> drawers = viewportHooks::drawers();
@@ -555,6 +555,7 @@ render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
         hud::drawOriginAxis(s, painter, view);
     drawViewIndicator(painter);
     drawViewCube(painter);
+    drawViewSwitcher(painter);
     drawHud(painter);
     if (QPointF cursor = mapFromGlobal(QCursor::pos().toPointF()); rect().contains(cursor.toPoint()))
     {

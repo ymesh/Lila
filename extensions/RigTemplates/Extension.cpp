@@ -1233,6 +1233,37 @@ bool registerCommands(ext::Context& ctx)
                         return orientSkeleton(g, e->tmpl, j.id(), limbs, a.get<std::string>("preserve", ""));
                     }});
 
+    defs.push_back({.name = "rigFromTemplate",
+                    .doc = "Give an existing skeleton its template's rig elements, matching joints by name and alias: IK limits, "
+                           "IK chains with poles, reverse feet on the skinned sole, lookers, twist drivers and deform flags, grouped "
+                           "under <root>_rig. A skeleton that already has IK chains is left alone. Without template, the best matching "
+                           "one is used. Returns the elements made.",
+                    .positionalDoc = "a joint of the skeleton",
+                    .flags = {{"template", "t", T::String, nullptr, "Template id."}},
+                    .run = [](const Args& a) -> json {
+                        Graph& g = graph();
+                        std::vector<std::string> objs = a.objects();
+                        if (objs.empty())
+                            throw CommandError("rigFromTemplate: give a joint of the skeleton");
+                        Node& j = need(g, objs[0], "rigFromTemplate");
+                        if (!rig::isJoint(j))
+                            throw CommandError("rigFromTemplate: " + j.path() + " is not a joint");
+                        const NodeId top = topJoint(g, j.id());
+                        const std::vector<NodeId> joints = skeletonOf(g, top);
+                        const Entry* e = a.has("template") ? findTemplate(a.get<std::string>("template")) : bestTemplate(g, joints).first;
+                        if (!e)
+                            throw CommandError(a.has("template") ? "rigFromTemplate: no template '" + a.get<std::string>("template") + "'"
+                                                                 : "rigFromTemplate: no loaded template matches " + j.path() + "'s joint names; give template");
+                        // A skeleton that already has IK chains is rigged; this only fills in a bare one.
+                        for (NodeId id : joints)
+                            if (lila::scene::rigel::chainContaining(g, id))
+                                return json::array();
+                        const std::map<std::string, NodeId> mapped = mapJoints(g, e->tmpl, joints);
+                        if (mapped.empty())
+                            return json::array();
+                        return buildTemplateRig(g, e->tmpl, Solved{}, mapped, g.node(top)->path(), true, "none");
+                    }});
+
     defs.push_back({.name = "templateFromSkeleton",
                     .doc = "Make a rig template from a skeleton: a marker per joint with its position, recorded "
                            "orientation, semantic label, side and mirror partner, orientation rules that reproduce it, "

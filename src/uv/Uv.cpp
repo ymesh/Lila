@@ -2,6 +2,7 @@
 
 #include "core/Profile.h"
 #include "geo/Topology.h"
+#include "uv/Metrics.h"
 #include "uv/UvCommon.h"
 
 #include <tbb/parallel_for.h>
@@ -78,6 +79,25 @@ std::string& currentSet()
 {
     static std::string name = "uv0";
     return name;
+}
+
+/** True when the charts kept where they are (all but those to pack) overlap each other in uv. */
+bool keptOverlap(std::span<const Chart> charts, std::span<Chart* const> toPack)
+{
+    std::vector<std::array<glm::dvec2, 3>> tris;
+    std::vector<Index> group;
+    for (size_t i = 0; i < charts.size(); ++i)
+    {
+        if (std::ranges::find(toPack, &charts[i]) != toPack.end())
+            continue;
+        for (const auto& t : charts[i].tris)
+        {
+            tris.push_back({charts[i].uv[t[0]], charts[i].uv[t[1]], charts[i].uv[t[2]]});
+            group.push_back(Index(i));
+        }
+    }
+    std::vector<uint8_t> flags;
+    return triangleOverlaps(tris, flags, group, true) > 0;
 }
 } // namespace
 
@@ -187,6 +207,13 @@ UnwrapFacesResult unwrapFaces(geo::Mesh& mesh, std::span<const Index> faceIds, s
         }
         else
             toPack.push_back(&ch);
+    }
+    if (!opts.pack && opts.keepPlacement && toPack.size() < charts.size() && keptOverlap(charts, toPack))
+    {
+        toPack.clear();
+        for (size_t i = 0; i < charts.size(); ++i)
+            if (ok[i] && !(opts.unwrap.usePins && pinCount(charts[i]) >= 2))
+                toPack.push_back(&charts[i]);
     }
     if (!toPack.empty())
     {

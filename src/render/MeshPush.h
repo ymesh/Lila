@@ -13,7 +13,8 @@ struct MeshPush
     /** The device address of the frame's instance buffer (GpuInstance entries) and this draw's first entry in it. */
     uint64_t instances = 0;
     uint32_t firstInstance = 0;
-    uint32_t instancePad = 0;
+    /** The sculpt rig's key light angle off the view direction, radians. */
+    float keyTilt = 0.0f;
     /** meshWirePS: the device address of the mesh's edge mask (RenderMesh::edgeMask), the section's first triangle and the wire width in pixels. */
     uint64_t edgeMask = 0;
     uint32_t firstTriangle = 0;

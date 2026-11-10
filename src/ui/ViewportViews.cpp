@@ -1,11 +1,14 @@
 #include "ui/ViewportWidgetDetail.h"
 #include "ui/ViewportToast.h"
 #include "ui/Hotkeys.h"
+#include "ui/ViewportHud.h"
+#include "ui/ViewportToolbar.h"
 #include "scene/HudStats.h"
 #include "scene/SoftSelect.h"
 #include "scene/Turntable.h"
 #include "uv/Uv.h"
 
+#include <QMenu>
 #include <QVariantAnimation>
 
 #include <map>
@@ -689,6 +692,95 @@ void ViewportWidget::drawViewCube(OverlayPainter& p)
         if (clickable)
             mViewCubeFaces.emplace_back(side, poly);
     }
+}
+
+namespace
+{
+const char* oppositeView(const std::string& v)
+{
+    static const std::map<std::string, const char*> kOpposite = {{"front", "back"}, {"back", "front"}, {"right", "left"},
+                                                                 {"left", "right"}, {"top", "bottom"}, {"bottom", "top"}};
+    const auto it = kOpposite.find(v);
+    return it != kOpposite.end() ? it->second : nullptr;
+}
+
+QString viewLabel(const std::string& v)
+{
+    QString s = QString::fromStdString(v);
+    return s.isEmpty() ? s : s.left(1).toUpper() + s.mid(1);
+}
+} // namespace
+
+void ViewportWidget::switchView(const std::string& view)
+{
+    const bool own = mLookThrough == scene::kNoNode;
+    if (own && mViewName == view)
+    {
+        if (const char* flip = oppositeView(view))
+            setView(flip);
+    }
+    else
+        setView(view);
+    requestFrame();
+    Q_EMIT viewStateChanged();
+}
+
+void ViewportWidget::drawViewSwitcher(OverlayPainter& p)
+{
+    if (!hud::shown(mHudPanel, "viewSwitcher"))
+        return;
+    const auto segments = hud::viewSwitcherSegments(width(), height(), hud::shown(mHudPanel, "viewCube"));
+    if (segments.empty())
+        return;
+    const QPointF cursor = mapFromGlobal(QCursor::pos().toPointF());
+    const bool own = mLookThrough == scene::kNoNode;
+    const QRectF all = segments.front().rect.united(segments.back().rect).adjusted(-3, -3, 3, 3);
+    p.rect(all, {0.0f, 0.0f, 0.0f, 0.45f});
+    for (const hud::SwitcherSegment& seg : segments)
+    {
+        const std::string v = seg.view;
+        const char* flip = oppositeView(v);
+        const bool camera = v == "camera";
+        const bool current = camera ? !own : own && (mViewName == v || (flip && mViewName == flip));
+        const bool hot = seg.rect.contains(cursor);
+        if (current)
+            p.rect(seg.rect, {0.78f, 0.78f, 0.78f, 1.0f});
+        else if (hot)
+            p.rect(seg.rect, {0.32f, 0.32f, 0.32f, 0.9f});
+        const glm::vec4 ink = current ? glm::vec4(0.08f, 0.08f, 0.08f, 1.0f) : hot ? glm::vec4(0.96f, 0.96f, 0.96f, 1.0f)
+                                                                              : glm::vec4(0.78f, 0.78f, 0.78f, 1.0f);
+        if (camera)
+        {
+            const QPointF c = seg.rect.center();
+            p.icon(QRectF(c.x() - 8.0, c.y() - 8.0, 16.0, 16.0), "camera", ink);
+            continue;
+        }
+        // The current side's own name: Back while looking from the back.
+        const std::string shown = current && own ? mViewName : v;
+        p.text(QPointF(seg.rect.center().x(), seg.rect.center().y() + 4.5), viewLabel(shown), ink, OverlayPainter::Center);
+    }
+}
+
+bool ViewportWidget::viewSwitcherClick(QPointF at)
+{
+    if (!hud::shown(mHudPanel, "viewSwitcher"))
+        return false;
+    for (const hud::SwitcherSegment& seg : hud::viewSwitcherSegments(width(), height(), hud::shown(mHudPanel, "viewCube")))
+    {
+        if (!seg.rect.contains(at))
+            continue;
+        if (std::string_view(seg.view) == "camera")
+        {
+            auto* menu = new QMenu(this);
+            menu->setAttribute(Qt::WA_DeleteOnClose);
+            fillCameraMenu(menu, this);
+            menu->popup(mapToGlobal(seg.rect.bottomLeft().toPoint()));
+        }
+        else
+            switchView(seg.view);
+        return true;
+    }
+    return false;
 }
 
 bool ViewportWidget::viewCubeClick(QPointF at)

@@ -489,6 +489,21 @@ QString trimDisplayName(const std::string& id)
     return out;
 }
 
+QString kindTip(std::string_view kind)
+{
+    if (kind == "stripU")
+        return "Strip U: tiles left to right, for long runs like mouldings and edges";
+    if (kind == "stripV")
+        return "Strip V: tiles top to bottom";
+    if (kind == "rect")
+        return "Rect: a panel; faces fit inside it without tiling";
+    if (kind == "radial")
+        return "Radial: round parts like caps, discs and rings";
+    if (kind == "unique")
+        return "Unique: one-off detail, used only when asked for by tag";
+    return "Flat: plain area with no edge detail, used only when asked for by tag";
+}
+
 /** A bold sub-header between the editor's groups. */
 QLabel* trimHeader(QWidget* parent, const QString& text)
 {
@@ -535,6 +550,11 @@ QWidget* makeEditor(QWidget* parent)
     auto* canvas = new SheetCanvas(w);
     canvas->setObjectName("trimSheetCanvas");
     v->addWidget(canvas, 1);
+    auto* hint = new QLabel("Click a trim to edit it, double-click to map the selection onto it. Drag a border to resize; "
+                            "right-click to split or delete.", w);
+    hint->setWordWrap(true);
+    hint->setProperty("role", "hint");
+    v->addWidget(hint);
     auto* warnings = new QLabel(w);
     warnings->setWordWrap(true);
     warnings->setStyleSheet("color: #e0a040");
@@ -549,9 +569,14 @@ QWidget* makeEditor(QWidget* parent)
     form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     auto* name = new QLineEdit(props);
     auto* kind = new QComboBox(props);
+    kind->setToolTip("How meshes use the trim");
     for (const char* k : kKindNames)
+    {
         kind->addItem(trimDisplayName(k), QString(k));
+        kind->setItemData(kind->count() - 1, kindTip(k), Qt::ToolTipRole);
+    }
     auto* style = new QComboBox(props);
+    style->setToolTip("The relief baked into the trim");
     for (const std::string& s : styleNames())
         style->addItem(trimDisplayName(s), QString::fromStdString(s));
     auto* bevel = new QDoubleSpinBox(props);
@@ -559,10 +584,12 @@ QWidget* makeEditor(QWidget* parent)
     bevel->setButtonSymbols(QAbstractSpinBox::NoButtons);
     bevel->setRange(0.0, 256.0);
     bevel->setSuffix(" px");
+    bevel->setToolTip("Width of the trim's bevelled edges on the sheet");
     auto* tags = new QLineEdit(props);
     tags->setPlaceholderText("wall, edge, floor...");
-    auto* reserved = new QCheckBox("Manual only", props);
-    reserved->setToolTip("Reserved: Auto never picks this trim; it goes only where you click it");
+    tags->setToolTip("Words to pick the trim by: Auto Trim and Texture's trim lists match them");
+    auto* reserved = new QCheckBox("Skip", props);
+    reserved->setToolTip("Auto Trim never picks this trim; it goes only where you map it by hand");
     auto* size = new QLabel(props);
     form->addRow("Name", name);
     form->addRow("Size", size);
@@ -570,15 +597,23 @@ QWidget* makeEditor(QWidget* parent)
     form->addRow("Style", style);
     form->addRow("Bevel", bevel);
     form->addRow("Tags", tags);
-    form->addRow("Reserved", reserved);
+    form->addRow("Auto Trim", reserved);
     v->addWidget(props);
 
-    v->addWidget(trimHeader(w, "Sheet"));
-    auto* buttons = new QHBoxLayout();
+    v->addWidget(trimHeader(w, "Bake"));
+    auto* bakeRow = new QHBoxLayout();
     auto* bake = new QPushButton("Bake", w);
-    bake->setToolTip("Bake: the sheet's relief and maps (changed trims only, or everything after a layout change)");
+    bake->setToolTip("Rebake the sheet's maps: the changed trims only, or all of them after a layout change");
+    auto* detail = new QPushButton("Bake Selected as Detail", w);
+    detail->setToolTip("Bake the selected meshes into the sheet on top of its relief, kept for later bakes. Model them on the sheet's "
+                       "high poly (Level > Trim Sheets > Show Sheet High/Low)");
+    bakeRow->addWidget(bake, 1);
+    bakeRow->addWidget(detail, 1);
+    v->addLayout(bakeRow);
+
+    v->addWidget(trimHeader(w, "Texture"));
     auto* material = new QComboBox(w);
-    material->setToolTip("Material: the smart material Texture puts on the sheet");
+    material->setToolTip("Smart material for the sheet");
     try
     {
         for (const json& m : ops::execute("texSmartMaterials", json::object()))
@@ -592,20 +627,14 @@ QWidget* makeEditor(QWidget* parent)
     {
         log::write(LogLevel::Warning, e.what());
     }
-    auto* texture = new QPushButton("Texture", w);
-    texture->setToolTip("Texture: replace the sheet's texturing with the chosen smart material");
-    auto* detail = new QPushButton("Bake Detail", w);
-    detail->setToolTip("Bake Detail: the selected meshes into the sheet on top of its relief (Level > Trim Sheets > Show Trim Sheet "
-                       "High/Low shows where to model them)");
+    auto* texture = new QPushButton("Apply", w);
+    texture->setToolTip("Replace the sheet's texturing with the smart material; every mesh using the sheet shows it");
     auto* paint = new QPushButton("Paint", w);
-    paint->setToolTip("Paint: the sheet by hand on a flat preview plane");
-    buttons->addWidget(bake, 1);
-    buttons->addWidget(detail, 1);
-    buttons->addWidget(paint, 1);
-    v->addLayout(buttons);
+    paint->setToolTip("Paint the sheet by hand on a flat preview plane");
     auto* materialRow = new QHBoxLayout();
     materialRow->addWidget(material, 1);
     materialRow->addWidget(texture);
+    materialRow->addWidget(paint);
     v->addLayout(materialRow);
 
     // Trims whose profile changed since the last bake rebake alone; a layout change rebakes everything.

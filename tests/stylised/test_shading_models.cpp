@@ -278,3 +278,29 @@ TEST_CASE("Viewport post: Kuwahara and outlines change the shaded view, with and
     }
 }
 
+
+TEST_CASE("Matcap looks the sphere image up by the view-space normal, whatever the lighting")
+{
+    if (!gpu("matcap"))
+        return;
+    // Left half red, right half blue: the sphere's left side faces left in view, so it must come out red.
+    auto img = std::make_shared<TextureImage>();
+    img->width = img->height = 64;
+    img->srgb = true;
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x)
+            img->rgba.insert(img->rgba.end(), {uint8_t(x < 32 ? 220 : 10), 10, uint8_t(x < 32 ? 10 : 220), 255});
+    Material m = base();
+    m.baseColor = glm::vec3(1.0f);
+    m.style.model = ShadingModel::Matcap;
+    m.baseColorMap = img;
+    m.flags |= MatBaseColorMap;
+    m.sampling = 0x5;
+    FrameState s = frame(m);
+    const auto studio = renderShaded(s);
+    const glm::ivec4 left = at(studio, kShadeSize / 2 - 25, kShadeSize / 2), right = at(studio, kShadeSize / 2 + 25, kShadeSize / 2);
+    CHECK(left.z > left.x + 80);
+    CHECK(right.x > right.z + 80);
+    s.lighting = FrameState::Lighting::Sculpt;
+    CHECK(meanDiff(studio, renderShaded(s)) < 0.5);
+}

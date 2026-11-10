@@ -26,6 +26,9 @@ using scene::MeshPtr;
 using scene::Node;
 using scene::components::Ids;
 
+/** Solve iterations for islands a relax leaves with slivers on the export: twice a plain solve's, as those are slow to open. */
+constexpr int kRepairIterations = 60;
+
 std::string setArg(const Args& a)
 {
     return a.has("uvSet") ? a.get<std::string>("uvSet") : currentUvSet();
@@ -82,6 +85,8 @@ struct RelaxStats
     int iterations = 0;
     size_t folded = 0;
     bool settled = true;
+    // Some island was relaxed on the exported mesh.
+    bool exported = false;
 
     std::string warning;
 
@@ -141,7 +146,20 @@ RelaxStats relaxIslands(geo::Mesh& m, std::span<const Index> faces, std::string_
                     islands[i].setUv(v, c.uv[v]);
         }
     writeLiveIslands(m, islands, set, false);
+    st.exported = std::ranges::any_of(islands, [](const LiveIsland& is) { return is.hasFinal(); });
     return st;
+}
+
+/**
+ * The relax reads a fit's respacing as it was; where the new uvs respace the border into slivers, those islands solve
+ * again on the export.
+ */
+void repairRelaxed(geo::Mesh& m, std::span<const Index> faces, std::string_view set, bool usePins, const Stack& stack)
+{
+    FinalSolveOptions fo;
+    fo.usePins = usePins;
+    fo.iterations = kRepairIterations;
+    repairFinal(m, islandFacesOf(m, faces, set), set, stack, fo);
 }
 
 LiveOptions optionsArgs(const Args& a)
@@ -232,12 +250,23 @@ void registerLiveCommands()
             int iterations = std::clamp(a.get<int>("iterations", 200), 1, 100000);
             bool flatten = a.get<bool>("flatten", false), pins = a.get<bool>("pins", true), final = a.get<bool>("finalMesh", true);
             std::string set = setArg(a);
-            return editUvMeshes("UV Live Relax", ComponentMode::Face, symmetricUvEdit(set, [&](geo::Mesh& m, const Ids& f, Node& n) -> json {
-                RelaxStats st = relaxIslands(m, f, set, o, iterations, flatten, pins, final ? exportStack(n) : Stack{});
+            return editUvMeshes("UV Live Relax", ComponentMode::Face, [&](geo::Mesh& m, const Ids& f, Node& n) -> json {
+                const Stack stack = final ? exportStack(n) : Stack{};
+                RelaxStats st;
+                withUvSymmetry(m, n, set, UvSymmetry::Absolute, {}, [&] {
+                    st = relaxIslands(m, f, set, o, iterations, flatten, pins, stack);
+                    return json();
+                });
+                // After the symmetry pass, which rewrites mirrored islands the repair has to see.
+                if (st.exported)
+                    withUvSymmetry(m, n, set, UvSymmetry::Absolute, {}, [&] {
+                        repairRelaxed(m, f, set, pins, stack);
+                        return json();
+                    });
                 if (!st.warning.empty())
                     log::warn("{}: {}", n.name(), st.warning);
                 return st.toJson();
-            }));
+            });
         },
     });
 

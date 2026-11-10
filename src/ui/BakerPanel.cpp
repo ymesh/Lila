@@ -313,8 +313,14 @@ BakerPanel::BakerPanel(QWidget* parent) : QWidget(parent)
         if (c == scene::Change::Value)
         {
             const scene::Node* n = graph().node(id);
-            if (!n || !(bake::isProject(*n) || bake::isGroup(*n)))
+            if (!n)
                 return;
+            if (!(bake::isProject(*n) || bake::isGroup(*n)))
+            {
+                if (self->watchedByLint(id))
+                    self->scheduleLint();
+                return;
+            }
         }
         self->scheduleRefresh();
         self->scheduleLint();
@@ -331,7 +337,10 @@ BakerPanel::BakerPanel(QWidget* parent) : QWidget(parent)
         if (!self || !e.done)
             return;
         if (e.name == "bake" || e.name == "bakeForTarget" || e.name == "newScene" || e.name == "openScene")
+        {
+            self->mLintedProject.clear();
             self->scheduleRefresh();
+        }
     });
     refresh();
 }
@@ -422,6 +431,34 @@ void BakerPanel::scheduleLint()
         mLintTimer->start();
 }
 
+bool BakerPanel::watchedByLint(scene::NodeId id) const
+{
+    const scene::Graph& g = graph();
+    for (; id != scene::kNoNode; id = g.parent(id))
+        if (const scene::Node* n = g.node(id); n && std::ranges::find(mLintWatch, n->path()) != mLintWatch.end())
+            return true;
+    return false;
+}
+
+void BakerPanel::updateLintWatch()
+{
+    mLintWatch.clear();
+    scene::Graph& g = graph();
+    const scene::Node* p = findNode(mProject);
+    if (!p || !bake::isProject(*p))
+        return;
+    for (scene::NodeId gid : bake::groupsOf(g, p->id()))
+    {
+        const bake::GroupSettings s = bake::groupSettings(*g.node(gid));
+        mLintWatch.insert(mLintWatch.end(), s.lows.begin(), s.lows.end());
+        if (!s.cage.empty())
+            mLintWatch.push_back(s.cage);
+        for (const bake::HighEntry& h : s.highs)
+            if (!h.node.empty())
+                mLintWatch.push_back(h.node);
+    }
+}
+
 void BakerPanel::runLint(bool full)
 {
     if (!ops::find("bakeLint") || mProject.empty() || !findNode(mProject))
@@ -437,6 +474,7 @@ void BakerPanel::runLint(bool full)
         log::warn("bakeLint: {}", e.what());
         return;
     }
+    mLintedProject = mProject;
     if (r == mLint)
         return;
     mLint = r;

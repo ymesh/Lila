@@ -1,7 +1,7 @@
 # Precompiled headers and unity builds for every Lila target. Call lila_build_speed() once, after all targets exist.
 
 find_program(LILA_SCCACHE sccache)
-option(LILA_COMPILER_CACHE "Compile through sccache, shared by every build dir and worktree" ON)
+option(LILA_COMPILER_CACHE "Compile through sccache, shared by every build dir of a checkout" ON)
 if(LILA_COMPILER_CACHE AND LILA_SCCACHE)
     set(_lila_cache ON)
 else()
@@ -14,13 +14,16 @@ option(LILA_UNITY_BUILD "Compile each target's sources in batches" ON)
 set(LILA_UNITY_BATCH_SIZE 8 CACHE STRING "Sources per unity batch")
 
 if(_lila_cache)
-    # Cache keys are taken relative to the checkout and the build dir, so every worktree and build dir shares entries.
+    # Cache keys are taken relative to the build dir, so every build dir of one checkout shares entries. The checkout stays
+    # in the key: a hit replays the original compile's /showIncludes, and another checkout's header paths there leave
+    # ninja blind to edits in this one, linking stale objects.
     # sccache applies basedirs per server, hence one server per build dir, on a port derived from its paths.
     string(SHA1 _lila_hash "${CMAKE_SOURCE_DIR}|${CMAKE_BINARY_DIR}")
     string(SUBSTRING ${_lila_hash} 0 4 _lila_hash)
     math(EXPR _lila_port "0x${_lila_hash} % 2000 + 42000")
-    file(WRITE ${CMAKE_BINARY_DIR}/sccache.toml "basedirs = [\"${CMAKE_SOURCE_DIR}/\", \"${CMAKE_BINARY_DIR}/\"]\n")
-    set(_lila_launcher ${CMAKE_COMMAND} -E env SCCACHE_CONF=${CMAKE_BINARY_DIR}/sccache.toml
+    file(WRITE ${CMAKE_BINARY_DIR}/sccache.toml "basedirs = [\"${CMAKE_BINARY_DIR}/\"]\n")
+    # LILA_CACHE_KEYS marks the key scheme, so a change to it recompiles everything and rewrites the header deps.
+    set(_lila_launcher ${CMAKE_COMMAND} -E env SCCACHE_CONF=${CMAKE_BINARY_DIR}/sccache.toml LILA_CACHE_KEYS=checkout
         SCCACHE_SERVER_PORT=${_lila_port} --unset=SCCACHE_BASEDIRS --unset=SCCACHE_CLIENT_SIDE ${LILA_SCCACHE})
     set(CMAKE_C_COMPILER_LAUNCHER ${_lila_launcher})
     set(CMAKE_CXX_COMPILER_LAUNCHER ${_lila_launcher})
@@ -119,12 +122,27 @@ function(lila_build_speed)
                 target_compile_options(${target} PRIVATE /bigobj)
             endif()
         endif()
+        # A header beside the sources that bakes in a path (a test's loader in TestUtil.h) reaches every source including
+        # it, and the scan below only reads sources: salt the whole target, unity batches included.
+        set(salt_all OFF)
+        if(path_regex)
+            file(GLOB local_headers ${dir}/*.h)
+            foreach(header IN LISTS local_headers)
+                file(STRINGS ${header} uses REGEX "(^|[^A-Za-z0-9_])(${path_regex})([^A-Za-z0-9_]|$)" LIMIT_COUNT 1)
+                if(uses)
+                    set(salt_all ON)
+                endif()
+            endforeach()
+        endif()
+        if(salt_all)
+            target_compile_options(${target} PRIVATE /FI${salt_header})
+        endif()
         foreach(source IN LISTS sources)
             cmake_path(ABSOLUTE_PATH source BASE_DIRECTORY ${dir} OUTPUT_VARIABLE path)
             if(NOT EXISTS ${path})
                 continue()
             endif()
-            # The cache keys ignore the checkout and build paths, so a source that bakes one in through a define would
+            # The cache keys ignore the build path, so a source that bakes a path in through a define would
             # hand another build dir its object with the wrong path. Salting it keeps its entries to this build dir.
             if(path_regex)
                 file(STRINGS ${path} uses REGEX "(^|[^A-Za-z0-9_])(${path_regex})([^A-Za-z0-9_]|$)" LIMIT_COUNT 1)

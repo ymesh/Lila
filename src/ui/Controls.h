@@ -6,6 +6,7 @@
 #include <QToolButton>
 #include <QWidget>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -27,6 +28,7 @@ class QScrollArea;
  *   value field      a drag field one step above the panel, numbers right-aligned, unit inside
  *   slider field     a value field with a fill showing where a bounded number sits in its range
  *   vector field     three value fields in a row, each with its axis letter in the axis colour
+ *   cycle button     a button stepping through states, left click forward, right click back
  *
  * Buttons that run an action with an option box get the corner glyph (optionBox::withOptionBox).
  */
@@ -105,6 +107,12 @@ LILA_UI_API bool stepPresets(QAbstractSpinBox* box, int steps);
 
 /** Keeps the scroll area at least as wide as its content needs, so a narrow dock never clips a row of tiles. */
 LILA_UI_API void fitScrollWidth(QScrollArea* scroll);
+
+/**
+ * Makes a click-to-cycle button step both ways: left click calls `step(+1)`, right click `step(-1)`. Use it for every
+ * button that cycles through states, so right click always goes back.
+ */
+LILA_UI_API void cycle(QAbstractButton* button, std::function<void(int)> step);
 
 /** Sets a role property and re-polishes, for sheet rules keyed on it. */
 LILA_UI_API void setRole(QWidget* w, const char* role);

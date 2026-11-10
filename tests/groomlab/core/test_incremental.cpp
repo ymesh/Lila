@@ -24,6 +24,9 @@
 #include "groomlab/display.h"
 #include "groomlab/export_view.h"
 #include "groomlab/graph.h"
+#include "groom/GroomDisplay.h"
+#include "groom/GroomEvaluator.h"
+#include "groom/GroomStrokeHost.h"
 #include "groomlab/flow.h"
 #include "groomlab/guide_hierarchy.h"
 #include "groomlab/guide_set.h"
@@ -989,6 +992,72 @@ std::string sphereGuides(const ScalpMesh& scalp, int count, std::size_t children
     return h.toJson();
 }
 
+// The view a fresh session gives with this one's inputs (its stored texts, the live stroke's
+// guides): every node evaluated in full, nothing kept.
+std::uint64_t freshView(GroomEvaluator& session, const GroomEvaluator::Request& request, GroomEvaluator::Bounds* bounds = nullptr) {
+    GroomEvaluator fresh(session.data());
+    if (const auto preview = session.previewHierarchy()) fresh.setPreviewHierarchy(std::make_shared<GuideHierarchy>(*preview));
+    const GroomEvaluator::Result& view = fresh.evaluate(request);
+    EXPECT_TRUE(view.errors.empty()) << (view.errors.empty() ? "" : view.errors[0]);
+    if (bounds) *bounds = view.bounds;
+    return view.strands ? view.strands->contentHash() : 0;
+}
+
+bool sameBounds(const GroomEvaluator::Bounds& a, const GroomEvaluator::Bounds& b) {
+    return a.valid == b.valid && std::memcmp(&a.lo, &b.lo, sizeof(Vec3f)) == 0 && std::memcmp(&a.hi, &b.hi, sizeof(Vec3f)) == 0;
+}
+
+// Strokes of `dabs` points with each brush mode in turn through BrushTool on `session`; after the
+// press, every dab and every release, its view is checked against a fresh session's. Returns how
+// many nodes evaluated incrementally.
+std::size_t strokeAndCompare(GroomEvaluator& session, lila::groom::GroomStrokeHost& host, const GroomEvaluator::Request& request,
+                             const std::vector<std::string>& modes, int dabs, const std::function<void(int)>& midStroke = {}) {
+    const ToolView view = ToolView::fromMatrix(test::lookAtProjection({0.0f, 1.8f, 4.5f}, {0.0f, 0.8f, 0.0f}, 40.0, 1.5), 1200, 800);
+    float x0 = 0.0f, y0 = 0.0f;
+    EXPECT_TRUE(view.project(Vec3f(0.0f, 1.0f, 0.35f).normalized(), x0, y0));
+    const std::size_t before = session.incrementalCount();
+    auto check = [&](const std::string& what) {
+        const GroomEvaluator::Result& seen = session.evaluate(request);
+        EXPECT_TRUE(seen.errors.empty()) << what << ": " << (seen.errors.empty() ? "" : seen.errors[0]);
+        ASSERT_TRUE(seen.strands) << what;
+        GroomEvaluator::Bounds bounds;  // (measured again only in the blocks of strands that changed)
+        EXPECT_EQ(seen.strands->contentHash(), freshView(session, request, &bounds)) << what;
+        EXPECT_TRUE(sameBounds(seen.bounds, bounds)) << what;
+    };
+    check("before");
+    int stroke = 0;
+    for (const std::string& mode : modes) {
+        BrushTool tool;
+        tool.settings.setMode(mode);
+        tool.settings.screenRadius = 90.0f;
+        tool.settings.brush.strength = 0.8f;
+        const float sx = x0 - 50.0f + 13.0f * static_cast<float>(stroke++);
+        EXPECT_TRUE(tool.begin(host, view, sx, y0, 1.0f)) << mode;
+        check(mode + " press");
+        for (int k = 1; k < dabs; ++k) {
+            tool.moveTo(host, view, sx + 9.0f * static_cast<float>(k), y0 + 2.0f * static_cast<float>(k), 1.0f);
+            if (midStroke) midStroke(k);
+            check(mode + " dab " + std::to_string(k));
+        }
+        tool.end(host, view);
+        check(mode + " release");
+    }
+    return session.incrementalCount() - before;
+}
+
+const char* kInterpolateGraph = R"({"version": 1, "output": "out",
+  "nodes": [
+    {"name": "scalp", "type": "Scalp"}, {"name": "guides", "type": "Guides"},
+    {"name": "scatter", "type": "Scatter", "params": {"density": 900.0}},
+    {"name": "interp", "type": "Interpolate", "params": {"limitDistance": 0.45}},
+    {"name": "out", "type": "Output"}, {"name": "resolution", "type": "Resample", "params": {"segments": 9}}],
+  "connections": [
+    {"from": "scalp", "to": "scatter", "input": "scalp"},
+    {"from": "scatter", "to": "interp", "input": "strands"},
+    {"from": "guides", "to": "interp", "input": "guides"},
+    {"from": "scalp", "to": "interp", "input": "scalp"},
+    {"from": "interp", "to": "out", "input": "strands"}]})";
+
 GroomData sphereGroom(const std::string& graph, int guides, std::size_t children) {
     const auto scalp = test::makeSphere(24, 48, 1.0f);
     GroomData data;
@@ -996,6 +1065,63 @@ GroomData sphereGroom(const std::string& graph, int guides, std::size_t children
     data.graphJson = graph;
     data.hierarchyJson = sphereGuides(*scalp, guides, children);
     return data;
+}
+
+TEST(Incremental, InterpolateBlendsAgainOnlyTheStrandsADabReaches) {
+    // Guide attributes and layers into channels, a radius (the influence channel); combing,
+    // smoothing, painting the clump value, sliding roots (the strands around them bound again),
+    // lengthening and cutting; the stroke at half density and at the view's.
+    const Verified verified;
+    for (const float sculpt : {0.5f, 1.0f}) {
+        GroomEvaluator session(sphereGroom(kInterpolateGraph, 40, 0));
+        lila::groom::GroomStrokeHost host(session);
+        GroomEvaluator::Request request;
+        request.sculptDensity = sculpt;
+        const std::size_t incremental =
+            strokeAndCompare(session, host, request, {"comb", "smooth", "clump", "slide", "length", "cut"}, 5);
+        EXPECT_GE(incremental, 24u) << "sculptDensity " << sculpt;  // at least every dab after a press
+    }
+}
+
+TEST(Incremental, GuideWeightFromAGuideLayerFollowsStrokes) {
+    // guideWeight read from the guides' painted clump value: painting it weighs those guides again
+    // (the strands they reach bound again), combing keeps the weights, sliding moves their roots.
+    const Verified verified;
+    std::string graph = kInterpolateGraph;
+    const std::string interp = R"("params": {"limitDistance": 0.45})";
+    graph.replace(graph.find(interp), interp.size(), R"("params": {"guideWeight": {"guide": "clump", "min": 0.1, "max": 1.0}})");
+    GroomEvaluator session(sphereGroom(graph, 40, 0));
+    lila::groom::GroomStrokeHost host(session);
+    GroomEvaluator::Request request;
+    request.sculptDensity = 0.5f;
+    EXPECT_GT(strokeAndCompare(session, host, request, {"clump", "comb", "slide"}, 5), 0u);
+}
+
+TEST(Incremental, GuidesAddedOrErasedMidStrokeAndUndo) {
+    // The kept guides change (one erased, one added through the preview): Interpolate evaluates in
+    // full, and the next dabs are incremental again. Undo and redo after the strokes.
+    const Verified verified;
+    GroomEvaluator session(sphereGroom(kInterpolateGraph, 30, 2));
+    lila::groom::GroomStrokeHost host(session);
+    GroomEvaluator::Request request;
+    request.sculptDensity = 0.5f;
+    auto edit = [&](int dab) {
+        const auto preview = session.previewHierarchy();
+        if (!preview || preview->guides().empty()) return;
+        if (dab == 2) preview->removeGuides({preview->guides().back().id});
+        if (dab == 3) {
+            const Vec3f n = Vec3f(0.1f, 1.0f, 0.3f).normalized();
+            preview->addGuide(preview->groups().front().id, test::straightCurve(n, n * 0.5f, 5));
+            preview->evaluate(session.scalp().get());
+        }
+    };
+    EXPECT_GT(strokeAndCompare(session, host, request, {"comb", "lift"}, 6, edit), 0u);
+    const GroomEvaluator::Result& now = session.evaluate(request);
+    const std::uint64_t committed = now.strands->contentHash();
+    ASSERT_TRUE(host.undo());
+    EXPECT_EQ(session.evaluate(request).strands->contentHash(), freshView(session, request));
+    ASSERT_TRUE(host.redo());
+    EXPECT_EQ(session.evaluate(request).strands->contentHash(), committed);
 }
 
 // A look graph: Interpolate and Clump, its own centers (its strength from the guides' painted
@@ -1025,6 +1151,396 @@ const char* kLookGraph = R"({"version": 1, "output": "out",
     {"from": "length", "to": "resample", "input": "strands"},
     {"from": "resample", "to": "out", "input": "strands"}]})";
 
+TEST(Incremental, LookGraphStrokesGiveWhatAFreshEvaluationGives) {
+    // Every node after the guides follows a stroke's changes: Interpolate the guides', Clump
+    // the centers' strands, Clump the strands and the members of the centers that moved, the
+    // per-strand nodes their input's. With children (a dab on a primary moves its children).
+    const Verified verified;
+    for (const float sculpt : {0.6f, 1.0f}) {
+        GroomEvaluator session(sphereGroom(kLookGraph, 24, 3));
+        lila::groom::GroomStrokeHost host(session);
+        GroomEvaluator::Request request;
+        request.sculptDensity = sculpt;
+        const std::size_t incremental = strokeAndCompare(session, host, request, {"comb", "clump", "twist", "slide", "smooth"}, 5);
+        // Every dab after a press runs at least Interpolate, Clump, Noise, Curl, Width
+        // and Length incrementally.
+        EXPECT_GE(incremental, 5u * 4u * 7u) << "sculptDensity " << sculpt;
+    }
+}
+
+TEST(Incremental, ARepellingClumpFollowsStrokesExactly) {
+    // A negative Clump strength (strands pushed away from their centers, lengths kept), mapped per
+    // strand from the guides' painted value: strokes as exact as with a pull.
+    const Verified verified;
+    std::string graph = kLookGraph;
+    const std::string strength = R"("strength": {"attribute": "clump", "min": 0.2, "max": 0.9}})";
+    graph.replace(graph.find(strength), strength.size(),
+                  R"("strength": {"attribute": "clump", "min": -0.9, "max": -0.2}, "repelRadius": 0.25})");
+    GroomEvaluator session(sphereGroom(graph, 24, 3));
+    lila::groom::GroomStrokeHost host(session);
+    GroomEvaluator::Request request;
+    request.sculptDensity = 0.6f;
+    EXPECT_GE(strokeAndCompare(session, host, request, {"comb", "clump", "smooth"}, 4), 3u * 3u * 7u);
+}
+
+TEST(Incremental, AClumpOnScatteredCentersFollowsStrokesExactly) {
+    // Centers from a sparse Scatter fed straight in (centersFrom inputPoints: each clump's axis is the
+    // strand it gathers nearest its center, extended past its tip): a dab moves strands and with
+    // them some axes; the strands that moved and the members of the axes that moved clump again.
+    const Verified verified;
+    std::string graph = kLookGraph;
+    const std::string clump = R"({"name": "clump", "type": "Clump", "params": {"count": 30,)";
+    graph.replace(graph.find(clump), clump.size(),
+                  R"({"name": "spots", "type": "Scatter", "params": {"density": 15.0, "seed": 5, "previewAll": true}},
+    {"name": "clump", "type": "Clump", "params": {"centersFrom": "inputPoints", "pastTip": "extend",)");
+    const std::string link = R"({"from": "interp", "to": "clump", "input": "strands"},)";
+    graph.replace(graph.find(link), link.size(),
+                  link + R"( {"from": "scalp", "to": "spots", "input": "scalp"}, {"from": "spots", "to": "clump", "input": "centers"},)");
+    GroomEvaluator session(sphereGroom(graph, 24, 3));
+    lila::groom::GroomStrokeHost host(session);
+    GroomEvaluator::Request request;
+    request.sculptDensity = 0.6f;
+    EXPECT_GE(strokeAndCompare(session, host, request, {"comb", "clump", "smooth"}, 4), 3u * 3u * 7u);
+}
+
+TEST(Incremental, AWarmedStrokeDocumentMakesTheFirstDabIncremental) {
+    // The stroke document evaluated ahead (a host's idle time: warmStroke) holds the groom as it
+    // is, so a stroke's press makes again only what it changed; every view is a fresh session's.
+    // Its evaluations are not counted; a graph edit warms it again; released, it goes.
+    const Verified verified;
+    GroomEvaluator::Request request;
+    request.sculptDensity = 0.6f;
+    // The nodes a stroke (a press, a dab, the release) evaluates in full.
+    auto inFull = [&](GroomEvaluator& session, lila::groom::GroomStrokeHost& host) {
+        const std::size_t evaluations = session.evaluationCount(), incrementals = session.incrementalCount();
+        strokeAndCompare(session, host, request, {"comb"}, 2);
+        return (session.evaluationCount() - evaluations) - (session.incrementalCount() - incrementals);
+    };
+    std::size_t cold = 0;
+    {
+        GroomEvaluator session(sphereGroom(kLookGraph, 24, 3));
+        lila::groom::GroomStrokeHost host(session);
+        session.evaluate(request);
+        cold = inFull(session, host);
+    }
+    GroomEvaluator session(sphereGroom(kLookGraph, 24, 3));
+    lila::groom::GroomStrokeHost host(session);
+    EXPECT_FALSE(session.warmStroke(request)) << "nothing evaluated yet: no inputs to warm with";
+    session.evaluate(request);
+    const std::size_t counted = session.evaluationCount();
+    EXPECT_TRUE(session.warmStroke(request));
+    EXPECT_TRUE(session.strokeDocument());
+    EXPECT_FALSE(session.warmStroke(request)) << "warm already";
+    EXPECT_EQ(session.evaluationCount(), counted) << "warming is not counted";
+    GroomEvaluator::Request full = request;
+    full.sculptDensity = 1.0f;
+    EXPECT_FALSE(session.warmStroke(full)) << "a stroke at the view's density uses the view's document";
+    // Cold, the press evaluates the stroke document in full (Scatter to Output); warm, only what
+    // reads the guides as a whole (the Guides node).
+    const std::size_t warm = inFull(session, host);
+    EXPECT_GE(cold, warm + 10u) << "in full: cold " << cold << ", warm " << warm;
+    // After the stroke, an edit of the graph: warmed again, and the next stroke as a fresh session's.
+    std::string graph = kLookGraph;
+    const std::string amplitude = "\"amplitude\": 0.02";
+    graph.replace(graph.find(amplitude), amplitude.size(), "\"amplitude\": 0.03");
+    session.setGraphJson(graph);
+    session.evaluate(request);
+    EXPECT_TRUE(session.warmStroke(request));
+    EXPECT_GE(strokeAndCompare(session, host, request, {"lift", "smooth"}, 3), 7u * 5u);
+    const std::size_t before = session.evaluationCount();
+    session.releaseStroke();
+    EXPECT_FALSE(session.strokeDocument());
+    EXPECT_EQ(session.evaluationCount(), before) << "a released stroke's evaluations stay counted";
+    EXPECT_GT(strokeAndCompare(session, host, request, {"comb"}, 2), 0u);
+}
+
+TEST(Incremental, AStrokeDocumentWarmedAwayFromTheSessionIsAsWarm) {
+    // detachWarm's copy evaluated on another thread and adopted is the stroke document warmStroke
+    // makes: the press after it evaluates as little, and every view is a fresh session's. A warm
+    // is never chained on, nor adopted as the view's document; one the session moved past (a
+    // stroke pressed meanwhile evaluated its own) is left.
+    const Verified verified;
+    GroomEvaluator::Request request;
+    request.sculptDensity = 0.6f;
+    auto inFull = [&](GroomEvaluator& session, lila::groom::GroomStrokeHost& host) {
+        const std::size_t evaluations = session.evaluationCount(), incrementals = session.incrementalCount();
+        strokeAndCompare(session, host, request, {"comb"}, 2);
+        return (session.evaluationCount() - evaluations) - (session.incrementalCount() - incrementals);
+    };
+    std::size_t warmed = 0;
+    {
+        GroomEvaluator session(sphereGroom(kLookGraph, 24, 3));
+        lila::groom::GroomStrokeHost host(session);
+        session.evaluate(request);
+        session.warmStroke(request);
+        warmed = inFull(session, host);
+    }
+    GroomEvaluator session(sphereGroom(kLookGraph, 24, 3));
+    lila::groom::GroomStrokeHost host(session);
+    EXPECT_EQ(session.detachWarm(request), nullptr) << "nothing evaluated yet: no inputs to warm with";
+    session.evaluate(request);
+    GroomEvaluator::Request full = request;
+    full.sculptDensity = 1.0f;
+    EXPECT_EQ(session.detachWarm(full), nullptr) << "a stroke at the view's density uses the view's document";
+    const std::size_t counted = session.evaluationCount();
+    std::shared_ptr<lila::groom::DetachedEvaluation> warm = session.detachWarm(request);
+    ASSERT_NE(warm, nullptr);
+    EXPECT_TRUE(warm->warm());
+    EXPECT_EQ(session.detach(request, warm), nullptr) << "never chained on a warm";
+    std::thread([&] { warm->run(); }).join();
+    EXPECT_FALSE(session.adopt(*warm)) << "not the view's document";
+    EXPECT_TRUE(session.adoptWarm(*warm));
+    EXPECT_EQ(session.evaluationCount(), counted) << "warming is not counted";
+    EXPECT_FALSE(session.warmStroke(request)) << "warm already";
+    EXPECT_EQ(inFull(session, host), warmed) << "the press as after warmStroke";
+    // A warm the stroke document moved past is left (the stroke evaluated it meanwhile).
+    std::shared_ptr<lila::groom::DetachedEvaluation> stale = session.detachWarm(request);
+    ASSERT_NE(stale, nullptr);
+    strokeAndCompare(session, host, request, {"lift"}, 2);
+    stale->run();
+    EXPECT_FALSE(session.adoptWarm(*stale));
+    EXPECT_GT(strokeAndCompare(session, host, request, {"comb"}, 2), 0u);
+}
+
+TEST(Incremental, AStrokesDabsEvaluatedAwayFromTheSessionLandAsDabsHere) {
+    // detachStroke lends the stroke document to a run on another thread with a copy of the
+    // preview guides while the tool goes on dabbing on the session; adopted, the evaluation that
+    // follows makes nothing again and shows the copy's strands (a fresh session's for those
+    // guides). The stroke commits what it commits with every dab evaluated here.
+    const Verified verified;
+    GroomEvaluator::Request request;
+    request.sculptDensity = 0.6f;
+    const ToolView view = ToolView::fromMatrix(test::lookAtProjection({0.0f, 1.8f, 4.5f}, {0.0f, 0.8f, 0.0f}, 40.0, 1.5), 1200, 800);
+    float x0 = 0.0f, y0 = 0.0f;
+    ASSERT_TRUE(view.project(Vec3f(0.0f, 1.0f, 0.35f).normalized(), x0, y0));
+    struct Outcome {
+        std::string guides;
+        std::uint64_t strands = 0;
+        int landed = 0;
+    };
+    auto stroke = [&](bool away) {
+        Outcome out;
+        GroomEvaluator session(sphereGroom(kLookGraph, 24, 3));
+        lila::groom::GroomStrokeHost host(session);
+        session.evaluate(request);
+        EXPECT_EQ(session.detachStroke(request), nullptr) << "no stroke";
+        BrushTool tool;
+        tool.settings.setMode("comb");
+        tool.settings.screenRadius = 90.0f;
+        tool.settings.brush.strength = 0.8f;
+        EXPECT_TRUE(tool.begin(host, view, x0, y0, 1.0f));
+        GroomEvaluator::Request full = request;
+        full.sculptDensity = 1.0f;
+        EXPECT_EQ(session.detachStroke(full), nullptr) << "a stroke at the view's density uses the view's document";
+        session.evaluate(request);  // the press, here
+        std::shared_ptr<lila::groom::DetachedEvaluation> run;
+        std::thread worker;
+        for (int k = 1; k <= 9; ++k) {
+            // The tool edits its preview while a run evaluates the copy (every other dab).
+            tool.moveTo(host, view, x0 + 9.0f * static_cast<float>(k), y0 + 2.0f * static_cast<float>(k), 1.0f);
+            if (!away) {
+                session.evaluate(request);
+                continue;
+            }
+            if (!run) {
+                run = session.detachStroke(request);
+                EXPECT_TRUE(run && run->stroke() && session.strokeLent());
+                if (!run) continue;
+                EXPECT_EQ(session.detachStroke(request), nullptr) << "one lent at a time";
+                worker = std::thread([run] { run->run(); });
+                continue;
+            }
+            worker.join();
+            const std::shared_ptr<GuideHierarchy> live = session.previewHierarchy();
+            EXPECT_TRUE(session.adoptStroke(*run));
+            EXPECT_FALSE(session.strokeLent());
+            EXPECT_NE(session.previewHierarchy(), live) << "the copy the run evaluated stands for the tool's";
+            const std::size_t evaluations = session.evaluationCount();
+            const GroomEvaluator::Result& seen = session.evaluate(request);
+            EXPECT_EQ(session.evaluationCount(), evaluations) << "dab " << k << ": evaluated again";
+            EXPECT_TRUE(seen.strands && seen.strands->contentHash() == freshView(session, request)) << "dab " << k;
+            session.setPreviewHierarchy(live, session.previewFinal());
+            ++out.landed;
+            run.reset();
+        }
+        if (worker.joinable()) worker.join();
+        if (run) session.adoptStroke(*run);
+        tool.end(host, view);
+        out.guides = host.storedText(StrokeField::Guides);
+        const GroomEvaluator::Result& committed = session.evaluate(request);
+        out.strands = committed.strands ? committed.strands->contentHash() : 0;
+        EXPECT_EQ(out.strands, freshView(session, request));
+        return out;
+    };
+    const Outcome here = stroke(false), away = stroke(true);
+    EXPECT_EQ(away.landed, 4);
+    EXPECT_FALSE(here.guides.empty());
+    EXPECT_EQ(away.guides, here.guides);
+    EXPECT_EQ(away.strands, here.strands);
+}
+
+TEST(Incremental, NodesTakeTheirLastResultsArraysInsteadOfCopyingThem) {
+    // A node's last result nobody else holds gives its points to the node's next result (no
+    // copy of the whole array): Interpolate, Clump and Noise here on every dab (Curl's are shared
+    // with Width's result, Length's with what Resample hands on); every view as a fresh session's,
+    // every incremental result checked against a full evaluation and its last result (verified).
+    const Verified verified;
+    GroomEvaluator session(sphereGroom(kLookGraph, 24, 0));
+    lila::groom::GroomStrokeHost host(session);
+    GroomEvaluator::Request request;
+    request.sculptDensity = 0.6f;
+    session.evaluate(request);
+    const std::size_t before = detail::arraysTaken();
+    strokeAndCompare(session, host, request, {"comb", "clump"}, 5);
+    EXPECT_GE(detail::arraysTaken() - before, 2u * 3u * 4u) << "Interpolate, Clump and Noise on each dab after a press";
+}
+
+TEST(Incremental, AStrokeAfterAGraphEditIsAsIncrementalAsWithout) {
+    // A graph edit swaps the document (setGraphJson: what the edit does not reach is adopted). The
+    // adopted results keep their serials and what they were made from, so the stroke right after
+    // evaluates as incrementally as one without the edit (Clump, before the edited
+    // Noise, included); every view as a fresh session's.
+    const Verified verified;
+    GroomEvaluator::Request request;  // sculptDensity 1: strokes evaluate the view's own document
+    auto inFull = [&](bool edit) {
+        GroomEvaluator session(sphereGroom(kLookGraph, 24, 0));
+        lila::groom::GroomStrokeHost host(session);
+        session.evaluate(request);
+        std::string graph = kLookGraph;
+        if (edit) {
+            const std::string amplitude = "\"amplitude\": 0.02";
+            graph.replace(graph.find(amplitude), amplitude.size(), "\"amplitude\": 0.025");
+        }
+        session.setGraphJson(graph);
+        session.evaluate(request);
+        const std::size_t evaluations = session.evaluationCount(), incrementals = session.incrementalCount();
+        strokeAndCompare(session, host, request, {"comb"}, 3);
+        return (session.evaluationCount() - evaluations) - (session.incrementalCount() - incrementals);
+    };
+    EXPECT_EQ(inFull(true), inFull(false));
+}
+
+TEST(Incremental, AWidthOrColorEditKeepsThePointsOfWhatFollows) {
+    // A Width or HairColor edit changes no point (StrandChanges::pointsKept): Merge, Collide and
+    // Instance after it keep their last points (the very arrays) and make only the widths and
+    // channels again; every view as a fresh session's, each incremental result checked against a
+    // full evaluation. An Instance whose probability reads a channel the edit changes is placed again.
+    const Verified verified;
+    const std::string graph = R"({"version": 1, "output": "out",
+      "nodes": [
+        {"name": "scalp", "type": "Scalp"}, {"name": "guides", "type": "Guides"},
+        {"name": "scatter", "type": "Scatter", "params": {"density": 600.0}},
+        {"name": "interp", "type": "Interpolate"},
+        {"name": "noise", "type": "Noise", "params": {"amplitude": 0.05, "frequency": 3.0}},
+        {"name": "width", "type": "Width", "params": {"width": 0.01, "randomness": 0.3}},
+        {"name": "color", "type": "HairColor", "params": {"melanin": 0.4}},
+        {"name": "whiskers", "type": "Scatter", "params": {"density": 40.0, "seed": 5}},
+        {"name": "whiskerInterp", "type": "Interpolate"},
+        {"name": "whiskerColor", "type": "HairColor", "params": {"melanin": 0.1}},
+        {"name": "merge", "type": "Merge"},
+        {"name": "collide", "type": "Collide", "params": {"offset": 0.05}},
+        {"name": "snow", "type": "Instance", "params": {"probability": 0.3, "tMin": 0.4, "scaleByWidth": true}},
+        {"name": "resample", "type": "Resample", "params": {"segments": 7}},
+        {"name": "out", "type": "Output"}],
+      "connections": [
+        {"from": "scalp", "to": "scatter", "input": "scalp"}, {"from": "scatter", "to": "interp", "input": "strands"},
+        {"from": "guides", "to": "interp", "input": "guides"}, {"from": "scalp", "to": "interp", "input": "scalp"},
+        {"from": "interp", "to": "noise", "input": "strands"}, {"from": "noise", "to": "width", "input": "strands"},
+        {"from": "width", "to": "color", "input": "strands"},
+        {"from": "scalp", "to": "whiskers", "input": "scalp"}, {"from": "whiskers", "to": "whiskerInterp", "input": "strands"},
+        {"from": "guides", "to": "whiskerInterp", "input": "guides"}, {"from": "scalp", "to": "whiskerInterp", "input": "scalp"},
+        {"from": "whiskerInterp", "to": "whiskerColor", "input": "strands"},
+        {"from": "color", "to": "merge", "input": "a"}, {"from": "whiskerColor", "to": "merge", "input": "b"},
+        {"from": "merge", "to": "collide", "input": "strands"}, {"from": "scalp", "to": "collide", "input": "scalp"},
+        {"from": "collide", "to": "snow", "input": "strands"}, {"from": "snow", "to": "out", "input": "strands"}]})";
+    GroomEvaluator session(sphereGroom(graph, 24, 0));
+    GroomEvaluator::Request request;
+    ASSERT_TRUE(session.evaluate(request).strands);
+    auto cached = [&](const char* name) {
+        const GraphDocument& doc = *session.viewDocument();
+        return valueAs<StrandsPtr>(doc.graph.cachedValue(doc.nodesByName.at(name)));
+    };
+    auto kind = [&](const char* name) {
+        const GraphDocument& doc = *session.viewDocument();
+        const auto it = doc.graph.lastRunKinds().find(doc.nodesByName.at(name));
+        return it == doc.graph.lastRunKinds().end() ? std::string("cached") : it->second;
+    };
+    auto edit = [&](std::string& text, const std::string& from, const std::string& to) {
+        const std::size_t at = text.find(from);
+        ASSERT_NE(at, std::string::npos) << from;
+        text.replace(at, from.size(), to);
+    };
+    std::string edited = graph;
+    const std::pair<std::string, std::string> edits[] = {
+        {R"("width": 0.01,)", R"("width": 0.013,)"},                     // the fur's widths
+        {R"("melanin": 0.4)", R"("melanin": 0.55)"},                     // the fur's color
+        {R"("melanin": 0.1)", R"("melanin": 0.2)"}};                     // the whiskers' (merge's b)
+    for (const auto& [from, to] : edits) {
+        SCOPED_TRACE(to);
+        const StrandsPtr collided = cached("collide"), snowed = cached("snow");
+        ASSERT_TRUE(collided && snowed && snowed->instances() && !snowed->instances()->empty());
+        edit(edited, from, to);
+        session.setGraphJson(edited);
+        const GroomEvaluator::Result& view = session.evaluate(request);
+        ASSERT_TRUE(view.strands);
+        EXPECT_EQ(view.strands->contentHash(), freshView(session, request));
+        for (const char* name : {"merge", "collide", "snow"}) EXPECT_EQ(kind(name).rfind("incremental", 0), 0u) << name << ": " << kind(name);
+        EXPECT_EQ(cached("collide")->positions().data(), collided->positions().data());  // the very points
+        EXPECT_EQ(cached("snow")->instances(), snowed->instances());                       // and instances
+        EXPECT_NE(cached("snow"), snowed);
+        ASSERT_TRUE(view.strandsChanges) << "the view says how its strands changed";
+        EXPECT_TRUE(view.strandsChanges->pointsKept);
+    }
+    // A probability read from a channel the edit changes: the instances placed again.
+    std::string byColor = edited;
+    edit(byColor, R"("probability": 0.3)", R"("probability": {"attribute": "melanin", "min": 0.0, "max": 0.8})");
+    session.setGraphJson(byColor);
+    ASSERT_TRUE(session.evaluate(request).strands);
+    const auto placedBefore = cached("snow")->instances();
+    edit(byColor, R"("melanin": 0.55)", R"("melanin": 0.7)");
+    session.setGraphJson(byColor);
+    const GroomEvaluator::Result& recolored = session.evaluate(request);
+    ASSERT_TRUE(recolored.strands);
+    EXPECT_EQ(recolored.strands->contentHash(), freshView(session, request));
+    EXPECT_EQ(kind("snow").rfind("full", 0), 0u) << kind("snow");
+    EXPECT_NE(cached("snow")->instances(), placedBefore);
+    EXPECT_EQ(kind("collide").rfind("incremental", 0), 0u) << kind("collide");
+}
+
+TEST(Incremental, PartsPosesAndDensityChanges) {
+    // A part across the top (Interpolate and Clump keep to their side), guides posed (a
+    // simulation's), the view's density changed mid-stroke (another set of strands: in full,
+    // then incremental again), a point budget.
+    const Verified verified;
+    GroomData data = sphereGroom(kLookGraph, 24, 0);
+    PartSet parts;
+    std::vector<Vec3f> line;
+    for (int i = 0; i <= 20; ++i) line.push_back(Vec3f(-0.8f + 0.08f * static_cast<float>(i), 1.0f, 0.1f).normalized());
+    parts.add("top", line, *data.scalp, 40);
+    data.partsJson = parts.toJson();
+    GroomEvaluator session(data);
+    {
+        const HierarchyPtr authored = session.authoredHierarchy();
+        auto poses = std::make_shared<GuideSet>();
+        for (std::size_t i = 0; i < authored->guides().size(); i += 3) {
+            const HierarchyGuide& g = authored->guides()[i];
+            std::vector<Vec3f> points = g.points;
+            for (std::size_t k = 1; k < points.size(); ++k) points[k] += Vec3f(0.0f, 0.0f, 0.02f * static_cast<float>(k));
+            poses->add(g.id, points);
+        }
+        session.setGuidePoses(poses);
+    }
+    lila::groom::GroomStrokeHost host(session);
+    GroomEvaluator::Request request;
+    request.sculptDensity = 0.7f;
+    request.pointBudget = 40000.0;
+    auto densities = [&](int dab) {
+        if (dab == 2) request.density = 0.8f;
+        if (dab == 4) request.density = 1.0f;
+    };
+    EXPECT_GT(strokeAndCompare(session, host, request, {"comb", "lift"}, 6, densities), 20u);
+}
+
 // Bend combing, HairColor with a tip blend (per-point colors), Resample by curvature (each strand's count
 // by its turning) and then evenly to fewer points (a new layout, kept from dab to dab).
 const char* kShapeGraph = R"({"version": 1, "output": "out",
@@ -1047,6 +1563,53 @@ const char* kShapeGraph = R"({"version": 1, "output": "out",
     {"from": "curvature", "to": "color", "input": "strands"},
     {"from": "color", "to": "even", "input": "strands"},
     {"from": "even", "to": "out", "input": "strands"}]})";
+
+TEST(Incremental, CombColorAndResampleFollowAStroke) {
+    // Resample by curvature falls back when a dab changes a strand's count (then the next dabs
+    // go on from there); evenly to another count it keeps the last result's layout.
+    const Verified verified;
+    GroomEvaluator session(sphereGroom(kShapeGraph, 24, 2));
+    lila::groom::GroomStrokeHost host(session);
+    GroomEvaluator::Request request;
+    request.sculptDensity = 0.7f;
+    EXPECT_GT(strokeAndCompare(session, host, request, {"comb", "twist", "straighten", "clump"}, 5), 40u);
+}
+
+TEST(Incremental, BandedGuardHairsAndIridescenceFollowAStroke) {
+    // Bands over HairColor's tip (on guard hairs picked at random) and FeatherColor's iridescence
+    // channel: each made again for the strands a dab moved, as a full evaluation makes them.
+    std::string graph = kShapeGraph;
+    const std::string link = R"({"from": "color", "to": "even", "input": "strands"})";
+    graph.replace(graph.find(link), link.size(),
+                  R"({"from": "color", "to": "bands", "input": "strands"}, {"from": "bands", "to": "sheen", "input": "strands"},
+                     {"from": "sheen", "to": "even", "input": "strands"})");
+    const std::string node = R"({"name": "even", "type": "Resample",)";
+    graph.replace(graph.find(node), node.size(),
+                  R"({"name": "bands", "type": "Bands", "params": {"strength": 0.8, "count": 3, "guards": 0.6, "undercoatDye": [0.6, 0.6, 0.6]}},
+                     {"name": "sheen", "type": "FeatherColor", "params": {"pattern": "none", "iridescence": 0.5}},
+                     )" + node);
+    const Verified verified;
+    GroomEvaluator session(sphereGroom(graph.c_str(), 24, 2));
+    lila::groom::GroomStrokeHost host(session);
+    GroomEvaluator::Request request;
+    request.sculptDensity = 0.7f;
+    EXPECT_GT(strokeAndCompare(session, host, request, {"comb", "clump"}, 4), 20u);
+    const GroomEvaluator::Result& view = session.evaluate(GroomEvaluator::Request{});
+    ASSERT_TRUE(view.strands);
+    EXPECT_TRUE(view.strands->pointChannel(kIridescenceChannel));
+}
+
+TEST(Incremental, TheDefaultGraphFollowsAStroke) {
+    const Verified verified;
+    std::string graph = defaultGraphJson();
+    const std::string from = "\"type\": \"Scatter\"";
+    graph.replace(graph.find(from), from.size(), from + ", \"params\": {\"density\": 700.0}");
+    GroomEvaluator session(sphereGroom(graph, 24, 0));
+    lila::groom::GroomStrokeHost host(session);
+    GroomEvaluator::Request request;
+    request.sculptDensity = 0.5f;
+    EXPECT_GT(strokeAndCompare(session, host, request, {"comb", "length"}, 5), 16u);
+}
 
 // Interpolate, then Collide (the scalp and a collider mesh above it), Lift, Part, Flow (along an
 // arrow), Smooth, Flyaway, Attribute (a map of the guides' clump value), Wind, Jiggle (the scalp
@@ -1092,6 +1655,382 @@ const char* kDeformGraph = R"({"version": 1, "output": "out",
     {"from": "instance", "to": "twist", "input": "strands"},
     {"from": "guides", "to": "twist", "input": "axes"},
     {"from": "twist", "to": "out", "input": "strands"}]})";
+
+TEST(Incremental, CollideAndTheDeformersFollowAStroke) {
+    // Every node from Interpolate to Instance follows a stroke's changes: each dab after a press
+    // runs the 12 of them incrementally (Interpolate, Collide, Lift, Part, Flow, Smooth, Flyaway,
+    // Attribute, Wind, Jiggle, RestoreLength, Instance), and every view is a fresh session's.
+    // Twist's axes are the guides the stroke moves: it evaluates in full.
+    const Verified verified;
+    GroomData data = sphereGroom(kDeformGraph, 24, 2);
+    PartSet parts;
+    std::vector<Vec3f> line;
+    for (int i = 0; i <= 20; ++i) line.push_back(Vec3f(-0.8f + 0.08f * static_cast<float>(i), 1.0f, 0.1f).normalized());
+    parts.add("top", line, *data.scalp, 40);
+    data.partsJson = parts.toJson();
+    FlowSet flow;
+    const Vec3f at = Vec3f(0.2f, 1.0f, 0.3f).normalized();
+    flow.pins.push_back(FlowSet::makePin(*data.scalp, data.scalp->closestPoint(at), Vec3f(1.0f, 0.0f, -0.2f)));
+    data.flowJson = flow.toJson();
+    std::vector<Vec3f> points = test::makeSphere(10, 20, 0.45f)->points();
+    for (Vec3f& p : points) p += Vec3f(0.3f, 1.35f, 0.2f);
+    data.meshes["collider"] = std::make_shared<const ScalpMesh>(std::move(points), test::makeSphere(10, 20, 0.45f)->triangles());
+    std::vector<std::vector<Vec3f>> frames;
+    for (int k = 1; k <= 4; ++k) {
+        std::vector<Vec3f> was = data.scalp->points();
+        for (Vec3f& p : was) p += Vec3f(0.02f * static_cast<float>(k), 0.0f, -0.01f * static_cast<float>(k * k));
+        frames.push_back(std::move(was));
+    }
+    data.scalpHistory = ScalpHistory::make(1.0 / 24.0, std::move(frames));
+    GroomEvaluator session(data);
+    lila::groom::GroomStrokeHost host(session);
+    GroomEvaluator::Request request;
+    request.sculptDensity = 0.7f;
+    const std::vector<std::string> modes = {"comb", "slide", "clump", "length", "smooth"};
+    const std::size_t incremental = strokeAndCompare(session, host, request, modes, 5);
+    EXPECT_GE(incremental, modes.size() * 4u * 12u);
+}
+
+// A host that keeps its strand lines' buffers and writes again only the changed strands' vertex
+// ranges when an item says so (DisplayItem::updated), hiding a kept item, and keeps the lit
+// strands' own colors while their key stays (writing the changed strands' when it moves, as
+// Maya's override does): after every update, each shown item's buffers must be what writing its
+// lines whole gives.
+struct PartialHost {
+    struct Buffers {
+        std::vector<float> positions, normals, tangents, colors;
+        std::uint64_t layout = 0, colorsKey = 0;
+        bool hidden = false;
+    };
+    DisplayBuilder builder;
+    DisplaySettings settings;
+    std::map<std::string, Buffers> buffers;
+    std::size_t partial = 0, whole = 0, kept = 0;
+    std::size_t colorsKept = 0, colorsInPart = 0;  // partial writes that kept the colors, wrote some
+
+    PartialHost() {
+        builder.setRetain(false);
+        builder.setWriteLines(true);
+        settings.sculptDisplay = 1;  // dimmed while a stroke is live (the default draws them as they are)
+    }
+    void draw(const GroomEvaluator::Result& view, bool stroke) {
+        const DisplayFrame& frame = builder.update(lila::groom::displayInputs(view, stroke), settings);
+        for (const DisplayItem& item : frame.items) {
+            if (!item.rebuilt) continue;
+            Buffers& b = buffers[item.name];
+            if (item.keep) {
+                b.hidden = true;
+                ++kept;
+                continue;
+            }
+            if (!item.geometry || !item.geometry->lines) {
+                b = Buffers{};
+                continue;
+            }
+            const StrandLines& lines = *item.geometry->lines;
+            const std::size_t n = lines.vertexCount();
+            b.hidden = false;
+            const StrandColors* colors = lines.colors.get();
+            if (item.updated && b.layout == lines.layoutKey() && b.positions.size() == n * 3 && (!lines.lit || b.normals.size() == n * 3) &&
+                (colors ? b.colors.size() == n * 4 : b.colors.empty())) {
+                const bool recolor = colors && colors->key != b.colorsKey;
+                for (const auto& [first, end] : strandRuns(item.updated->strands, 8)) {
+                    const std::size_t begin = lines.strands->strandBegin(first), at = begin * 3;
+                    lines.writePositions(b.positions.data() + at, first, end);
+                    if (lines.lit) lines.writeFrames(b.normals.data() + at, b.tangents.data() + at, first, end);
+                    if (recolor) lines.writeColors(b.colors.data() + begin * 4, first, end);
+                }
+                ++partial;
+                if (colors) {
+                    ++(recolor ? colorsInPart : colorsKept);
+                    b.colorsKey = colors->key;
+                }
+            } else {
+                b.positions.assign(n * 3, 0.0f);
+                lines.writePositions(b.positions.data());
+                b.normals.clear();
+                b.tangents.clear();
+                if (lines.lit) {
+                    for (auto* v : {&b.normals, &b.tangents}) v->assign(n * 3, 0.0f);
+                    lines.writeFrames(b.normals.data(), b.tangents.data());
+                }
+                b.colors.assign(colors ? n * 4 : 0, 0.0f);
+                if (colors) lines.writeColors(b.colors.data());
+                b.colorsKey = colors ? colors->key : 0;
+                b.layout = lines.layoutKey();
+                ++whole;
+            }
+            // What writing it whole gives.
+            std::vector<float> positions(n * 3), normals(lines.lit ? n * 3 : 0), tangents(normals.size());
+            std::vector<float> rgba(colors ? n * 4 : 0);
+            lines.writePositions(positions.data());
+            if (lines.lit) lines.writeFrames(normals.data(), tangents.data());
+            if (colors) lines.writeColors(rgba.data());
+            EXPECT_TRUE(positions == b.positions) << item.name;
+            EXPECT_TRUE(normals == b.normals && tangents == b.tangents) << item.name;
+            EXPECT_TRUE(rgba == b.colors) << item.name;
+        }
+    }
+};
+
+TEST(Incremental, AViewportWritesOnlyTheChangedStrandsAndHoldsWhatAWholeWriteGives) {
+    // Strokes with the strands dimmed while they last (sculptDisplay 1) and lit after: the dimmed
+    // strands are written whole at the first press and in part after; the lit ones are kept hidden
+    // through a stroke and written again in part at its release.
+    const Verified verified;
+    GroomEvaluator session(sphereGroom(kLookGraph, 24, 0));
+    lila::groom::GroomStrokeHost host(session);
+    GroomEvaluator::Request request;
+    request.sculptDensity = 0.6f;
+    PartialHost viewport;
+    viewport.draw(session.evaluate(request), false);
+    const ToolView view = ToolView::fromMatrix(test::lookAtProjection({0.0f, 1.8f, 4.5f}, {0.0f, 0.8f, 0.0f}, 40.0, 1.5), 1200, 800);
+    float x0 = 0.0f, y0 = 0.0f;
+    ASSERT_TRUE(view.project(Vec3f(0.0f, 1.0f, 0.35f).normalized(), x0, y0));
+    for (int stroke = 0; stroke < 3; ++stroke) {
+        BrushTool tool;
+        tool.settings.setMode(stroke == 1 ? "smooth" : "comb");
+        tool.settings.screenRadius = 90.0f;
+        const float sx = x0 - 40.0f + 15.0f * static_cast<float>(stroke);
+        ASSERT_TRUE(tool.begin(host, view, sx, y0, 1.0f));
+        viewport.draw(session.evaluate(request), session.hasPreview());
+        for (int k = 1; k < 5; ++k) {
+            tool.moveTo(host, view, sx + 9.0f * static_cast<float>(k), y0, 1.0f);
+            viewport.draw(session.evaluate(request), session.hasPreview());
+        }
+        tool.end(host, view);
+        viewport.draw(session.evaluate(request), session.hasPreview());
+    }
+    // Lit strands whole once, dimmed ones whole at the first press; the rest in part.
+    EXPECT_EQ(viewport.whole, 2u);
+    EXPECT_GE(viewport.partial, 3u * 5u);
+    EXPECT_EQ(viewport.kept, 6u);  // lit ones at each press, dimmed ones at each release
+}
+
+TEST(Incremental, LitStrandsKeepTheirOwnColorsThroughAStroke) {
+    // The look graph colored by HairColor (varied per strand, blended toward a tip color along the
+    // strands by a mask of the points' height, so a dab that moves strands changes their colors):
+    // the lit strands carry their colors (strandLookColors), drawn as ever through strokes (the
+    // sculpt display off): each dab writes the changed strands' points, frames and colors, and
+    // the host's buffers hold what writing them whole gives.
+    const Verified verified;
+    std::string graph = kLookGraph;
+    const std::string from = R"j({"from": "resample", "to": "out", "input": "strands"})j";
+    graph.replace(graph.find(from), from.size(),
+                  R"j({"from": "resample", "to": "color", "input": "strands"}, {"from": "color", "to": "out", "input": "strands"})j");
+    const std::string node = R"j({"name": "out", "type": "Output"})j";
+    graph.replace(graph.find(node), node.size(),
+                  R"j({"name": "color", "type": "HairColor", "params": {"melaninRandom": 0.3, "tipColor": [0.9, 0.9, 0.2],
+                       "tipStrength": {"expression": "smoothstep(0.6, 1.4, py)", "max": 0.7}}}, )j" + node);
+    GroomEvaluator session(sphereGroom(graph, 24, 0));
+    lila::groom::GroomStrokeHost host(session);
+    GroomEvaluator::Request request;
+    request.sculptDensity = 1.0f;
+    PartialHost viewport;
+    viewport.settings.sculptDisplay = 0;
+    const GroomEvaluator::Result& first = session.evaluate(request);
+    ASSERT_TRUE(first.strands->pointChannel(kColorChannels[0])) << "HairColor writes per-point colors";
+    viewport.draw(first, false);
+    ASSERT_EQ(viewport.buffers["strands"].colors.size(), first.strands->pointCount() * 4);
+    const ToolView view = ToolView::fromMatrix(test::lookAtProjection({0.0f, 1.8f, 4.5f}, {0.0f, 0.8f, 0.0f}, 40.0, 1.5), 1200, 800);
+    float x0 = 0.0f, y0 = 0.0f;
+    ASSERT_TRUE(view.project(Vec3f(0.0f, 1.0f, 0.35f).normalized(), x0, y0));
+    for (int stroke = 0; stroke < 2; ++stroke) {
+        BrushTool tool;
+        tool.settings.setMode("comb");
+        tool.settings.screenRadius = 90.0f;
+        const float sx = x0 - 40.0f + 15.0f * static_cast<float>(stroke);
+        ASSERT_TRUE(tool.begin(host, view, sx, y0, 1.0f));
+        viewport.draw(session.evaluate(request), session.hasPreview());
+        for (int k = 1; k < 4; ++k) {
+            tool.moveTo(host, view, sx + 9.0f * static_cast<float>(k), y0, 1.0f);
+            viewport.draw(session.evaluate(request), session.hasPreview());
+        }
+        tool.end(host, view);
+        viewport.draw(session.evaluate(request), session.hasPreview());
+    }
+    EXPECT_EQ(viewport.whole, 1u);
+    EXPECT_GE(viewport.colorsInPart, 4u) << "dabs write the changed strands' colors";
+    EXPECT_EQ(viewport.partial, viewport.colorsInPart + viewport.colorsKept);
+}
+
+TEST(Incremental, APreviewHoldingHiddenCoreStrandsFollowsStrokes) {
+    // A preview under its core share (preview_core.h: 33k strands, a core of a quarter, the view at
+    // 0.1 and its strokes at 0.06) evaluates the core strands it does not show and hides them: its
+    // strokes are as incremental and exact as any, and the changes it hands the viewport are the
+    // shown strands' (written in part, what a whole write gives).
+    const Verified verified;
+    std::string graph = kLookGraph;
+    const std::string density = R"("density": 700.0)";
+    graph.replace(graph.find(density), density.size(), R"("density": 2600.0)");
+    GroomEvaluator session(sphereGroom(graph, 24, 3));
+    lila::groom::GroomStrokeHost host(session);
+    GroomEvaluator::Request request;
+    request.density = 0.1f;
+    request.sculptDensity = 0.6f;
+    const GroomEvaluator::Result& first = session.evaluate(request);
+    ASSERT_TRUE(first.strands);
+    EXPECT_GT(first.strands->strandCount(), 2500u);  // a tenth of about 33k
+    EXPECT_LT(first.strands->strandCount(), 4000u);
+    EXPECT_GE(strokeAndCompare(session, host, request, {"comb", "clump", "smooth"}, 4), 3u * 3u * 7u);
+    PartialHost viewport;
+    viewport.draw(session.evaluate(request), false);
+    const ToolView view = ToolView::fromMatrix(test::lookAtProjection({0.0f, 1.8f, 4.5f}, {0.0f, 0.8f, 0.0f}, 40.0, 1.5), 1200, 800);
+    float x0 = 0.0f, y0 = 0.0f;
+    ASSERT_TRUE(view.project(Vec3f(0.0f, 1.0f, 0.35f).normalized(), x0, y0));
+    BrushTool tool;
+    tool.settings.setMode("comb");
+    tool.settings.screenRadius = 90.0f;
+    ASSERT_TRUE(tool.begin(host, view, x0, y0, 1.0f));
+    viewport.draw(session.evaluate(request), session.hasPreview());
+    for (int k = 1; k < 5; ++k) {
+        tool.moveTo(host, view, x0 + 9.0f * static_cast<float>(k), y0, 1.0f);
+        viewport.draw(session.evaluate(request), session.hasPreview());
+    }
+    tool.end(host, view);
+    viewport.draw(session.evaluate(request), session.hasPreview());
+    EXPECT_GE(viewport.partial, 4u);
+}
+
+TEST(Incremental, WarmedReleasedAndForgottenStrokesDrawWhatAWholeWriteDraws) {
+    // A host warming the stroke document between strokes, then putting the brush away (the stroke
+    // document released, the dimmed strands' buffers let go: forgetKept) and taking it up again:
+    // every item holds what writing it whole gives, the dimmed strands written whole again.
+    const Verified verified;
+    GroomEvaluator session(sphereGroom(kLookGraph, 24, 0));
+    lila::groom::GroomStrokeHost host(session);
+    GroomEvaluator::Request request;
+    request.sculptDensity = 0.6f;
+    PartialHost viewport;
+    viewport.draw(session.evaluate(request), false);
+    const ToolView view = ToolView::fromMatrix(test::lookAtProjection({0.0f, 1.8f, 4.5f}, {0.0f, 0.8f, 0.0f}, 40.0, 1.5), 1200, 800);
+    float x0 = 0.0f, y0 = 0.0f;
+    ASSERT_TRUE(view.project(Vec3f(0.0f, 1.0f, 0.35f).normalized(), x0, y0));
+    EXPECT_FALSE(viewport.builder.forgetKept(DisplayItemId::DimStrands)) << "nothing kept yet";
+    for (int stroke = 0; stroke < 4; ++stroke) {
+        if (stroke == 2) {
+            session.releaseStroke();
+            EXPECT_TRUE(viewport.builder.forgetKept(DisplayItemId::DimStrands));
+            EXPECT_FALSE(viewport.builder.forgetKept(DisplayItemId::DimStrands)) << "once";
+            viewport.buffers.erase("dimStrands");
+        }
+        session.warmStroke(request);
+        BrushTool tool;
+        tool.settings.setMode("comb");
+        tool.settings.screenRadius = 90.0f;
+        const float sx = x0 - 40.0f + 15.0f * static_cast<float>(stroke);
+        ASSERT_TRUE(tool.begin(host, view, sx, y0, 1.0f));
+        viewport.draw(session.evaluate(request), session.hasPreview());
+        for (int k = 1; k < 4; ++k) {
+            tool.moveTo(host, view, sx + 9.0f * static_cast<float>(k), y0, 1.0f);
+            viewport.draw(session.evaluate(request), session.hasPreview());
+        }
+        tool.end(host, view);
+        const GroomEvaluator::Result& seen = session.evaluate(request);
+        EXPECT_EQ(seen.strands->contentHash(), freshView(session, request)) << "stroke " << stroke;
+        viewport.draw(seen, session.hasPreview());
+    }
+    // Lit strands whole once; dimmed ones whole at the first press and after they were let go.
+    EXPECT_EQ(viewport.whole, 3u);
+}
+
+TEST(Incremental, DimmedStrandsAGpuWroteAreWrittenWholeAtTheNextPress) {
+    // A host whose GPU preview wrote a stroke's dimmed strands in place (Maya's under OpenGL) says
+    // so at the release (DisplayBuilder::forgetHeld): the item stays kept hidden, and the next
+    // stroke's press writes all its points (the host's check: what a whole write gives).
+    const Verified verified;
+    GroomEvaluator session(sphereGroom(kLookGraph, 24, 0));
+    lila::groom::GroomStrokeHost host(session);
+    GroomEvaluator::Request request;
+    request.sculptDensity = 0.6f;
+    PartialHost viewport;
+    viewport.draw(session.evaluate(request), false);
+    const ToolView view = ToolView::fromMatrix(test::lookAtProjection({0.0f, 1.8f, 4.5f}, {0.0f, 0.8f, 0.0f}, 40.0, 1.5), 1200, 800);
+    float x0 = 0.0f, y0 = 0.0f;
+    ASSERT_TRUE(view.project(Vec3f(0.0f, 1.0f, 0.35f).normalized(), x0, y0));
+    std::size_t kept = 0;
+    for (int stroke = 0; stroke < 2; ++stroke) {
+        BrushTool tool;
+        tool.settings.setMode("comb");
+        tool.settings.screenRadius = 90.0f;
+        const float sx = x0 - 40.0f + 15.0f * static_cast<float>(stroke);
+        ASSERT_TRUE(tool.begin(host, view, sx, y0, 1.0f));
+        viewport.draw(session.evaluate(request), session.hasPreview());
+        tool.moveTo(host, view, sx + 9.0f, y0, 1.0f);
+        // The GPU's dab: the dimmed strands' points written by someone else.
+        for (float& p : viewport.buffers["dimStrands"].positions) p += 0.5f;
+        tool.end(host, view);
+        kept = viewport.kept;
+        viewport.builder.forgetHeld(DisplayItemId::DimStrands);
+        viewport.draw(session.evaluate(request), session.hasPreview());
+        EXPECT_EQ(viewport.kept, kept + 1) << "the dimmed strands kept hidden at the release";
+    }
+    EXPECT_GE(viewport.whole, 3u);  // the dimmed strands whole at the second press
+}
+
+TEST(Incremental, EveryShippedPresetFollowsAStrokeExactly) {
+    // Every shipped preset, and the tests' own (tests/data/presets), on the reference groom
+    // (PresetLooks': tests/data/strokes, a unit sphere with guides, the preset fitted to its
+    // size): a comb stroke over the guides, every node's
+    // incremental result checked against a full evaluation (Verified) and the view against a
+    // fresh session's, bit for bit, after the press, each dab and the release.
+    const Verified verified;
+    const GroomFile reference = readGroomFile(std::string(GROOMLAB_TEST_DATA) + "/strokes/strokes.groom");
+    ASSERT_TRUE(reference.data.scalp);
+    const std::optional<double> size = presetScalpSize(*reference.data.scalp);
+    const std::string shipped = GROOMLAB_SHIPPED_PRESETS;
+    const PathResolver paths = searchPathResolver({reference.directory, shipped});
+    const ToolView view = ToolView::fromMatrix(test::lookAtProjection({0.0f, 1.8f, 4.5f}, {0.0f, 0.8f, 0.0f}, 40.0, 1.5), 1200, 800);
+    float x0 = 0.0f, y0 = 0.0f;
+    ASSERT_TRUE(view.project(Vec3f(0.3f, 1.0f, 0.2f).normalized(), x0, y0));
+    GroomEvaluator::Request request;
+    request.density = 0.05f;
+    std::size_t incremental = 0, presets = 0;
+    for (const PresetInfo& p : listPresets({shipped, std::string(GROOMLAB_TEST_DATA) + "/presets"})) {
+        std::ifstream in(std::filesystem::u8path(p.path), std::ios::binary);
+        std::stringstream text;
+        text << in.rdbuf();
+        GroomData data = reference.data;
+        data.graphJson = presetGraphJson(text.str(), size);
+        GroomEvaluator session(data);
+        session.setPathResolver(paths);
+        if (!session.evaluate(request).errors.empty()) continue;  // (painted_maps: a map the reference lacks)
+        ++presets;
+        auto fresh = [&] {
+            GroomEvaluator again(session.data());
+            again.setPathResolver(paths);
+            if (const auto preview = session.previewHierarchy()) again.setPreviewHierarchy(std::make_shared<GuideHierarchy>(*preview));
+            const GroomEvaluator::Result& made = again.evaluate(request);
+            return made.strands ? made.strands->contentHash() : 0;
+        };
+        auto check = [&](const std::string& what) {
+            const GroomEvaluator::Result& seen = session.evaluate(request);
+            EXPECT_TRUE(seen.errors.empty()) << p.name << " " << what;
+            ASSERT_TRUE(seen.strands) << p.name << " " << what;
+            EXPECT_EQ(seen.strands->contentHash(), fresh()) << p.name << " " << what;
+        };
+        lila::groom::GroomStrokeHost host(session);
+        const std::size_t before = session.incrementalCount();
+        BrushTool tool;
+        tool.settings.setMode("comb");
+        tool.settings.screenRadius = 120.0f;
+        tool.settings.brush.strength = 0.8f;
+        if (!tool.begin(host, view, x0 - 40.0f, y0, 1.0f)) {
+            ADD_FAILURE() << p.name << ": the stroke reached no guide";
+            continue;
+        }
+        check("press");
+        for (int k = 1; k < 3; ++k) {
+            tool.moveTo(host, view, x0 - 40.0f + 20.0f * static_cast<float>(k), y0 + 4.0f * static_cast<float>(k), 1.0f);
+            check("dab " + std::to_string(k));
+        }
+        tool.end(host, view);
+        check("release");
+        incremental += session.incrementalCount() - before;
+    }
+    EXPECT_GT(presets, 30u);
+    EXPECT_GT(incremental, presets) << "the strokes evaluated nothing incrementally: the test checks little";
+}
 
 // held -> diff -> transform -> direction -> bend -> cut (a collider) -> render -> clump (guides as
 // centers, varied per clump) -> out, on strands scattered on a sphere (rooted, so each node's

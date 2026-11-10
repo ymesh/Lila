@@ -10,6 +10,7 @@
 #include "scene/MeasureMath.h"
 #include "scene/MeshNodes.h"
 #include "ui/Actions.h"
+#include "ui/GeometrySnap.h"
 #include "ui/MeshCache.h"
 #include "ui/Tools.h"
 #include "ui/ViewportHooks.h"
@@ -410,6 +411,16 @@ Snap snapAt(QPointF px, const ViewInfo& view)
     for (NodeId id : g.nodes())
     {
         scene::Node* n = g.node(id);
+        if (geometrySnap::isPointObject(g, id))
+        {
+            glm::dvec3 w(n->as<glm::dmat4>(scene::Transform::kWorldMatrix)[3]);
+            if (auto s = view.project(w); (snaps & SnapVertex) && s && scene::effectivelyVisible(g, id) && pxDist(*s, px) < bestPx)
+            {
+                bestPx = pxDist(*s, px);
+                best = Snap{w, scene::kNoNode, -1, "object"};
+            }
+            continue;
+        }
         if (!n->type().isA("mesh") || !scene::effectivelyVisible(g, id))
             continue;
         scene::MeshPtr mesh = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
@@ -488,7 +499,7 @@ void runAction(const char* name, json args)
     actions::run({{"command", name}, {"args", std::move(args)}});
 }
 
-bool attachToMeshes() { return prefs().value<bool>("general", "/measure/attach", true); }
+bool attachToMeshes() { return prefs().value<bool>("general", "/measure/attach", false); }
 
 json parentFor(const Snap& s)
 {
@@ -798,11 +809,14 @@ void copyField(const char* what, std::vector<std::string> fields)
 
 void registerMeasureActions()
 {
-    auto add = [](const char* id, const char* label, std::function<void()> fn, const char* python = "", const char* doc = "") {
-        actions::add({.id = id, .label = label, .category = "Measure", .run = std::move(fn), .doc = doc, .python = python});
+    auto add = [](const char* id, const char* label, std::function<void()> fn, const char* python = "", const char* doc = "",
+                  std::vector<std::string> keywords = {}) {
+        actions::add({.id = id, .label = label, .category = "Measure", .run = std::move(fn), .doc = doc, .python = python,
+                      .keywords = std::move(keywords)});
     };
+    // The keyword also lets tear-off search find the Display > Measure section by "distance".
     add("measure.selection", "Measure Selection", measureSelectionUi, "lila.ops.measureSelection()",
-        "Distance, length, angle, circle, area or size of the selection, shown in the viewport and copied to the clipboard.");
+        "Distance, length, angle, circle, area or size of the selection, shown in the viewport and copied to the clipboard.", {"distance"});
     add("measure.copyDistance", "Copy Distance", [] { copyField("distance", {"distance", "length"}); }, "lila.ops.measureSelection()[\"distance\"]",
         "Copies the distance across the selection to the clipboard, in the clipboard units.");
     add("measure.copyDiameter", "Copy Diameter", [] { copyField("diameter", {"diameter"}); }, "lila.ops.measureSelection()[\"diameter\"]",

@@ -339,6 +339,27 @@ Playback& playback()
     return state().playback;
 }
 
+TimeSelection& timeSelection()
+{
+    static TimeSelection s;
+    return s;
+}
+
+double timeSelectionWeight(const TimeSelection& s, double seconds)
+{
+    if (!s.active)
+        return 0.0;
+    const double frame = frameOf(seconds), from = frameOf(s.start), to = frameOf(s.end);
+    const double outside = frame < from ? from - frame : frame > to ? frame - to : 0.0;
+    if (outside <= 1e-9)
+        return 1.0;
+    if (s.falloff <= 0.0 || outside >= s.falloff + 1.0)
+        return 0.0;
+    // Smoothstep from the selection's edge to a frame past the falloff, so the last eased frame still moves a little.
+    const double x = 1.0 - outside / (s.falloff + 1.0);
+    return x * x * (3.0 - 2.0 * x);
+}
+
 void playbackChanged()
 {
     notify();
@@ -651,6 +672,36 @@ void registerCommands()
 
     const FlagDef attrFlag{"attribute", "at", T::Any, nullptr, "Attribute name or list of names (translate keys all three)."};
     const FlagDef timeFlag{"time", "t", T::Any, nullptr, "Seconds, or (start, end) with None for an open end. Default: all keys."};
+
+    ops::registerCommand({
+        .name = "timeRange",
+        .doc = "The time slider's selected range (Shift + drag on it), which edits across frames act on, such as Strings "
+               "poses. Give start and end to select, clear to drop it, falloff for the frames edits ease out over either "
+               "side. Returns {active, start, end, falloff}, times in seconds.",
+        .flags = {
+            {"start", "s", T::Float, nullptr, "Seconds."},
+            {"end", "e", T::Float, nullptr, "Seconds."},
+            {"falloff", "fo", T::Float, nullptr, "Frames edits ease out over either side."},
+            {"clear", "c", T::Bool, false, "Drop the selection."},
+        },
+        .undoable = false,
+        .run = [](const Args& a) -> json {
+            TimeSelection& s = timeSelection();
+            if (a.get<bool>("clear", false))
+                s.active = false;
+            if (a.has("start") || a.has("end"))
+            {
+                const double from = a.get<double>("start", a.get<double>("end", 0.0)), to = a.get<double>("end", from);
+                s.start = std::min(from, to);
+                s.end = std::max(from, to);
+                s.active = true;
+            }
+            if (a.has("falloff"))
+                s.falloff = std::max(0.0, a.get<double>("falloff"));
+            playbackChanged();
+            return {{"active", s.active}, {"start", s.start}, {"end", s.end}, {"falloff", s.falloff}};
+        },
+    });
 
     ops::registerCommand({
         .name = "setKeyframe",

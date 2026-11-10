@@ -42,7 +42,15 @@ inline constexpr const char* kPostEffects = "/viewport/post/effects";
 inline constexpr const char* kGrid = "/viewport/grid";
 inline constexpr const char* kBackfaceCulling = "/viewport/backfaceCulling";
 inline constexpr const char* kXray = "/viewport/xray";
-inline constexpr const char* kLighting = "/viewport/lighting"; // "environment", "studio" or "flat"
+inline constexpr const char* kLighting = "/viewport/lighting"; // "environment", "studio", "sculpt" or "flat"
+inline constexpr const char* kEnvRotation = "/viewport/env/rotation"; // degrees around the up axis
+/** Degrees the studio and sculpt rigs turn around the view axis. */
+inline constexpr const char* kRigRotation = "/viewport/rigRotation";
+/** Degrees the sculpt rig's key sits off the view direction: 0 lights from the camera, 90 grazes. */
+inline constexpr const char* kRigTilt = "/viewport/rigTilt";
+inline constexpr double kDefaultRigTilt = 45.0;
+/** The lighting mode Sculpt Lighting switches back to. */
+inline constexpr const char* kLightingBeforeSculpt = "/viewport/lightingBeforeSculpt";
 inline constexpr const char* kSceneLights = "/viewport/sceneLights"; // false: lights and domes light nothing in the viewport
 inline constexpr const char* kShadows = "/viewport/shadows";
 inline constexpr const char* kDefaultMaterial = "/viewport/defaultMaterial";
@@ -140,6 +148,9 @@ inline void applyCurveWidths(render::FrameState& s, double dpr)
 inline bool accentColors(bool monotone, bool selective) { return selective && !monotone; }
 /** Whether the display behind one of the accent toggles above draws in colour right now. */
 LILA_UI_API bool accentColors(const char* key);
+/** Whether views show the View Switcher where a viewport has made no choice of its own; Puppeteer's modes turn it on. */
+LILA_UI_API void setViewSwitcherDefault(bool on);
+LILA_UI_API bool viewSwitcherDefault();
 /** A display layer's linear colour, as a grey of the same luminance under Monotone. */
 LILA_UI_API glm::vec3 layerTint(const glm::vec3& linear);
 /** The theme's X, Y and Z colours (Monotone: muted red, green and blue that read on the dark UI greys). sRGB 0..1. */
@@ -190,6 +201,15 @@ enum class Quality
 };
 /** kAaMode is temporal. */
 LILA_UI_API bool temporalAa();
+/**
+ * Turns the light the current lighting mode uses by degrees: the HDRI around the up axis, or the studio or sculpt rig
+ * around the view. Flat lighting has none, and nothing changes. Kept within -180..180.
+ */
+LILA_UI_API void turnLight(double degrees);
+/** Moves the sculpt rig's key toward grazing (positive) or toward the camera, within 0..90 degrees. Other modes ignore it. */
+LILA_UI_API void tiltLight(double degrees);
+/** The current mode's light back to its defaults: rotation 0, and the sculpt rig's angle too. */
+LILA_UI_API void resetLight();
 LILA_UI_API void applyQuality(Quality q);
 /** The scene's active post process into s (nothing when it has none); effects turns its grading, bloom and lens effects on. */
 LILA_UI_API void applyPostProcess(render::FrameState& s, bool effects);

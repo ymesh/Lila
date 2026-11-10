@@ -29,7 +29,9 @@ def call(method, path, body=None):
         sys.exit("set LILA_CREDITS_ADMIN_TOKEN")
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(BASE + path, data=data, method=method,
-                                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+                                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json",
+                                          # Cloudflare rejects urllib's default User-Agent (error 1010).
+                                          "User-Agent": "lila-credits-admin"})
     try:
         with urllib.request.urlopen(req, timeout=60) as r:
             return json.load(r)

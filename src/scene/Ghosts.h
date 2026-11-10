@@ -94,6 +94,18 @@ public:
     /** Drops every cached frame. */
     void invalidate();
 
+    /** The times ghosts show at under s, around the graph's current time. */
+    std::vector<GhostTime> shownTimes(const Settings& s);
+    /** The ghosted nodes as they are evaluated now, as the frame at time t. The caller has set the time. */
+    std::shared_ptr<const Frame> captureNow(double t);
+    /**
+     * Frames shown in place of the cached ones at their times, while a drag previews an edit across time; the cache
+     * itself is left alone, so clearing the preview shows the frames as keyed.
+     */
+    void setPreview(std::vector<std::shared_ptr<const Frame>> frames);
+    void clearPreview() { mPreview.clear(); }
+    bool previewing() const { return !mPreview.empty(); }
+
     /** Frames captured since construction, for tests and the HUD. */
     uint64_t captures() const { return mCaptures; }
     size_t cached() const { return mFrames.size(); }
@@ -114,6 +126,7 @@ private:
     std::vector<double> mKeys;
     bool mKeysValid = false;
     std::map<int64_t, std::shared_ptr<const Frame>> mFrames; // by time in ticks
+    std::map<int64_t, std::shared_ptr<const Frame>> mPreview;
     uint64_t mCaptures = 0;
 };
 

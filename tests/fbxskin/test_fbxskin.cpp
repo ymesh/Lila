@@ -261,7 +261,7 @@ TEST_CASE("exportForUnreal honours the mapping's kind")
 
 /**
  * Writes the FBX plus what Lila computes for it (file-space joint heads and skinned points per frame) for the
- * Blender and Maya checks in this folder. They are run by hand: see validate_blender.py and validate_maya.py.
+ * Blender check in this folder, run by hand: see validate_blender.py.
  */
 TEST_CASE("reference data for external DCC validation")
 {

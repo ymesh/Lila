@@ -8,6 +8,7 @@
 #include "ui/Actions.h"
 #include "ui/Deletion.h"
 #include "ui/DockSidebar.h"
+#include "ui/MenuSearch.h"
 #include "ui/Panels.h"
 #include "ui/Icons.h"
 #include "ui/Layouts.h"
@@ -33,8 +34,6 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
-#include <QMouseEvent>
-#include <QPainter>
 #include <QPointer>
 #include <QPushButton>
 #include <QTabBar>
@@ -56,85 +55,7 @@ using nlohmann::json;
 namespace
 {
 /** The layouts that always have a tab; the rest are one click away in the tab strip's + menu. */
-const std::vector<std::string> kTabLayouts = {"Model", "UV", "Sculpt", "Texture", "Bake", "Rig", "Animate", "Level"};
-
-/**
- * Reset folded into the active layout tab: a small restore arrow in its top-right corner, where the option-box triangle
- * sits bottom-right. Clicking that corner resets the layout instead of running the tab; the arrow brightens under the
- * pointer. Inactive tabs show nothing.
- */
-class LayoutResetCorner : public QObject
-{
-public:
-    explicit LayoutResetCorner(QToolButton* tab) : QObject(tab), mTab(tab)
-    {
-        tab->setMouseTracking(true);
-        tab->installEventFilter(this);
-    }
-
-protected:
-    bool eventFilter(QObject* obj, QEvent* e) override
-    {
-        if (obj != mTab)
-            return false;
-        switch (e->type())
-        {
-        case QEvent::MouseButtonPress:
-        case QEvent::MouseButtonDblClick:
-        {
-            auto* m = static_cast<QMouseEvent*>(e);
-            if (mTab->isChecked() && m->button() == Qt::LeftButton && inCorner(m->position().toPoint()))
-            {
-                actions::run(json("window.resetLayout"));
-                return true;
-            }
-            return false;
-        }
-        case QEvent::MouseMove:
-            setHot(mTab->isChecked() && inCorner(static_cast<QMouseEvent*>(e)->position().toPoint()));
-            return false;
-        case QEvent::Leave:
-            setHot(false);
-            return false;
-        case QEvent::Paint:
-        {
-            mTab->removeEventFilter(this);
-            QCoreApplication::sendEvent(mTab, e);
-            mTab->installEventFilter(this);
-            if (!mTab->isChecked())
-                return true;
-            QPainter p(mTab);
-            const int size = mHot ? 12 : 10;
-            const QRect r = mTab->rect();
-            const QIcon::Mode mode = mHot ? QIcon::Active : QIcon::Normal;
-            icon("restore").paint(&p, QRect(r.right() - 1 - size, r.top() + 1, size, size), Qt::AlignCenter, mode);
-            return true;
-        }
-        default:
-            return false;
-        }
-    }
-
-private:
-    bool inCorner(QPoint pos) const { return pos.x() >= mTab->rect().right() - kZone && pos.y() <= kZone; }
-
-    void setHot(bool hot)
-    {
-        if (hot == mHot)
-            return;
-        mHot = hot;
-        mTab->setToolTip(hot ? QString::fromStdString(actions::tooltip("window.resetLayout")) : mTip);
-        mTab->update();
-    }
-
-public:
-    QString mTip;
-
-private:
-    static constexpr int kZone = 14;
-    QToolButton* mTab;
-    bool mHot = false;
-};
+const std::vector<std::string> kTabLayouts = {"Model", "Sculpt", "UV", "Bake", "Texture", "Rig", "Animate", "Level"};
 
 std::map<std::string, std::function<QDockWidget*()>>& lazyDocks()
 {
@@ -210,6 +131,7 @@ LayoutController::LayoutController(QMainWindow* window, DockSidebars* sidebars, 
 
     mMenu = new QMenu("Layouts", window);
     mMenu->setIcon(icon("layout"));
+    mMenu->setProperty(menuSearch::kSearchSuffixProperty, " Layout");
     connect(mMenu, &QMenu::aboutToShow, this, &LayoutController::fillMenu);
     fillMenu();
 
@@ -326,10 +248,11 @@ void LayoutController::refreshSwitcher()
             b->setText(QString::fromStdString(n));
             b->setCheckable(true);
             b->setProperty("layoutName", QString::fromStdString(n));
-            b->setToolTip(QString("%1 layout: arranges the panels and starts the %1 menus. Every tool and menu works in any layout. "
-                                  "Switching back restores it as you left it; the arrow in the active tab's corner resets it.")
+            b->setToolTip(QString("%1 layout: arranges the panels and starts the %1 menus. Switching back restores it as you left it. "
+                                  "Right-click to reset or save it.")
                               .arg(QString::fromStdString(n)));
-            (new LayoutResetCorner(b))->mTip = b->toolTip();
+            b->setContextMenuPolicy(Qt::CustomContextMenu);
+            connect(b, &QToolButton::customContextMenuRequested, this, [this, b, n](QPoint pos) { tabMenu(n, b->mapToGlobal(pos)); });
             connect(b, &QToolButton::clicked, this, [this, n] {
                 run("applyLayout", {{"name", n}});
                 refreshSwitcher();
@@ -340,6 +263,30 @@ void LayoutController::refreshSwitcher()
     }
     for (QToolButton* b : mTabButtons)
         b->setChecked(b->property("layoutName").toString().toStdString() == cur);
+}
+
+void LayoutController::tabMenu(const std::string& name, QPoint at)
+{
+    const QString n = QString::fromStdString(name);
+    std::optional<layouts::Entry> e = layouts::find(name);
+    QMenu menu(mWindow);
+    menu.addAction(icon("restore"), QString("Reset %1").arg(n), this, [this, name] {
+        run("applyLayout", {{"name", name}, {"reset", true}});
+        refreshSwitcher();
+    });
+    QAction* revert = menu.addAction("Revert to Built-in", this, [this, name] {
+        run("deleteLayout", {{"name", name}});
+        run("applyLayout", {{"name", name}, {"reset", true}});
+        refreshSwitcher();
+    });
+    revert->setEnabled(e && e->shadowsBuiltIn);
+    menu.addSeparator();
+    const bool current = layouts::current() == name;
+    QAction* save = menu.addAction(icon("device-floppy"), "Save Current Layout As...", this, [] { actions::run(json("window.layout.saveAs")); });
+    save->setEnabled(current);
+    menu.addAction(icon("plus"), "Add to Shelf", this, [this, name] { addToShelf(name); });
+    menu.addAction(icon("pencil"), "Manage Layouts...", this, [] { actions::run(json("window.layout.manage")); });
+    menu.exec(at);
 }
 
 void LayoutController::refreshLayoutActions()
@@ -525,6 +472,17 @@ void LayoutController::applyPreset(const json& preset)
             open.insert(n.get<std::string>());
             ensureDock(n.get<std::string>());
         }
+    // A tool palette the layout opens is its toolkit: docked in its area, not floating with the tool.
+    for (const std::string& name : open)
+    {
+        const panels::Panel* p = panels::registry().find(name);
+        QDockWidget* d = p && p->toolPalette ? dock(QString::fromStdString(name)) : nullptr;
+        if (!d || !d->isFloating())
+            continue;
+        d->hide();
+        d->setFloating(false);
+        mWindow->addDockWidget(p->area, d);
+    }
     for (QDockWidget* d : mWindow->findChildren<QDockWidget*>())
         if (d->parentWidget() == mWindow && !d->objectName().isEmpty())
             d->setVisible(open.count(d->objectName().toStdString()) > 0);

@@ -310,10 +310,9 @@ std::vector<FlagDef> remeshFlags(const char* symmetry)
              "Starting settings for what the mesh is for: gameCharacter, midPoly, hero, stylized, hardSurface, prop, or the name of a preset "
              "saved from the option box. Flags set to other than their default win."},
             {"method", "", T::String, "patches",
-             "patches: loops run unbroken between a few poles, for characters, props and anything edited by hand; field: each point follows "
-             "the flow near it, loops wander and poles scatter, for rough surfaces like scans and rocks; grid: a straight grid over an open "
-             "sheet seen from one side (terrain tiles, panels), patches otherwise.",
-             {"patches", "field", "grid"}},
+             "patches: loops run unbroken between a few poles; grid: a straight grid over an open sheet seen from one side (terrain tiles, "
+             "panels), patches otherwise.",
+             {"patches", "grid"}},
             {"targetFaces", "", T::Int, 3000, "Approximate face count.", {}, {}, 8.0},
             {"countTolerance", "", T::Float, 0.1, "Retry at a corrected size until the face count is within this fraction of targetFaces; 0 takes the first try.", {}, {}, 0.0, 1.0},
             {"timeout", "", T::Float, 0.0, "Seconds before giving up with an error saying how far it got, leaving the scene as it was; 0 waits until done or aborted.", {}, {}, 0.0},
@@ -351,9 +350,9 @@ QuadRemeshOptions remeshOptions(const Args& given, const Node& src, const char* 
     const Args a = withPreset(given, cmd);
     QuadRemeshOptions o;
     const std::string method = a.get<std::string>("method", "patches");
-    if (method != "patches" && method != "field" && method != "grid")
-        throw CommandError(std::string(cmd) + ": method must be patches, field or grid");
-    o.method = method == "grid" ? RemeshMethod::Grid : method == "field" ? RemeshMethod::Field : RemeshMethod::Patches;
+    if (method != "patches" && method != "grid")
+        throw CommandError(std::string(cmd) + ": method must be patches or grid");
+    o.method = method == "grid" ? RemeshMethod::Grid : RemeshMethod::Patches;
     o.targetFaces = std::max(8, a.get<int>("targetFaces", 3000));
     o.countTolerance = std::clamp(a.get<double>("countTolerance", 0.1), 0.0, 1.0);
     o.timeout = std::max(0.0, a.get<double>("timeout", 0.0));
@@ -952,11 +951,12 @@ void registerCommands()
         .doc = "Retopo Draw: connect a different reference mesh to the retopo mesh, so drawing continues on that surface and "
                "resumes on it later. Returns the mesh name.",
         .flags = {nodeFlag({"mesh", "", T::String, nullptr, "Retopo mesh."}, "mesh"),
-                  nodeFlag({"reference", "", T::String, nullptr, "The new reference mesh."}, "mesh")},
+                  nodeFlag({"reference", "", T::String, nullptr, "The new reference mesh."}, "mesh"),
+                  {"create", "", T::Bool, false, "Create the mesh if it doesn't exist (taking the reference's symmetry)."}},
         .run = [](const Args& a) -> json {
             if (!a.has("reference"))
                 throw CommandError("retopoDrawSetReference: give reference=");
-            return retopoDrawTarget(a, "retopoDrawSetReference", false).path();
+            return retopoDrawTarget(a, "retopoDrawSetReference", a.get<bool>("create", false)).path();
         },
     });
 

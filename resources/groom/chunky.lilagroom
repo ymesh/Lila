@@ -6,35 +6,7 @@
   "lock": {
     "profile": "ribbon",
     "thickness": 0.35,
-    "widthRamp": "0:0.55 0.12:1 0.7:0.8 1:0.08"
-  },
-  "stack": [
-    {
-      "style": "split",
-      "attrs": {
-        "count": 3,
-        "spread": 1.5
-      }
-    },
-    {
-      "style": "clump",
-      "attrs": {
-        "amount": 0.4
-      }
-    },
-    {
-      "style": "noise",
-      "attrs": {
-        "amount": 0.8,
-        "frequency": 0.06
-      }
-    },
-    {
-      "style": "flyaways",
-      "attrs": {
-        "amount": 0.15,
-        "spread": 2.5
-      }
-    }
-  ]
+    "widthRamp": "0:0.55 0.12:1 0.7:0.8 1:0.08",
+    "graph": "{\"version\": 1, \"output\": \"output\", \"nodes\": [{\"name\": \"scalp\", \"type\": \"Scalp\"}, {\"name\": \"guides\", \"type\": \"Guides\"}, {\"name\": \"locks\", \"type\": \"Locks\"}, {\"name\": \"scatter\", \"type\": \"Scatter\", \"params\": {\"density\": 20.0}}, {\"name\": \"hair\", \"type\": \"Interpolate\"}, {\"name\": \"output\", \"type\": \"Output\"}, {\"name\": \"split\", \"type\": \"LockSplit\", \"params\": {\"count\": 3, \"spread\": 1.5}}, {\"name\": \"clump\", \"type\": \"LockClump\", \"params\": {\"amount\": 0.4}}, {\"name\": \"noise\", \"type\": \"LockNoise\", \"params\": {\"amount\": 0.8, \"frequency\": 0.06}}, {\"name\": \"flyaways\", \"type\": \"LockFlyaways\", \"params\": {\"amount\": 0.15, \"spread\": 2.5}}], \"connections\": [{\"from\": \"scalp\", \"to\": \"scatter\", \"input\": \"scalp\"}, {\"from\": \"scatter\", \"to\": \"hair\", \"input\": \"strands\"}, {\"from\": \"locks\", \"to\": \"hair\", \"input\": \"guides\"}, {\"from\": \"scalp\", \"to\": \"hair\", \"input\": \"scalp\"}, {\"from\": \"hair\", \"to\": \"output\", \"input\": \"strands\"}, {\"from\": \"guides\", \"to\": \"split\", \"input\": \"guides\"}, {\"from\": \"scalp\", \"to\": \"split\", \"input\": \"scalp\"}, {\"from\": \"split\", \"to\": \"clump\", \"input\": \"guides\"}, {\"from\": \"scalp\", \"to\": \"clump\", \"input\": \"scalp\"}, {\"from\": \"clump\", \"to\": \"noise\", \"input\": \"guides\"}, {\"from\": \"scalp\", \"to\": \"noise\", \"input\": \"scalp\"}, {\"from\": \"noise\", \"to\": \"flyaways\", \"input\": \"guides\"}, {\"from\": \"scalp\", \"to\": \"flyaways\", \"input\": \"scalp\"}, {\"from\": \"flyaways\", \"to\": \"locks\", \"input\": \"guides\"}]}"
+  }
 }

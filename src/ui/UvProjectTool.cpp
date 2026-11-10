@@ -7,6 +7,7 @@
 #include "scene/Graph.h"
 #include "scene/LastOp.h"
 #include "ui/Actions.h"
+#include "ui/CameraBookmarks.h"
 #include "ui/GizmoMath.h"
 #include "ui/ToolColors.h"
 #include "ui/Tools.h"
@@ -14,6 +15,7 @@
 #include "ui/ViewportDisplay.h"
 #include "ui/ViewportHooks.h"
 #include "ui/ViewportTool.h"
+#include "ui/ViewportWidget.h"
 #include "ui/ViewportToolMath.h"
 #include "uv/UvCommands.h"
 
@@ -734,6 +736,12 @@ void installUvProjectTool()
             gViewEye = glm::dvec3(glm::inverse(glm::dmat4(view.view))[3]);
     });
     uv::projectionViewProvider() = [] { return gViewDir; };
+    uv::projectionCameraProvider() = []() -> std::optional<glm::dmat4> {
+        ViewportWidget* v = cameraBookmarks::activeView();
+        if (!v)
+            return std::nullopt;
+        return v->viewInfo().viewProj();
+    };
     actions::add({.id = "uv.seamView",
                   .label = "Add Seam View",
                   .category = "UV",

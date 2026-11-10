@@ -16,6 +16,8 @@
 #include "io/References.h"
 #include "io/SceneFormats.h"
 #include "maya/MayaFile.h"
+#include "maya/MayaIndex.h"
+#include "maya/MayaRig.h"
 #include "math/MathCore.h"
 #include "scene/Anim.h"
 #include "scene/AnimCurve.h"
@@ -58,66 +60,13 @@ using geo::kInvalid;
 using scene::Graph;
 using scene::NodeId;
 using scene::PlugRef;
-using MNode = maya::Node;
 using json = nlohmann::json;
-using Names = std::initializer_list<std::string_view>;
 
 constexpr int kMaxRefDepth = 8;
 
-bool oneOf(std::string_view s, Names names)
-{
-    return std::find(names.begin(), names.end(), s) != names.end();
-}
-
-std::string shortName(std::string_view path)
-{
-    if (auto bar = path.rfind('|'); bar != std::string_view::npos)
-        path = path.substr(bar + 1);
-    return std::string(path);
-}
-
-/** A valid Lila name: namespace segments kept, anything else Lila doesn't allow becomes '_'. */
-std::string lilaName(std::string_view raw, std::string_view ns, const char* fallback)
-{
-    std::string s;
-    bool segStart = true;
-    for (char c : shortName(raw))
-    {
-        if (c == ':')
-        {
-            if (!segStart)
-                s.push_back(':');
-            segStart = true;
-            continue;
-        }
-        bool alpha = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
-        bool digit = c >= '0' && c <= '9';
-        if (segStart && digit)
-            s.push_back('_');
-        s.push_back(alpha || digit ? c : '_');
-        segStart = false;
-    }
-    while (!s.empty() && s.back() == ':')
-        s.pop_back();
-    if (s.empty())
-        s = fallback;
-    return ns.empty() ? s : std::string(ns) + ":" + s;
-}
-
-/** Maya matrices are row-vector, rows written in order; read straight into glm's columns that is the column form. */
-glm::dmat4 matrixOf(const std::vector<double>& v)
-{
-    glm::dmat4 m(1.0);
-    if (v.size() >= 16)
-        for (int c = 0; c < 4; ++c)
-            for (int r = 0; r < 4; ++r)
-                m[c][r] = v[size_t(c * 4 + r)];
-    return m;
-}
-
 const std::set<std::string_view>& transformTypes()
 {
-    static const std::set<std::string_view> k = {"transform", "joint", "lodGroup"};
+    static const std::set<std::string_view> k = {"transform", "joint", "lodGroup", "ikHandle"};
     return k;
 }
 
@@ -143,7 +92,7 @@ const std::set<std::string_view>& quietTypes()
         "nodeGraphEditorInfo", "dagPose", "place2dTexture", "shapeEditorManager", "poseInterpolatorManager", "groupId", "groupParts",
         "aiOptions", "aiAOVDriver", "aiAOVFilter", "aiImagerDenoiserOidn", "reference", "hyperGraphInfo", "hyperLayout", "hyperView",
         "partition", "sequenceManager", "sequencer", "objectSet", "colorManagementGlobals", "polyBlindData", "uvChooser",
-        "ikRPsolver", "ikSCsolver", "ikSystem", "hikSolver", "renderGlobals", "brush", "unitConversion", "timeEditor",
+        "ikRPsolver", "ikSCsolver", "ikSplineSolver", "ik2Bsolver", "ikSystem", "hikSolver", "renderGlobals", "brush", "unitConversion", "timeEditor",
         "timeEditorTracks", "defaultRenderUtilityList", "renderSetup", "lookdevXGraph"};
     return k;
 }
@@ -168,193 +117,6 @@ std::optional<scene::lights::Kind> lightKind(std::string_view t)
     if (t == "ambientLight" || t == "aiSkyDomeLight")
         return Kind::Dome;
     return std::nullopt;
-}
-
-struct Plug
-{
-    int node = -1;
-    std::string attr;
-};
-
-/** Node lookup by name or DAG path, hierarchy, and connections of one file. */
-class FileIndex
-{
-public:
-    explicit FileIndex(const File& f) : file(f)
-    {
-        const size_t n = f.nodes.size();
-        parent.assign(n, -1);
-        children.resize(n);
-        for (size_t i = 0; i < n; ++i)
-        {
-            const MNode& node = f.nodes[i];
-            if (!node.parent.empty())
-            {
-                int p = resolve(node.parent, int(i));
-                parent[i] = p;
-                if (p >= 0)
-                    children[size_t(p)].push_back(int(i));
-                else
-                    unresolvedParents.push_back(node.name);
-            }
-            byName[shortName(node.name)].push_back(int(i));
-        }
-        for (const Connection& c : f.connections)
-        {
-            Plug s = split(c.src), d = split(c.dst);
-            if (s.node < 0 || d.node < 0)
-                continue;
-            size_t k = conns.size();
-            conns.push_back({s, d});
-            in.emplace(d.node, k);
-            out.emplace(s.node, k);
-        }
-    }
-
-    const File& file;
-    std::vector<int> parent;
-    std::vector<std::vector<int>> children;
-    std::vector<std::string> unresolvedParents;
-    struct Conn
-    {
-        Plug src, dst;
-    };
-    std::vector<Conn> conns;
-    std::multimap<int, size_t> in, out;
-
-    const MNode& node(int i) const { return file.nodes[size_t(i)]; }
-
-    /** "|grp|box|boxShape" */
-    std::string fullPath(int i) const
-    {
-        std::string p;
-        for (int cur = i; cur >= 0; cur = parent[size_t(cur)])
-            p = "|" + shortName(node(cur).name) + p;
-        return p;
-    }
-
-    /** Index of a name or DAG path; `before` limits the search to nodes created earlier (-p while reading). */
-    int resolve(std::string_view name, int before = -1) const
-    {
-        while (!name.empty() && name[0] == ':')
-            name.remove_prefix(1);
-        const bool absolute = !name.empty() && name[0] == '|';
-        std::vector<std::string_view> segs;
-        for (size_t i = 0; i <= name.size();)
-        {
-            size_t j = name.find('|', i);
-            if (j == std::string_view::npos)
-                j = name.size();
-            if (j > i)
-                segs.push_back(name.substr(i, j - i));
-            i = j + 1;
-        }
-        if (segs.empty())
-            return -1;
-        auto it = byName.find(std::string(segs.back()));
-        // byName is filled as nodes are read, so a lookup while building only sees earlier nodes.
-        std::vector<int> cands;
-        if (it != byName.end())
-            cands = it->second;
-        if (before >= 0)
-            std::erase_if(cands, [&](int c) { return c >= before; });
-        int best = -1;
-        for (int c : cands)
-        {
-            int cur = c;
-            bool ok = true;
-            for (size_t s = segs.size() - 1; s-- > 0;)
-            {
-                cur = parent[size_t(cur)];
-                if (cur < 0 || shortName(node(cur).name) != segs[s])
-                {
-                    ok = false;
-                    break;
-                }
-            }
-            if (ok && absolute && parent[size_t(cur)] >= 0)
-                ok = false;
-            if (ok)
-                best = c; // the latest match, like Maya's last created node of a name
-        }
-        return best;
-    }
-
-    /** "node.attr.path" to (node, attr). */
-    Plug split(std::string_view s) const
-    {
-        size_t dot = s.find('.');
-        if (dot == std::string_view::npos)
-            return {};
-        return {resolve(s.substr(0, dot)), std::string(s.substr(dot + 1))};
-    }
-
-    /** Source of a node's input whose attr is one of names. */
-    std::optional<Plug> input(int n, Names names) const
-    {
-        auto [a, b] = in.equal_range(n);
-        for (auto it = a; it != b; ++it)
-            if (oneOf(conns[it->second].dst.attr, names))
-                return conns[it->second].src;
-        return std::nullopt;
-    }
-
-    std::vector<std::pair<Plug, Plug>> inputs(int n) const
-    {
-        std::vector<std::pair<Plug, Plug>> v;
-        auto [a, b] = in.equal_range(n);
-        for (auto it = a; it != b; ++it)
-            v.push_back({conns[it->second].src, conns[it->second].dst});
-        return v;
-    }
-
-    std::vector<std::pair<Plug, Plug>> outputs(int n) const
-    {
-        std::vector<std::pair<Plug, Plug>> v;
-        auto [a, b] = out.equal_range(n);
-        for (auto it = a; it != b; ++it)
-            v.push_back({conns[it->second].src, conns[it->second].dst});
-        return v;
-    }
-
-private:
-    std::unordered_map<std::string, std::vector<int>> byName;
-};
-
-const AttrValue* lastAttr(const MNode& n, Names names)
-{
-    for (auto it = n.attrs.rbegin(); it != n.attrs.rend(); ++it)
-        if (oneOf(it->attr, names))
-            return &*it;
-    return nullptr;
-}
-
-double num(const MNode& n, Names names, double def)
-{
-    const AttrValue* a = lastAttr(n, names);
-    return a && !a->nums.empty() ? a->nums[0] : def;
-}
-
-std::string text(const MNode& n, Names names)
-{
-    const AttrValue* a = lastAttr(n, names);
-    return a && !a->strs.empty() ? a->strs[0] : std::string();
-}
-
-/** A double3 attribute with its per-component attributes applied in file order. */
-glm::dvec3 vec3(const MNode& n, Names whole, std::array<Names, 3> comps, glm::dvec3 def)
-{
-    glm::dvec3 v = def;
-    for (const AttrValue& a : n.attrs)
-    {
-        if (oneOf(a.attr, whole) && a.nums.size() >= 3)
-            v = {a.nums[0], a.nums[1], a.nums[2]};
-        else
-            for (int i = 0; i < 3; ++i)
-                if (oneOf(a.attr, comps[size_t(i)]) && !a.nums.empty())
-                    v[i] = a.nums[0];
-    }
-    return v;
 }
 
 glm::dvec3 color(const MNode& n, Names whole, glm::dvec3 def)
@@ -693,7 +455,7 @@ struct Nested
 };
 
 /** Bumped when a conversion would come out differently, so cached .lila files of referenced Maya files are redone. */
-constexpr int kConverterVersion = 6;
+constexpr int kConverterVersion = 7;
 
 /**
  * How a referenced file's node is named relative to its namespace: the bare name when no other node has it, else its
@@ -815,6 +577,27 @@ public:
                 weights.step();
             }
         }
+        mRig = std::make_unique<RigBuilder>(RigContext{
+            .g = mG,
+            .ix = mIx,
+            .opts = mOpts,
+            .r = mR,
+            .lin = mU.lin,
+            .ang = mU.ang,
+            .fps = mU.fps,
+            .c3 = mC3,
+            .axes = mAxes,
+            .identityAxes = mIdentityAxes,
+            .transforms = mLila,
+            .meshes = mShapeNode,
+            .pointOf = mPointOf,
+            .handled = mHandled,
+            .blendPlugs = [this](int node, const std::string& attr) { return blendPlugs(node, attr); },
+            .readCurve = [this](const MNode& n, double unit, double sign, double tangentUnit, bool* approx) {
+                return readCurve(n, unit, sign, tangentUnit, approx);
+            },
+            .resolveImage = [this](const std::string& stored, const std::string& what) { return resolveImage(stored, what); },
+        });
         if (mOpts.morphs)
         {
             buildBlendShapes();
@@ -829,6 +612,10 @@ public:
         {
             progress::Scope curves("Animation curves", 0.0, progress::None, 0.5);
             buildAnimation();
+        }
+        {
+            progress::Scope rig("Rig", 0.0, progress::None, 0.5);
+            mRig->build();
         }
         connectPlaceholders();
         if (mOpts.setPlayback && mDepth == 0)
@@ -1003,8 +790,12 @@ private:
         const bool planeXform = !joint && !instanceXform && meshes.empty() && cameras.empty() && locators.empty() && !planes.empty();
         const bool lightXform =
             !joint && !instanceXform && meshes.empty() && cameras.empty() && locators.empty() && planes.empty() && !lights.empty();
+        const bool latticeXform = !joint && meshes.empty() &&
+                                  std::any_of(others.begin(), others.end(), [&](int o) { return mIx.node(o).type == "lattice" && !isIntermediate(o); });
         const char* type = joint                               ? "joint"
+                           : mn.type == "ikHandle"             ? "ikHandle"
                            : mn.type == "lodGroup"             ? "lodGroup"
+                           : latticeXform                      ? "lattice"
                            : !meshes.empty() || instanceXform ? "mesh"
                            : cameraXform     ? (mIdentityAxes ? "camera" : "transform")
                            : planeXform      ? (mIdentityAxes ? "imagePlane" : "transform")
@@ -1075,8 +866,15 @@ private:
         }
         for (int o : others)
         {
-            mHandled.insert(o);
             const std::string& t = mIx.node(o).type;
+            // Constraints and pins are converted, or reported, by the rig pass; the deformer handles are only helpers.
+            if (RigBuilder::ownsShape(t))
+            {
+                if (!t.ends_with("Constraint") && t != "follicle")
+                    mHandled.insert(o);
+                continue;
+            }
+            mHandled.insert(o);
             if (isIntermediate(o))
                 continue;
             mR.skipped.push_back(std::format("{} '{}'{}", isLight(t) ? "light" : t.c_str(), shortName(mIx.node(o).name),
@@ -1626,7 +1424,8 @@ private:
                     Geom out;
                     out.mesh = geo::subdivide(g->mesh, {.levels = levels,
                                                                 .sharpBoundary = num(n, {"kb", "keepBorder"}, 1.0) != 0.0,
-                                                                .keepHardEdges = num(n, {"khe", "keepHardEdge"}, 1.0) != 0.0});
+                                                                .keepHardEdges = num(n, {"khe", "keepHardEdge"}, 1.0) != 0.0,
+                                                                .uvs = geo::SubdivideUvs::Blend});
                     return out;
                 }
             }
@@ -1673,7 +1472,7 @@ private:
             if (auto b = outAttr.find('['); b != std::string::npos)
                 k = outAttr.substr(b + 1, outAttr.find(']') - b - 1);
             std::string ig = "ip[" + k + "].ig", ig2 = "input[" + k + "].inputGeometry";
-            if (t != "skinCluster" && t != "tweak" && !(t == "blendShape" && mOpts.morphs))
+            if (t != "skinCluster" && t != "tweak" && !(t == "blendShape" && mOpts.morphs) && !RigBuilder::convertsDeformer(t))
                 log.warnings.push_back(std::format("{}: deformer {} '{}' not applied", shape, t, shortName(n.name)));
             return upstream({ig, ig2});
         }
@@ -2857,8 +2656,11 @@ private:
                     auto driver = in ? lilaDriver(*in) : std::nullopt;
                     if (!driver || !types::find("drivenChannel"))
                     {
-                        ++skipped[std::format("set driven key on {} (its driver {} is not converted)", where,
-                                              in ? std::format("{}.{}", shortName(mIx.node(in->node).name), in->attr) : std::string("is missing"))];
+                        std::string why;
+                        if (mRig && mRig->drive(src, plugs, &why))
+                            continue;
+                        ++skipped[std::format("set driven key on {} (its driver {} is not converted: {})", where,
+                                              in ? std::format("{}.{}", shortName(mIx.node(in->node).name), in->attr) : std::string("is missing"), why)];
                         continue;
                     }
                     if (std::abs(driver->second) < 1e-12)
@@ -2883,10 +2685,13 @@ private:
                         mG.connect({ch, drivers::kChannelOutput, -1}, plugs[k]);
                     continue;
                 }
-                const std::string why = sn.type == "expression"      ? "an expression"
-                                        : sn.type == "blendWeighted" ? "several set driven keys (blendWeighted)"
-                                                                     : sn.type + " '" + shortName(sn.name) + "'";
-                ++skipped[std::format("{} driving {}", why, where)];
+                std::string why;
+                if (mRig && mRig->drive(src, plugs, &why))
+                    continue;
+                if (sn.type == "expression")
+                    ++skipped[std::format("an expression driving {} (MEL expressions are not converted)", where)];
+                else
+                    ++skipped[std::format("{}.{} driving {} ({})", shortName(sn.name), src.attr, where, why)];
             }
         if (approx)
             mR.warnings.push_back("blendShape weight curves: slow, fast, plateau, step next and smooth tangents were approximated");
@@ -3055,9 +2860,11 @@ private:
             if (!oneOf(c.src.attr, {"o", "output"}) || mBlends.contains(c.dst.node))
                 continue;
             const char kind = cn.type.size() == 11 ? cn.type[10] : '?';
+            // Set driven keys, and time curves on anything but transform channels, are the rig pass's.
             if (cn.type.size() != 11 || cn.type[9] != 'T' || (kind != 'L' && kind != 'A' && kind != 'U'))
             {
-                ++skippedTargets[cn.type.starts_with("animCurveU") ? "driven keys (" + cn.type + ")" : cn.type];
+                if (!cn.type.starts_with("animCurveU"))
+                    ++skippedTargets[cn.type];
                 continue;
             }
             const double tangentUnit = kind == 'L' ? 1.0 : kind == 'A' ? 180.0 / math::kPi : 1.0; // tangent y is in internal units
@@ -3096,6 +2903,8 @@ private:
                         group = gi, axis = ai;
             if (!target || group < 0)
             {
+                if (mLila.contains(c.dst.node) || RigBuilder::convertsInputsOf(mIx.node(c.dst.node).type))
+                    continue;
                 ++skippedTargets[target ? std::format("{}.{}", mG.node(target->first)->path(), target->second)
                                         : std::format("{}.{}", shortName(mIx.node(c.dst.node).name), c.dst.attr)];
                 continue;
@@ -4325,6 +4134,9 @@ private:
                 // Maya's own bookkeeping: lockInfluenceWeights on every skinned joint, a converted blendShape's aliases.
                 if (a.longName == "lockInfluenceWeights" || (a.longName == "attributeAliasList" && mBlends.contains(int(i))) || n.existing)
                     continue;
+                // Converted user attributes, and the attributes the rig pass reads off converted nodes (constraint weights, nonlinear settings).
+                if ((mRig && mRig->convertedAttr(int(i), a.longName)) || (mHandled.contains(int(i)) && RigBuilder::convertsInputsOf(n.type)))
+                    continue;
                 ++custom;
                 if (customNames.size() < 20)
                     customNames.push_back(std::format("{}.{}", shortName(n.name), a.longName));
@@ -4340,7 +4152,7 @@ private:
         for (const auto& [type, count] : unconverted)
             mR.skipped.push_back(std::format("{} {} node(s)", count, type));
         if (custom)
-            mR.skipped.push_back(std::format("{} custom attribute(s) (Lila nodes have no dynamic attributes): {}{}", custom,
+            mR.skipped.push_back(std::format("{} custom attribute(s) (only numeric, bool and enum attributes on transforms and joints convert): {}{}", custom,
                                              [&] {
                                                  std::string s;
                                                  for (const std::string& c : customNames)
@@ -4375,6 +4187,7 @@ private:
     std::set<int> mHandled;
     std::set<int> mRotateAxisFolded;
     std::map<int, Blend> mBlends; // converted blendShapes by Maya node
+    std::unique_ptr<RigBuilder> mRig;
     std::vector<PendingMesh> mPending;
     Nested* mNested = nullptr;
     std::vector<RefInfo> mRefs;

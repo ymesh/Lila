@@ -4,6 +4,7 @@
 
 #include "geo/Mesh.h"
 #include "geo/Primitives.h"
+#include "core/PrefStore.h"
 #include "ops/Command.h"
 #include "scene/Components.h"
 #include "scene/Graph.h"
@@ -357,5 +358,40 @@ TEST_CASE("pivot-edit rotate on a joint turns it once, keeps its child, and undo
     CHECK(near(node(mid).as<glm::dvec3>(Joint::kJointOrient), {0, 0, 0}));
     CHECK(near(glm::dvec3(worldOf("tip")[3]), tipAt));
     ui::tools::setPivotEdit(false);
+    ui::tools::setCurrent(ui::Tool::Move);
+}
+
+TEST_CASE("gimbal rotate: a ring drag turns one rotate channel, and rings coincide at gimbal lock")
+{
+    run("newScene");
+    run("spaceLocator", {{"name", "A"}});
+    run("rotate", {{"args", {"A"}}, {"to", {20, 30, 0}}});
+    PrefStore::get().set("general", "/manipulator/rotateSpace", "gimbal");
+    ui::tools::setCurrent(ui::Tool::Rotate);
+    ui::ViewInfo view;
+    view.proj = glm::ortho(-50.0, 50.0, -50.0, 50.0, -100.0, 100.0);
+    view.width = view.height = 100.0;
+    view.ortho = true;
+    view.eye = {0.0, 0.0, 50.0};
+
+    run("select", {{"args", {"A"}}});
+    ui::Manipulator m;
+    m.setView(view);
+    double r = 6.0;
+    while (r < 49.0 && !(m.hover({50 + r, 50 + r}), m.hovering()))
+        r += 0.5;
+    REQUIRE(r < 49.0);
+    REQUIRE(m.press({50 + r, 50 + r}, Qt::LeftButton, Qt::NoModifier));
+    m.drag({50 + r - 12.0, 50 + r + 12.0}, Qt::NoModifier);
+    m.release();
+    const glm::dvec3 after = node("A").as<glm::dvec3>(scene::Transform::kRotate);
+    int changed = 0;
+    for (int c = 0; c < 3; ++c)
+        changed += std::abs(after[c] - glm::dvec3(20, 30, 0)[c]) > 1e-6;
+    CHECK(changed == 1);
+    run("undo");
+    CHECK(near(node("A").as<glm::dvec3>(scene::Transform::kRotate), {20, 30, 0}));
+
+    PrefStore::get().set("general", "/manipulator/rotateSpace", "world");
     ui::tools::setCurrent(ui::Tool::Move);
 }

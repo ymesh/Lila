@@ -17,6 +17,8 @@
  * A pass adds to the frame like a drawer does, 3D into frame (lines, linesOnTop, meshes, tris3d) and 2D into painter,
  * but chooses where it lands relative to Lila's own content.
  */
+class QWidget;
+
 namespace lila::ui::renderPasses
 {
 enum class Stage : uint8_t
@@ -33,6 +35,8 @@ struct Context
     const ViewInfo& view;
     /** Which viewport panel, as hud prefs key them. */
     int panel = 0;
+    /** The viewport widget being drawn, to tell the view under the cursor from the others. */
+    QWidget* widget = nullptr;
 };
 
 struct Pass

@@ -25,6 +25,10 @@
 
 #include <algorithm>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace lila::ui
 {
 namespace
@@ -67,6 +71,26 @@ uint32_t eventScancode(QKeyEvent* e)
     (void)e;
     return 0;
 #endif
+}
+
+/**
+ * The key pressed, by its label. Windows reports Ctrl with a symbol key by the control character it types, so Ctrl+`
+ * arrives as '@' and would read as Ctrl+Shift+2; the layout's own character for the virtual key is the key pressed.
+ */
+int eventKey(QKeyEvent* e)
+{
+#ifdef _WIN32
+    const auto mods = e->modifiers();
+    if ((mods & Qt::ControlModifier) && !(mods & Qt::ShiftModifier) && hotkeys::unshiftedUsKey(e->key()) != e->key())
+    {
+        UINT vk = e->nativeVirtualKey();
+        if (!vk && e->nativeScanCode())
+            vk = MapVirtualKeyW(e->nativeScanCode(), MAPVK_VSC_TO_VK);
+        if (UINT ch = MapVirtualKeyW(vk, MAPVK_VK_TO_CHAR) & 0x7FFF; ch > 0x20)
+            return QChar(char16_t(ch)).toUpper().unicode();
+    }
+#endif
+    return e->key();
 }
 
 bool isStandardTextEdit(int mods, int key)
@@ -283,13 +307,41 @@ void Hotkeys::setMode(const std::string& mode)
     reload();
 }
 
+namespace
+{
+/**
+ * With several keys on one action, the one hints name: a letter, digit or function key before punctuation, which sits
+ * under the right hand while it holds the mouse and moves between keyboard layouts.
+ */
+int hintRank(const QString& keyText)
+{
+    const QString key = keyText.section('+', -1);
+    if (key.size() == 1)
+        return key[0].isLetterOrNumber() ? 1 : 0;
+    return key.startsWith('F') ? 1 : 0;
+}
+
+/** The best-ranked key in keys, the first of its rank winning. */
+QString bestHint(const std::vector<QString>& keys)
+{
+    QString best;
+    for (const QString& k : keys)
+        if (best.isEmpty() || hintRank(k) > hintRank(best))
+            best = k;
+    return best;
+}
+} // namespace
+
 QString Hotkeys::keyFor(const std::string& actionId) const
 {
+    std::vector<QString> found;
     for (const char* ctx : {"global", "viewport"})
         if (auto it = mModeContexts.find(ctx); it != mModeContexts.end())
             for (auto& [chord, over] : it->second)
                 if (hotkeys::Slots s = hotkeys::overlaySlots({}, over.value); s.press.is_string() && s.press.get<std::string>() == actionId)
-                    return over.keyText;
+                    found.push_back(over.keyText);
+    if (!found.empty())
+        return bestHint(found);
     for (const char* ctx : {"global", "viewport"})
     {
         auto it = mContexts.find(ctx);
@@ -297,14 +349,16 @@ QString Hotkeys::keyFor(const std::string& actionId) const
             continue;
         for (auto& [chord, b] : it->second)
             if (b.targets.press.is_string() && b.targets.press.get<std::string>() == actionId)
-                return b.keyText;
+                found.push_back(b.keyText);
     }
+    if (!found.empty())
+        return bestHint(found);
     // Panel contexts last (graph editor, UV editor...), so a panel's own keys show in its tooltips.
     for (auto& [ctx, bindings] : mContexts)
         for (auto& [chord, b] : bindings)
             if (b.targets.press.is_string() && b.targets.press.get<std::string>() == actionId)
-                return b.keyText;
-    return {};
+                found.push_back(b.keyText);
+    return bestHint(found);
 }
 
 bool Hotkeys::chordMatches(const Chord& chord, QKeyEvent* e)
@@ -313,7 +367,7 @@ bool Hotkeys::chordMatches(const Chord& chord, QKeyEvent* e)
     // By position the modifiers are the ones held: Windows reports Ctrl+` as '@', which normalizing would read as Shift+2.
     if (uint32_t scan = eventScancode(e); chord.scan && scan)
         return chord.scan == scan && chord.mods == held;
-    auto [mods, key] = hotkeys::normalizeShifted(held, e->key());
+    auto [mods, key] = hotkeys::normalizeShifted(held, eventKey(e));
     return chord.mods == mods && chord.qtKey == key;
 }
 
@@ -422,7 +476,7 @@ bool Hotkeys::eventFilter(QObject* obj, QEvent* e)
 
     // The held key's own events are handled wherever they land: an open hotbox menu would otherwise take the key's
     // repeats as presses of its highlighted item.
-    if (mPending && (mPending->scan ? mPending->scan == eventScancode(k) : mPending->qtKey == k->key()))
+    if (mPending && (mPending->scan ? mPending->scan == eventScancode(k) : mPending->qtKey == eventKey(k)))
     {
         const bool pass = buttonsOnly(mPending->binding.targets);
         if (e->type() == QEvent::KeyPress || k->isAutoRepeat())
@@ -456,7 +510,7 @@ bool Hotkeys::eventFilter(QObject* obj, QEvent* e)
     // The OS key repeat is eaten so the repeat cadence comes from the prefs alone.
     if (mRepeat)
     {
-        bool same = mRepeat->scan ? mRepeat->scan == eventScancode(k) : mRepeat->qtKey == k->key();
+        bool same = mRepeat->scan ? mRepeat->scan == eventScancode(k) : mRepeat->qtKey == eventKey(k);
         if (same)
         {
             if (e->type() == QEvent::KeyRelease && !k->isAutoRepeat())
@@ -480,7 +534,7 @@ bool Hotkeys::eventFilter(QObject* obj, QEvent* e)
         if (k->isAutoRepeat())
             return false;
         for (auto it = mHeldKeys.begin(); it != mHeldKeys.end(); ++it)
-            if (it->scan ? it->scan == eventScancode(k) : it->qtKey == k->key())
+            if (it->scan ? it->scan == eventScancode(k) : it->qtKey == eventKey(k))
             {
                 json release = it->binding.targets.release;
                 mHeldKeys.erase(it);
@@ -542,12 +596,12 @@ bool Hotkeys::eventFilter(QObject* obj, QEvent* e)
     if (t.hold.is_null() && !t.hasButtons())
     {
         // Press/release pairs (hold D for pivot mode) are tracked apart so other keys can come and go meanwhile.
-        mHeldKeys.push_back(Pending{*b, eventScancode(k), k->key(), hotkeys::HeldKey(t)});
+        mHeldKeys.push_back(Pending{*b, eventScancode(k), eventKey(k), hotkeys::HeldKey(t)});
         if (!t.press.is_null())
             runFromKey(t.press);
         return true;
     }
-    mPending.emplace(Pending{*b, eventScancode(k), k->key(), hotkeys::HeldKey(t)});
+    mPending.emplace(Pending{*b, eventScancode(k), eventKey(k), hotkeys::HeldKey(t)});
     if (!t.hold.is_null())
         mHoldTimer.start(mHoldDelay);
     if (isHotbox(t.hold))
@@ -590,7 +644,7 @@ void Hotkeys::startRepeat(QKeyEvent* e, const json& target)
     // An interval of 0 turns the repeat off.
     if (PrefStore::get().value<int>("general", "/undo/repeatIntervalMs", 100) <= 0)
         return;
-    mRepeat = Repeat{eventScancode(e), e->key(), target};
+    mRepeat = Repeat{eventScancode(e), eventKey(e), target};
     mRepeatTimer.start(std::max(0, PrefStore::get().value<int>("general", "/undo/repeatDelayMs", 180)));
 }
 

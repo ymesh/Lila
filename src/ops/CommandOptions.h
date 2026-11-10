@@ -50,7 +50,8 @@ struct Field
     std::vector<double> presets;
     /**
      * A Text field's editor: "multiline" (a box of several lines), "code" (monospace, applied on Ctrl+Enter), "font" (font
-     * pickers) or "uvSet" (the selected meshes' uv sets, given to every flag named uvSet); empty is one line.
+     * pickers) or "uvSet" (the selected meshes' uv sets, given to every flag named uvSet); empty is one line. A Choice
+     * field's editor: "segmented" (one strip of its values, for modes); empty is a dropdown.
      */
     std::string editor;
     /** A Text or List field naming scene nodes: their type (FlagDef::nodeType), drawn as a node picker. */

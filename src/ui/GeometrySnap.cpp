@@ -5,6 +5,7 @@
 #include "curve/Tessellate.h"
 #include "scene/Graph.h"
 #include "scene/Isolation.h"
+#include "scene/Rig.h"
 #include "scene/Transform.h"
 #include "ui/Isolate.h"
 #include "ui/Tools.h"
@@ -44,6 +45,21 @@ void Nearest::segment(const glm::dvec3& a, const glm::dvec3& b)
         // Screen-space t is close enough along short segments; perspective skew is tiny at snap distances.
         mHit = glm::mix(a, b, t);
     }
+}
+
+bool isPointObject(scene::Graph& g, scene::NodeId id)
+{
+    const scene::Node* node = g.node(id);
+    return node && (node->type().isA("locator") || scene::rig::isJoint(*node));
+}
+
+bool addPointObject(Nearest& n, scene::Graph& g, scene::NodeId id, unsigned snaps)
+{
+    if (!isPointObject(g, id))
+        return false;
+    if ((snaps & SnapVertex) && scene::effectivelyVisible(g, id) && isolate::shows(scene::isolation::active(), id))
+        n.point(glm::dvec3(g.node(id)->as<glm::dmat4>(scene::Transform::kWorldMatrix)[3]));
+    return true;
 }
 
 void addCurve(Nearest& n, scene::Graph& g, scene::NodeId id, unsigned snaps, const std::vector<uint32_t>& moving)

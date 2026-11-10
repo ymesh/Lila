@@ -154,9 +154,7 @@ std::vector<Preset> list()
 
 json capture(Graph& g, Node& groom, bool withGuides)
 {
-    json j = {{"format", kFormat}, {"version", 1}, {"lock", attrsOf(groom)}, {"stack", json::array()}};
-    for (Node* n : styleStack(g, groom))
-        j["stack"].push_back({{"style", styleName(styleOptionsOf(*n).kind)}, {"attrs", attrsOf(*n)}});
+    json j = {{"format", kFormat}, {"version", 1}, {"lock", attrsOf(groom)}};
     if (Node* guides = withGuides ? guidesOf(g, groom) : nullptr)
     {
         json splines = json::array();
@@ -174,20 +172,6 @@ json capture(Graph& g, Node& groom, bool withGuides)
 int apply(Graph& g, Node& groom, const json& preset, bool guides, bool replaceGuides)
 {
     setAttrs(g, groom, preset.value("lock", json::object()));
-    if (preset.contains("stack"))
-    {
-        for (Node* n : styleStack(g, groom))
-            removeFromStack(g, groom, *n);
-        for (const json& entry : preset["stack"])
-        {
-            Style k;
-            if (!parseStyle(entry.value("style", std::string()), &k))
-                continue;
-            Node* n = g.createNode(*types::find(styleNodeType(k)), {}, kNoNode, true);
-            setAttrs(g, *n, entry.value("attrs", json::object()));
-            insertStyle(g, groom, *n, -1);
-        }
-    }
     Node* guideNode = guidesOf(g, groom);
     if (!guides || !guideNode || !preset.contains("guides"))
         return 0;

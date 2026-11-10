@@ -1,6 +1,7 @@
 #include "ui/UvEditorInternal.h"
 
 #include "ops/CommandOptions.h"
+#include "ui/Menus.h"
 #include "ui/OptionBox.h"
 #include "ui/PanelDefaults.h"
 #include "ui/FlowLayout.h"
@@ -101,8 +102,9 @@ private:
 };
 
 /**
- * The Planar tile: best fit, X, Y and Z project in one click from a 2x2 grid where the icon would be; the tile keeps its
- * label and option box (the axis there is what the grid overrides), so it sits in the grid like its neighbours.
+ * The Planar tile: camera, X, Y and Z project in one click from a 2x2 grid where the icon would be; the tile keeps its
+ * label (best fit by default) and option box (the axis there is what the grid overrides), so it sits in the grid like its
+ * neighbours.
  */
 QToolButton* planarTile(QWidget* parent)
 {
@@ -117,7 +119,7 @@ QToolButton* planarTile(QWidget* parent)
     cells->setContentsMargins(1, 1, 1, 1);
     cells->setSpacing(1);
     const std::tuple<const char*, const char*, const char*> parts[] = {
-        {nullptr, "uv.projectPlanarBest", nullptr}, {"X", "uv.projectPlanarX", "axisX"}, {"Y", "uv.projectPlanarY", "axisY"}, {"Z", "uv.projectPlanarZ", "axisZ"}};
+        {nullptr, "uv.projectCamera", nullptr}, {"X", "uv.projectPlanarX", "axisX"}, {"Y", "uv.projectPlanarY", "axisY"}, {"Z", "uv.projectPlanarZ", "axisZ"}};
     for (int i = 0; auto [text, id, axisToken] : parts)
     {
         auto* b = new QToolButton(strip);
@@ -125,8 +127,7 @@ QToolButton* planarTile(QWidget* parent)
             b->setText(text);
         else
         {
-            // Best fit wears the planar icon: it is what the plain Planar button does by default.
-            b->setIcon(icon("square"));
+            b->setIcon(icon("camera"));
             b->setIconSize(QSize(14, 14));
         }
         b->setToolTip(QString::fromStdString(actions::tooltip(id)));
@@ -1012,6 +1013,9 @@ void registerUvActions()
     cmd("uv.auto", "Auto UV", "uvAuto", json::object(), "Seams, unwrap and pack in one step.");
     cmd("uv.autoSeams", "Auto Seams", "uvAutoSeams", json::object(), "Place seams for game assets.");
     cmd("uv.unwrap", "Unwrap", "uvUnwrap", json::object(), "Unwrap along the seams with low stretch.");
+    cmd("uv.unwrapExported", "Unwrap Exported Mesh", "uvUnwrapExported", json::object(),
+        "Apply the modifier stack and unwrap the result: no collapsed UVs. The modifiers are gone afterwards.");
+    menus::addItem({.menu = "UV", .action = "uv.unwrapExported", .after = "UV/uv.unwrap"});
     // uv.cut, uv.sew and uv.weld come from uvLive::install, which re-solves the touched islands in live mode.
     uvLive::install();
     for (auto [mode, label, doc] : {std::tuple{"vertex", "UV Vertex Select", "Select uv points in the UV editor (vertex mode)."},
@@ -1068,6 +1072,8 @@ void registerUvActions()
     cmd("uv.projectBox", "Box Projection", "uvProject", json{{"type", "box"}}, "Project uvs from six sides.");
     cmd("uv.projectCylindrical", "Cylindrical Projection", "uvProject", json{{"type", "cylindrical"}}, "Project uvs around an axis.");
     cmd("uv.projectSpherical", "Spherical Projection", "uvProject", json{{"type", "spherical"}}, "Project uvs from the centre.");
+    cmd("uv.projectCamera", "Camera Projection", "uvProject", json{{"type", "camera"}},
+        "Project uvs through the active view, filling 0-1 with what it shows. Pick a camera in the options to use its resolution gate.");
     cmd("uv.hose", "Hose UVs", "uvHose", json::object(),
         "Pipes, hoses, cables and rings: one straight strip per tube with its seam on the least seen side, long runs cut where least "
         "seen, round ends as circles. Seam views, cameras or planes in the options say where it is seen from.");

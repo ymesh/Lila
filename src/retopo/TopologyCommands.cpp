@@ -131,6 +131,8 @@ void mapSpec(json& spec, ConstructKind kind, const std::function<glm::dvec3(cons
                 points(side["points"]);
         if (spec.contains("pull"))
             one(spec["pull"]);
+        if (spec.contains("lift"))
+            spec["lift"] = vec(dir(toVec(spec["lift"], "lift")));
         break;
     case ConstructKind::Strip:
         points(spec["knots"]);
@@ -262,6 +264,8 @@ ConstructSpec parseConstructSpec(ConstructKind kind, const json& s)
         p.variant = s.value("variant", 0);
         if (s.contains("pull") && !s["pull"].is_null())
             p.pull = toVec(s["pull"], "pull");
+        if (s.contains("lift") && !s["lift"].is_null())
+            p.lift = toVec(s["lift"], "lift");
         return p;
     }
     case ConstructKind::Strip:
@@ -336,6 +340,7 @@ ConstructSpec parseConstructSpec(ConstructKind kind, const json& s)
         p.faces = toList<Index>(s.value("faces", json::array()));
         p.referenceFaces = s.value("referenceFaces", Index(0));
         p.edgeLength = s.value("edgeLength", 1.0);
+        p.targetFaces = s.value("targetFaces", 0);
         for (const json& g : s.value("guides", json::array()))
             p.guides.push_back(toVecs(g, "guides"));
         p.border = toVecs(s.value("border", json::array()), "border");
@@ -551,7 +556,8 @@ void registerTopologyCommands()
 
             double weld = std::max(0.0, a.get<double>("weld")) * std::cbrt(std::abs(glm::determinant(glm::dmat3(toLocal))));
             std::optional<geo::SymmetryPlane> sym = symmetryPlane(n);
-            StitchResult st = stitchConstruct(m, gen, id, weld, sym);
+            // Points within about a third of an edge of the symmetry plane or of an open border join it, so pieces meet.
+            StitchResult st = stitchConstruct(m, gen, id, weld, sym, ctx.edgeLength * 0.35);
             if (!gen.faces.empty() && st.faces.empty())
                 throw CommandError(std::string("retopoConstruct ") + constructKindName(kind) +
                                    ": every face would overlap existing faces or make a non-manifold edge");

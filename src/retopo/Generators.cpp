@@ -152,6 +152,7 @@ GenResult genPatch(const PatchSpec& s, const GenContext& ctx)
     o.padding = s.padding;
     o.variant = s.variant;
     o.pull = s.pull;
+    o.lift = s.lift;
     PatchResult p = fillPatch(b, o, ctx.surface);
     if (!p.ok())
     {
@@ -811,8 +812,20 @@ GenResult generateRegion(const RegionSpec& s, const GenContext& ctx)
         r.error = "the region has no faces";
         return r;
     }
+    double area = 0.0;
+    for (Index f = 0; f < source.faceCapacity(); ++f)
+        if (source.faceValid(f))
+            area += source.faceArea(f);
+    const double edge = s.targetFaces > 0 ? std::sqrt(area / s.targetFaces) : std::max(s.edgeLength, 1e-6);
+    // Checked up front: a remesh this dense runs for minutes before its first progress step.
+    constexpr double kMaxFaces = 50000.0;
+    if (double estimate = area / (edge * edge); estimate > kMaxFaces)
+    {
+        r.error = "about " + std::to_string(int64_t(estimate)) + " faces is over the region limit of 50000; lower Faces or raise Edge Length";
+        return r;
+    }
     QuadRemeshOptions o;
-    o.targetEdgeLength = std::max(s.edgeLength, 1e-6);
+    o.targetEdgeLength = edge;
     o.guides = s.guides;
     o.timeout = ctx.timeout;
     o.adaptivity = 0.0;
@@ -877,6 +890,7 @@ GenResult generateRegion(const RegionSpec& s, const GenContext& ctx)
                 p = map[p];
             r.faces.push_back(pts);
         }
+    r.sideCounts = {int(r.faces.size())};
     return r;
 }
 } // namespace lila::retopo

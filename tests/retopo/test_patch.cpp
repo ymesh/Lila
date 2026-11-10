@@ -559,3 +559,35 @@ TEST_CASE("patch: corners from a loop")
     checkPatch(b, r);
     CHECK(r.poles.empty());
 }
+
+TEST_CASE("patch: a cap lifts onto the dome instead of flattening across the ring")
+{
+    geo::SphereOptions so;
+    so.radius = 10.0;
+    so.subdivAxis = 64;
+    so.subdivHeight = 64;
+    geo::Mesh sphere = geo::makeSphere(so);
+    geo::MeshBvh bvh;
+    bvh.build(sphere);
+    // A ring of 16 points round the sphere at y = 6, its cap bulging along +Y like a fingertip.
+    retopo::PatchBoundary b;
+    const double y = 6.0, r = std::sqrt(100.0 - y * y);
+    for (int i = 0; i < 16; ++i)
+    {
+        const double a = i / 16.0 * glm::two_pi<double>();
+        b.points.push_back({r * std::cos(a), y, r * std::sin(a)});
+    }
+    b.corners = {0, 4, 8, 12};
+    retopo::PatchOptions o;
+    o.lift = glm::dvec3(0.0, 1.0, 0.0);
+    retopo::PatchResult res = retopo::fillPatch(b, o, &bvh);
+    REQUIRE(res.ok());
+    double highest = 0.0;
+    for (size_t i = b.points.size(); i < res.positions.size(); ++i)
+    {
+        CHECK(glm::length(res.positions[i]) == doctest::Approx(10.0).epsilon(0.02));
+        CHECK(res.positions[i].y > y);
+        highest = std::max(highest, res.positions[i].y);
+    }
+    CHECK(highest > 9.0);
+}

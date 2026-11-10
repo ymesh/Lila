@@ -121,8 +121,16 @@ struct BrushSettings
     brush::Radial radial;
     /** Shape brushes also paint color where they move points; the Paint brush always does. */
     bool paint = false;
+    /** With paint: color goes only where a stroke digs in, more the deeper it digs (dark seams along Dam Standard lines). */
+    bool cavityPaint = false;
     /** Linear RGB. */
     glm::vec3 color{1.0f};
+    /** Paint and Mask: blur the color or mask under the brush instead of laying it down (Shift). */
+    bool blur = false;
+    /** Smooth: keep even curvature and volume; off, plain neighbour averaging, which also flattens the form. */
+    bool keepVolume = true;
+    /** Pinch: how far it presses the surface in as it draws points together, 0 for none, 1 the default. */
+    double pinchDepth = 1.0;
 };
 
 /** The brush's name: a built-in's, or the registered one's. */
@@ -301,6 +309,8 @@ private:
     void addDisplacement(const Side& s);
     void addMaskChange(const Side& s);
     void addPaint(const Side& s);
+    /** Each point the dab's copies overlap on takes their moves averaged by falloff, so the copies blend instead of stacking. */
+    void blendSides();
     bool painting() const;
     void ensureColor();
     StrokeRecord colorChange(const std::vector<glm::vec4>& next);
@@ -313,6 +323,13 @@ private:
     glm::vec4 shownColor(Index p) const;
     glm::dvec3 originalPosition(Index p) const;
     glm::dvec3 projectToOriginal(Index p, const glm::dvec3& at) const;
+    /** Neighbour average less the point: zero on a flat, even patch. */
+    glm::dvec3 laplacian(Index p) const;
+    /**
+     * Smooth's full-strength move: the bi-Laplacian, which removes noise but leaves an even curvature (a sphere, a
+     * cylinder, a rounded edge) where it is, so forms keep their volume and silhouette.
+     */
+    glm::dvec3 smoothStep(Index p) const;
     double pointWeight(Index p, double falloff) const;
 
     geo::Mesh mMesh;
@@ -348,12 +365,17 @@ private:
     std::vector<float> mMaskDelta;
     std::vector<int8_t> mFreezeSet; // -1 clear, 1 set, 0 untouched
     std::vector<float> mPaint;      // how far toward the brush color, 0 to 1
+    std::vector<double> mBlend;     // summed falloff of the copies that moved each point
     std::vector<glm::vec4> mColor;
 
     std::vector<uint32_t> mGatherStamp;
     uint32_t mGatherId = 0;
 
     std::shared_ptr<render::RenderMesh> mRender;
+    /** The render vertices of each point (one per uv seam side), [mPointVertOffsets[p], mPointVertOffsets[p + 1]). */
+    std::vector<uint32_t> mPointVertOffsets;
+    std::vector<uint32_t> mPointVerts;
+    std::vector<glm::vec2> mVertUv;
     uint64_t mVersion = 1;
     uint64_t mMaskVersion = 1;
     uint64_t mColorVersion = 1;

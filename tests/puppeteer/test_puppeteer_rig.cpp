@@ -79,12 +79,13 @@ TEST_CASE("puppeteer: modes, gizmo and selection handlers come and go with the e
     CHECK(animate->gizmoProvider == "puppeteer.spinner");
     CHECK(animate->selectionHandler == "puppeteer.animate");
     CHECK(rigMode->selectionHandler == "puppeteer.rig");
-    // Space's tap swaps in the graph editor; its hold (the hotbox) is left alone.
-    CHECK(animate->hotkeys["viewport"]["Space"] == json{{"press", "puppeteer.graphFullScreen"}});
+    // Space's tap opens the Curve Overlay; its hold (the hotbox) is left alone.
+    CHECK(animate->hotkeys["viewport"]["Space"] == json{{"press", "puppeteer.curveOverlay"}});
+    CHECK(ui::actions::find("puppeteer.curveOverlay"));
     CHECK_FALSE(animate->hotkeys["viewport"]["Space"].contains("hold"));
     CHECK(ui::gizmos::find("puppeteer.spinner"));
     CHECK(ui::selectionHandlers::find("puppeteer.animate"));
-    CHECK(ui::layouts::contributed().find("Puppeteer Animate"));
+    CHECK(ui::layouts::contributed().find("Animate"));
     CHECK(ui::actions::find("mode.puppeteerAnimate"));
     CHECK(ui::actions::find("puppeteer.spinner.inheritRotate"));
 

@@ -12,6 +12,7 @@
 #include "scene/DeformerUtil.h"
 #include "scene/Fields.h"
 #include "scene/Graph.h"
+#include "scene/BendBonesDeformer.h"
 #include "scene/Jiggle.h"
 #include "scene/MeshCache.h"
 #include "scene/MeshNodes.h"
@@ -965,6 +966,7 @@ void registerTypes()
     registerSurfaceTypes();
     morphs::registerTypes();
     jiggle::registerTypes();
+    bendbones::registerTypes();
     meshCache::registerTypes();
     registerShapeTypes();
     registerTextureTypes();
@@ -1282,6 +1284,7 @@ void registerCommands()
     registerSurfaceCommands();
     morphs::registerCommands();
     jiggle::registerCommands();
+    bendbones::registerCommands();
     meshCache::registerCommands();
     skinbake::registerCommands();
     registerShapeCommands();

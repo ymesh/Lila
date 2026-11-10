@@ -325,7 +325,14 @@ ToolStatus RetopoPolesTool::status() const
     }
     return {.tool = "Retopo Poles",
             .fields = {{"three-edge", QString::number(three)}, {"five-edge", QString::number(five)}, {"faces", QString("~%1").arg(targetFaces())}},
-            .flags = {{"solving", mJob.valid()}}};
+            .flags = {{"solving", mJob.valid()}},
+            .keys = {{"drag pole", "move"},
+                     {"Ctrl-click", "add a 3/5 pair"},
+                     {"Ctrl+Alt-click", "remove a pair"},
+                     {"Ctrl-wheel", "faces"},
+                     {"Backspace", "reset"},
+                     {"Enter", "build"},
+                     {"Esc", "exit"}}};
 }
 
 bool RetopoPolesTool::mousePress(QMouseEvent* e, const ViewInfo& view)

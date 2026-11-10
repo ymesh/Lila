@@ -549,7 +549,9 @@ void registerMeshEditComponentCommands()
             const bool fromFaces = components::mode() == K::Face;
             json out = editSelected("Bridge", fromFaces ? K::Face : K::Edge, [&](geo::Mesh& m, const Ids& sel, const geo::SymmetryMap* s) {
                 const Ids all = withMirror(m, s, sel, fromFaces ? K::Face : K::Edge);
-                geo::BridgeResult r = fromFaces ? geo::bridgeFaces(m, all, o) : geo::bridge(m, all, o);
+                geo::BridgeOptions so = o;
+                so.symmetry = s;
+                geo::BridgeResult r = fromFaces ? geo::bridgeFaces(m, all, so) : geo::bridge(m, all, so);
                 total.rows = std::max(total.rows, r.rows);
                 total.welded += r.welded;
                 total.split += r.split;

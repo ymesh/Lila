@@ -21,7 +21,10 @@ namespace lila::uv
 struct UnwrapFacesOptions
 {
     UnwrapOptions unwrap;
-    /** Keep each island where it was (centre, area and rough rotation) when it had uvs; else pack. */
+    /**
+     * Keep each island where it was (centre, area and rough rotation) when it had uvs; else pack. Islands kept in place
+     * that come out overlapping each other are packed instead, at the size they came out at.
+     */
     bool keepPlacement = true;
     /** Pack the unwrapped islands into 0-1 instead (just these islands). */
     bool pack = false;

@@ -422,13 +422,6 @@ bool parseStyle(std::string_view name, Style* out)
     return false;
 }
 
-std::string styleNodeType(Style s)
-{
-    std::string n = styleName(s);
-    n[0] = char(std::toupper(n[0]));
-    return "groom" + n;
-}
-
 void applyStyle(Splines& s, const StyleOptions& o, const Surface* scalp)
 {
     LILA_ZONE();

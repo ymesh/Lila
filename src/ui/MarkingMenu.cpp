@@ -39,6 +39,9 @@ constexpr double kMenuRadius = 110.0;
 constexpr double kDeadZone = 18.0;
 // How long the cursor must rest on a compass item's option box before releasing there opens it rather than the item.
 constexpr qint64 kBoxDwellMs = 250;
+// A submenu row or a submenu in the slot above the list opens only after the cursor rests this long, so moving past
+// it to reach something else never pops it open.
+constexpr qint64 kSubmenuDwellMs = 450;
 constexpr double kItemHeight = 32.0;
 // Text inset from an item's left and right edges.
 constexpr double kPadX = 13.0;
@@ -537,6 +540,20 @@ void MarkingMenu::updateHighlight(QPointF pos)
 {
     mCursor = pos;
     mCopied = false;
+    // Back at a parent's centre, or on one of its rows, the submenus above it close and the parent picks again.
+    while (mLevels.size() > 1)
+    {
+        const Level& parent = mLevels[mLevels.size() - 2];
+        const QPointF back = pos - parent.center;
+        bool onParent = !parent.cascade && std::hypot(back.x(), back.y()) < kDeadZone;
+        for (const Item& row : parent.overflow)
+            onParent |= row.rect.adjusted(-4, -1, -16, 1).contains(pos);
+        if (!onParent)
+            break;
+        mLevels.pop_back();
+        mSticky = false;
+        update();
+    }
     Level& l = mLevels.back();
     const int wasOverflow = mOverflow;
     mOverflow = -1;
@@ -546,7 +563,7 @@ void MarkingMenu::updateHighlight(QPointF pos)
     if (mOverflow >= 0 && mOverflow != wasOverflow && l.overflow[mOverflow].children.is_object())
     {
         mRowSince.start();
-        QTimer::singleShot(kBoxDwellMs, this, [this] {
+        QTimer::singleShot(kSubmenuDwellMs, this, [this] {
             if (gActive == this)
                 updateHighlight(mapFromGlobal(QCursor::pos()).toPointF());
         });
@@ -580,8 +597,20 @@ void MarkingMenu::updateHighlight(QPointF pos)
             mSlot = sector;
     }
 
-    // Moving past a submenu item opens it, centered on that item.
-    if (Item* it = highlighted(); it && mOverflow < 0 && it->children.is_object() && dist > kMenuRadius + 35)
+    if (mSlot != wasSlot && mSlot >= 0 && l.compass[mSlot] && l.compass[mSlot]->children.is_object())
+    {
+        mSlotSince.start();
+        QTimer::singleShot(kSubmenuDwellMs, this, [this] {
+            if (gActive == this)
+                updateHighlight(mapFromGlobal(QCursor::pos()).toPointF());
+        });
+    }
+    // Moving past a submenu item opens it, centered on that item. The south slot sits on the way down to the list,
+    // so there it opens only once the cursor rests on it.
+    const bool southOverList = mSlot == 4 && !l.overflow.empty();
+    const bool rested = mSlotSince.isValid() && mSlotSince.elapsed() >= kSubmenuDwellMs;
+    if (Item* it = highlighted(); it && mOverflow < 0 && it->children.is_object() &&
+                                  ((dist > kMenuRadius + 35 && !southOverList) || (southOverList && rested && dist > kMenuRadius - 10)))
     {
         mLevels.push_back(buildLevel(it->children, it->rect.center()));
         mSlot = -1;
@@ -589,7 +618,7 @@ void MarkingMenu::updateHighlight(QPointF pos)
     }
     // An overflow row with children cascades once the cursor reaches its arrow or rests on the row.
     else if (it && mOverflow >= 0 && it->children.is_object() &&
-             (pos.x() > it->rect.right() - 16 || (mRowSince.isValid() && mRowSince.elapsed() >= kBoxDwellMs)))
+             (pos.x() > it->rect.right() - 16 || (mRowSince.isValid() && mRowSince.elapsed() >= kSubmenuDwellMs)))
     {
         QPointF origin(it->rect.right() + 2, it->rect.top());
         mLevels.push_back(buildLevel(it->children, QPointF(it->rect.right(), it->rect.center().y()), origin));

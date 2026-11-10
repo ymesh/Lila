@@ -53,30 +53,45 @@ TEST_CASE("sculpt panel: level row follows the session and its buttons step leve
     panel.show();
     pump();
     auto* status = panelChild<QLabel>(&panel, "sculptStatus");
-    auto* row = panelChild<QWidget>(&panel, "sculptLevelRow");
-    CHECK(status->text() == "Ready: Rock");
+    auto* row = panelChild<QWidget>(&panel, "sculptLevels");
+    CHECK(status->text() == QString::fromUtf8("Rock  ·  not sculpting"));
     CHECK_FALSE(row->isVisible());
 
     ops::execute("sculptEnter", {{"args", {"Rock"}}, {"levels", 2}});
     pump();
     CHECK(row->isVisible());
-    CHECK(panelChild<QLabel>(&panel, "sculptLevel")->text() == "2 / 2");
-    CHECK(status->text() == "Sculpting Rock: level 2 of 2, 96 faces");
+    CHECK(panelChild<QLabel>(&panel, "sculptLevel")->text() == "Level 2 / 2");
+    CHECK(status->text() == QString::fromUtf8("Rock  \u00b7  96 faces"));
 
     ui::actions::run(json("sculpt.levelDown"));
     pump();
-    CHECK(panelChild<QLabel>(&panel, "sculptLevel")->text() == "1 / 2");
+    CHECK(panelChild<QLabel>(&panel, "sculptLevel")->text() == "Level 1 / 2");
     ui::actions::run(json("sculpt.addLevel"));
     pump();
-    CHECK(panelChild<QLabel>(&panel, "sculptLevel")->text() == "3 / 3");
+    CHECK(panelChild<QLabel>(&panel, "sculptLevel")->text() == "Level 3 / 3");
     CHECK(sculpt::active()->sculpt.mesh().numFaces() == 384);
 
-    ui::actions::run(json("sculpt.previewLowPoly"));
-    pump();
-    CHECK(ui::sculptPreviewing());
-    CHECK(panelChild<QPushButton>(&panel, "sculptPreview")->isChecked());
-    ops::execute("sculptCancel", json::object());
+    ops::execute("sculptExit", json::object());
     pump();
     CHECK_FALSE(row->isVisible());
-    CHECK_FALSE(ui::sculptPreviewing());
+    CHECK(status->text() == QString::fromUtf8("Rock  \u00b7  level 3 of 3  ·  not sculpting"));
+}
+
+TEST_CASE("smoothing strokes: Ctrl flips Keep Volume, and so does Shift with the Smooth brush picked")
+{
+    ui::SculptSettings st;
+    st.brush = sculpt::Brush::Smooth;
+    CHECK(ui::smoothStrokeKeepsVolume(st, Qt::NoModifier));
+    CHECK_FALSE(ui::smoothStrokeKeepsVolume(st, Qt::ShiftModifier));
+    CHECK_FALSE(ui::smoothStrokeKeepsVolume(st, Qt::ControlModifier));
+    st.stroke.params["keepVolume"] = 0.0;
+    CHECK_FALSE(ui::smoothStrokeKeepsVolume(st, Qt::NoModifier));
+    CHECK(ui::smoothStrokeKeepsVolume(st, Qt::ShiftModifier));
+
+    // Shift-smoothing from another brush: Smooth's own setting, flipped by Ctrl only.
+    st.brush = sculpt::Brush::Draw;
+    st.stroke.params.clear();
+    st.perBrush["smooth"].params["keepVolume"] = 1.0;
+    CHECK(ui::smoothStrokeKeepsVolume(st, Qt::ShiftModifier));
+    CHECK_FALSE(ui::smoothStrokeKeepsVolume(st, Qt::ShiftModifier | Qt::ControlModifier));
 }

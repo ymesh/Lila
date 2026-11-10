@@ -18,6 +18,8 @@ namespace lila::ui::menuSearch
 {
 /** A QMenu property: when true, the menu search leaves the menu and its submenus out. */
 inline constexpr const char* kNoSearchProperty = "lilaNoSearch";
+/** A QMenu property: text the menu search appends to the menu's checkable rows, such as " Layout". */
+inline constexpr const char* kSearchSuffixProperty = "lilaSearchSuffix";
 
 /** Type-to-filter for every QMenu in the app. */
 LILA_UI_API void install();

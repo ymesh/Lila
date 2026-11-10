@@ -64,6 +64,8 @@ scene::Space spaceFor(Tool t)
 
 bool normalSpace() { return PrefStore::get().value<std::string>("general", "/manipulator/moveSpace", "world") == "normal"; }
 
+bool gimbalSpace() { return PrefStore::get().value<std::string>("general", "/manipulator/rotateSpace", "world") == "gimbal"; }
+
 bool rotateComponentSpace() { return PrefStore::get().value<std::string>("general", "/manipulator/rotateSpace", "world") == "component"; }
 
 bool moveComponentSpace() { return PrefStore::get().value<std::string>("general", "/manipulator/moveSpace", "world") == "component"; }
@@ -212,6 +214,14 @@ uint8_t channelsAlong(Graph& g, NodeId id, Tool t, const glm::dvec3& dir, int fr
 
 json tidyVecJson(const glm::dvec3& v) { return json::array({tidy(v.x), tidy(v.y), tidy(v.z)}); }
 
+/** A gimbal ring drag as the change to its one rotate channel. */
+glm::dvec3 channelDegrees(int axis, double degrees)
+{
+    glm::dvec3 out(0.0);
+    out[axis] = degrees;
+    return out;
+}
+
 /** The pivot's axes are off the object's own, and Bake Pivot can make them the object's without touching shared data. */
 bool canBakePivot(Graph& g, NodeId id)
 {
@@ -330,6 +340,7 @@ void Manipulator::refresh()
     mTargets.clear();
     mLead = scene::kNoNode;
     mComponents = false;
+    mGimbal = false;
     mNormal = false;
     if (tools::current() == Tool::Select && !tools::pivotEdit())
         return;
@@ -394,6 +405,11 @@ void Manipulator::refresh()
     // Object space is the pivot's own orientation. Scale shows it too: a drag along it bakes the pivot in first.
     bool pivotAxes = (tools::pivotEdit() && t == Tool::Rotate) || (space == scene::Space::Object && (t != Tool::Scale || canBakePivot(g, mLead)));
     mFrame = pivotAxes ? scene::xformops::pivotFrame(g, mLead) : scene::xformops::frame(g, mLead, space);
+    if (t == Tool::Rotate && !tools::pivotEdit() && gimbalSpace())
+    {
+        mGimbal = true;
+        mFrame = scene::xformops::gimbalFrame(g, mLead);
+    }
     refreshLocks(t);
 }
 
@@ -413,7 +429,7 @@ void Manipulator::refreshLocks(Tool t)
         uint8_t mask = g.node(id)->lockMask(attr) & 7u;
         all = all && mask == 7u;
         for (int i = 0; i < 3; ++i)
-            locked[i] = locked[i] && mask != 0 && (channelsAlong(g, id, t, mFrame[i], i) & ~mask) == 0;
+            locked[i] = locked[i] && mask != 0 && (mGimbal ? (mask >> i & 1u) != 0 : (channelsAlong(g, id, t, mFrame[i], i) & ~mask) == 0);
     }
     mLockedAxes = locked;
     mAllLocked = all;
@@ -460,11 +476,10 @@ double Manipulator::handleLength() const
 std::vector<QPointF> Manipulator::ringPoints(int i, bool frontOnly) const
 {
     std::vector<QPointF> pts;
-    glm::dvec3 a = axis(i);
-    glm::dvec3 u = axis((i + 1) % 3), v = axis((i + 2) % 3);
+    glm::dvec3 u, v;
+    ringBasis(i, u, v);
     double r = handleLength() * 0.85;
     glm::dvec3 toEye = glm::normalize(mView.eye - mPivot);
-    (void)a;
     const int n = 72;
     for (int k = 0; k <= n; ++k)
     {
@@ -479,6 +494,26 @@ std::vector<QPointF> Manipulator::ringPoints(int i, bool frontOnly) const
         pts.push_back(p ? *p : QPointF(qQNaN(), qQNaN()));
     }
     return pts;
+}
+
+void Manipulator::ringBasis(int i, glm::dvec3& u, glm::dvec3& v) const
+{
+    u = axis((i + 1) % 3);
+    v = axis((i + 2) % 3);
+    if (!mGimbal)
+        return;
+    // Gimbal axes are not orthogonal, and two can coincide.
+    const glm::dvec3 a = axis(i);
+    for (glm::dvec3 ref : {axis((i + 1) % 3), axis((i + 2) % 3), glm::dvec3(1, 0, 0), glm::dvec3(0, 1, 0)})
+    {
+        glm::dvec3 p = ref - a * glm::dot(a, ref);
+        if (glm::length(p) > 1e-3)
+        {
+            u = glm::normalize(p);
+            v = glm::cross(a, u);
+            return;
+        }
+    }
 }
 
 H Manipulator::pick(QPointF px) const
@@ -670,6 +705,7 @@ bool Manipulator::press(QPointF px, Qt::MouseButton button, Qt::KeyboardModifier
     const bool clone = tools::cloneDrag() && !mComponents && !tools::pivotEdit() && !surfaceSlide;
     if (clone)
     {
+        tools::markCloneDragUsed();
         cloneCall = ops::options::callWith("duplicate", json::object());
         try
         {
@@ -697,6 +733,7 @@ bool Manipulator::press(QPointF px, Qt::MouseButton button, Qt::KeyboardModifier
     d.startPivot = mPivot;
     d.frame = mFrame;
     d.pivotEdit = tools::pivotEdit();
+    d.gimbal = mGimbal && h >= H::X && h <= H::Z;
     d.components = mComponents && !d.pivotEdit;
     d.componentPivot = mComponents && d.pivotEdit;
     if (d.componentPivot && !gComponentPivot)
@@ -789,8 +826,9 @@ bool Manipulator::press(QPointF px, Qt::MouseButton button, Qt::KeyboardModifier
                     bestK = int(k);
                 }
             double tparam = 2 * std::numbers::pi * bestK / 72.0;
-            int i = handleAxis(h);
-            d.startHit = mPivot + (axis((i + 1) % 3) * std::cos(tparam) + axis((i + 2) % 3) * std::sin(tparam)) * handleLength() * 0.85;
+            glm::dvec3 u, v;
+            ringBasis(handleAxis(h), u, v);
+            d.startHit = mPivot + (u * std::cos(tparam) + v * std::sin(tparam)) * handleLength() * 0.85;
         }
     }
 
@@ -1092,6 +1130,8 @@ std::optional<glm::dvec3> Manipulator::snapTarget(QPointF px, unsigned snaps) co
                                    d.components ? scene::components::selected(id, scene::components::mode()) : scene::components::Ids{});
             continue;
         }
+        if (geometrySnap::addPointObject(nearest, g, id, snaps))
+            continue;
         if (!n->type().isA("mesh") || !scene::effectivelyVisible(g, id) || !isolate::shows(scene::isolation::active(), id))
             continue;
         scene::MeshPtr mesh = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
@@ -1260,6 +1300,8 @@ void Manipulator::apply()
                 if (scene::rig::centerEnabled(*g.node(id)))
                     scene::rig::centerNode(g, id);
         }
+        else if (t == Tool::Rotate && d.gimbal)
+            scene::xformops::rotateChannelsBy(g, ids, channelDegrees(handleAxis(d.handle), d.angle));
         else if (t == Tool::Rotate)
             scene::xformops::rotateBy(g, ids, d.rotation);
         else
@@ -1271,6 +1313,9 @@ void Manipulator::apply()
     }
     u.setEnabled(was);
     mPivot = d.startPivot + (t == Tool::Move ? d.moveDelta : glm::dvec3(0.0));
+    // The inner rings follow the outer angles as they turn.
+    if (d.gimbal && g.node(mLead))
+        mFrame = scene::xformops::gimbalFrame(g, mLead);
     // Locked channels can hold the lead back from the delta, and the manipulator stays on it.
     if (t == Tool::Move && !d.components && !d.pivotEdit && g.node(mLead))
         mPivot = scene::xformops::worldPivot(g, mLead);
@@ -1424,6 +1469,11 @@ void Manipulator::commit()
         {
             if (std::abs(d.angle) < 1e-9)
                 return;
+            if (d.gimbal)
+            {
+                ops::execute("rotate", {{"args", names}, {"by", tidyVecJson(channelDegrees(handleAxis(d.handle), d.angle))}, {"space", "gimbal"}}, CallSource::UI);
+                return;
+            }
             glm::dvec3 euler = scene::matrixToEuler(glm::mat3_cast(d.rotation), scene::RotateOrder::XYZ);
             ops::execute("rotate", {{"args", names}, {"by", tidyVecJson(euler)}}, CallSource::UI);
         }

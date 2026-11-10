@@ -1861,7 +1861,7 @@ void CodeEditor::afterTyping(const QString& typed)
     // `, ` is typed as two keys; the space would close the list the comma opened.
     const bool argumentTrigger = ch == '(' || ch == ',' || (ch == ' ' && col >= 2 && line[col - 2] == ',');
 
-    if (ch == '(' || ch == ',')
+    if (autoPopups && (ch == '(' || ch == ','))
         mSignatureTimer.start();
     else if (ch == ')' && mSignature->isVisible())
         mSignatureTimer.start();
@@ -1892,7 +1892,7 @@ void CodeEditor::afterTyping(const QString& typed)
             return;
         }
     }
-    if (ch.isNull())
+    if (ch.isNull() || !autoPopups)
         return;
 
     if (inStringOrComment(c))
@@ -2132,7 +2132,7 @@ void CodeEditor::acceptCompletion()
 
     if (auto extra = e.lspItem.find("additionalTextEdits"); extra != e.lspItem.end())
         applyTextEdits(*extra);
-    if (callable)
+    if (callable && autoPopups)
     {
         mSignatureTimer.start();
         mCompletionManual = false;
@@ -2161,7 +2161,7 @@ void CodeEditor::insertCall(const QString& code)
     c.endEditBlock();
     setTextCursor(c);
     setFocus();
-    if (!call)
+    if (!call || !autoPopups)
         return;
     mSignatureTimer.start();
     if (code.endsWith('('))

@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <set>
 
 namespace lila::ui
 {
@@ -64,6 +65,44 @@ json loopSides(const std::vector<glm::dvec3>& loop, const std::vector<int>& corn
         sides.push_back({{"points", vecListJson(span)}, {"fixed", fixed}, {"count", fixed ? int(span.size()) - 1 : 0}});
     }
     return sides;
+}
+
+/** Which side of the plane most of the points lie on: 1, -1, or 0 when they all lie on it. */
+double sideOf(const std::vector<glm::dvec3>& pts, const geo::SymmetryPlane& plane)
+{
+    double sum = 0.0, scale = 0.0;
+    for (const glm::dvec3& p : pts)
+    {
+        sum += plane.distance(p);
+        scale += std::abs(plane.distance(p));
+    }
+    return std::abs(sum) <= scale * 1e-6 ? 0.0 : (sum > 0.0 ? 1.0 : -1.0);
+}
+
+/**
+ * Keeps a guide on the side of the plane most of it lies on: points past the plane move onto it, and a run of them
+ * shrinks to its two ends, so the guide meets its mirror image down the middle instead of crossing it.
+ */
+std::vector<glm::dvec3> clipToSide(const std::vector<glm::dvec3>& pts, const geo::SymmetryPlane& plane)
+{
+    double ahead = 0.0, behind = 0.0;
+    for (const glm::dvec3& p : pts)
+        (plane.distance(p) > 0.0 ? ahead : behind) += std::abs(plane.distance(p));
+    const double side = ahead >= behind ? 1.0 : -1.0;
+    std::vector<glm::dvec3> out;
+    std::vector<uint8_t> onPlane;
+    for (const glm::dvec3& p : pts)
+    {
+        const bool past = plane.distance(p) * side < 0.0;
+        if (past && onPlane.size() >= 2 && onPlane.back() && onPlane[onPlane.size() - 2])
+        {
+            out.pop_back();
+            onPlane.pop_back();
+        }
+        out.push_back(past ? plane.project(p) : p);
+        onPlane.push_back(past);
+    }
+    return out;
 }
 } // namespace
 
@@ -121,7 +160,7 @@ void TopologyTool::finishStroke(const ViewInfo& view, bool erase)
     Index a = pickBorderPoint(mStrokePx.front(), view), b = pickBorderPoint(mStrokePx.back(), view);
     switch (mMode)
     {
-    case TopoMode::Pencil: commitPencil(s); break;
+    case TopoMode::Pencil: commitPencil(s, view); break;
     case TopoMode::Patch: commitPatch(s, a, b, view); break;
     case TopoMode::Strip: commitStrip(s, view); break;
     case TopoMode::Stroke: commitStroke(s, a, b, view); break;
@@ -130,14 +169,92 @@ void TopologyTool::finishStroke(const ViewInfo& view, bool erase)
     }
 }
 
-void TopologyTool::commitPencil(const retopo::SurfaceStroke& s)
+std::vector<glm::dvec3> TopologyTool::smoothOnSurface(std::vector<glm::dvec3> pts, bool closed, double amount) const
 {
-    json guides = json::array();
-    for (const retopo::Guide& g : mGuides)
-        guides.push_back({{"points", vecListJson(g.points)}, {"closed", g.closed}, {"color", json::array({g.color.r, g.color.g, g.color.b})}});
-    glm::vec3 c = retopo::guidePaletteColor(int(mGuides.size()));
-    guides.push_back({{"points", vecListJson(s.points)}, {"closed", s.closed}, {"color", json::array({c.r, c.g, c.b})}});
-    run("retopoSetGuides", targetCall({{"guides", guides}}));
+    const int passes = int(std::lround(amount * 20.0));
+    const size_t n = pts.size();
+    if (passes <= 0 || n < 3)
+        return pts;
+    for (int pass = 0; pass < passes; ++pass)
+    {
+        std::vector<glm::dvec3> next = pts;
+        for (size_t i = closed ? 0 : 1; i < (closed ? n : n - 1); ++i)
+            next[i] = onSurface(glm::mix(pts[i], (pts[(i + n - 1) % n] + pts[(i + 1) % n]) * 0.5, 0.5));
+        pts = std::move(next);
+    }
+    return pts;
+}
+
+void TopologyTool::commitPencil(const retopo::SurfaceStroke& s, const ViewInfo& view)
+{
+    constexpr double kReachPx = 12.0;
+    auto nearPx = [&](const glm::dvec3& w, QPointF px) {
+        std::optional<QPointF> sp = visible(w, view) ? view.project(w) : std::nullopt;
+        return sp && distPx(*sp, px) < kReachPx;
+    };
+    // A stroke starting or ending on an open guide's end carries that guide on, keeping its colour.
+    std::vector<retopo::Guide> guides = mGuides;
+    std::vector<glm::dvec3> stroke = smoothOnSurface(s.points, s.closed, pencilSmoothing());
+    bool extended = false;
+    retopo::Guide* touched = nullptr;
+    auto mirror = [&](const glm::dvec3& w) { return mSymmetry ? mSymmetry->reflect(w) : w; };
+    for (bool fromEnd : {false, true})
+    {
+        QPointF touch = fromEnd ? mStrokePx.back() : mStrokePx.front();
+        for (retopo::Guide& g : guides)
+        {
+            if (g.closed || g.points.size() < 2)
+                continue;
+            bool atFront = nearPx(g.points.front(), touch), atBack = !atFront && nearPx(g.points.back(), touch);
+            // The mirror image's ends count too.
+            bool mirrored = false;
+            if (!atFront && !atBack && mSymmetry)
+            {
+                atFront = nearPx(mirror(g.points.front()), touch);
+                atBack = !atFront && nearPx(mirror(g.points.back()), touch);
+                mirrored = atFront || atBack;
+            }
+            if (!atFront && !atBack)
+                continue;
+            // A stroke drawn on the mirror's side continues the guide's mirror image, so it is reflected onto the guide's side.
+            if (mSymmetry && sideOf(stroke, *mSymmetry) * sideOf(g.points, *mSymmetry) < 0.0)
+                for (glm::dvec3& w : stroke)
+                    w = mirror(w);
+            if (fromEnd)
+                std::reverse(stroke.begin(), stroke.end());
+            if (atFront)
+                std::reverse(g.points.begin(), g.points.end());
+            g.points.insert(g.points.end(), stroke.begin() + 1, stroke.end());
+            QPointF other = fromEnd ? mStrokePx.front() : mStrokePx.back();
+            g.closed = !mirrored && g.points.size() > 3 && nearPx(g.points.front(), other);
+            extended = true;
+            touched = &g;
+            break;
+        }
+        if (extended)
+            break;
+    }
+    if (!extended)
+        guides.push_back({.points = stroke, .color = retopo::guidePaletteColor(int(mGuides.size())), .closed = s.closed});
+    if (mSymmetry)
+    {
+        retopo::Guide& g = extended ? *touched : guides.back();
+        if (!g.closed)
+        {
+            g.points = clipToSide(g.points, *mSymmetry);
+            // Ends near the middle land on it, so the guide joins its mirror.
+            for (glm::dvec3* end : {&g.points.front(), &g.points.back()})
+            {
+                auto a = view.project(*end), b = view.project(mSymmetry->project(*end));
+                if (a && b && distPx(*a, *b) < kReachPx)
+                    *end = mSymmetry->project(*end);
+            }
+        }
+    }
+    json list = json::array();
+    for (const retopo::Guide& g : guides)
+        list.push_back({{"points", vecListJson(g.points)}, {"closed", g.closed}, {"color", json::array({g.color.r, g.color.g, g.color.b})}});
+    run("retopoSetGuides", targetCall({{"guides", list}}));
     refresh();
 }
 
@@ -207,7 +324,7 @@ void TopologyTool::fillLoopAt(Index edge, const ViewInfo&)
     retopo::BorderRun run = retopo::walkBorder(*mRetopo, edge, 180.0);
     if (!run.closed)
     {
-        log::warn("Patch: that border doesn't close into a loop");
+        log::warn("Cap: that border is open, it needs to run all the way round");
         return;
     }
     std::vector<glm::dvec3> loop;
@@ -217,11 +334,48 @@ void TopologyTool::fillLoopAt(Index edge, const ViewInfo&)
         loop.pop_back();
     if (loop.size() % 2 != 0)
     {
-        log::warn("Patch: the hole has an odd number of edges ({}), so it can't be filled with quads alone", loop.size());
+        log::warn("Cap: the border has {} edges; quads need an even count, so add or remove one point on it", loop.size());
         return;
     }
-    std::vector<int> corners = retopo::patchCorners(loop, 4);
-    createConstruct(ConstructKind::Patch, {{"sides", loopSides(loop, corners, true)}}, 0.0);
+    // Four sides, opposite ones equal, so a round ring caps with an even grid rather than a sliver along one side.
+    const int n = int(loop.size());
+    const std::vector<int> found = retopo::patchCorners(loop, 4);
+    const int c0 = found.empty() ? 0 : found.front();
+    const int quarter = std::max(1, int(std::lround(n / 4.0)));
+    std::vector<int> corners = {c0, (c0 + quarter) % n, (c0 + n / 2) % n, (c0 + n / 2 + quarter) % n};
+    std::sort(corners.begin(), corners.end());
+    json spec = {{"sides", loopSides(loop, corners, true)}};
+    if (std::optional<glm::dvec3> out = capDirection(run.points))
+        spec["lift"] = vecJson(*out);
+    createConstruct(ConstructKind::Patch, spec, 0.0);
+}
+
+std::optional<glm::dvec3> TopologyTool::capDirection(const std::vector<Index>& loop) const
+{
+    // The loop's plane normal, turned away from the faces behind it: a tube's end points out of the tube.
+    std::set<Index> on(loop.begin(), loop.end());
+    glm::dvec3 centre(0.0), normal(0.0), behind(0.0);
+    int behindCount = 0;
+    for (size_t i = 0; i < loop.size(); ++i)
+    {
+        const glm::dvec3 a = pointWorld(loop[i]), b = pointWorld(loop[(i + 1) % loop.size()]);
+        centre += a / double(loop.size());
+        normal += glm::cross(a, b);
+    }
+    for (Index e = 0; e < mRetopo->edgeCapacity(); ++e)
+        if (mRetopo->edgeValid(e))
+        {
+            const Index a = mRetopo->edgePoint(e, 0), b = mRetopo->edgePoint(e, 1);
+            if (on.contains(a) != on.contains(b))
+            {
+                behind += pointWorld(on.contains(a) ? b : a);
+                ++behindCount;
+            }
+        }
+    if (glm::length(normal) < 1e-12 || behindCount == 0)
+        return std::nullopt;
+    normal = glm::normalize(normal);
+    return glm::dot(normal, centre - behind / double(behindCount)) >= 0.0 ? normal : -normal;
 }
 
 void TopologyTool::commitStrip(const retopo::SurfaceStroke& s, const ViewInfo& view)
@@ -575,7 +729,16 @@ bool TopologyTool::runRegion()
     }
     json guides = json::array();
     for (const retopo::Guide& g : mGuides)
+    {
         guides.push_back(vecListJson(g.points));
+        if (mSymmetry)
+        {
+            std::vector<glm::dvec3> mirrored;
+            for (const glm::dvec3& w : g.points)
+                mirrored.push_back(mSymmetry->reflect(w));
+            guides.push_back(vecListJson(mirrored));
+        }
+    }
     // A retopo border loop lying along the region's edge is what the region stitches to.
     json border = json::array();
     if (mRetopo)
@@ -641,6 +804,8 @@ void TopologyTool::beginHandles(const std::vector<glm::dvec3>& path, const ViewI
     mXforms.clear();
     for (const glm::dvec3& h : handles)
         mXforms.push_back({.pivot = h, .axis = normalAt(h)});
+    mRigMesh = mRetopo;
+    mRigFresh = true;
 }
 
 void TopologyTool::previewHandles()
@@ -654,6 +819,8 @@ void TopologyTool::previewHandles()
 
 void TopologyTool::commitHandles()
 {
+    mRigMesh = nullptr;
+    mRigFresh = false;
     if (!mMoved.empty())
     {
         json points = json::array(), positions = json::array();
@@ -683,6 +850,7 @@ void TopologyTool::commitHandles()
     for (size_t i = 0; i < handles.size(); ++i)
         next.push_back({.pivot = handles[i], .axis = normalAt(handles[i]), .scale = 1.0});
     mXforms = std::move(next);
+    mRigMesh = mRetopo;
 }
 
 void TopologyTool::clearHandles()
@@ -691,6 +859,8 @@ void TopologyTool::clearHandles()
     mXforms.clear();
     mMoved.clear();
     mDragHandle = -1;
+    mRigMesh = nullptr;
+    mRigFresh = false;
     viewportTools::requestRedraw();
 }
 
@@ -785,12 +955,13 @@ void TopologyTool::previewConstruct(int id, const json& spec)
     if (!rec)
         return;
     retopo::GenResult gen;
+    retopo::GenContext ctx;
     try
     {
-        retopo::GenContext ctx;
         ctx.surfaceMesh = &mRefWorldMesh;
         ctx.surface = &mRefBvh;
-        ctx.edgeLength = std::max(1e-6, edgeLength());
+        geo::Bounds b = mRefWorldMesh.bounds();
+        ctx.edgeLength = edgeLength() > 0.0 ? edgeLength() : std::max(1e-6, glm::length(b.max - b.min) / 40.0);
         gen = retopo::generate(retopo::parseConstructSpec(rec->kind, spec), ctx);
     }
     catch (const std::exception&)
@@ -799,9 +970,18 @@ void TopologyTool::previewConstruct(int id, const json& spec)
     }
     if (!gen.ok())
         return;
+    // Stitched on its own with the mirror, so the preview is cut at the middle and mirrored like the result.
+    geo::Mesh scratch;
+    retopo::stitchConstruct(scratch, gen, id, 1e-6, mSymmetry, ctx.edgeLength * 0.35);
     mPreviewId = id;
-    mPreviewPos = std::move(gen.positions);
-    mPreviewFaces = std::move(gen.faces);
+    mPreviewPos.assign(scratch.pointCapacity(), glm::dvec3(0.0));
+    for (Index p = 0; p < scratch.pointCapacity(); ++p)
+        if (scratch.pointValid(p))
+            mPreviewPos[p] = scratch.position(p);
+    mPreviewFaces.clear();
+    for (Index f = 0; f < scratch.faceCapacity(); ++f)
+        if (scratch.faceValid(f))
+            mPreviewFaces.push_back(scratch.facePoints(f));
     mPreviewSpec = spec;
 }
 
@@ -834,8 +1014,12 @@ bool TopologyTool::wheelConstruct(int id, int delta, bool second, QPointF px, co
                         best = d;
                         nearest = int(i);
                     }
+            // Every side fixed, as on a cap: the layout is the only thing to change.
             if (nearest < 0)
+            {
+                spec["variant"] = spec.value("variant", 0) + delta;
                 break;
+            }
             auto bump = [&](int i, int by) { sides[i]["count"] = std::max(1, sides[i].value("count", 1) + by); };
             int opposite = sides.size() == 4 ? (nearest + 2) % 4 : -1;
             if (opposite >= 0 && !sides[opposite].value("fixed", false))
@@ -854,6 +1038,12 @@ bool TopologyTool::wheelConstruct(int id, int delta, bool second, QPointF px, co
                 spec["divisions"] = std::max(1, (spec.value("divisions", 0) > 0 ? spec.value("divisions", 0) : count(0, 4)) + delta);
             break;
         case ConstructKind::Stroke: spec["divisions"] = std::max(1, spec.value("divisions", 8) + delta); break;
+        case ConstructKind::Region:
+        {
+            const int faces = spec.value("targetFaces", 0) > 0 ? spec.value("targetFaces", 0) : count(0, 100);
+            spec["targetFaces"] = std::max(4, int(std::lround(faces * std::pow(second ? 1.02 : 1.1, delta))));
+            break;
+        }
         case ConstructKind::Bridge:
             if (second)
                 spec["rows"] = std::max(1, (spec.value("rows", 0) > 0 ? spec.value("rows", 0) : count(1, 2)) + delta);
@@ -878,7 +1068,6 @@ bool TopologyTool::wheelConstruct(int id, int delta, bool second, QPointF px, co
                 spec["points"] = std::max(capped ? 4 : 3, spec.value("points", 8) + delta * (capped ? 2 : 1));
             }
             break;
-        case ConstructKind::Region: spec["edgeLength"] = spec.value("edgeLength", 1.0) * std::pow(0.9, delta); break;
         }
     });
 }

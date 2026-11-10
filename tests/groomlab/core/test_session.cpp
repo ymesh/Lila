@@ -15,6 +15,7 @@
 #include "groomlab/correctives.h"
 #include "groomlab/export_view.h"
 #include "groom/GroomEvaluator.h"
+#include "groomlab/card_files.h"
 #include "groomlab/hair_color.h"
 #include "groomlab/guide_hierarchy.h"
 #include "groomlab/operator_state.h"
@@ -175,9 +176,155 @@ TEST(Session, UpdatedScalpPointsKeepTheTopologyAndMatchANewScalp) {
     EXPECT_THROW(session.updateScalpPoints({Vec3f{}}), std::invalid_argument);
 }
 
+TEST(Session, ScalpMapsLayVertexMapsAsTheScalpCarryingThemDoes) {
+    // A Length cut by a painted vertex map: the session's scalpMaps against a scalp already
+    // carrying the color set with the catalog (a groom file).
+    const std::string graph =
+        withNode(R"({"name": "cut", "type": "Length", "params": {"keep": {"colorSet": "tint", "min": 0.2, "max": 1.0}}})", "cut");
+    const MeshPtr scalp = sphere();
+    std::vector<float> values(scalp->pointCount());
+    for (std::size_t i = 0; i < values.size(); ++i) values[i] = scalp->points()[i].x > 0.0f ? 1.0f : 0.0f;
+    ScalpMaps maps;
+    maps.maps["tint"] = ScalpMapEntry{"vertices", values, "", 1};
 
+    GroomEvaluator painted(groomData(graph));
+    painted.setScalpMapsJson(maps.toJson());
+    const GroomEvaluator::Result& view = painted.evaluate(GroomEvaluator::Request{});
+    ASSERT_TRUE(view.strands) << (view.errors.empty() ? "" : view.errors.front());
+    ASSERT_TRUE(view.scalp && view.scalp->hasColorSet("tint"));
+    EXPECT_EQ(painted.scalpMaps().maps.size(), 1u);
 
+    GroomData carried = groomData(graph);
+    carried.scalp = withVertexMaps(scalp, ScalpMaps::fromJson(maps.toJson()), "", nullptr, nullptr);
+    carried.maps = maps.catalog();
+    expectSameStrands(*view.strands, *GroomEvaluator(carried).evaluate(1.0f, 0.0));
 
+    // Painting (a preview of the map) re-runs only the map's readers: Scatter, Interpolate stay.
+    const std::size_t runs = painted.evaluationCount();
+    auto stroke = std::make_shared<std::vector<float>>(values.size(), 1.0f);
+    painted.setPreviewVertexMap("tint", stroke);
+    const GroomEvaluator::Result& previewed = painted.evaluate(GroomEvaluator::Request{});
+    EXPECT_EQ(painted.evaluationCount() - runs, 2u);  // the cut and the output
+    EXPECT_NE(previewed.strands->pointCount(), 0u);
+    painted.setPreviewVertexMap("tint", nullptr);
+    expectSameStrands(*painted.evaluate(GroomEvaluator::Request{}).strands, *GroomEvaluator(carried).evaluate(1.0f, 0.0));
+
+    // A map painted on another scalp is said, not fatal.
+    painted.setScalpMapsJson(R"({"tint": {"kind": "vertices", "values": [1, 0, 1]}})");
+    const GroomEvaluator::Result& wrong = painted.evaluate(GroomEvaluator::Request{});
+    ASSERT_FALSE(wrong.errors.empty());
+    EXPECT_NE(wrong.errors.front().find("was painted on a scalp with 3 vertices"), std::string::npos);
+    painted.setScalpMapsJson("{not json");
+    EXPECT_FALSE(painted.scalpMapsError().empty());
+    EXPECT_EQ(painted.inputErrors().size(), 1u);
+}
+
+TEST(Session, AGuidePreviewReplacesTheStoredGuidesUntilCleared) {
+    GroomEvaluator session(groomData());
+    const GroomEvaluator::Result before = session.evaluate(GroomEvaluator::Request{});
+    auto preview = std::make_shared<GuideHierarchy>(*before.authoredHierarchy);
+    for (const HierarchyGuide& g : before.authoredHierarchy->guides()) {
+        std::vector<Vec3f> points = g.points;
+        for (Vec3f& p : points) p = p + Vec3f{0.0f, 0.2f, 0.0f};
+        preview->setPoints(g.id, points);
+    }
+    session.setPreviewHierarchy(preview);
+    EXPECT_TRUE(session.hasPreview());
+    GroomEvaluator::Request request;
+    request.sculptDensity = 0.5f;
+    const GroomEvaluator::Result during = session.evaluate(request);
+    EXPECT_EQ(during.hierarchy.get(), preview.get());
+    EXPECT_LT(during.strands->strandCount(), before.strands->strandCount());  // the sculpt density
+    EXPECT_GT(during.versions.hierarchy, before.versions.hierarchy);
+    // Edited in place between evaluations: every evaluation is a change.
+    EXPECT_GT(session.evaluate(request).versions.hierarchy, during.versions.hierarchy);
+    session.setPreviewHierarchy(nullptr);
+    const GroomEvaluator::Result& after = session.evaluate(GroomEvaluator::Request{});
+    EXPECT_EQ(after.hierarchy, before.hierarchy);
+    expectSameStrands(*after.strands, *before.strands);
+}
+
+TEST(Session, AStrokeAtTheSculptDensityKeepsTheViewsCache) {
+    // A stroke evaluates at its own density on a document of its own: its first dab leaves the
+    // view's cache alone, so the release (the same guides) runs nothing again, and the next
+    // stroke's dabs find the last stroke's results.
+    GroomEvaluator session(groomData());
+    GroomEvaluator::Request request;
+    request.sculptDensity = 0.5f;
+    const StrandsPtr before = session.evaluate(request).strands;
+    const std::size_t viewRuns = session.evaluationCount();
+    auto preview = std::make_shared<GuideHierarchy>(*session.authoredHierarchy());
+    session.setPreviewHierarchy(preview);
+    const StrandsPtr during = session.evaluate(request).strands;
+    EXPECT_LT(during->strandCount(), before->strandCount());
+    const std::size_t strokeRuns = session.evaluationCount();
+    EXPECT_GT(strokeRuns, viewRuns);
+    session.setPreviewHierarchy(nullptr);
+    const GroomEvaluator::Result& after = session.evaluate(request);
+    EXPECT_EQ(session.evaluationCount(), strokeRuns);  // nothing ran again: the view's cache stayed
+    EXPECT_EQ(after.strands.get(), before.get());
+    session.setPreviewHierarchy(std::make_shared<GuideHierarchy>(*preview));  // the next stroke, the same guides
+    EXPECT_EQ(session.evaluate(request).strands->contentHash(), during->contentHash());
+    EXPECT_EQ(session.evaluationCount(), strokeRuns);
+    session.setPreviewHierarchy(nullptr);
+    request.sculptDensity = 1.0f;  // a stroke at the view's density evaluates the view's document
+    session.setPreviewHierarchy(std::make_shared<GuideHierarchy>(*preview));
+    EXPECT_EQ(session.evaluate(request).strands.get(), before.get());
+    EXPECT_EQ(session.evaluationCount(), strokeRuns);
+}
+
+TEST(Session, AStrokeAHostRunsPastANodeEvaluatesWhatFeedsItAlone) {
+    // GroomEvaluator::Request::stopAt (Maya's GPU preview runs Interpolate and what follows on a live stroke's
+    // dabs): the guides are evaluated, nothing after them, the view keeps its strands; the same
+    // dab evaluated without it gives what a fresh session gives, and the operators' memos say what
+    // the strands were made from (operator_state.h).
+    GroomEvaluator session(groomData());
+    GroomEvaluator::Request request;
+    request.sculptDensity = 0.5f;
+    auto preview = std::make_shared<GuideHierarchy>(*session.evaluate(GroomEvaluator::Request{}).authoredHierarchy);
+    session.setPreviewHierarchy(preview);
+    const GroomEvaluator::Result pressed = session.evaluate(request);  // the press: the stroke's document in full
+    const GraphDocument& doc = *session.viewDocument();
+    const NodeId interpolate = doc.nodesByName.at("interpolate"), guides = doc.nodesByName.at("guides");
+    const NodeId clump = doc.nodesByName.at("clump");
+    const StrandsPtr blended = valueAs<StrandsPtr>(doc.graph.cachedValue(interpolate));
+    InterpolateState interpolated;
+    ASSERT_TRUE(interpolateState(doc.graph.node(interpolate), blended, &interpolated));
+    EXPECT_EQ(interpolated.strandCount, blended->strandCount());
+    EXPECT_EQ(interpolated.guides, valueAs<GuidesPtr>(doc.graph.cachedValue(guides)));
+    InterpolateRecords records;
+    interpolateRecords(interpolated, &records);
+    ASSERT_EQ(records.offsets.size(), blended->strandCount() + 1);
+    EXPECT_EQ(records.guides.size(), records.offsets.back());
+    EXPECT_FALSE(interpolateState(doc.graph.node(interpolate), valueAs<StrandsPtr>(doc.graph.cachedValue(clump)), &interpolated));
+    ClumpState clumped;
+    ASSERT_TRUE(clumpState(doc.graph.node(clump), valueAs<StrandsPtr>(doc.graph.cachedValue(clump)), &clumped));
+    EXPECT_EQ(clumped.assigned->size(), blended->strandCount());
+    EXPECT_EQ(clumped.curves.size(), clumped.centerGuides.size() * kClumpCenterSamples);
+    EXPECT_FALSE(clumped.chosen.empty());  // its own centers, chosen by root
+
+    // A dab: every guide bent; evaluated up to Interpolate's inputs alone.
+    for (const HierarchyGuide& g : pressed.authoredHierarchy->guides()) {
+        std::vector<Vec3f> points = g.points;
+        for (std::size_t i = 1; i < points.size(); ++i) points[i] = points[i] + Vec3f{0.05f * static_cast<float>(i), 0.0f, 0.0f};
+        preview->setPoints(g.id, points);
+    }
+    const std::size_t runs = session.evaluationCount();
+    GroomEvaluator::Request stopped = request;
+    stopped.stopAt = "interpolate";
+    const GroomEvaluator::Result& dab = session.evaluate(stopped);
+    EXPECT_EQ(dab.strands, pressed.strands);  // the view keeps its strands
+    EXPECT_GT(dab.versions.hierarchy, pressed.versions.hierarchy);
+    EXPECT_EQ(dab.versions.strands, pressed.versions.strands);
+    EXPECT_LE(session.evaluationCount() - runs, 2u);  // the guides (and nothing after them)
+    EXPECT_NE(valueAs<GuidesPtr>(doc.graph.cachedValue(guides)), interpolated.guides);  // the dab's guides
+    EXPECT_EQ(valueAs<StrandsPtr>(doc.graph.cachedValue(interpolate)), blended);       // Interpolate untouched
+    // The same dab evaluated in full: a fresh session's strands for those guides.
+    const GroomEvaluator::Result& full = session.evaluate(request);
+    GroomEvaluator fresh(groomData());
+    fresh.setPreviewHierarchy(std::make_shared<GuideHierarchy>(*preview));
+    expectSameStrands(*full.strands, *fresh.evaluate(request).strands);
+}
 
 TEST(Session, AGraphEditKeepsTheWorkOfTheNodesItLeavesAlone) {
     // An edit after Interpolate (a new graph text: new operators, the old results adopted): the
@@ -203,6 +350,18 @@ TEST(Session, AGraphEditKeepsTheWorkOfTheNodesItLeavesAlone) {
     EXPECT_EQ(interpolateBindCount(), binds);  // Interpolate ran no more
 }
 
+TEST(Session, ALiveStrokeEvaluatesAtTheSculptDensityAndAsksForAnotherAfter) {
+    GroomEvaluator session(groomData());
+    GroomEvaluator::Request request;
+    request.sculptDensity = 0.25f;
+    const std::size_t all = session.evaluate(request).strands->strandCount();
+    EXPECT_FALSE(session.setLiveStroke(true));
+    EXPECT_LT(session.evaluate(request).strands->strandCount(), all);
+    EXPECT_TRUE(session.setLiveStroke(false));  // evaluated at the stroke's density: once more
+    EXPECT_EQ(session.evaluate(request).strands->strandCount(), all);
+    EXPECT_FALSE(session.setLiveStroke(true));
+    EXPECT_FALSE(session.setLiveStroke(false));  // nothing evaluated during it
+}
 
 TEST(Session, PartsPreviewAndBadTextsAreSaidNotThrown) {
     GroomEvaluator session(groomData());
@@ -269,8 +428,76 @@ TEST(Session, LiveCorrectiveWeightsReplaceTheLayersEnvelopes) {
     EXPECT_EQ(session.evaluate(GroomEvaluator::Request{}).hierarchy, kept);  // the same weights: the same hierarchy
 }
 
+TEST(Session, ViewsANodeAndCountsWhatItShows) {
+    GroomEvaluator session(groomData());
+    GroomEvaluator::Request request;
+    request.viewNode = "scatter";
+    const GroomEvaluator::Result& view = session.evaluate(request);
+    EXPECT_EQ(view.viewedNode, "scatter");
+    EXPECT_TRUE(view.viewedRoots);
+    request.viewNode = "nope";  // not a node: the output
+    EXPECT_EQ(session.evaluate(request).viewedNode, "");
+    const GroomEvaluator::Stats stats = session.stats();
+    EXPECT_EQ(stats.strands, session.last().strands->strandCount());
+    EXPECT_EQ(stats.guides, 8u);
+    EXPECT_TRUE(stats.times.count("scatter"));
+    const nlohmann::json json = nlohmann::json::parse(stats.toJson());
+    for (const char* key : {"view", "strands", "points", "guides", "cards", "cardNodes", "hairColor", "renderData", "colorNodes", "colorBlends",
+                            "times", "channels", "notes", "scalpHistory", "instances", "restEvaluations", "cardsStale"}) {
+        EXPECT_TRUE(json.contains(key)) << key;
+    }
+}
 
+TEST(Session, CardsAtTheirDensityKeepABakedAtlas) {
+    const std::string graph = withNode(R"({"name": "cards", "type": "Cards", "params": {"segments": 4, "maxCards": 40}})", "cards");
+    GroomEvaluator session(groomData(graph));
+    EXPECT_TRUE(session.hasCardsNode());
+    GroomEvaluator::Request request;
+    request.density = 0.2f;
+    request.wantCards = true;
+    const GroomEvaluator::Result first = session.evaluate(request);
+    ASSERT_TRUE(first.cards);
+    EXPECT_FALSE(first.cards->cards.empty());
+    EXPECT_EQ(first.cardStrands->strandCount(), GroomEvaluator(groomData(graph)).evaluate(1.0f, 0.0)->strandCount());
+    EXPECT_EQ(session.evaluate(request).versions.cards, first.versions.cards);  // nothing changed: the same cards
 
+    // A bake's atlas: the stamp says nothing is stale; cards rebuilt keep the baked cells.
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "groomlab_session_cards";
+    std::filesystem::create_directories(dir);
+    const std::string atlas = (dir / "hair_Atlas.json").generic_string();
+    {
+        std::ofstream out(atlas, std::ios::binary | std::ios::trunc);
+        out << captureCardAtlas(*first.cards, first.cardStrands.get()).toJson();
+    }
+    session.setCardMaps("Coverage=" + (dir / "hair_Coverage.tga").generic_string() + ";Atlas=" + atlas +
+                        ";Strands=" + cardsBakeStamp(first.cardNodes));
+    const GroomEvaluator::Result& relaid = session.evaluate(request);
+    EXPECT_GT(relaid.versions.cards, first.versions.cards);  // laid out for the bake
+    GroomEvaluator::Stats stats = session.stats();
+    EXPECT_TRUE(stats.cardsBaked);
+    EXPECT_FALSE(stats.cardsStale);
+    EXPECT_EQ(stats.cards, first.cards->cards.size());
+
+    request.wantCards = false;  // nothing wants them: dropped
+    EXPECT_FALSE(session.evaluate(request).cards);
+    std::filesystem::remove_all(dir);
+}
+
+TEST(Session, RachisAndScratchEvaluationsLeaveTheViewAlone) {
+    GroomEvaluator session(groomData());
+    GroomEvaluator::Request request;
+    request.density = 0.25f;
+    const GroomEvaluator::Result view = session.evaluate(request);
+    const StrandsPtr full = session.evaluateFullDensity(0.0);
+    ASSERT_TRUE(full);
+    EXPECT_GT(full->strandCount(), view.strands->strandCount());
+    const Value scatter = session.evaluateNode("scatter", 1.0f, 0.0);
+    ASSERT_TRUE(std::holds_alternative<StrandsPtr>(scatter));
+    EXPECT_EQ(std::get<StrandsPtr>(scatter)->strandCount(), full->strandCount());
+    EXPECT_THROW(session.evaluateNode("nope", 1.0f, 0.0), GraphError);
+    EXPECT_EQ(session.evaluate(request).strands, view.strands);
+    session.releaseFullDensity();
+}
 
 TEST(Session, StartsWithTheDefaultGraphAndTakesInputsBySetters) {
     GroomEvaluator session;

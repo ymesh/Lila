@@ -5,6 +5,7 @@
 #include "geo/Bvh.h"
 #include "geo/Symmetry.h"
 #include "retopo/Retopo.h"
+#include "retopo/TopologyCommands.h"
 #include "scene/Plug.h"
 #include "ui/ViewportTool.h"
 
@@ -33,7 +34,7 @@ namespace lila::ui
  *   Tab drag             extend a strip of quads from a border edge
  *   Tab Shift drag       extrude the whole border loop the edge is on
  *   Tab Ctrl drag        extrude along the border until it turns more than the extrude angle (Tab Ctrl wheel adjusts)
- *   Ctrl Alt click       delete the face, vertex or dot under the cursor (highlighted while hovering)
+ *   Ctrl Shift click     delete (Ctrl Alt click too) the face, vertex or dot under the cursor (highlighted while hovering)
  *   MMB or LMB drag      tweak a vertex or dot along the surface; dropping a vertex on another welds them
  *   Esc, Q/W/E/R         leave the tool
  *
@@ -58,6 +59,8 @@ public:
     bool keyPress(QKeyEvent* e, const ViewInfo& view) override;
     void draw(render::FrameState& s, OverlayPainter& p, const ViewInfo& view) override;
     std::optional<QCursor> cursor() const override;
+    /** The readout, its keys following the modifiers held. */
+    ToolStatus status(Qt::KeyboardModifiers mods) const;
 
     /** Tab is held; fed by the tool's application event filter since Tab never reaches the viewport. */
     void setTabDown(bool down)
@@ -171,6 +174,8 @@ private:
     std::vector<glm::dvec3> mDots; // world space, read from the retopo mesh
     std::string mDotsText;
     glm::dmat4 mDotsWorld{1.0};
+    std::vector<retopo::Guide> mGuides; // the Topology Pencil's, world space, shown here too
+    std::string mGuidesText;
     Hover mHover;
     geo::Index mAnchorPoint = geo::kInvalid; // the vertex last hovered; Shift's line snap starts there while there are no dots
     QPointF mCursor;
@@ -199,6 +204,8 @@ private:
 };
 
 /** The running Retopo Draw tool, or null. */
+/** Indices of the smallest convex quad (else triangle) of the screen points nearest px that holds px, counter-clockwise on screen; empty for none. */
+LILA_UI_API std::vector<int> smallestFillAround(QPointF px, const std::vector<QPointF>& screen);
 LILA_UI_API RetopoDrawTool* activeRetopoDraw();
 
 /** Registers "retopo.draw", "retopo.setReference" and the snap angle and space actions. */

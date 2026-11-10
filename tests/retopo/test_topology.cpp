@@ -277,6 +277,27 @@ TEST_CASE("constructs: symmetry stitches the mirror half")
     CHECK(m.numPoints() == 10);
 }
 
+TEST_CASE("constructs: symmetry keeps the half a construct mostly lies in, clamped to the plane")
+{
+    geo::Mesh m;
+    retopo::BridgeSpec b;
+    b.a = {{-5, 0, 0}, {15, 0, 0}};
+    b.b = {{-5, 0, 10}, {15, 0, 10}};
+    b.divisions = 4;
+    b.rows = 1;
+    retopo::GenResult r = retopo::generate(b, retopo::GenContext{});
+    REQUIRE(r.ok());
+    retopo::StitchResult st = retopo::stitchConstruct(m, r, 1, 1e-6, geo::axisPlane(0));
+    // Columns at x = -5, 0, 5, 10, 15: the face beyond x = 0 is dropped, the other three mirror.
+    CHECK(st.faces.size() == 6);
+    double minX = 1e9;
+    for (Index p = 0; p < m.pointCapacity(); ++p)
+        if (m.pointValid(p))
+            minX = std::min(minX, m.position(p).x);
+    CHECK(minX == doctest::Approx(-15.0));
+    CHECK(m.numPoints() == 14);
+}
+
 TEST_CASE("handles: a moved handle carries its region and fades to the border")
 {
     geo::Mesh m = plane(100.0, 10);

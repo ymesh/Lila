@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -91,6 +92,9 @@ struct RefEdit
 struct AddedAttr
 {
     std::string longName, shortName, type;
+    std::string parent; // -p: a child of this compound
+    std::optional<double> defaultValue, min, max, softMin, softMax;
+    std::vector<std::string> enumNames; // -en "a:b:c", or "a=0:b=2"
 };
 
 struct Node

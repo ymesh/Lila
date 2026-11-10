@@ -13,13 +13,13 @@
 #include "scene/Graph.h"
 #include "scene/MeshNodes.h"
 #include "scene/Modifiers.h"
-#include "uv/Chart.h"
 
 #include <tbb/parallel_for.h>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iterator>
 #include <map>
 #include <set>
 #include <tuple>
@@ -35,8 +35,8 @@ using detail::shortName;
 constexpr size_t kMaxComponents = 100000;
 /** Under a texel of UV area a triangle's winding and tangent sign don't show in the bake. */
 constexpr double kMinTexels = 1.0;
-/** Texels an island must have wound against the rest before it counts as folded. */
-constexpr double kFoldTexels = 4.0;
+/** Texels an island must have wound against the rest before it counts as folded: smaller folds vanish under padding. */
+constexpr double kFoldTexels = 16.0;
 /** A collapsed triangle smaller than this at its island's density is too small to see. */
 constexpr double kVisibleTexels = 16.0;
 /** UV area, as a fraction of what its island's density would give it, under which a triangle counts as collapsed. */
@@ -55,8 +55,14 @@ void hardEdges(const GroupInputs& gi, const LowInput& low, LintReport& r)
         return;
     const double q = std::max(1e-6, double(glm::length(s.boundsMax - s.boundsMin)) * 1e-6);
     auto key = [&](const glm::vec3& p) { return std::array<int64_t, 3>{int64_t(std::llround(p.x / q)), int64_t(std::llround(p.y / q)), int64_t(std::llround(p.z / q))}; };
-    // Undirected edge -> the corners (a, b) of each triangle side on it.
-    std::map<std::pair<std::array<int64_t, 3>, std::array<int64_t, 3>>, std::vector<std::pair<size_t, size_t>>> edges;
+    // Each triangle side as its undirected edge key and its corners (a, b), sorted so the sides on one edge are adjacent.
+    struct Side
+    {
+        std::array<int64_t, 3> ka, kb;
+        size_t a, b;
+    };
+    std::vector<Side> sides;
+    sides.reserve(s.triangleCount() * 3);
     for (size_t t = 0; t < s.triangleCount(); ++t)
         for (size_t k = 0; k < 3; ++k)
         {
@@ -67,8 +73,9 @@ void hardEdges(const GroupInputs& gi, const LowInput& low, LintReport& r)
                 std::swap(ka, kb);
                 std::swap(a, b);
             }
-            edges[{ka, kb}].push_back({a, b});
+            sides.push_back({ka, kb, a, b});
         }
+    std::ranges::sort(sides, [](const Side& x, const Side& y) { return std::tie(x.ka, x.kb, x.a) < std::tie(y.ka, y.kb, y.a); });
     const float cosHard = std::cos(glm::radians(1.0f));
     auto split = [&](size_t c0, size_t c1) {
         const glm::vec3 n0 = glm::normalize(s.normals[c0]), n1 = glm::normalize(s.normals[c1]);
@@ -78,12 +85,17 @@ void hardEdges(const GroupInputs& gi, const LowInput& low, LintReport& r)
     size_t count = 0;
     json where = json::array();
     json edgePoints = json::array();
-    for (const auto& [k, sides] : edges)
+    for (size_t i = 0; i < sides.size();)
     {
-        if (sides.size() != 2)
+        size_t j = i + 1;
+        while (j < sides.size() && sides[j].ka == sides[i].ka && sides[j].kb == sides[i].kb)
+            ++j;
+        const size_t first = i;
+        const bool manifold = j - i == 2;
+        i = j;
+        if (!manifold)
             continue;
-        const auto [a0, b0] = sides[0];
-        const auto [a1, b1] = sides[1];
+        const size_t a0 = sides[first].a, b0 = sides[first].b, a1 = sides[first + 1].a, b1 = sides[first + 1].b;
         if (!(split(a0, a1) || split(b0, b1)) || seam(a0, a1) || seam(b0, b1))
             continue;
         ++count;
@@ -97,7 +109,7 @@ void hardEdges(const GroupInputs& gi, const LowInput& low, LintReport& r)
     }
     if (count)
         r.issues.push_back({"hardEdges", "warning", gi.name, s.name,
-                            std::to_string(count) + " hard edge(s) are not UV seams; the normal map can't hide their shading split (split the UVs there or soften them)",
+                            std::to_string(count) + " hard edge(s) are not UV seams; the normal map can't hide their shading split. Split the UVs there, or soften them with Surface > Soften Normals",
                             {{"count", count}, {"positions", where}, {"edgePoints", edgePoints}}});
 }
 
@@ -164,16 +176,32 @@ void uvMissing(const GroupInputs& gi, const LowInput& low, const ProjectSettings
                             {{"count", collapsed}, {"faces", faces}}});
 }
 
+/** Faces (by face id) whose triangles of a texel or more are wound both ways in UV: the triangulation folds them. */
+std::set<uint32_t> foldedFaces(const LowInput& low, double texels)
+{
+    std::map<uint32_t, std::array<bool, 2>> wound;
+    for (size_t t = 0; t < low.soup.triangleCount() && t < low.faces.size(); ++t)
+        if (const double a = uvArea(&low.soup.uvs[t * 3]); std::abs(a) * texels >= kMinTexels)
+            wound[low.faces[t]][a < 0.0] = true;
+    std::set<uint32_t> out;
+    for (const auto& [f, w] : wound)
+        if (w[0] && w[1])
+            out.insert(f);
+    return out;
+}
+
 void mirroredTangents(const GroupInputs& gi, const LowInput& low, const ProjectSettings& ps, LintReport& r)
 {
     const MeshSoup& s = low.soup;
     if (s.uvs.empty() || low.tangents.size() != s.positions.size())
         return;
     const double texels = double(ps.output.width) * ps.output.height;
-    size_t mismatched = 0, mirrored = 0;
+    const std::set<uint32_t> splitFolds = foldedFaces(low, texels);
+    auto inSplitFold = [&](size_t t) { return t < low.faces.size() && splitFolds.contains(low.faces[t]); };
+    size_t mismatched = 0, mismatchedInSplits = 0, mirrored = 0;
     std::set<uint32_t> faces;
-    // Per island: texels wound each way, to find islands folding over themselves.
-    std::vector<std::array<double, 2>> winding(low.islandCount);
+    // Per island: texels wound each way, to find islands folding over themselves, with and without the split-folded faces.
+    std::vector<std::array<double, 2>> winding(low.islandCount), windingOutsideSplits(low.islandCount);
     for (size_t t = 0; t < s.triangleCount(); ++t)
     {
         const double a = uvArea(&s.uvs[t * 3]);
@@ -183,24 +211,44 @@ void mirroredTangents(const GroupInputs& gi, const LowInput& low, const ProjectS
         const bool flipped = a < 0.0;
         mirrored += flipped;
         if (t < low.islands.size() && low.islands[t] < winding.size())
+        {
             winding[low.islands[t]][flipped] += std::abs(a) * texels;
+            if (!inSplitFold(t))
+                windingOutsideSplits[low.islands[t]][flipped] += std::abs(a) * texels;
+        }
+        // A small triangle's sign disagrees with a neighbouring sliver's through their shared corner; it doesn't show.
+        if (std::abs(a) * texels < kVisibleTexels)
+            continue;
         for (int k = 0; k < 3; ++k)
             if ((low.tangents[t * 3 + size_t(k)].w < 0.0f) != flipped)
             {
                 ++mismatched;
+                mismatchedInSplits += inSplitFold(t);
                 if (t < low.faces.size() && faces.size() < kMaxComponents)
                     faces.insert(low.faces[t]);
                 break;
             }
     }
+    size_t folded = 0, foldedOutsideSplits = 0;
+    for (size_t i = 0; i < winding.size(); ++i)
+    {
+        folded += std::min(winding[i][0], winding[i][1]) >= kFoldTexels;
+        foldedOutsideSplits += std::min(windingOutsideSplits[i][0], windingOutsideSplits[i][1]) >= kFoldTexels;
+    }
+    // Every problem inside faces whose triangulation folds them: a concave UV face cut across its inside corner.
+    if ((mismatched || folded) && mismatchedInSplits == mismatched && !foldedOutsideSplits)
+    {
+        r.issues.push_back({"mirroredTangents", "warning", gi.name, s.name,
+                            std::to_string(splitFolds.size()) +
+                                " face(s) fold in UV only where the export triangulation splits them (a concave UV face cut across its inside corner): "
+                                "move that UV corner out or split the face",
+                            {{"count", mismatched}, {"splitFaces", splitFolds.size()}, {"faces", splitFolds}}});
+        return;
+    }
     if (mismatched)
         r.issues.push_back({"mirroredTangents", "warning", gi.name, s.name,
                             std::to_string(mismatched) + " triangle(s) have a tangent sign that disagrees with their UV winding; mirrored UVs will decode inverted",
                             {{"count", mismatched}, {"mirroredTriangles", mirrored}, {"faces", faces}}});
-    size_t folded = 0;
-    for (const auto& w : winding)
-        if (std::min(w[0], w[1]) >= kFoldTexels)
-            ++folded;
     if (folded)
         r.issues.push_back({"mirroredTangents", "warning", gi.name, s.name,
                             std::to_string(folded) + " UV island(s) fold over themselves (triangles wound both ways); their texels bake twice",
@@ -233,6 +281,8 @@ void uvOverlap(const BakeInputs& in, const ProjectSettings& ps, LintReport& r)
             const uint64_t lowIndex = lows.size();
             lows.push_back({g, l});
             const std::vector<glm::ivec2> tiles = triangleTiles(low);
+            // The texture a triangle writes depends only on its material and UDIM tile.
+            std::map<std::tuple<uint32_t, int, int>, std::pair<std::vector<uint64_t>*, std::vector<uint8_t>*>> targets;
             for (size_t t = 0; t < s.triangleCount(); ++t)
             {
                 const glm::vec2* uv = &s.uvs[t * 3];
@@ -240,22 +290,30 @@ void uvOverlap(const BakeInputs& in, const ProjectSettings& ps, LintReport& r)
                 if (std::abs(a) < 1e-14)
                     continue;
                 const int tu = tiles[t].x, tv = tiles[t].y;
-                NameTokens tok;
-                tok.project = in.project;
-                tok.group = in.groups[g].name;
-                tok.mesh = shortName(s.name);
-                tok.material = t < s.materials.size() && s.materials[t] < s.materialNames.size() ? s.materialNames[s.materials[t]] : std::string();
-                tok.map = "*";
-                tok.ext = "x";
-                tok.udim = udimOf(tu, tv);
-                const std::string file = expandName(ps.output.name, tok, true);
-                std::vector<uint64_t>& grid = grids[{file, tok.udim}];
-                std::vector<uint8_t>& clash = contested[{file, tok.udim}];
-                if (grid.empty())
+                const uint32_t material = t < s.materials.size() ? s.materials[t] : UINT32_MAX;
+                auto [target, added] = targets.try_emplace({material, tu, tv});
+                if (added)
                 {
-                    grid.assign(size_t(R) * size_t(R), 0);
-                    clash.assign(size_t(R) * size_t(R), 0);
+                    NameTokens tok;
+                    tok.project = in.project;
+                    tok.group = in.groups[g].name;
+                    tok.mesh = shortName(s.name);
+                    tok.material = material < s.materialNames.size() ? s.materialNames[material] : std::string();
+                    tok.map = "*";
+                    tok.ext = "x";
+                    tok.udim = udimOf(tu, tv);
+                    const std::string file = expandName(ps.output.name, tok, true);
+                    std::vector<uint64_t>& grid = grids[{file, tok.udim}];
+                    std::vector<uint8_t>& clash = contested[{file, tok.udim}];
+                    if (grid.empty())
+                    {
+                        grid.assign(size_t(R) * size_t(R), 0);
+                        clash.assign(size_t(R) * size_t(R), 0);
+                    }
+                    target->second = {&grid, &clash};
                 }
+                std::vector<uint64_t>& grid = *target->second.first;
+                std::vector<uint8_t>& clash = *target->second.second;
                 const uint64_t me = ((lowIndex << 32) | (t < low.islands.size() ? low.islands[t] : 0u)) + 1;
                 glm::dvec2 p[3];
                 for (int k = 0; k < 3; ++k)
@@ -292,11 +350,16 @@ void uvOverlap(const BakeInputs& in, const ProjectSettings& ps, LintReport& r)
     }
     // Per pair of lows: overlapping cells and island pairs.
     std::map<std::pair<uint64_t, uint64_t>, std::pair<size_t, size_t>> perLows;
+    std::map<std::pair<uint64_t, uint64_t>, json> islandPairs;
     for (const auto& [pair, cells] : conflicts)
     {
-        auto& v = perLows[{(pair.first - 1) >> 32, (pair.second - 1) >> 32}];
+        const std::pair<uint64_t, uint64_t> lowPair{(pair.first - 1) >> 32, (pair.second - 1) >> 32};
+        auto& v = perLows[lowPair];
         v.first += cells;
         ++v.second;
+        json& ip = islandPairs[lowPair];
+        if (ip.size() < 64)
+            ip.push_back({(pair.first - 1) & 0xffffffffu, (pair.second - 1) & 0xffffffffu, cells});
     }
     for (const auto& [pair, v] : perLows)
     {
@@ -316,7 +379,7 @@ void uvOverlap(const BakeInputs& in, const ProjectSettings& ps, LintReport& r)
         else
             msg = "UVs overlap " + nb + " (" + buf + " of the tile) in the texture they share";
         r.issues.push_back({"uvOverlap", "warning", ga.name, na, msg,
-                            {{"cells", v.first}, {"islandPairs", v.second}, {"other", nb}, {"otherGroup", gb.name}, {"resolution", R}}});
+                            {{"cells", v.first}, {"islandPairs", v.second}, {"islands", islandPairs[pair]}, {"other", nb}, {"otherGroup", gb.name}, {"resolution", R}}});
     }
 }
 
@@ -705,16 +768,22 @@ LintReport lintInputs(const BakeInputs& in, const ProjectSettings& ps, const Bac
     LILA_ZONE();
 
     LintReport r;
+    std::vector<std::pair<const GroupInputs*, const LowInput*>> lows;
     for (const GroupInputs& gi : in.groups)
         for (const LowInput& low : gi.lows)
-        {
-            if (wanted(o, "uvMissing"))
-                uvMissing(gi, low, ps, r);
-            if (wanted(o, "hardEdges"))
-                hardEdges(gi, low, r);
-            if (wanted(o, "mirroredTangents"))
-                mirroredTangents(gi, low, ps, r);
-        }
+            lows.emplace_back(&gi, &low);
+    std::vector<LintReport> perLow(lows.size());
+    tbb::parallel_for(size_t(0), lows.size(), [&](size_t i) {
+        const auto [gi, low] = lows[i];
+        if (wanted(o, "uvMissing"))
+            uvMissing(*gi, *low, ps, perLow[i]);
+        if (wanted(o, "hardEdges"))
+            hardEdges(*gi, *low, perLow[i]);
+        if (wanted(o, "mirroredTangents"))
+            mirroredTangents(*gi, *low, ps, perLow[i]);
+    });
+    for (LintReport& l : perLow)
+        std::ranges::move(l.issues, std::back_inserter(r.issues));
     if (wanted(o, "uvOverlap"))
         uvOverlap(in, ps, r);
     if (wanted(o, "texelDensity"))
@@ -740,58 +809,88 @@ void lintScene(scene::Graph& g, const BakeInputs& in, LintReport& r, const LintO
 
 namespace
 {
-/** Triangles of the mesh's uv0 squeezed under kCollapsedFraction of what their island's density gives them. */
-size_t collapsedUvTriangles(const geo::Mesh& m)
+/** The mesh's export-enabled modifiers. */
+std::vector<std::string> exportModifiers(scene::Graph& g, const scene::Node& n)
 {
-    if (m.cornerAttrs().get<glm::vec2>("uv0").empty())
-        return 0;
-    uv::ChartOptions co;
-    co.source = uv::IslandSource::Uvs;
-    co.pinAttr = {};
-    size_t n = 0;
-    for (const uv::Chart& ch : uv::buildCharts(m, {}, co))
-    {
-        const double a3 = ch.area3d(), density = a3 > 0.0 ? std::abs(ch.areaUv()) / a3 : 0.0;
-        for (const auto& t : ch.tris)
-        {
-            const glm::dvec3 p0 = ch.pos[t[0]];
-            const double area = 0.5 * glm::length(glm::cross(ch.pos[t[1]] - p0, ch.pos[t[2]] - p0));
-            const glm::dvec2 e1 = ch.uv[t[1]] - ch.uv[t[0]], e2 = ch.uv[t[2]] - ch.uv[t[0]];
-            if (area > 1e-12 * a3 && 0.5 * std::abs(e1.x * e2.y - e1.y * e2.x) < area * density * kCollapsedFraction)
-                ++n;
-        }
-    }
-    return n;
+    std::vector<std::string> names;
+    for (scene::NodeId id : scene::modifiers::stack(g, n.id()))
+        if (const scene::ModifierNode* m = scene::modifiers::asModifier(g.node(id)); m && scene::modifiers::exportEnabled(*m))
+            names.push_back(m->name());
+    return names;
+}
+
+/** The mesh's last export modifier that sets normals, when it is a Weighted Normals keeping the hard edges split: its name. */
+std::string hardEdgeKeeper(scene::Graph& g, const scene::Node& n)
+{
+    const std::vector<scene::NodeId> stack = scene::modifiers::stack(g, n.id());
+    for (auto it = stack.rbegin(); it != stack.rend(); ++it)
+        if (const scene::ModifierNode* m = scene::modifiers::asModifier(g.node(*it));
+            m && scene::modifiers::exportEnabled(*m) && m->type().isA("weightedNormalsModifier"))
+            return m->as<bool>(m->type().attrIndex("keepHardEdges")) ? m->name() : std::string();
+    return {};
+}
+
+/** Whether base, linted alone, raises an issue of the same check and kind (a triangle count or an island count) as i. */
+bool baseHasIssue(const LintIssue& i, const LowInput& base, const ProjectSettings& ps)
+{
+    GroupInputs gi;
+    gi.name = i.group;
+    LintReport r;
+    if (i.check == "uvMissing")
+        uvMissing(gi, base, ps, r);
+    else if (i.check == "hardEdges")
+        hardEdges(gi, base, r);
+    else
+        mirroredTangents(gi, base, ps, r);
+    return std::ranges::any_of(r.issues, [&](const LintIssue& b) { return b.check == i.check && b.data.contains("islands") == i.data.contains("islands"); });
 }
 
 /**
- * A uvMissing collapse the base mesh doesn't have comes from the mesh's modifiers moving the surface under islands whose
- * uvs they only blend. Says so, and that Relax or Unwrap (which solve on the exported mesh) fix it.
+ * A per-mesh issue the base mesh doesn't have comes from the mesh's modifiers: they move the surface under UVs they only
+ * blend, or split its normals. Says so, and for UV problems that Relax or Unwrap (which solve on the exported mesh) fix
+ * it, and that Unwrap Exported Mesh always does.
  */
-void explainDraggedUvs(scene::Graph& g, LintReport& r)
+void explainModifierIssues(scene::Graph& g, LintReport& r, const ProjectSettings& ps)
 {
     for (LintIssue& i : r.issues)
     {
-        if (i.check != "uvMissing" || !i.data.contains("count"))
+        const bool uvs = (i.check == "uvMissing" && i.data.contains("count")) || i.check == "mirroredTangents";
+        if (!uvs && i.check != "hardEdges")
             continue;
         scene::Node* n = g.find(i.mesh);
         if (!n || !n->type().isA("mesh"))
             continue;
-        std::vector<std::string> mods;
-        for (scene::NodeId id : scene::modifiers::stack(g, n->id()))
-            if (const scene::ModifierNode* m = scene::modifiers::asModifier(g.node(id)); m && scene::modifiers::exportEnabled(*m))
-                mods.push_back(m->name());
+        if (i.check == "hardEdges")
+            if (const std::string keeper = hardEdgeKeeper(g, *n); !keeper.empty())
+            {
+                i.message = std::to_string(i.data["count"].get<size_t>()) + " hard edge(s) are not UV seams: " + keeper +
+                            " (Weighted Normals) keeps the mesh's hard edges split. Turn off its Keep Hard Edges, or split the UVs there";
+                i.data["keptBy"] = keeper;
+                continue;
+            }
+        const std::vector<std::string> mods = exportModifiers(g, *n);
         const scene::MeshPtr cage = mods.empty() ? nullptr : scene::modifiers::cage(g, n->id());
-        if (!cage || collapsedUvTriangles(*cage) > 0)
+        if (!cage || baseHasIssue(i, lowFromMesh(*cage, glm::dmat4(1.0), i.mesh), ps))
             continue;
         std::string names;
         for (const std::string& m : mods)
             names += (names.empty() ? "" : ", ") + m;
-        const size_t count = i.data["count"].get<size_t>();
-        i.message = std::to_string(count) + " triangle(s) are collapsed in UV on the exported mesh only: its modifiers (" + names +
-                    ") move the surface under UVs they keep; the base mesh's UVs are fine. Relax or Unwrap the mesh to solve its UVs on the "
-                    "exported mesh";
+        const auto count = [&](const char* key) { return std::to_string(i.data[key].get<size_t>()); };
+        const std::string what = i.check == "hardEdges"           ? count("count") + " hard edge(s) off the UV seams"
+                                 : i.data.contains("islands")     ? count("islands") + " UV island(s) folding over themselves"
+                                 : i.check == "uvMissing"         ? count("count") + " triangle(s) collapsed in UV"
+                                                                  : count("count") + " triangle(s) wound against their tangent sign";
         i.data["fromModifiers"] = mods;
+        if (i.check == "hardEdges")
+        {
+            i.message = what + " on the exported mesh only: its modifiers (" + names + ") split the normals there; the base mesh is fine. "
+                        "Split the UVs along those edges or change the modifiers' angle";
+            continue;
+        }
+        i.message = what + " on the exported mesh only: its modifiers (" + names +
+                    ") move the surface under UVs they keep; the base mesh's UVs are fine. Relax or Unwrap the mesh to solve its UVs on the "
+                    "exported mesh, or UV > Unwrap Exported Mesh to apply the modifiers and unwrap the result";
+        i.data["fix"] = "uvUnwrapExported";
     }
 }
 
@@ -801,7 +900,7 @@ LintReport lint(scene::Graph& g, const BakeInputs& in, const ProjectSettings& ps
 {
     LintReport r = lintInputs(in, ps, backend, o);
     lintScene(g, in, r, o);
-    explainDraggedUvs(g, r);
+    explainModifierIssues(g, r, ps);
     return r;
 }
 } // namespace lila::bake

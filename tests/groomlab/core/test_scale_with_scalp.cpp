@@ -437,4 +437,27 @@ TEST(ScaleWithScalp, TheScalpsOwnAreaChangingIsSaidOnce) {
     EXPECT_EQ(session.scaleNoticeSerial(), 1u);
 }
 
+TEST(ScaleWithScalp, ASimulatedGroomScaledBehavesAsTheOneAt1xScaled) {
+    const GroomData data = strokesGroom(presetText("everyday_sim"));
+    const double size = *presetScalpSize(*data.scalp);
+    GroomEvaluator at1(data);
+    GroomData big = data;
+    big.scalp = scaledMesh(data.scalp, 2.0f);
+    big.scaleReference = at1.scaleReference();
+    GroomEvaluator at2(big);
+    ASSERT_NEAR(at2.groomScale(), 2.0, 1e-4);
+    std::vector<Vec3f> first;
+    for (int frame = 1; frame <= 12; ++frame) {
+        GroomEvaluator::Request request;
+        request.time = frame / kFps;
+        request.density = 0.1f;
+        const StrandsPtr a = at1.evaluate(request).strands;
+        const StrandsPtr b = at2.evaluate(request).strands;
+        ASSERT_TRUE(a && b);
+        if (frame == 1 || frame == 12) EXPECT_LT(difference(*a, *b, 2.0f, size), 2e-3) << "frame " << frame;
+        if (frame == 1) first = a->positions();
+        if (frame == 12) EXPECT_NE(a->positions(), first) << "the simulation moved nothing";
+    }
+}
+
 }  // namespace groomlab

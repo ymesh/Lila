@@ -58,6 +58,14 @@ struct Session::Impl
         VkPipeline pipe = VK_NULL_HANDLE;
         VkPipelineLayout layout = VK_NULL_HANDLE;
         uint32_t push = 0;
+        /** Bound kernels: their slots, in binding order. */
+        std::vector<Slot> slots;
+    };
+    /** A bound kernel's set layout and pipeline layout, shared by every kernel of the same slots. */
+    struct BoundLayout
+    {
+        VkDescriptorSetLayout set = VK_NULL_HANDLE;
+        VkPipelineLayout layout = VK_NULL_HANDLE;
     };
     struct Code
     {
@@ -71,6 +79,12 @@ struct Session::Impl
     std::map<int, Kern> kernels;
     std::map<uint32_t, VkPipelineLayout> layouts;
     std::map<std::string, Code> code;
+    std::map<std::string, BoundLayout> boundLayouts;
+    /** Descriptor sets of the run being recorded: reset at each run. */
+    std::vector<VkDescriptorPool> pools;
+    size_t poolUsed = 0;
+    uint32_t setsInPool = 0;
+    rc::Buffer zero;
     rc::Submitter submit;
     bool alive = false;
     double ms = 0.0;
@@ -84,6 +98,19 @@ struct Session::Impl
             rc::destroy(vk, b);
         for (auto& [bytes, l] : layouts)
             rc::destroy(vk, l);
+        for (auto& [key, l] : boundLayouts)
+        {
+            rc::destroy(vk, l.layout);
+            vkDestroyDescriptorSetLayout(vk.device, l.set, nullptr);
+        }
+        for (VkDescriptorPool p : pools)
+            vkDestroyDescriptorPool(vk.device, p, nullptr);
+        if (zero.buffer)
+            rc::destroy(vk, zero);
+        boundLayouts.clear();
+        pools.clear();
+        poolUsed = 0;
+        setsInPool = 0;
         bufs.clear();
         readbacks.clear();
         layouts.clear();
@@ -190,6 +217,11 @@ bool Session::run(const std::function<void(Recorder&)>& record, std::string* err
              std::scoped_lock lock(impl->mutex);
              if (!impl->submit.pool)
                  impl->submit.init(vk);
+             // The last run's descriptor sets are done with: its wait returned.
+             for (VkDescriptorPool p : impl->pools)
+                 vkResetDescriptorPool(vk.device, p, 0);
+             impl->poolUsed = 0;
+             impl->setsInPool = 0;
              std::vector<rc::Buffer> staging;
              try
              {
@@ -258,7 +290,9 @@ uint64_t Recorder::buffer(int id, size_t bytes, BufferKind kind)
         r.staging.push_back(it->second.b);
     Session::Impl::Buf b;
     b.kind = kind;
-    b.b = rc::makeBuffer(r.vk, bytes, kind == BufferKind::Indirect ? VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT : 0, rc::Host::None);
+    b.b = rc::makeBuffer(r.vk, bytes,
+                         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | (kind == BufferKind::Indirect ? VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT : 0),
+                         rc::Host::None);
     r.s.bufs[id] = b;
     return b.b.address;
 }
@@ -386,4 +420,158 @@ void Recorder::dispatchIndirect(int kernel, const void* push, int argsBuffer, si
 }
 
 void Recorder::barrier() { rc::memoryBarrier(st(state_).cmd); }
+
+namespace
+{
+constexpr uint32_t kSetsPerPool = 1024;
+constexpr size_t kZeroBytes = 4096;
+
+/** The words of a shader file: absolute, or in the shaders folder. */
+const Session::Impl::Code& shaderCode(RecState& r, const char* shader)
+{
+    Session::Impl::Code& code = r.s.code[shader];
+    if (!code.words.empty())
+        return code;
+    std::string err;
+    const std::filesystem::path path = paths::fromUtf8(shader);
+    if (path.is_absolute())
+    {
+        std::ifstream in(path, std::ios::binary | std::ios::ate);
+        if (in)
+        {
+            code.words.resize(size_t(in.tellg()) / 4);
+            in.seekg(0);
+            in.read(reinterpret_cast<char*>(code.words.data()), std::streamsize(code.words.size() * 4));
+        }
+        else
+            err = std::string("gpu: missing shader ") + shader;
+    }
+    else
+        code.words = rc::loadSpirv(shader, &err);
+    if (code.words.empty())
+        throw std::runtime_error(err.empty() ? std::string("gpu: cannot load ") + shader : err);
+    code.hash = rc::spirvHash(code.words);
+    return code;
+}
+
+VkDescriptorType descriptorType(SlotKind k)
+{
+    return k == SlotKind::Uniform ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+}
+
+VkDescriptorSet allocateSet(RecState& r, VkDescriptorSetLayout layout)
+{
+    Session::Impl& s = r.s;
+    if (s.pools.empty() || s.setsInPool >= kSetsPerPool)
+    {
+        if (!s.pools.empty())
+            ++s.poolUsed;
+        s.setsInPool = 0;
+        if (s.poolUsed >= s.pools.size())
+        {
+            const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kSetsPerPool * 2},
+                                                  {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kSetsPerPool * 16}};
+            VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+            pci.maxSets = kSetsPerPool;
+            pci.poolSizeCount = 2;
+            pci.pPoolSizes = sizes;
+            VkDescriptorPool pool = VK_NULL_HANDLE;
+            if (vkCreateDescriptorPool(r.vk.device, &pci, nullptr, &pool) != VK_SUCCESS)
+                throw std::runtime_error("gpu: cannot create a descriptor pool");
+            s.pools.push_back(pool);
+            s.poolUsed = s.pools.size() - 1;
+        }
+    }
+    VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    ai.descriptorPool = s.pools[s.poolUsed];
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &layout;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    if (vkAllocateDescriptorSets(r.vk.device, &ai, &set) != VK_SUCCESS)
+        throw std::runtime_error("gpu: cannot allocate a descriptor set");
+    ++s.setsInPool;
+    return set;
+}
+} // namespace
+
+void Recorder::boundKernel(int id, const char* shader, const char* entry, std::span<const Slot> slots)
+{
+    RecState& r = st(state_);
+    if (r.s.kernels.count(id))
+        return;
+    std::vector<Slot> sorted(slots.begin(), slots.end());
+    std::sort(sorted.begin(), sorted.end(), [](const Slot& a, const Slot& b) { return a.binding < b.binding; });
+    std::string key = "lila.gpu.bound";
+    for (const Slot& s : sorted)
+        key += (s.kind == SlotKind::Uniform ? ":u" : ":s") + std::to_string(s.binding);
+    Session::Impl::BoundLayout& bl = r.s.boundLayouts[key];
+    if (!bl.set)
+    {
+        std::vector<VkDescriptorSetLayoutBinding> bindings;
+        for (const Slot& s : sorted)
+            bindings.push_back({s.binding, descriptorType(s.kind), 1, kCompute, nullptr});
+        VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        ci.bindingCount = uint32_t(bindings.size());
+        ci.pBindings = bindings.data();
+        if (vkCreateDescriptorSetLayout(r.vk.device, &ci, nullptr, &bl.set) != VK_SUCCESS)
+            throw std::runtime_error("gpu: cannot create a descriptor set layout");
+        bl.layout = rc::pipelineLayout(r.vk, 0, kCompute, std::span<const VkDescriptorSetLayout>(&bl.set, 1));
+    }
+    const Session::Impl::Code& code = shaderCode(r, shader);
+    const uint64_t layoutKey = rc::layoutKey(0, kCompute, key);
+    r.s.kernels[id] = {rc::sharedPipelines().get(r.vk, bl.layout, layoutKey, code.words, code.hash, entry), bl.layout, 0, sorted};
+}
+
+void Recorder::dispatchBound(int kernel, std::span<const Bind> binds, uint32_t groupsX, uint32_t groupsY, uint32_t groupsZ)
+{
+    RecState& r = st(state_);
+    const auto& k = needKernel(r, kernel);
+    if (!groupsX || !groupsY || !groupsZ)
+        return;
+    if (!r.s.zero.buffer)
+    {
+        r.s.zero = rc::makeBuffer(r.vk, kZeroBytes, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, rc::Host::None);
+        vkCmdFillBuffer(r.cmd, r.s.zero.buffer, 0, VK_WHOLE_SIZE, 0);
+        rc::memoryBarrier(r.cmd);
+    }
+    std::string key = "lila.gpu.bound";
+    for (const Slot& s : k.slots)
+        key += (s.kind == SlotKind::Uniform ? ":u" : ":s") + std::to_string(s.binding);
+    const VkDescriptorSet set = allocateSet(r, r.s.boundLayouts.at(key).set);
+    std::vector<VkDescriptorBufferInfo> infos(k.slots.size());
+    std::vector<VkWriteDescriptorSet> writes(k.slots.size());
+    for (size_t i = 0; i < k.slots.size(); ++i)
+    {
+        const Slot& slot = k.slots[i];
+        VkDescriptorBufferInfo& info = infos[i];
+        info = {r.s.zero.buffer, 0, VK_WHOLE_SIZE};
+        for (const Bind& b : binds)
+            if (b.binding == slot.binding && b.buffer >= 0)
+            {
+                const auto it = r.s.bufs.find(b.buffer);
+                if (it == r.s.bufs.end())
+                    break;
+                info = {it->second.b.buffer, b.offset, b.bytes ? b.bytes : VK_WHOLE_SIZE};
+                break;
+            }
+        if (slot.kind == SlotKind::Uniform && info.buffer == r.s.zero.buffer)
+            info.range = kZeroBytes;
+        VkWriteDescriptorSet& w = writes[i];
+        w = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w.dstSet = set;
+        w.dstBinding = slot.binding;
+        w.descriptorCount = 1;
+        w.descriptorType = descriptorType(slot.kind);
+        w.pBufferInfo = &info;
+    }
+    vkUpdateDescriptorSets(r.vk.device, uint32_t(writes.size()), writes.data(), 0, nullptr);
+    vkCmdBindPipeline(r.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, k.pipe);
+    vkCmdBindDescriptorSets(r.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, k.layout, 0, 1, &set, 0, nullptr);
+    vkCmdDispatch(r.cmd, groupsX, groupsY, groupsZ);
+}
+
+size_t Recorder::uniformAlignment() const
+{
+    return size_t(st(state_).vk.properties.limits.minUniformBufferOffsetAlignment);
+}
 } // namespace lila::gpu

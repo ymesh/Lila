@@ -4,6 +4,7 @@
 
 #include "rig/RigMath.h"
 
+#include <lila/Anim.h>
 #include <lila/Command.h>
 #include <lila/Graph.h>
 #include <lila/Log.h>
@@ -205,8 +206,22 @@ inline json vecJson(const glm::dvec3& v) { return json::array({v.x, v.y, v.z}); 
  */
 inline void keyVec(const std::string& node, const std::string& attr, const glm::dvec3& v, double time)
 {
-    lila::ops::execute("setKeyframe", {{"args", {node + "." + attr}}, {"time", time}});
     const char axes[3] = {'x', 'y', 'z'};
+    // On an animation layer each key takes what the layer adds to reach v, which setKeyframe's value works out from what
+    // is below the layer at the scene's time: so the time steps there first.
+    lila::scene::Graph& g = lila::scene::Graph::current();
+    if (lila::scene::anim::activeLayer(g) != lila::scene::kNoNode)
+    {
+        const double now = g.time();
+        g.setTime(time, false);
+        g.evaluate();
+        for (int k = 0; k < 3; ++k)
+            lila::ops::execute("setKeyframe", {{"args", {node + "." + attr.substr(0, 1) + axes[k]}}, {"time", time}, {"value", v[k]}});
+        g.setTime(now, false);
+        g.evaluate();
+        return;
+    }
+    lila::ops::execute("setKeyframe", {{"args", {node + "." + attr}}, {"time", time}});
     for (int k = 0; k < 3; ++k)
         lila::ops::execute("keyframe", {{"args", {node + "." + attr.substr(0, 1) + axes[k]}}, {"time", json::array({time, time})},
                                          {"valueChange", v[k]}});

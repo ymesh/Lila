@@ -773,7 +773,7 @@ json runCliffKit(const Args& a)
                      {"scaleJitter", a.get<double>("scaleJitter", 0.2)},
                      {"sink", a.get<double>("sink", 0.1)},
                      {"floatTolerance", a.get<double>("floatTolerance", 25.0)},
-                     {"maxPenetration", a.get<double>("maxPenetration", 0.6)},
+                     {"maxPenetration", a.get<double>("maxPenetration", 0.8)},
                      {"gap", a.get<double>("gap", 150.0)},
                      {"seed", a.get<int64_t>("seed", 1)}};
     json names = json::array();
@@ -959,8 +959,16 @@ json sendKit(Graph& g, const json& entry, const std::string& kitAs, const std::s
     const std::string name = identifier(entry.value("name", std::string("Kit")));
     if (!host)
         throw std::runtime_error(name + ": the kit's mesh is gone");
+    const std::string group = id + "/kits/" + name;
     if (kitAs == "hism")
-        return ops::execute("unrealPlaceInstances", {{"args", {host->path()}}, {"mode", "hism"}, {"folder", content + "/Kits"}, {"wait", true}});
+    {
+        call("removePlacements", {{"groups", json::array({group})}});
+        json place = {{"args", {host->path()}}, {"mode", "hism"}, {"folder", content + "/Kits"}, {"wait", true}};
+        if (!hlod.empty())
+            place["hlodLayer"] = hlod;
+        return ops::execute("unrealPlaceInstances", place);
+    }
+    ops::execute("unrealRemovePlacements", {{"args", {host->path()}}});
 
     link::PlacementOptions o;
     o.folder = content + "/Kits/" + name;
@@ -1019,7 +1027,6 @@ json sendKit(Graph& g, const json& entry, const std::string& kitAs, const std::s
     for (const json& made : imported.value("assets", json::array()))
         if (made.is_string() && made.get<std::string>().ends_with("/" + root + "." + root))
             assembly = made.get<std::string>();
-    const std::string group = id + "/kits/" + name;
     json params = {{"group", group},
                    {"label", root},
                    {"mesh", assembly},
@@ -1382,7 +1389,7 @@ void registerCliffCommands(ext::Context& ctx)
                   {"scaleJitter", "sj", T::Float, 0.2, "Scale variation, 0 to 1.", {}, {}, 0.0, 1.0},
                   {"sink", "sk", T::Float, 0.1, "Base sunk into the ground, as a fraction of a piece's height.", {}, {}, 0.0, 1.0},
                   {"floatTolerance", "ft", T::Float, 25.0, "A piece this far above the ground is floating, cm.", {}, {}, 0.0},
-                  {"maxPenetration", "mp", T::Float, 0.6, "Most of a piece that may be inside the ground, 0 to 1.", {}, {}, 0.0, 1.0},
+                  {"maxPenetration", "mp", T::Float, 0.8, "How far into a piece's depth the cliff face behind it may reach, 0 to 1.", {}, {}, 0.0, 1.0},
                   {"gap", "gp", T::Float, 150.0, "Gaps wider than this get smaller pieces, cm.", {}, {}, 1.0},
                   {"seed", "sd", T::Int, int64_t(1), "Another seed gives another arrangement."},
                   {"send", "se", T::String, "none", "Send it to Unreal: none, hism or assembly.", {"none", "hism", "assembly"}},

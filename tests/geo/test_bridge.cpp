@@ -467,3 +467,29 @@ TEST_CASE("bridge: explicit start points pair as asked")
     CHECK(isValid(m));
     CHECK(m.findEdge(a, target) != kInvalid);
 }
+
+TEST_CASE("bridge: with mirror symmetry a border never pairs with its mirror image")
+{
+    // A gap down the middle: its two sides face each other across x = 0.
+    Gap g = cut(makePlane({400.0, 100.0, 8, 2}), [](const glm::dvec3& c) { return std::abs(c.x) < 50.0; },
+                [](const glm::dvec3& mid) { return std::abs(std::abs(mid.x) - 50.0) < 1e-6; });
+    REQUIRE(g.border.size() == 4);
+
+    Mesh plain = g.mesh;
+    BridgeOptions o = autoOptions();
+    CHECK(bridge(plain, g.border, o).pairsBridged == 1);
+
+    const SymmetryMap map = SymmetryMap::build(g.mesh, axisPlane(0), 1e-3);
+    o.symmetry = &map;
+    const BridgeResult r = bridge(g.mesh, g.border, o);
+    for (Index f : r.faces)
+    {
+        bool neg = false, pos = false;
+        g.mesh.forEachFaceCorner(f, [&](Index c) {
+            const double x = g.mesh.position(g.mesh.cornerPoint(c)).x;
+            neg = neg || x < -1e-6;
+            pos = pos || x > 1e-6;
+        });
+        CHECK_FALSE((neg && pos));
+    }
+}

@@ -2,6 +2,7 @@
   "N": { "label": "World", "action": "manip.rotate.world" },
   "W": { "label": "Object", "action": "manip.rotate.object" },
   "E": { "label": "Parent", "action": "manip.rotate.parent" },
+  "NE": { "label": "Gimbal", "action": "manip.rotate.gimbal" },
   "S": { "label": "Edit Pivot", "action": "tool.pivotEditToggle" },
   "SW": { "label": "Orient Pivot", "action": "modify.orientPivot" },
   "NW": { "label": "Pin Pivot", "action": "modify.pinComponentPivot" },

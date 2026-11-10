@@ -464,6 +464,11 @@ void checkSkirt(const Mesh& m, const Object& wall, const Ground* ground, const O
     REQUIRE(!normal.empty());
     double worstDistance = 0.0, worstAngle = 0.0;
     const glm::dmat4 inv = glm::inverse(wall.world);
+    auto wallNormalAt = [&](const glm::dvec3& q) {
+        lila::geo::BvhClosest cl;
+        return wall.bvh->closestPoint(glm::dvec3(inv * glm::dvec4(q, 1.0)), cl) ? glm::normalize(wall.mesh->faceNormal(cl.face)) : glm::dvec3(0.0);
+    };
+    auto angle = [](const glm::dvec3& a, const glm::dvec3& b) { return glm::degrees(std::acos(std::clamp(glm::dot(a, b), -1.0, 1.0))); };
     for (Index c = 0; c < m.cornerCapacity(); ++c)
     {
         if (!m.cornerValid(c))
@@ -497,7 +502,16 @@ void checkSkirt(const Mesh& m, const Object& wall, const Ground* ground, const O
         else
             continue;
         worstDistance = std::max(worstDistance, distance);
-        worstAngle = std::max(worstAngle, glm::degrees(std::acos(std::clamp(glm::dot(glm::dvec3(normal[c]), surfaceNormal), -1.0, 1.0))));
+        const glm::dvec3 cn(normal[c]);
+        double off = angle(cn, surfaceNormal);
+        if (side[p] < 1e-6)
+        {
+            // On a wall's edge the normal may turn between the faces either side of it.
+            const glm::dvec3 t = glm::normalize(glm::cross(glm::dvec3(0.0, 1.0, 0.0), cn) + glm::dvec3(1e-12, 0.0, 0.0));
+            const glm::dvec3 na = wallNormalAt(pos - t), nb = wallNormalAt(pos + t);
+            off = std::min(off, angle(cn, na) + angle(cn, nb) - angle(na, nb));
+        }
+        worstAngle = std::max(worstAngle, off);
     }
     CHECK(worstDistance < 0.01);
     CHECK(worstAngle < 1.0);
@@ -598,4 +612,16 @@ TEST_CASE("skirt: a unioned box wall's outer corners are rounded, not tapered")
         CHECK(nearest > o.width * 0.85);
         CHECK(farthest < o.width * 1.15);
     }
+    // Shading follows the surface round the corners: no corner normal turned far from its face.
+    const auto normal = s.mesh.cornerAttrs().get<glm::vec3>("normal");
+    double worst = 0.0;
+    for (Index f = 0; f < s.mesh.faceCapacity(); ++f)
+    {
+        if (!s.mesh.faceValid(f) || glm::length(s.mesh.faceAreaVector(f)) < 1e-3)
+            continue;
+        const glm::dvec3 fn = glm::normalize(s.mesh.faceAreaVector(f));
+        for (Index c : s.mesh.faceCorners(f))
+            worst = std::max(worst, glm::degrees(std::acos(std::clamp(glm::dot(fn, glm::dvec3(normal[c])), -1.0, 1.0))));
+    }
+    CHECK(worst < 60.0);
 }

@@ -142,7 +142,10 @@ enum class RemeshMethod
      * regular grid: edge loops run unbroken between poles and the center line of a symmetric result is one of them.
      */
     Patches,
-    /** Each point placed from the edge flow nearby: quick, but loops break and poles come in pairs more often. */
+    /**
+     * Each point placed from the edge flow nearby: loops break and poles come in pairs more often. Not a command method;
+     * Patches falls back to it, with a note, when its layout fails or comes out with more flaws.
+     */
     Field,
     /** A straight grid seen down the sheet's normal, for open sheets like terrain tiles and panels; Patches otherwise. */
     Grid,

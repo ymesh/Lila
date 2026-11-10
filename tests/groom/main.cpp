@@ -5,6 +5,7 @@
 #include "core/MainQueue.h"
 #include "curve/CurveNodes.h"
 #include "groom/GroomNodes.h"
+#include "retopo/RetopoCommands.h"
 #include "io/SceneFile.h"
 #include "ops/Command.h"
 #include "scene/Node.h"
@@ -33,6 +34,7 @@ int main(int argc, char** argv)
     lila::clay::registerTypes();
     lila::groom::registerTypes();
     lila::groom::registerCommands();
+    lila::retopo::registerCommands();
 
     doctest::Context ctx(argc, argv);
     return ctx.run();

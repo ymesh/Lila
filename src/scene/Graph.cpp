@@ -2052,8 +2052,13 @@ void Graph::evaluateDirty(const std::vector<NodeId>* only)
                 clampToLimits(da, dv);
             }
             if (n->type().dag)
+            {
                 if (const glm::dmat4* frame = spaces::activeFrame(*n))
                     n->mValues[Transform::kParentMatrix] = *frame;
+                else if (const auto* opm = n->mValues.size() > Transform::kOffsetParentMatrix ? std::get_if<glm::dmat4>(&n->mValues[Transform::kOffsetParentMatrix]) : nullptr;
+                         opm && *opm != glm::dmat4(1.0))
+                    n->mValues[Transform::kParentMatrix] = std::get<glm::dmat4>(n->mValues[Transform::kParentMatrix]) * *opm;
+            }
             if (!mDisplayTurns.empty() && n->type().dag)
                 if (auto turn = mDisplayTurns.find(n->id()); turn != mDisplayTurns.end())
                     n->mValues[Transform::kParentMatrix] = turn->second * n->as<glm::dmat4>(Transform::kParentMatrix);

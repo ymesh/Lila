@@ -88,3 +88,32 @@ TEST_CASE("V and C snap to curve points and along curves")
         CHECK_FALSE(snap(c, QPointF(60, 52), ui::SnapEdge));
     }
 }
+
+TEST_CASE("V snaps to the centers of locators and joints")
+{
+    run("newScene");
+    std::string loc = run("spaceLocator", {{"position", {10, 5, 0}}, {"skipSelect", true}});
+    std::string jnt = run("joint", {{"position", {-20, 0, 0}}, {"parent", ""}, {"skipSelect", true}});
+    std::string cube = run("polyCube", json::object())[0];
+    scene::Graph& g = scene::Graph::current();
+    g.evaluate();
+    ui::ViewInfo view = snapTopView();
+    auto at = [&](const std::string& node, QPointF px, unsigned snaps) {
+        geometrySnap::Nearest n(px, view, 5.0);
+        bool point = geometrySnap::addPointObject(n, g, g.find(node)->id(), snaps);
+        return std::pair{point, n.hit()};
+    };
+
+    auto [isLoc, locHit] = at(loc, QPointF(62, 56), ui::SnapVertex);
+    CHECK(isLoc);
+    checkHit(locHit, D3(10, 5, 0));
+    auto [isJoint, jointHit] = at(jnt, QPointF(31, 50), ui::SnapVertex);
+    CHECK(isJoint);
+    checkHit(jointHit, D3(-20, 0, 0));
+    CHECK_FALSE(at(loc, QPointF(62, 56), ui::SnapEdge).second);
+    CHECK_FALSE(at(cube, QPointF(50, 50), ui::SnapVertex).first);
+
+    run("hide", {{"args", {loc}}});
+    g.evaluate();
+    CHECK_FALSE(at(loc, QPointF(62, 56), ui::SnapVertex).second);
+}

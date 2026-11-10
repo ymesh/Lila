@@ -91,6 +91,8 @@ public:
     virtual ~Node() = default;
 
     NodeId id() const { return mId; }
+    /** The graph the node is in, null before it is added. */
+    const Graph* graph() const { return mGraph; }
     const NodeType& type() const { return *mType; }
     /** The short name, unique among siblings. Use path() to address the node. */
     const std::string& name() const { return mName; }

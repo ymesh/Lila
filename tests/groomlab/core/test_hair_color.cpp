@@ -192,6 +192,21 @@ TEST(HairColorModel, TheAppearanceIsWhatTheHairLooksLike) {
 // What each consumer gets: renderers the base color, writers of a display or albedo color the
 // appearance (USD displayColor, Alembic Cd, Unreal's groom_color: describeExport's
 // kExportAppearanceColors), and the display's lit strands either, as the host draws them.
+TEST(HairColorModel, RenderersGetTheBaseColorAndDisplaysTheAppearance) {
+    const StrandsPtr s = colored({{"melanin", 0.35}, {"melaninRandom", 0.0}, {"tipStrength", 0.5}});
+    const ExportView base = describeExport(*s, nullptr, kExportPointColors);
+    const ExportView shown = describeExport(*s, nullptr, kExportPointColors | kExportAppearanceColors);
+    ASSERT_FALSE(base.colors.empty());
+    ASSERT_EQ(base.pointColors.size(), s->pointCount());
+    EXPECT_EQ(base.colors[0], strandColor(*s, 0));
+    EXPECT_EQ(shown.colors[0], hairAppearanceColor(strandColor(*s, 0)));
+    EXPECT_EQ(shown.pointColors[3], hairAppearanceColor(base.pointColors[3]));
+    EXPECT_EQ(strandAppearanceColors(*s)[0], shown.colors[0]);
+    const auto bsdf = strandLookColors(s, false), plain = strandLookColors(s, true);
+    ASSERT_TRUE(bsdf && plain);
+    EXPECT_NE(bsdf->key, plain->key);
+    EXPECT_EQ(plain->at(0, s->strandBegin(0) + 2), hairAppearanceColor(bsdf->at(0, s->strandBegin(0) + 2)));
+}
 
 // HSL turns, as PxrHairColor varies its dye: the hue turns with the lightness kept, the
 // saturation scales, grey and white stay neutral, the value scales it all.

@@ -678,3 +678,116 @@ TEST_CASE("uv tools solve and measure on the mesh after its modifiers")
     run("uvTexelDensity", {{"density", target}, {"resolution", 1024}, {"worldSpace", false}});
     CHECK(run("uvTexelDensity", {{"resolution", 1024}, {"worldSpace", false}}).get<double>() == doctest::Approx(target).epsilon(0.02));
 }
+
+TEST_CASE("uvUnwrapExported applies the modifiers and leaves no collapsed uvs")
+{
+    run("newScene");
+    std::string plate = run("polyCube", {{"width", 10.0}, {"height", 1.0}, {"depth", 10.0}})[0];
+    run("select", {{"args", {plate}}});
+    run("uvProject", {{"type", "box"}});
+    run("uvPack");
+    run("autoBevel", {{"args", {plate}}, {"segments", 3}, {"offset", 0.03}});
+    const json added = run("addModifier", {{"args", {plate}}, {"kind", "subdivision"}});
+    const std::string subdiv = added.is_array() ? added[0].get<std::string>() : added.get<std::string>();
+    run("setAttr", {{"args", {subdiv + ".levels", 2}}});
+    // Blend uvs: the rim strips collapse on the export.
+    run("setAttr", {{"args", {subdiv + ".uvs", 0}}});
+    scene::Graph& g = scene::Graph::current();
+    g.evaluate();
+    const size_t exportedFaces = g.find(plate)->as<scene::MeshPtr>(scene::MeshNode::kOutMesh)->numFaces();
+
+    run("select", {{"args", {plate}}});
+    const json r = run("uvUnwrapExported");
+    CHECK(r["modifiersApplied"] == true);
+    CHECK(scene::modifiers::stack(g, g.find(plate)->id()).empty());
+    g.evaluate();
+    const geo::Mesh& m = *g.find(plate)->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+    CHECK(m.numFaces() == exportedFaces);
+
+    // Per island, no triangle under 2% of the uv area the island's density gives it.
+    uv::ChartOptions co;
+    co.source = uv::IslandSource::Uvs;
+    size_t collapsed = 0;
+    for (const uv::Chart& ch : uv::buildCharts(m, {}, co))
+    {
+        const double density = std::abs(ch.areaUv()) / std::max(ch.area3d(), 1e-300);
+        for (const auto& t : ch.tris)
+        {
+            const glm::dvec3 a = ch.pos[t[0]], b = ch.pos[t[1]], c = ch.pos[t[2]];
+            const double a3 = 0.5 * glm::length(glm::cross(b - a, c - a));
+            const glm::dvec2 u = ch.uv[t[1]] - ch.uv[t[0]], v = ch.uv[t[2]] - ch.uv[t[0]];
+            collapsed += a3 > 1e-9 && 0.5 * std::abs(u.x * v.y - u.y * v.x) < 0.02 * a3 * density;
+        }
+    }
+    CHECK(collapsed == 0);
+    run("undo");
+    CHECK(scene::modifiers::stack(g, g.find(plate)->id()).size() == 2);
+}
+
+TEST_CASE("uvLiveRelax repairs the export after its uv symmetry pass")
+{
+    // A thin symmetric plate unwrapped symmetrically: the relax leaves the rim strips collapsed on the export, and the
+    // symmetry pass that mirrors the relax rewrites islands across the plane, so the repair has to come after it.
+    run("newScene");
+    std::string plate = run("polyCube", {{"width", 10.0}, {"height", 0.4}, {"depth", 6.0}, {"subdivisionsX", 2}, {"subdivisionsZ", 2}})[0];
+    run("select", {{"args", {plate}}});
+    run("setSymmetry", {{"args", {plate}}, {"axis", "x"}});
+    run("uvUnwrapSymmetric");
+    run("autoBevel", {{"args", {plate}}, {"segments", 3}, {"offset", 0.2}});
+    const json added = run("addModifier", {{"args", {plate}}, {"kind", "subdivision"}});
+    const std::string subdiv = added.is_array() ? added[0].get<std::string>() : added.get<std::string>();
+    run("setAttr", {{"args", {subdiv + ".levels", 2}}});
+    run("setAttr", {{"args", {subdiv + ".uvs", 1}}});
+    run("select", {{"args", {plate}}});
+    run("uvLiveRelax", {{"iterations", 200}});
+
+    scene::Graph& g = scene::Graph::current();
+    g.evaluate();
+    const geo::Mesh& m = *g.find(plate)->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+    // Per island, no triangle under 2% of the uv area the island's density gives it.
+    uv::ChartOptions co;
+    co.source = uv::IslandSource::Uvs;
+    size_t collapsed = 0;
+    for (const uv::Chart& ch : uv::buildCharts(m, {}, co))
+    {
+        const double density = std::abs(ch.areaUv()) / std::max(ch.area3d(), 1e-300);
+        for (const auto& t : ch.tris)
+        {
+            const glm::dvec3 a = ch.pos[t[0]], b = ch.pos[t[1]], c = ch.pos[t[2]];
+            const double a3 = 0.5 * glm::length(glm::cross(b - a, c - a));
+            const glm::dvec2 u = ch.uv[t[1]] - ch.uv[t[0]], v = ch.uv[t[2]] - ch.uv[t[0]];
+            collapsed += a3 > 1e-9 && 0.5 * std::abs(u.x * v.y - u.y * v.x) < 0.02 * a3 * density;
+        }
+    }
+    CHECK(collapsed == 0);
+}
+
+TEST_CASE("camera projection maps what a camera sees to 0-1, image up as V")
+{
+    run("newScene");
+    std::string plane = run("polyPlane", {{"width", 10}, {"depth", 10}})[0];
+    run("setAttr", {{"args", {plane + ".translate", {3.0, 0.0, 0.0}}}});
+    std::string cam = run("createNode", {{"args", {"camera"}}}).get<std::string>();
+    // Looking straight down, so image up is world -Z.
+    run("setAttr", {{"args", {cam + ".translate", {0.0, 50.0, 0.0}}}});
+    run("setAttr", {{"args", {cam + ".rotate", {-90.0, 0.0, 0.0}}}});
+    run("select", {{"args", {plane}}});
+    CHECK_THROWS_AS(run("uvProject", {{"type", "camera"}, {"camera", plane}}), CommandError);
+    run("uvProject", {{"type", "camera"}, {"camera", cam}});
+
+    scene::Graph& g = scene::Graph::current();
+    g.evaluate();
+    const geo::Mesh& m = *g.find(plane)->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+    std::span<const glm::vec2> uvs = m.cornerAttrs().get<glm::vec2>("uv0");
+    for (geo::Index f = 0; f < m.faceCapacity(); ++f)
+        if (m.faceValid(f))
+            m.forEachFaceCorner(f, [&](geo::Index c) {
+                glm::dvec3 p = m.position(m.cornerPoint(c));
+                CHECK(uvs[c].x > 0.4f);
+                CHECK(uvs[c].x < 0.7f);
+                CHECK(uvs[c].y > 0.0f);
+                CHECK(uvs[c].y < 1.0f);
+                CHECK((uvs[c].x > 0.5f) == (p.x > 0.0));
+                CHECK((uvs[c].y > 0.5f) == (p.z < 0.0));
+            });
+}

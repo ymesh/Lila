@@ -134,6 +134,8 @@ void registerAnimProxy(ext::Context& ctx)
                              b.toggle("Use anim proxy", kUseAnimProxy, true);
                              b.toggle("Show proxy when Puppeteer turns on", kProxyOnEnter, true);
                              b.toggle("Show real mesh when Puppeteer turns off", kRealOnExit, true);
+                             b.section("Curve Overlay");
+                             b.number("Scrim", "/curveOverlay/scrim", 0.45, 0.0, 0.9, 0.05);
                          }});
 
     const char* cat = "Puppeteer";

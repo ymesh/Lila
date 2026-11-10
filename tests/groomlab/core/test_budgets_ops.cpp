@@ -240,5 +240,36 @@ TEST(Budget, BraidOnAHead) {
     report("Braid (picked, region 3)", *in, timeOp(op::kBraid, in, [](Operator& o) { o.params().set("region", 3.0); }, {Value()}));
 }
 
+TEST(Budget, CardsAndDisplayOnAHead) {
+    const HeadGroom& g = headGroom();
+    auto clump = OperatorRegistry::instance().create(op::kClump);
+    clump->params().set("count", std::int64_t{400});
+    const StrandsPtr clumped = valueAs<StrandsPtr>(clump->evaluate(g.ctx, {Value(g.strands), Value()}));
+    ASSERT_TRUE(clumped);
+    CardSettings settings;
+    settings.maxCards = 1000;
+    CardMesh cards;
+    report("buildCards (400 clumps, at most 1000 cards)", *clumped,
+           medianMs(3, [&] { cards = buildCards(*clumped, g.head.get(), settings); }));
+    CardBakeSettings bake;
+    bake.size = 512;
+    bake.scalp = g.head.get();
+    report("bakeCardTextures at 512", *clumped, medianMs(3, [&] { bakeCardTextures(*clumped, cards, bake); }));
+    // The viewport's lit strands, built into vectors (a host that copies) and as lines a host writes.
+    DisplayInputs inputs;
+    inputs.strands = clumped;
+    const DisplaySettings display;
+    std::uint64_t version = 0;
+    for (const bool lines : {false, true}) {
+        report(lines ? "display: lit strands as lines" : "display: lit strands into vectors", *clumped, medianMs(5, [&] {
+                   DisplayBuilder builder;
+                   builder.setRetain(false);
+                   builder.setWriteLines(lines);
+                   inputs.strandsVersion = ++version;
+                   builder.update(inputs, display);
+               }));
+    }
+}
+
 }  // namespace
 }  // namespace groomlab

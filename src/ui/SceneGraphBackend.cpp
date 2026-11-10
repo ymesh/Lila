@@ -126,7 +126,7 @@ public:
     QString canvasHint() const override
     {
         return "Select a node to edit its values.\n\nEvery view shows the scene's own nodes around the selection: Selection with what is "
-               "wired straight in and out of it, Hierarchy with parents and children, Upstream and Downstream to the depth set in the "
+               "wired straight in and out of it, History with each mesh's whole modifier stack, Hierarchy with parents and children, Upstream and Downstream to the depth set in the "
                "toolbar. Nodes show only their connected plugs until Hide Unused Sockets is turned off for them. Drag from an output to "
                "an input to connect, Ctrl+drag across wires to cut them. Tab / Shift+A adds a node, which joins the selection. In "
                "Hierarchy, wire Children into Parent to parent.";
@@ -150,6 +150,17 @@ public:
             mAll = on;
             editor.setGroup(editor.group());
         });
+        auto syncDepth = [depth, depthLabel](const QString& view) {
+            const bool used = view == "Upstream" || view == "Downstream";
+            depth->setEnabled(used);
+            depthLabel->setEnabled(used);
+        };
+        syncDepth(editor.group());
+        const int listener = NodeEditor::addGroupListener([syncDepth, owner = &editor](NodeEditor& e) {
+            if (&e == owner)
+                syncDepth(e.group());
+        });
+        QObject::connect(depth, &QObject::destroyed, [listener] { NodeEditor::removeGroupListener(listener); });
         bar->addWidget(depthLabel);
         bar->addWidget(depth);
         bar->addWidget(all);

@@ -8,6 +8,8 @@ lila_module(lila_link Scene
     Placements.cpp
     RpcClient.cpp
     Socket.cpp
+    GroomSend.cpp
+    GroomSend.h
     SplineSend.cpp
     SplineSend.h
     TextureSend.cpp

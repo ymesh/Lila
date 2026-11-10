@@ -265,6 +265,35 @@ FlagFieldWidgets makeFlagField(const opt::Field& f, const json& value, std::func
     }
     case opt::FieldKind::Choice:
     {
+        // A mode with a few values: one segmented strip, never a dropdown.
+        if (f.editor == "segmented")
+        {
+            auto* strip = new controls::Segmented(parent);
+            for (size_t i = 0; i < f.choices.size(); ++i)
+                strip->add(flagChoiceLabel(f, i), QString(), flagChoiceLabel(f, i), int(i));
+            auto select = [strip, &f](const json& v) {
+                const std::string s = v.is_string() ? v.get<std::string>() : std::string();
+                for (size_t i = 0; i < f.choices.size(); ++i)
+                    if (f.choices[i] == s)
+                        strip->setCurrent(int(i));
+            };
+            select(value);
+            const std::vector<std::string> values = f.choices;
+            QObject::connect(strip, &controls::Segmented::picked, strip, [values, changed](int id) {
+                if (id >= 0 && size_t(id) < values.size())
+                    changed(values[size_t(id)]);
+            });
+            out.label = new QLabel(label, parent);
+            out.field = strip;
+            out.set = [strip, values](const json& v) {
+                QSignalBlocker b(strip);
+                const std::string s = v.is_string() ? v.get<std::string>() : std::string();
+                for (size_t i = 0; i < values.size(); ++i)
+                    if (values[i] == s)
+                        strip->setCurrent(int(i));
+            };
+            break;
+        }
         auto* combo = new QComboBox(parent);
         for (size_t i = 0; i < f.choices.size(); ++i)
             combo->addItem(flagChoiceLabel(f, i), QString::fromStdString(f.choices[i]));

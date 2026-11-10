@@ -21,6 +21,11 @@ void ViewportWidget::mousePressEvent(QMouseEvent* e)
         updateCursor();
         return;
     }
+    if (e->button() == Qt::LeftButton && !(e->modifiers() & Qt::AltModifier) && viewSwitcherClick(e->position()))
+    {
+        mSwallowRelease = true;
+        return;
+    }
     // The view cube moves the camera like Alt with the same button, each button switchable in the prefs.
     if (!(e->modifiers() & Qt::AltModifier) && hud::shown(mHudPanel, "viewCube") && hud::viewCubeRect(width()).contains(e->position()))
     {
@@ -92,6 +97,11 @@ void ViewportWidget::mousePressEvent(QMouseEvent* e)
         bool overObject = !hitTest(e->position(), e->position()).empty();
         std::string base = (e->modifiers() & Qt::ShiftModifier) ? "viewportShift" : (e->modifiers() & Qt::ControlModifier) ? "viewportCtrl" : "viewport";
         QPoint at = e->globalPosition().toPoint();
+        if (ViewportTool* tool = viewportTools::active())
+            if (const std::string own = tool->markingMenu(base); !own.empty())
+                if (json def = markingMenus::resolve(own);
+                    def.is_object() && !def.empty() && MarkingMenu::popupDefinition(def, MarkingMenu::Trigger::MouseButton, Qt::RightButton, at))
+                    return;
         // Over a skinned mesh, a joint-picking selection handler offers the joints under the cursor instead.
         if (overObject && base == "viewport" && scene::components::mode() == scene::ComponentMode::Object)
             if (selectionHandlers::Hit hit = selectionHit(e->position()); hit.face != selectionHandlers::kNone)
@@ -183,6 +193,13 @@ void ViewportWidget::mousePressEvent(QMouseEvent* e)
             mLasso.push_back({mPressPos.x(), mPressPos.y()});
         return;
     }
+    if ((e->modifiers() & Qt::AltModifier) && (e->modifiers() & Qt::ShiftModifier) && e->button() == Qt::RightButton)
+    {
+        mLightDrag = true;
+        mLightDragged = false;
+        mPressPos = e->position();
+        return;
+    }
     if (e->modifiers() & Qt::AltModifier)
     {
         startNav(e->button() == Qt::LeftButton     ? Nav::Tumble
@@ -236,6 +253,16 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* e)
     {
         mTabStroke.paint(viewInfo(), mLastPos - d, e->position(), paintSelect::tabRadius(scene::components::mode()));
         submit();
+        return;
+    }
+    if (mLightDrag)
+    {
+        mLightDragged = mLightDragged || (e->position() - mPressPos).manhattanLength() > QApplication::startDragDistance();
+        if (!mLightDragged)
+            return;
+        viewportDisplay::turnLight(d.x() * 0.5);
+        viewportDisplay::tiltLight(d.y() * 0.3);
+        requestFrame();
         return;
     }
     if (mSoftDrag)
@@ -382,6 +409,17 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* e)
         requestFrame();
         return;
     }
+    if (mLightDrag && e->button() == Qt::RightButton)
+    {
+        mLightDrag = false;
+        // A click without a drag puts the light back.
+        if (!mLightDragged)
+        {
+            viewportDisplay::resetLight();
+            requestFrame();
+        }
+        return;
+    }
     if (ViewportTool* tool = viewportTools::active(); tool && mToolDrag)
     {
         mToolDrag = false;
@@ -469,6 +507,20 @@ bool ViewportWidget::selectLoopAt(QPointF at, Qt::KeyboardModifiers mods)
     };
     try
     {
+        // A Ctrl click before this one on the same loop anchors a run: only the edges between the two are removed.
+        if (ctrl && !shift && mode == ComponentMode::Edge)
+        {
+            const scene::componentPick::Hover& prev = mClicked[0] == h ? mClicked[1] : mClicked[0];
+            if (prev.node == h.node && prev.mode == mode && prev.id != h.id &&
+                !std::ranges::binary_search(scene::components::selected(h.node, mode), prev.id) &&
+                std::ranges::count(geo::edgeLoop(*mesh, h.id), prev.id) != 0)
+            {
+                ops::execute("selectPathBetween",
+                             {{"args", {n->path()}}, {"kind", "edge"}, {"from", prev.id}, {"to", h.id}, {"deselect", true}, {"symmetric", symmetric}},
+                             CallSource::UI);
+                return true;
+            }
+        }
         if (op)
         {
             json call = {{"args", {n->path()}}, {op, true}, {"symmetric", symmetric}};
@@ -555,6 +607,11 @@ void ViewportWidget::wheelEvent(QWheelEvent* e)
         return;
     }
     if (ViewportTool* tool = viewportTools::active(); tool && tool->wheel(e, viewInfo()))
+    {
+        submit();
+        return;
+    }
+    if (Gizmo* gz = currentGizmo(); gz && gz->dragging() && e->angleDelta().y() != 0 && gz->wheel(e->angleDelta().y() > 0 ? 1 : -1))
     {
         submit();
         return;

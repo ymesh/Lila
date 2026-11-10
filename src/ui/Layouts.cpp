@@ -99,9 +99,7 @@ const std::vector<std::pair<std::string, json>>& presets()
         // The UV editor takes its own full-height column beside the viewport; the data column stays whole beyond it.
         {"UV", preset(with({"uvEditor", "modifierStack"}), {"uvEditor", "channelBox"}, "UV", {{"uvEditor", {{"width", 580}}}}, {},
                       json::array({{"uvEditor"}, {"outliner", "channelBox"}}))},
-        // The sculpt panel takes its own full-height column beside the viewport, like the UV editor.
-        {"Sculpt", preset(with({"sculptPanel"}), {"sculptPanel", "channelBox"}, "Sculpt", {{"sculptPanel", {{"width", 600}}}}, {},
-                          json::array({{"sculptPanel"}, {"outliner", "channelBox"}}))},
+        {"Sculpt", preset(with({"sculptPanel"}), {"sculptPanel", "channelBox"}, "Sculpt", {{"sculptPanel", {{"width", 600}}}})},
         {"Texture", preset(with({"textureSets", "baker", "materialEditor"}), {"textureSets", "materialEditor"}, "Texture")},
         {"Bake", preset(with({"baker", "textureSets", "materialEditor"}), {"baker", "channelBox"}, "Texture", {{"baker", {{"width", 375}}}})},
         {"Rig", preset(with({"timeSlider"}), {"channelBox"}, "Rig", {{"outliner", {{"height", 0.5}}}})},
@@ -110,7 +108,7 @@ const std::vector<std::pair<std::string, json>>& presets()
         {"Level", preset(with({"levelToolkit", "stagehand.library", "modelingToolkit"}), {"levelToolkit", "channelBox"}, "Level",
                          {{"stagehand.library", {{"height", 0.4}}}}, {"stagehand.library"})},
         {"Effects", preset(with({"timeSlider"}), {"channelBox"}, "Effects")},
-        {"Groom", preset(with({}), {"channelBox"}, "Groom")},
+        {"Groom", preset(with({"groomPalette"}), {"groomPalette", "channelBox"}, "Groom", {{"groomPalette", {{"width", 300}}}})},
         {"Print", preset(with({"modelingToolkit"}), {"modelingToolkit", "channelBox"}, "Print")},
         {"Script", preset(with({"scriptEditor", "scriptOutput"}), {"scriptEditor", "channelBox"}, "Script", {{"scriptEditor", {{"height", 0.45}}}})},
     };

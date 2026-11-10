@@ -8,9 +8,10 @@
 #include <string_view>
 
 /**
- * The groom's attribute schema on guide splines. Per-curve values live in Spline::attrs, per-point ones in
- * Spline::pointAttrs (radius and tilt are the lock's width scale and twist). Names line up with Unreal's groom_*
- * attributes where one exists, so an exporter maps them one to one.
+ * The groom's attribute schema on lock splines. Per-curve values live in Spline::attrs, per-point ones in
+ * Spline::pointAttrs (radius and tilt are the lock's width scale and twist). Names are GroomLab's channel names where
+ * GroomLab has one (export_view.h), so a guide's attributes become the strands' channels of the same name, and the
+ * export maps them to Unreal's groom_* in one place.
  */
 namespace lila::groom::attr
 {
@@ -19,8 +20,8 @@ inline constexpr std::string_view kId = "id";               // stable per lock: 
 inline constexpr std::string_view kWidth = "width";         // scale on the groom's lock width, groom_width
 inline constexpr std::string_view kThickness = "thickness"; // scale on the groom's thickness
 inline constexpr std::string_view kProfile = "profile";     // profile index, absent for the groom's own
-inline constexpr std::string_view kGroup = "group";         // groom_group_id
-inline constexpr std::string_view kClump = "clump";         // groom_clumpid
+inline constexpr std::string_view kGroup = "groupId";       // the guide's group in the hierarchy
+inline constexpr std::string_view kClump = "clumpId";       // locks drawn together (a braid's strands)
 inline constexpr std::string_view kGuide = "guide";         // 1 on guides, 0 on curves a modifier made, groom_guide
 inline constexpr std::string_view kStray = "stray";         // 1 on flyaways
 inline constexpr std::string_view kColorR = "colorR";       // groom_color

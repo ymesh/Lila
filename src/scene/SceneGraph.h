@@ -13,7 +13,7 @@
 namespace lila::scene::sceneGraph
 {
 /** The views, in the order the group picker lists them. */
-inline constexpr std::array<const char*, 4> kViews = {"Selection", "Hierarchy", "Upstream", "Downstream"};
+inline constexpr std::array<const char*, 5> kViews = {"Selection", "History", "Hierarchy", "Upstream", "Downstream"};
 
 /** Socket type of the hierarchy sockets the Hierarchy view adds: "@parent" in, "@children" out. */
 inline constexpr const char* kDagSocketType = "dag";

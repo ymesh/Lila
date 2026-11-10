@@ -31,6 +31,14 @@ class Graph;
  * display layers (visibility, hide on playback, template / reference, colour, members), namespaces, and referenced
  * Maya, FBX and OBJ files.
  *
+ * Rigs (MayaRig.h): offset parent matrices, numeric custom attributes, parent / point / orient / aim / scale / pole
+ * vector constraints with their offsets and weights, ikHandles (rotate plane and single chain, pole vectors, twist,
+ * stretch by driven joint lengths), cluster, lattice, nonLinear, softMod, deltaMush, tension, wrap, proximityWrap,
+ * jiggle, shrinkWrap and textureDeformer, utility and matrix node networks (MathNodes.h), set driven keys alone or
+ * summed by blendWeighted, curves on any converted plug, follicles, uvPins and proximityPins. MEL expressions, spline
+ * IK, motion paths and other curve or surface nodes, wire and sculpt deformers, HumanIK and plugin nodes stay as
+ * their last pose and keys, listed in the report.
+ *
  * Maya's axes are right-handed, Y up unless the scene's default cameras say Z; units come from currentUnit.
  */
 namespace lila::maya

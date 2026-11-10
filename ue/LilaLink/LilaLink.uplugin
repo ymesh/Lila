@@ -20,6 +20,16 @@
 			"LoadingPhase": "Default"
 		},
 		{
+			"Name": "LilaLinkDeformer",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "LilaLinkAnimGraph",
+			"Type": "UncookedOnly",
+			"LoadingPhase": "Default"
+		},
+		{
 			"Name": "LilaLink",
 			"Type": "Editor",
 			"LoadingPhase": "PostEngineInit",
@@ -61,6 +71,14 @@
 		},
 		{
 			"Name": "ControlRig",
+			"Enabled": true
+		},
+		{
+			"Name": "HairStrands",
+			"Enabled": true
+		},
+		{
+			"Name": "DeformerGraph",
 			"Enabled": true
 		},
 		{

@@ -8,6 +8,7 @@
 #include <glm/glm.hpp>
 
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -51,6 +52,28 @@ LILA_SCENE_API std::shared_ptr<const SubdStack> buildSubdStack(const geo::Mesh& 
 LILA_SCENE_API std::shared_ptr<const SubdStack> addSubdLevel(const SubdStack& s);
 /** s cut down to levels 0 to top. */
 LILA_SCENE_API std::shared_ptr<const SubdStack> truncateSubdStack(const SubdStack& s, int top);
+
+/** s with level `bottom` as its new level 0, the levels below it gone. */
+LILA_SCENE_API std::shared_ptr<const SubdStack> dropSubdLevelsBelow(const SubdStack& s, int bottom);
+
+/**
+ * The cage whose Catmull-Clark subdivision has fine's topology, for rebuilding the levels below a mesh subdivided
+ * elsewhere. Faces and UVs come from the fine corners at the cage's points. Null when fine isn't a subdivision: not all
+ * quads, or no consistent labelling of its points as the cage's points, edge points and face points. coarseOf gets,
+ * per fine point, its cage point (kInvalid for edge and face points).
+ */
+LILA_SCENE_API std::optional<geo::Mesh> reconstructCage(const geo::Mesh& fine, std::vector<Index>& coarseOf);
+
+/**
+ * Per point of a, the point of b at the same place: a and b are both one subdivision of the same cage, coarseA and
+ * coarseB naming each fine point's cage point (kInvalid for edge and face points) in that cage's ids. Empty when they
+ * don't line up.
+ */
+LILA_SCENE_API std::vector<Index> matchSubdivisions(const geo::Mesh& a, std::span<const Index> coarseA, const geo::Mesh& b,
+                                                    std::span<const Index> coarseB);
+
+/** Per point of level `level` (1 or more), its point on the level below, kInvalid for edge and face points. */
+LILA_SCENE_API std::vector<Index> coarsePoints(const SubdLevel& level);
 
 /** Per point layers carried between levels: polypaint, mask and freeze. Empty spans when a layer is unused. */
 struct LevelLayers

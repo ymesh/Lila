@@ -300,6 +300,30 @@ TEST_CASE("bakeLint finds each problem and bake lists its warnings first")
         CHECK(issues(lintOnly(p2, "hardEdges"), "hardEdges").empty());
     }
 
+    SUBCASE("hard edges a weighted normals modifier keeps")
+    {
+        newScene();
+        geo::Mesh roof = plane(2);
+        for (geo::Index i = 0; i < roof.pointCapacity(); ++i)
+        {
+            glm::dvec3 q = roof.position(i);
+            q.y = 50.0 - std::abs(q.x);
+            roof.setPosition(i, q);
+        }
+        geo::setHardEdgesByAngle(roof, 10.0);
+        geo::updateCornerNormals(roof);
+        const std::string p = smallProject(dir);
+        const std::string mesh = addMesh("roof", roof);
+        ops::execute("bakeGroup", {{"args", {"g"}}, {"lows", {mesh}}, {"self", true}});
+        // Off by default, the modifier smooths across the hard edges.
+        const std::string mod = ops::execute("addModifier", {{"args", {mesh}}, {"kind", "weightedNormals"}}).get<std::string>();
+        CHECK(issues(lintOnly(p, "hardEdges"), "hardEdges").empty());
+        ops::execute("setAttr", {{"args", {mod + ".keepHardEdges", true}}});
+        const auto found = issues(lintOnly(p, "hardEdges"), "hardEdges");
+        REQUIRE(found.size() == 1);
+        CHECK(found[0]["message"].get<std::string>().find("Keep Hard Edges") != std::string::npos);
+    }
+
     SUBCASE("missing and degenerate UVs")
     {
         newScene();
@@ -324,6 +348,12 @@ TEST_CASE("bakeLint finds each problem and bake lists its warnings first")
         const auto found = issues(lintOnly(p, "uvOverlap"), "uvOverlap");
         REQUIRE(found.size() == 1);
         CHECK(found[0]["data"]["otherGroup"].get<std::string>() != found[0]["group"].get<std::string>());
+        // Each overlapping island pair: island on the mesh, island on the other, cells.
+        const json& pairs = found[0]["data"]["islands"];
+        REQUIRE(pairs.size() == 1);
+        CHECK(pairs[0][0] == 0);
+        CHECK(pairs[0][1] == 0);
+        CHECK(pairs[0][2] == found[0]["data"]["cells"]);
         const json r = ops::execute("bake", {{"project", p}, {"maps", {"height"}}});
         CHECK(std::ranges::any_of(r["warnings"], [](const json& w) { return w.get<std::string>().starts_with("lint uvOverlap"); }));
         CHECK(r["lint"]["warnings"].get<int>() >= 1);

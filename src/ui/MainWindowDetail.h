@@ -60,6 +60,7 @@
 #include "ui/MenuSearch.h"
 #include "ui/Menus.h"
 #include "ui/Modes.h"
+#include "ui/SceneLayout.h"
 #include "ui/ModelingToolkit.h"
 #include "ui/TopologyToolkit.h"
 #include "ui/CurveToolkit.h"

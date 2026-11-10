@@ -85,6 +85,12 @@ public:
      */
     virtual bool cacheable() const { return true; }
 
+    /**
+     * False for a deformer moved by its own controls rather than by joints (Soft Net): fitting skin weights over joint
+     * poses learns nothing from it, so exports leave the skin's own weights instead of refitting.
+     */
+    virtual bool followsJoints() const { return true; }
+
     /** Whether the last evaluation ran on the GPU, so its points carry float precision: exports re-run it on the CPU. */
     bool ranOnGpu() const { return mRanOnGpu; }
 

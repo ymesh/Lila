@@ -154,6 +154,15 @@ TEST_CASE("loop, path and contained face commands select as one undo step")
     run("undo");
     CHECK(comp::selected(id, ComponentMode::Edge).empty());
 
+    // Deselecting a run removes only that run, even between neighbours that would otherwise take the whole loop.
+    run("selectLoopThrough", {{"args", {plane}}, {"edge", 0}});
+    run("selectPathBetween", {{"args", {plane}}, {"kind", "edge"}, {"from", loop[0]}, {"to", loop[2]}, {"deselect", true}});
+    CHECK(comp::selected(id, ComponentMode::Edge).size() == loop.size() - 3);
+    run("selectLoopThrough", {{"args", {plane}}, {"edge", 0}});
+    run("selectPathBetween", {{"args", {plane}}, {"kind", "edge"}, {"from", loop[0]}, {"to", loop[1]}, {"deselect", true}});
+    CHECK(comp::selected(id, ComponentMode::Edge).size() == loop.size() - 2);
+    run("selectLoopThrough", {{"args", {plane}}, {"edge", 0}, {"deselect", true}});
+
     json faces = run("selectLoopThrough", {{"args", {plane}}, {"edge", 0}, {"faces", true}});
     CHECK(comp::mode() == ComponentMode::Face);
     CHECK(comp::selected(id, ComponentMode::Face).size() == faces.size());

@@ -17,12 +17,15 @@
 #include <tbb/task_arena.h>
 #endif
 
+#include "groom/GroomEvaluator.h"
 #include "groomlab/guide_hierarchy.h"
 #include "groomlab/map_ref.h"
 #include "groomlab/operators.h"
 #include "groomlab/random.h"
 #include "groomlab/simulation.h"
 #include "test_helpers.h"
+
+using lila::groom::GroomEvaluator;
 
 namespace groomlab {
 namespace {
@@ -502,6 +505,42 @@ GroomData sessionData(const std::string& graph) {
     d.hierarchyJson = h.toJson();
     d.meshes["ball"] = test::makeSphere(12, 24, 1.3f);  // around the head: the hair rests against it
     return d;
+}
+
+std::vector<Vec3f> guidesAt(GroomEvaluator& session, int frame) {
+    session.simulateTo(frame);
+    const GuidesPtr g = session.simulatedFrame("sim", frame);
+    EXPECT_TRUE(g);
+    std::vector<Vec3f> out;
+    if (g) {
+        for (const Guide& guide : g->guides()) out.insert(out.end(), guide.points.begin(), guide.points.end());
+    }
+    return out;
+}
+
+TEST(SimulateNode, TheColliderMeshsFrictionAndMapsReachTheSolver) {
+    GroomEvaluator global(sessionData(graphWith("-1"))), same(sessionData(graphWith("0.3"))),
+        sticky(sessionData(graphWith("1.0")));
+    const std::vector<Vec3f> a = guidesAt(global, 12);
+    ASSERT_FALSE(a.empty());
+    EXPECT_TRUE(sameBits(guidesAt(same, 12), a)) << "the global friction on the ColliderMesh differs";
+    EXPECT_FALSE(sameBits(guidesAt(sticky, 12), a)) << "the ColliderMesh's friction changed nothing";
+    // simulate mapped to 0 (an expression): every guide held at its input, frame after frame.
+    GroomEvaluator held(sessionData(graphWith("-1", R"(, "strength": {"expression": "0"})")));
+    const std::vector<Vec3f> h = guidesAt(held, 12);
+    const GuidesPtr input = held.simulatedFrame("sim", 1);
+    ASSERT_TRUE(input);
+    std::vector<Vec3f> rest;
+    for (const Guide& guide : input->guides()) rest.insert(rest.end(), guide.points.begin(), guide.points.end());
+    ASSERT_EQ(h.size(), rest.size());
+    float apart = 0.0f;
+    for (std::size_t i = 0; i < h.size(); ++i) apart = std::max(apart, (h[i] - rest[i]).length());
+    EXPECT_LT(apart, 1e-4f) << "guides held by a strength map moved";
+    EXPECT_GT([&] {
+        float most = 0.0f;
+        for (std::size_t i = 0; i < a.size(); ++i) most = std::max(most, (a[i] - rest[i]).length());
+        return most;
+    }(), 0.05f) << "the unmapped run did not move: the test shows nothing";
 }
 
 }  // namespace

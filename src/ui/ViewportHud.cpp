@@ -16,6 +16,7 @@
 #include "ui/LocateFlash.h"
 #include "ui/MeshCache.h"
 #include "ui/OptionBox.h"
+#include "ui/ViewportDisplay.h"
 #include "ui/ViewportTool.h"
 #include "ui/ViewportWidget.h"
 #include "uv/Metrics.h"
@@ -67,6 +68,8 @@ bool itemDefault(std::string_view item)
 {
     if (item == "polyCount")
         return PrefStore::get().value<bool>("general", "/viewport/polyCount", true);
+    if (item == "viewSwitcher")
+        return viewportDisplay::viewSwitcherDefault();
     return item == "cameraNames" || item == "viewAxis" || item == "viewCube" || item == "symmetry";
 }
 
@@ -484,6 +487,7 @@ const std::vector<Item>& items()
         {"currentFrame", "Current Frame", "The current frame of the time slider."},
         {"viewAxis", "View Axis", "The axis triad in the bottom-left corner."},
         {"viewCube", "View Cube", "A cube in the top-right corner turning with the view; click a face to look at that side."},
+        {"viewSwitcher", "View Switcher", "Persp, Front, Side and Top buttons under the view cube, with the scene's cameras. Click the current view again for its opposite side."},
         {"originAxis", "Origin Axis", "The world axes drawn at the origin."},
     };
     return list;
@@ -493,6 +497,32 @@ QRectF viewCubeRect(double viewWidth)
 {
     constexpr double size = 84.0;
     return {viewWidth - kMargin - size, kTop, size, size};
+}
+
+std::vector<SwitcherSegment> viewSwitcherSegments(double viewWidth, double viewHeight, bool belowCube)
+{
+    constexpr double kHeight = 22.0, kPad = 16.0, kCamera = 26.0, kGap = 2.0;
+    // Each segment is as wide as its longer label, so flipping to the opposite side never resizes the strip.
+    static const std::pair<const char*, const char*> kPairs[] = {{"persp", "Persp"}, {"front", "Front"}, {"right", "Right"}, {"top", "Bottom"}};
+    std::vector<double> widths;
+    double total = kCamera;
+    for (const auto& [view, longest] : kPairs)
+    {
+        widths.push_back(std::ceil(OverlayPainter::textWidth(longest)) + kPad);
+        total += widths.back() + kGap;
+    }
+    const double top = belowCube ? viewCubeRect(viewWidth).bottom() + 6.0 : kTop;
+    if (viewWidth < total + 2.0 * kMargin + 120.0 || viewHeight < top + kHeight + 140.0)
+        return {};
+    double x = viewWidth - kMargin - total;
+    std::vector<SwitcherSegment> out;
+    for (size_t i = 0; i < std::size(kPairs); ++i)
+    {
+        out.push_back({kPairs[i].first, QRectF(x, top, widths[i], kHeight)});
+        x += widths[i] + kGap;
+    }
+    out.push_back({"camera", QRectF(x, top, kCamera, kHeight)});
+    return out;
 }
 
 bool itemOn(int panel, std::string_view item)
@@ -702,6 +732,11 @@ bool draw(OverlayPainter& p, const Context& ctx)
     Stack topRight{.right = true, .edge = kTop, .width = ctx.view.width};
     if (on("viewCube"))
         topRight.edge = viewCubeRect(ctx.view.width).bottom() + kBlockGap;
+    std::vector<SwitcherSegment> switcher;
+    if (on("viewSwitcher"))
+        switcher = viewSwitcherSegments(ctx.view.width, ctx.view.height, on("viewCube"));
+    if (!switcher.empty())
+        topRight.edge = switcher.back().rect.bottom() + kBlockGap;
     double widest = 0.0;
     for (const Block& b : rightBlocks)
         widest = std::max(widest, sizeOf(b).width());
@@ -747,6 +782,8 @@ bool draw(OverlayPainter& p, const Context& ctx)
         taken.emplace_back(0.0, ctx.view.height - 72.0, 72.0, 72.0);
     if (on("viewCube"))
         taken.push_back(viewCubeRect(ctx.view.width));
+    for (const SwitcherSegment& seg : switcher)
+        taken.push_back(seg.rect);
     if (on("cameraNames"))
     {
         double w = OverlayPainter::textWidth(QString::fromStdString(ctx.view.camera));

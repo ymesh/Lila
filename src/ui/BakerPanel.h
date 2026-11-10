@@ -109,6 +109,9 @@ private:
     /** One status row in place of the result rows: Baking, Cancelled, Failed. */
     void showStatus(const QString& text, const QString& detail = {}, bool error = false);
     void scheduleLint();
+    /** Whether id is, or is under, one of mLintWatch's meshes. */
+    bool watchedByLint(uint64_t id) const;
+    void updateLintWatch();
     /** full also loads the highs for the range and cage checks. */
     void runLint(bool full);
     void pollProgress();
@@ -146,6 +149,10 @@ private:
     std::string mShownResult;
     std::string mMapFormKey;
     nlohmann::json mLint;
+    /** The project mLint was run on: a different current project relints. */
+    std::string mLintedProject;
+    /** Paths of the current project's lows, cages and high nodes: an edit under one relints. */
+    std::vector<std::string> mLintWatch;
     int mThumbJobs = 0;
     uint64_t mThumbGeneration = 0;
 

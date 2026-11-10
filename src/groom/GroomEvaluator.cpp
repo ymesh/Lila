@@ -2,6 +2,7 @@
 // see src/groom/groomlab/LICENSE and NOTICE).
 #include "groom/GroomEvaluator.h"
 
+#include <groomlab/card_files.h>
 #include <groomlab/export_view.h>
 #include <groomlab/frame_time.h>
 #include <groomlab/guide_hierarchy.h>
@@ -9,6 +10,7 @@
 #include <groomlab/operators.h>
 #include <groomlab/presets.h>
 #include <groomlab/random.h>
+#include <groomlab/scalp_history.h>
 #include <groomlab/scalp_mesh.h>
 #include <groomlab/scalp_pieces.h>
 #include <groomlab/strand_set.h>
@@ -17,12 +19,15 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <climits>
 #include <cmath>
 #include <limits>
 #include <cstdio>
 #include <cstring>
 #include <set>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace lila::groom
 {
@@ -114,6 +119,69 @@ const Operator* activeNode(const GraphDocument& doc, const char* type, std::stri
     });
     return found;
 }
+/**
+ * The guides an Interpolate feeding `shown` takes, when a GuideCache or Simulate node on its guides input moved them this
+ * frame: what the viewport draws as the moving guides. Every value read is the evaluation's own (cached).
+ */
+GuidesPtr movingGuidesOf(Graph& graph, NodeId shown, const EvalContext& ctx)
+{
+    auto isMotion = [&](NodeId id) {
+        const std::string type = graph.node(id).typeName();
+        return (type == "GuideCache" || type == "Simulate") && !graph.bypassed(id);
+    };
+    auto guidesSlot = [&](NodeId id) -> std::ptrdiff_t {
+        const std::vector<PortSpec> specs = graph.inputSpecs(id);
+        for (std::size_t slot = 0; slot < specs.size(); ++slot)
+            if (specs[slot].name == "guides")
+                return static_cast<std::ptrdiff_t>(slot);
+        return -1;
+    };
+    std::vector<NodeId> stack{shown}, seen;
+    while (!stack.empty())
+    {
+        const NodeId id = stack.back();
+        stack.pop_back();
+        if (std::find(seen.begin(), seen.end(), id) != seen.end())
+            continue;
+        seen.push_back(id);
+        if (graph.node(id).typeName() == "Interpolate" && !graph.bypassed(id))
+        {
+            const std::ptrdiff_t slot = guidesSlot(id);
+            NodeId source = 0;
+            std::size_t output = 0;
+            if (slot >= 0 && graph.inputSource(id, static_cast<std::size_t>(slot), &source, &output))
+            {
+                // Up the guides' chain to the nearest node that moves them.
+                NodeId at = source;
+                for (int steps = 0; at && steps < 64 && !isMotion(at); ++steps)
+                {
+                    const std::ptrdiff_t up = guidesSlot(at);
+                    NodeId next = 0;
+                    at = up >= 0 && graph.inputSource(at, static_cast<std::size_t>(up), &next) ? next : 0;
+                }
+                if (at)
+                {
+                    const GuidesPtr moved = valueAs<GuidesPtr>(graph.evaluateOutput(source, output, ctx));
+                    NodeId fed = 0;
+                    std::size_t fedOutput = 0;
+                    const std::ptrdiff_t in = guidesSlot(at);
+                    const GuidesPtr before = in >= 0 && graph.inputSource(at, static_cast<std::size_t>(in), &fed, &fedOutput)
+                                                 ? valueAs<GuidesPtr>(graph.evaluateOutput(fed, fedOutput, ctx))
+                                                 : nullptr;
+                    if (moved && !moved->empty() && moved != before)
+                        return moved;
+                }
+            }
+        }
+        for (std::size_t slot = 0; slot < graph.inputSpecs(id).size(); ++slot)
+        {
+            NodeId source = 0;
+            if (graph.inputSource(id, slot, &source))
+                stack.push_back(source);
+        }
+    }
+    return nullptr;
+}
 } // namespace groomEvaluator
 
 using namespace groomEvaluator;
@@ -182,13 +250,28 @@ void GroomEvaluator::setGraphJson(const std::string& graphJson)
 
 void GroomEvaluator::installGraph(std::unique_ptr<GraphDocument> parsed)
 {
+    // Each document is a clone of the one parse; nodes whose type, params, inputs and data are the same keep their results.
+    auto adopt = [&](std::unique_ptr<GraphDocument>& old) {
+        auto doc = std::make_unique<GraphDocument>(parsed->clone());
+        doc->graph.setCacheIntermediates(mCacheIntermediates);
+        if (old)
+            doc->graph.adoptCache(old->graph);
+        old = std::move(doc);
+    };
     std::unique_ptr<RestPose> rest = mRestPose ? std::make_unique<RestPose>(parsed->clone(), mRestPose.get()) : nullptr;
-    auto doc = std::make_unique<GraphDocument>(parsed->clone());
-    doc->graph.setCacheIntermediates(mCacheIntermediates);
-    // Nodes whose type, params, inputs and data are the same keep their results.
-    if (mDoc)
-        doc->graph.adoptCache(mDoc->graph);
-    mDoc = std::move(doc);
+    adopt(mDoc);
+    ++mDocGeneration;
+    ++mGraphGeneration;
+    if (mSculptDoc)
+        adopt(mSculptDoc);
+    ++mStrokeDocGeneration;
+    mWarmEvaluations = mWarmIncrementals = mReleasedEvaluations = mReleasedIncrementals = 0;
+    if (mCardDoc)
+        adopt(mCardDoc);
+    if (mFullDoc)
+        adopt(mFullDoc);
+    for (auto& [density, doc] : mMeshDocs)
+        adopt(doc);
     mRestPose = std::move(rest);
     mParsed = std::move(parsed);
 }
@@ -197,6 +280,16 @@ void GroomEvaluator::dropGraph(const std::string& graphJson, const std::string& 
 {
     mParsed.reset();
     mDoc.reset();
+    ++mDocGeneration;
+    ++mGraphGeneration;
+    mSculptDoc.reset();
+    ++mStrokeDocGeneration;
+    mWarmEvaluations = mWarmIncrementals = mReleasedEvaluations = mReleasedIncrementals = 0;
+    mShown[0] = mShown[1] = Shown{};
+    mCardDoc.reset();
+    mFullDoc.reset();
+    mMeshDocs.clear();
+    mMeshMemos.clear();
     mRestPose.reset();
     mData.graphJson = graphJson;
     mGraphSet = true;
@@ -478,6 +571,7 @@ void GroomEvaluator::setSculptsJson(const std::string& json)
             externals[name] = {std::make_shared<const SculptEdits>(edits), hash};
     }
     mSculptExternals = std::move(externals);
+    ++mSculptsVersion;
 }
 
 void GroomEvaluator::setCorrectiveWeights(std::map<int, float> weights)
@@ -774,10 +868,11 @@ void GroomEvaluator::bindScalp(std::vector<std::string>& errors)
     MeshPtr levelled;
     const int levels = scalpLevelsOn(raw, &levelled);
     const std::uint64_t levelsKey = levelled && levelled != raw ? levelled->piecesHash() : 0;
-    const std::uint64_t key = hashCombine(hashCombine(raw ? raw->contentHash() : 0, mScalpMapsHash), levelsKey);
+    const std::uint64_t previewKey = mPreviewMapValues ? mPreviewMapVersion : 0;
+    const std::uint64_t key = hashCombine(hashCombine(hashCombine(raw ? raw->contentHash() : 0, mScalpMapsHash), previewKey), levelsKey);
     if (key != mMappedKey || !mCageScalp)
     {
-        const std::uint64_t mapsKey = hashCombine(mScalpMapsHash, levelsKey);
+        const std::uint64_t mapsKey = hashCombine(hashCombine(mScalpMapsHash, previewKey), levelsKey);
         if (raw && mCageScalp && mMappedFrom && mCageScalp != mMappedFrom && mapsKey == mMappedMapsKey && raw->samePointsLayout(*mMappedFrom))
         {
             // The same maps on the scalp's next frame: the color sets stay, the points move (the same mesh a fresh laying gives).
@@ -786,7 +881,7 @@ void GroomEvaluator::bindScalp(std::vector<std::string>& errors)
         else
         {
             mMapErrors.clear();
-            mCageScalp = withVertexMaps(levelled, mScalpMaps, std::string(), nullptr, &mMapErrors);
+            mCageScalp = withVertexMaps(levelled, mScalpMaps, mPreviewMapName, mPreviewMapValues.get(), &mMapErrors, mPreviewMapChannels);
         }
         mMappedKey = key;
         mMappedMapsKey = mapsKey;
@@ -903,15 +998,23 @@ const PathResolver* GroomEvaluator::paths() const
 void GroomEvaluator::setCacheIntermediates(bool enabled)
 {
     mCacheIntermediates = enabled;
-    if (mDoc)
-        mDoc->graph.setCacheIntermediates(enabled);
+    for (auto* doc : {&mDoc, &mSculptDoc, &mCardDoc, &mFullDoc})
+        if (*doc)
+            (*doc)->graph.setCacheIntermediates(enabled);
+    for (auto& [density, doc] : mMeshDocs)
+        doc->graph.setCacheIntermediates(enabled);
     if (mRestPose)
         mRestPose->setCacheIntermediates(enabled);
 }
 
 void GroomEvaluator::setFramesPerSecond(double fps)
 {
-    mFps = canonicalFramesPerSecond(fps > 0.0 && std::isfinite(fps) ? fps : 24.0);
+    fps = canonicalFramesPerSecond(fps > 0.0 && std::isfinite(fps) ? fps : 24.0);
+    if (fps == mFps)
+        return;
+    mFps = fps;
+    for (auto& [name, node] : mSims)
+        node->cache.clear();
 }
 
 void GroomEvaluator::setFollowScalp(bool on)
@@ -1278,8 +1381,14 @@ void GroomEvaluator::prepareTime(double seconds, std::vector<std::string>& error
 
 void GroomEvaluator::fillExternals(ExternalInputs& externals) const
 {
+    for (const auto& [name, node] : mSims)
+        if (node->shown)
+            externals.set(simulationExternal(name), node->shown, node->shownHash);
     for (const auto& [name, edits] : mSculptExternals)
-        externals.set(sculptExternal(name), edits.first, edits.second);
+        if (!mPreviewSculpt || name != mPreviewSculptNode)
+            externals.set(sculptExternal(name), edits.first, edits.second);
+    if (mPreviewSculpt)
+        externals.set(sculptExternal(mPreviewSculptNode), mPreviewSculpt, mPreviewSculptHash);
     if (mFollowing)
         setGroomExternals(externals, mFollowRest, mFollowGuides, mFollowActive, mFollowParts, mFollowFlow);
     else
@@ -1344,7 +1453,15 @@ const GroomEvaluator::Result& GroomEvaluator::evaluate(const Request& request)
     }
 
     const HierarchyPtr previousActive = mActiveHierarchy;
+    const PartsPtr previousParts = mParts;
+    const FlowPtr previousFlow = mFlow;
     prepareTime(request.time, errors, messages);
+    messages.insert(messages.begin(), mDetachedMessages.begin(), mDetachedMessages.end());
+    mDetachedMessages.clear();
+    stepSimulations(request, errors);
+    // A live brush stroke edits the preview in place: every evaluation is a change.
+    bool hierarchyChanged = mActiveHierarchy.get() != previousActive.get() || mPreviewHierarchy != nullptr;
+    const HierarchyPtr previousShown = mResult.hierarchy;
     for (const std::string* e : {&mCorrectiveError, &mPartError, &mFlowError})
         if (!e->empty())
             errors.push_back(*e);
@@ -1353,31 +1470,66 @@ const GroomEvaluator::Result& GroomEvaluator::evaluate(const Request& request)
     fillExternals(externals);
     EvalContext ctx = context(externals);
     ctx.previewDensity = request.density;
+    // While a stroke is live, fewer strands keep the viewport responsive, on a document of their own (the view's cache
+    // stays for the release).
+    if (hasPreview())
+        ctx.previewDensity *= request.sculptDensity;
+    if (mLiveStroke)
+        mStrokeDensityUsed = true;
+    const bool sculpting = hasPreview() && ctx.previewDensity != request.density && mDoc;
+    if (sculpting && !mSculptDoc)
+        mSculptDoc = newDocument();
+    mViewSculpt = sculpting;
+    GraphDocument* const viewed = sculpting ? mSculptDoc.get() : mDoc.get();
     ctx.maxPoints = request.pointBudget;
     ctx.time = request.time;
     ctx.viewport = request.viewport;
+    ctx.liveDrag = mLiveDrag;
     ctx.buildCards = request.buildCards;
+    mLastViewContext = ctx;
+    mLastViewContext.previewDensity = request.density;
+    mLastViewContext.externals = nullptr;
+    mLastViewContext.paths = nullptr;
 
     Result& out = mResult;
-    out.density = std::clamp(request.density, 0.0f, 1.0f);
+    out.density = std::clamp(ctx.previewDensity, 0.0f, 1.0f);
     const StrandsPtr previousStrands = out.strands;
+    const std::uint64_t previousSerial = out.strandsSerial;
+    const std::shared_ptr<const CardMesh> previousCards = out.cards;
+    const std::uint64_t previousStrandMeshes = out.versions.strandMeshes;
     const std::string previousView = out.viewedNode;
-    const HierarchyPtr previousShown = out.hierarchy;
+    const bool previousRoots = out.viewedRoots;
+    const std::shared_ptr<const std::vector<Vec3f>> previousCenters = out.clumpCenters;
+    const FollowCarryPtr previousFollow = out.follow;
     out.strands.reset();
-    if (mDoc)
+    out.follow.reset();
+    NodeId stopAt = 0;
+    if (viewed && !request.stopAt.empty())
+        if (const auto it = viewed->nodesByName.find(request.stopAt); it != viewed->nodesByName.end())
+            stopAt = it->second;
+    auto failed = [&](const char* what) {
+        mShown[0] = mShown[1] = Shown{};
+        out.strandsSerial = out.changesBase = 0;
+        out.strandsChanges.reset();
+        mFailure = std::current_exception();
+        errors.push_back(what);
+        messages.push_back({what, true});
+    };
+    if (stopAt)
     {
+        // The host runs this node and what follows: what feeds it, and the strands as they were.
         try
         {
-            NodeId shown = mDoc->output;
-            out.viewedNode.clear();
-            const auto it = mDoc->nodesByName.find(request.viewNode);
-            if (!request.viewNode.empty() && it != mDoc->nodesByName.end() && mDoc->graph.outputType(it->second) == PortType::Strands)
+            const std::size_t slots = viewed->graph.inputSpecs(stopAt).size();
+            for (std::size_t slot = 0; slot < slots; ++slot)
             {
-                shown = it->second;
-                out.viewedNode = request.viewNode;
+                NodeId source = 0;
+                std::size_t output = 0;
+                if (viewed->graph.inputSource(stopAt, slot, &source, &output))
+                    viewed->graph.evaluateOutput(source, output, ctx);
             }
-            const StrandsPtr strands = pinToRest(mDoc->graph.evaluateStrands(shown, ctx), out.viewedNode, ctx);
-            out.strands = carry(strands, 0);
+            out.strands = previousStrands;
+            out.follow = previousFollow;
         }
         catch (const std::exception& e)
         {
@@ -1385,11 +1537,110 @@ const GroomEvaluator::Result& GroomEvaluator::evaluate(const Request& request)
             errors.push_back(e.what());
             messages.push_back({e.what(), true});
         }
+    }
+    else if (viewed)
+    {
+        try
+        {
+            NodeId shown = viewed->output;
+            out.viewedNode.clear();
+            out.viewedRoots = false;
+            NodeId centersOf = 0;
+            const auto it = viewed->nodesByName.find(request.viewNode);
+            if (!request.viewNode.empty() && it != viewed->nodesByName.end() && viewed->graph.outputType(it->second) == PortType::Strands)
+            {
+                shown = it->second;
+                out.viewedNode = request.viewNode;
+                out.viewedRoots = viewed->graph.node(shown).typeName() == "Scatter";
+                if (viewed->graph.node(shown).typeName() == op::kClump)
+                    centersOf = shown;
+            }
+            const StrandsPtr evaluated = viewed->graph.evaluateStrands(shown, ctx);
+            out.movingGuides = groomEvaluator::movingGuidesOf(viewed->graph, shown, ctx);
+            if (centersOf)
+            {
+                const std::shared_ptr<const std::vector<Vec3f>> dots = clumpCenterDots(*viewed, centersOf, ctx);
+                if (!previousCenters || *previousCenters != *dots)
+                    out.clumpCenters = dots;
+            }
+            else
+            {
+                out.clumpCenters.reset();
+            }
+            const StrandsPtr strands = pinToRest(evaluated, out.viewedNode, ctx);
+            if (mFollowing && request.hostCarries && strands && carriesPointsAndInstances(*strands))
+            {
+                out.strands = strands;
+                const bool same = previousFollow && previousFollow->rest() == strands && previousFollow->from() == mFollowRest &&
+                                  previousFollow->to() == mScalp;
+                out.follow = same ? previousFollow : std::make_shared<const FollowCarry>(strands, mFollowRest, mScalp);
+            }
+            else
+            {
+                out.strands = carry(strands, 0);
+            }
+            // Which strands these are, and how they differ from the ones this document gave last: the graph's changes of
+            // the node shown, when the view hands its strands on as evaluated (not carried, nor pinned to rest).
+            Shown& was = mShown[sculpting ? 1 : 0];
+            const std::uint64_t graphSerial = viewed->graph.resultSerial(shown);
+            const bool asEvaluated = out.strands == evaluated && !mFollowing && graphSerial != 0;
+            if (asEvaluated && was.serial != 0 && was.node == shown && was.graphSerial == graphSerial && was.strands.lock() == out.strands)
+            {
+                out.strandsSerial = was.serial;
+                out.changesBase = was.serial;
+                out.strandsChanges = viewed->graph.changesSince(shown, graphSerial);
+            }
+            else
+            {
+                out.strandsSerial = ++mStrandsSerial;
+                out.changesBase = was.serial;
+                out.strandsChanges =
+                    asEvaluated && was.serial != 0 && was.node == shown ? viewed->graph.changesSince(shown, was.graphSerial) : nullptr;
+                was.serial = asEvaluated ? out.strandsSerial : 0;
+                was.node = shown;
+                was.graphSerial = graphSerial;
+                was.strands = out.strands;
+            }
+            if (request.wantCards)
+            {
+                // Mid-stroke too while a rebuild is quick enough to follow the brush; slower ones catch up at the end.
+                if (!hasPreview() || mLastCardBuildMs <= kLiveCardBuildBudgetMs)
+                    buildCards(ctx, request.cardDensity, messages);
+            }
+            else
+            {
+                mCardDoc.reset();
+                out.cardStrands.reset();
+                out.cards.reset();
+                out.cardNodes.clear();
+            }
+            if (request.wantStrandMeshes)
+            {
+                if (!hasPreview() || mLastStrandMeshMs <= kLiveCardBuildBudgetMs)
+                {
+                    const auto started = std::chrono::steady_clock::now();
+                    std::vector<StrandMeshSource> meshes = evaluateStrandMeshes(request.time);
+                    mLastStrandMeshMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+                    if (!sameStrandMeshes(meshes, out.strandMeshes))
+                    {
+                        out.strandMeshes = std::move(meshes);
+                        ++out.versions.strandMeshes;
+                    }
+                }
+            }
+            else if (!out.strandMeshes.empty())
+            {
+                out.strandMeshes.clear();
+                ++out.versions.strandMeshes;
+            }
+        }
+        catch (const std::exception& e)
+        {
+            failed(e.what());
+        }
         catch (...)
         {
-            mFailure = std::current_exception();
-            errors.push_back("evaluation failed");
-            messages.push_back({"evaluation failed", true});
+            failed("evaluation failed");
         }
     }
     if (!mGraphError.empty())
@@ -1399,16 +1650,49 @@ const GroomEvaluator::Result& GroomEvaluator::evaluate(const Request& request)
     if (!mSculptError.empty())
         errors.push_back(mSculptError);
 
-    // A preview is edited in place: every evaluation is a change.
-    const bool hierarchyChanged = mActiveHierarchy.get() != previousActive.get() || mPreviewHierarchy != nullptr ||
-                                  mActiveHierarchy != previousShown;
-    const bool strandsChanged = out.strands.get() != previousStrands.get() || out.viewedNode != previousView;
+    // A Sculpt node brushes shape: its output is the guides shown (a live stroke's working guides).
+    HierarchyPtr shownHierarchy = mActiveHierarchy;
+    if (!mSculptTarget.empty())
+    {
+        mSculptShownVersion = mSculptsVersion;
+        if (mPreviewSculptShown && mPreviewSculptNode == mSculptTarget)
+        {
+            shownHierarchy = mPreviewSculptShown;
+            hierarchyChanged = true;
+        }
+        else if (viewed)
+        {
+            const GuidesPtr output = sculptOutput(*viewed, ctx);
+            if (!output)
+            {
+                mSculptShown.reset();
+                mSculptShownFrom.reset();
+            }
+            else if (output != mSculptShownFrom || mScalp != mSculptShownOn || !mSculptShown)
+            {
+                mSculptShown = groomlab::sculptHierarchy(*output, mSculptTarget, mFollowing ? nullptr : mScalp.get());
+                mSculptShownFrom = output;
+                mSculptShownOn = mScalp;
+            }
+            if (mSculptShown)
+                shownHierarchy = mSculptShown;
+        }
+    }
+    if (shownHierarchy != previousShown)
+        hierarchyChanged = true;
+
+    // What changed, for drawing: the same cached results (a static groom at another frame) leave the versions alone.
+    auto carriedTo = [](const FollowCarryPtr& f) { return f ? f->to().get() : nullptr; };
+    const bool strandsChanged = out.strands.get() != previousStrands.get() || carriedTo(out.follow) != carriedTo(previousFollow) ||
+                                out.viewedNode != previousView || out.viewedRoots != previousRoots || out.clumpCenters != previousCenters;
+    const bool cardsChanged = out.cards.get() != previousCards.get();
+    const bool overlaysChanged = mParts.get() != previousParts.get() || mFlow.get() != previousFlow.get();
     if (strandsChanged)
         ++out.versions.strands;
     if (hierarchyChanged)
         ++out.versions.hierarchy;
-    if (strandsChanged || hierarchyChanged || out.parts != mParts || out.flow != mFlow)
-        ++out.versions.evaluation;
+    if (cardsChanged)
+        ++out.versions.cards;
     if ((strandsChanged || hierarchyChanged) && !request.wantBounds)
         mBoundsStale = true;
     if ((strandsChanged || hierarchyChanged || mBoundsStale) && request.wantBounds)
@@ -1422,10 +1706,15 @@ const GroomEvaluator::Result& GroomEvaluator::evaluate(const Request& request)
         };
         if (out.strands)
         {
-            const StrandSet::Extent e = out.strands->extent();
+            // Only some strands changed since the view's last: their blocks measured again. Handed on at rest: each
+            // strand's box at rest, where carrying puts it.
+            const bool some = out.strandsChanges && !out.strandsChanges->all && previousStrands && out.changesBase == previousSerial;
+            const StrandSet::Extent e = out.follow ? carriedBounds(*out.strands, followBoxes(out.strands), *out.follow->to())
+                                        : some     ? out.strands->extentAfter(*previousStrands, out.strandsChanges->strands)
+                                                   : out.strands->extent();
             if (!e.finite)
             {
-                const std::string what = nonFiniteMessage(mDoc.get());
+                const std::string what = nonFiniteMessage(sculpting ? mSculptDoc.get() : mDoc.get());
                 errors.push_back(what);
                 messages.push_back({what, true});
             }
@@ -1435,18 +1724,22 @@ const GroomEvaluator::Result& GroomEvaluator::evaluate(const Request& request)
                 expand(e.hi);
             }
         }
-        if (mActiveHierarchy)
-            for (const HierarchyGuide& g : mActiveHierarchy->guides())
-                for (const Vec3f& p : g.points)
-                    expand(p);
+        for (const HierarchyPtr& h : {mActiveHierarchy, shownHierarchy != mActiveHierarchy ? shownHierarchy : nullptr})
+            if (h)
+                for (const HierarchyGuide& g : h->guides())
+                    for (const Vec3f& p : g.points)
+                        expand(p);
         out.bounds.valid = lo.x <= hi.x;
         out.bounds.lo = out.bounds.valid ? lo : Vec3f();
         out.bounds.hi = out.bounds.valid ? hi : Vec3f();
     }
+    const bool strandMeshesChanged = out.versions.strandMeshes != previousStrandMeshes;
+    if (strandsChanged || hierarchyChanged || cardsChanged || overlaysChanged || strandMeshesChanged)
+        ++out.versions.evaluation;
 
     out.scalp = mScalp;
     out.cageScalp = mCageScalp;
-    out.hierarchy = mActiveHierarchy;
+    out.hierarchy = shownHierarchy;
     out.authoredHierarchy = mHierarchy;
     out.parts = mParts;
     out.flow = mFlow;
@@ -1484,7 +1777,7 @@ Value GroomEvaluator::evaluateNode(const std::string& name, float density, doubl
     ctx.buildCards = buildCards;
     Value value = scratch.graph.evaluate(id, ctx);
     if (const StrandsPtr strands = valueAs<StrandsPtr>(value))
-        return Value(carry(strands, 1));
+        return Value(carry(strands, 3));
     return value;
 }
 
@@ -1617,16 +1910,87 @@ std::string GroomEvaluator::hairLookJson() const
     return out.dump();
 }
 
+std::string GroomEvaluator::Stats::toJson() const
+{
+    nlohmann::json out;
+    out["view"] = view;
+    out["strands"] = strands;
+    out["points"] = points;
+    out["guides"] = guides;
+    out["cards"] = cards;
+    out["cardStrands"] = cardStrands;
+    out["cardTriangles"] = cardTriangles;
+    out["cardTextures"] = cardTextures;
+    out["cardFeathers"] = cardFeathers;
+    out["cardsBaked"] = cardsBaked;
+    out["cardsStale"] = cardsStale;
+    nlohmann::json nodes = nlohmann::json::object();
+    for (const auto& [name, n] : cardNodes)
+        nodes[name] = {{"cards", n.cards}, {"triangles", n.triangles}, {"textures", n.textures}, {"feathers", n.feathers}, {"stale", n.stale}};
+    out["cardNodes"] = std::move(nodes);
+    out["hairColor"] = hairColor;
+    out["renderData"] = renderData;
+    out["colorNodes"] = colorNodes;
+    out["colorBlends"] = colorBlends;
+    out["times"] = times;
+    out["runs"] = runs;
+    out["channels"] = channels;
+    out["notes"] = notes;
+    out["scalpHistory"] = {{"frames", scalpHistoryFrames}};
+    out["instances"] = instances;
+    out["restEvaluations"] = restEvaluations;
+    out["cacheBytes"] = cacheBytes;
+    out["cacheEvictions"] = cacheEvictions;
+    out["strokeDocument"] = strokeDocument;
+    nlohmann::json sims = nlohmann::json::object();
+    for (const groomlab::SimStatus& s : simulations)
+    {
+        nlohmann::json ranges = nlohmann::json::array();
+        for (const auto& [first, last] : s.ranges)
+            ranges.push_back({first, last});
+        sims[s.node] = {{"startFrame", s.startFrame}, {"ranges", ranges}, {"frames", s.frames}, {"live", s.live}, {"baked", s.baked},
+                        {"bakeStale", s.bakeStale}, {"bakedFirst", s.bakedFirst}, {"bakedLast", s.bakedLast}, {"bakedFile", s.bakedFile},
+                        {"stepMs", s.stepMs}, {"bytes", s.bytes}};
+    }
+    out["simulations"] = std::move(sims);
+    return out.dump();
+}
+
 GroomEvaluator::Stats GroomEvaluator::stats() const
 {
     Stats out;
-    const StrandsPtr& strands = mResult.strands;
+    const Result& v = mResult;
+    const StrandsPtr& strands = v.strands;
+    out.view = v.viewedNode;
     out.strands = strands ? strands->strandCount() : 0;
     out.points = strands ? strands->pointCount() : 0;
     out.guides = mActiveHierarchy ? mActiveHierarchy->guides().size() : 0;
+    out.cards = v.cards ? v.cards->cards.size() : 0;
+    out.cardStrands = v.cardStrands ? v.cardStrands->strandCount() : 0;
+    out.cardTriangles = v.cards ? v.cards->triangleCount() : 0;
+    out.cardTextures = v.cards ? v.cards->textureCount() : 0;
+    {
+        // A Cards node is stale when its cards no longer match what the bake was made from (one the bake never saw too);
+        // maps set by hand carry no stamp and are never stale.
+        const auto coverage = mCardMaps.find("Coverage");
+        const bool baked = coverage != mCardMaps.end() && !coverage->second.empty();
+        const auto stampIt = mCardMaps.find("Strands");
+        const std::string stamp = stampIt != mCardMaps.end() ? stampIt->second : std::string();
+        const auto bakedHashes = parseCardsBakeStamp(stamp);
+        if (v.cards)
+            for (const CardNodeSummary& n : v.cardNodes)
+            {
+                const auto it = bakedHashes.find(n.node);
+                const bool stale = baked && !stamp.empty() && (it == bakedHashes.end() || it->second != std::to_string(n.bakeHash));
+                out.cardsStale = out.cardsStale || stale;
+                out.cardFeathers += n.feathers;
+                out.cardNodes[n.node] = {n.cards, n.triangles, n.textures, n.feathers, stale};
+            }
+        out.cardsBaked = baked;
+    }
     if (mDoc)
     {
-        const GraphDocument& doc = *mDoc;
+        const GraphDocument& doc = *viewDoc();
         out.cacheBytes = doc.graph.cachedBytes();
         out.cacheEvictions = doc.graph.cacheEvictions();
         activeNode(doc, "HairColor", &out.hairColor);
@@ -1654,6 +2018,21 @@ GroomEvaluator::Stats GroomEvaluator::stats() const
     }
     out.scalpHistoryFrames = scalpHistoryFrames(mResult.viewedNode);
     out.restEvaluations = restEvaluations();
+    if (strands && strands->instances() && !strands->instances()->empty())
+    {
+        std::unordered_map<std::uint64_t, std::size_t> index;
+        index.reserve(strands->strandCount());
+        for (std::size_t s = 0; s < strands->strandCount(); ++s)
+            index.emplace(strands->ids()[s], s);
+        for (const auto& placed : strands->instances()->instances)
+        {
+            const auto it = index.find(placed.strand);
+            if (it != index.end() && strands->strandPointCount(it->second) > 0)
+                ++out.instances;
+        }
+    }
+    out.strokeDocument = mSculptDoc != nullptr;
+    out.simulations = simulationStatus();
     return out;
 }
 
@@ -1662,7 +2041,7 @@ std::vector<std::pair<std::string, double>> GroomEvaluator::nodeTimes() const
     std::vector<std::pair<std::string, double>> out;
     if (!mDoc)
         return out;
-    const auto& times = mDoc->graph.lastEvaluationTimes();
+    const auto& times = viewDoc()->graph.lastEvaluationTimes();
     for (const auto& [name, id] : mDoc->nodesByName)
         if (const auto it = times.find(id); it != times.end())
             out.emplace_back(name, it->second);
@@ -1674,7 +2053,7 @@ std::vector<std::pair<std::string, std::string>> GroomEvaluator::nodeNotes() con
     std::vector<std::pair<std::string, std::string>> out;
     if (!mDoc)
         return out;
-    const auto& notes = mDoc->graph.lastNotes();
+    const auto& notes = viewDoc()->graph.lastNotes();
     for (const auto& [name, id] : mDoc->nodesByName)
         if (const auto it = notes.find(id); it != notes.end())
             out.emplace_back(name, it->second);
@@ -1683,16 +2062,634 @@ std::vector<std::pair<std::string, std::string>> GroomEvaluator::nodeNotes() con
 
 std::size_t GroomEvaluator::evaluationCount() const
 {
-    return mDoc ? mDoc->graph.evaluationCount() : 0;
+    // The view's and a live stroke's (both show the graph's result); not the stroke document's warm evaluations.
+    return (mDoc ? mDoc->graph.evaluationCount() : 0) + (mSculptDoc ? mSculptDoc->graph.evaluationCount() - mWarmEvaluations : 0) +
+           mReleasedEvaluations;
 }
 
 std::size_t GroomEvaluator::incrementalCount() const
 {
-    return mDoc ? mDoc->graph.incrementalCount() : 0;
+    return (mDoc ? mDoc->graph.incrementalCount() : 0) + (mSculptDoc ? mSculptDoc->graph.incrementalCount() - mWarmIncrementals : 0) +
+           mReleasedIncrementals;
 }
 
 std::size_t GroomEvaluator::restEvaluations() const
 {
     return mRestPose ? mRestPose->evaluations() : 0;
+}
+
+// Simulation.
+
+namespace groomEvaluator
+{
+/** Two frames of one cache blended, `a` toward `b` by w (points and wetness). */
+GuidesPtr blendFrames(const GuidesPtr& a, const GuidesPtr& b, float w)
+{
+    if (!a || !b || a->size() != b->size())
+        return a;
+    auto out = std::make_shared<GuideSet>(*a);
+    for (std::size_t g = 0; g < out->size(); ++g)
+    {
+        Guide& guide = out->guides()[g];
+        const Guide& next = b->guides()[g];
+        std::vector<Vec3f>& points = guide.points;
+        const std::vector<Vec3f>& to = next.points;
+        if (to.size() != points.size())
+            continue;
+        for (std::size_t j = 0; j < points.size(); ++j)
+            points[j] = points[j] + (to[j] - points[j]) * w;
+        const auto wet = guide.pointAttributes.find(kWetnessChannel);
+        const auto wetTo = next.pointAttributes.find(kWetnessChannel);
+        if (wet == guide.pointAttributes.end() || wetTo == next.pointAttributes.end() ||
+            wetTo->second.size() != wet->second.size())
+            continue;
+        for (std::size_t j = 0; j < wet->second.size(); ++j)
+            wet->second[j] += (wetTo->second[j] - wet->second[j]) * w;
+    }
+    return out;
+}
+
+/** The frame at `seconds`, and how far past it toward the next (0: on the frame). */
+int frameAt(double seconds, double fps, double* past)
+{
+    const double at = secondsToFrame(seconds, fps);
+    const int frame = static_cast<int>(std::floor(at + 1e-6));
+    double w = at - frame;
+    if (w < 1e-6)
+        w = 0.0;
+    if (past)
+        *past = w;
+    return frame;
+}
+} // namespace groomEvaluator
+
+std::vector<std::pair<std::string, NodeId>> GroomEvaluator::simulateNodeIds(const std::string& viewNode) const
+{
+    std::vector<std::pair<std::string, NodeId>> out;
+    if (!mDoc)
+        return out;
+    const Graph& graph = mDoc->graph;
+    auto upstream = [&](NodeId from) {
+        std::set<NodeId> reached;
+        std::vector<NodeId> stack{from};
+        while (!stack.empty())
+        {
+            const NodeId id = stack.back();
+            stack.pop_back();
+            if (!graph.hasNode(id) || !reached.insert(id).second)
+                continue;
+            const std::size_t slots = graph.inputSpecs(id).size();
+            for (std::size_t slot = 0; slot < slots; ++slot)
+            {
+                NodeId source = 0;
+                if (graph.inputSource(id, slot, &source))
+                    stack.push_back(source);
+            }
+        }
+        return reached;
+    };
+    std::set<NodeId> reached = upstream(mDoc->output);
+    const auto viewed = mDoc->nodesByName.find(viewNode);
+    if (!viewNode.empty() && viewed != mDoc->nodesByName.end())
+    {
+        const std::set<NodeId> more = upstream(viewed->second);
+        reached.insert(more.begin(), more.end());
+    }
+    // Ordered by how many Simulate nodes feed each, so a node's inputs are stepped before it.
+    std::vector<std::pair<std::size_t, std::pair<std::string, NodeId>>> found;
+    for (const auto& [name, id] : mDoc->nodesByName)
+    {
+        if (!reached.count(id) || graph.bypassed(id) || graph.node(id).typeName() != op::kSimulate)
+            continue;
+        std::size_t fedBy = 0;
+        for (const NodeId other : upstream(id))
+            if (other != id && graph.node(other).typeName() == op::kSimulate && !graph.bypassed(other))
+                ++fedBy;
+        found.push_back({fedBy, {name, id}});
+    }
+    std::sort(found.begin(), found.end());
+    for (auto& f : found)
+        out.push_back(std::move(f.second));
+    return out;
+}
+
+std::vector<GroomEvaluator::SimRef> GroomEvaluator::simRefs(const std::string& viewNode)
+{
+    std::vector<SimRef> refs;
+    for (const auto& [name, id] : simulateNodeIds(viewNode))
+    {
+        std::unique_ptr<SimNode>& node = mSims[name];
+        if (!node)
+            node = std::make_unique<SimNode>();
+        node->cache.configure(SimSettings::fromParams(mDoc->graph.node(id).params()), mFps);
+        refs.push_back({name, id, node.get()});
+    }
+    // A node gone from the graph lets its frames go; a bake set for it stays.
+    for (auto& [name, node] : mSims)
+        if (!mDoc || !mDoc->nodesByName.count(name))
+            node->cache.clear();
+    return refs;
+}
+
+bool GroomEvaluator::readsEarlierFrames(const std::string& viewNode, int firstFrame, int lastFrame) const
+{
+    if (scalpHistoryFrames(viewNode) > 0)
+        return true;
+    for (const auto& [name, id] : simulateNodeIds(viewNode))
+    {
+        const SimSettings settings = SimSettings::fromParams(mDoc->graph.node(id).params());
+        const int from = std::max(firstFrame, settings.startFrame);
+        if (from > lastFrame)
+            continue;
+        const auto it = mSims.find(name);
+        const BakedSimulationPtr baked = it != mSims.end() ? it->second->baked : nullptr;
+        const bool covered = baked && baked->read && (baked->stamp == 0 || baked->stamp == settings.hash()) &&
+                             std::lround(secondsToFrame(baked->firstSeconds, mFps)) <= from &&
+                             std::lround(secondsToFrame(baked->lastSeconds, mFps)) >= lastFrame;
+        if (!covered)
+            return true;
+    }
+    return false;
+}
+
+std::vector<std::string> GroomEvaluator::simulateNodes() const
+{
+    std::vector<std::string> out;
+    for (const auto& [name, id] : simulateNodeIds({}))
+        out.push_back(name);
+    return out;
+}
+
+EvalContext GroomEvaluator::simContext(double seconds, const ExternalInputs& externals) const
+{
+    EvalContext ctx;
+    ctx.previewDensity = mSimDensity;
+    ctx.maxPoints = mSimPointBudget;
+    ctx.time = seconds;
+    ctx.framesPerSecond = mFps;
+    ctx.scale = mGroomScale;
+    ctx.externals = &externals;
+    ctx.paths = paths();
+    return ctx;
+}
+
+SimInputs GroomEvaluator::simInputs(const SimRef& ref, const EvalContext& ctx, std::uint64_t* hash)
+{
+    SimInputs in;
+    Graph& graph = mDoc->graph;
+    NodeId source = 0;
+    std::size_t output = 0;
+    if (graph.inputSource(ref.id, 0, &source, &output))
+        in.guides = valueAs<GuidesPtr>(graph.evaluateOutput(source, output, ctx));
+    if (graph.inputSource(ref.id, 1, &source, &output))
+    {
+        if (MeshPtr mesh = valueAs<MeshPtr>(graph.evaluateOutput(source, output, ctx)))
+        {
+            in.colliders.push_back(std::move(mesh));
+            // A ColliderMesh node's own friction; negative: the Simulate node's.
+            const Operator& from = graph.node(source);
+            in.colliderFriction.push_back(from.typeName() == op::kColliderMesh
+                                              ? static_cast<float>(from.params().getDouble("friction", -1.0))
+                                              : -1.0f);
+        }
+    }
+    if (graph.inputSource(ref.id, 2, &source, &output))
+        in.water = valueAs<MeshPtr>(graph.evaluateOutput(source, output, ctx));
+    in.scalp = mScalp;
+    // Following, the graph runs on the rest pose: the guides are stepped on the scalp as it is (simFrameAt carries
+    // the frames back).
+    if (mFollowing && in.guides && mFollowRest && mScalp)
+        in.guides = carryGuidesBack(in.guides, *mScalp, *mFollowRest);
+    if (!in.guides)
+        in.guides = std::make_shared<const GuideSet>();
+    {
+        // The mappable params as the graph would evaluate them for the node (painted, textured, fields plugged in).
+        ParamSet params = graph.node(ref.id).params();
+        const std::vector<std::string>& exposed = graph.paramInputs(ref.id);
+        const std::size_t own = graph.node(ref.id).inputs().size();
+        for (std::size_t k = 0; k < exposed.size(); ++k)
+        {
+            if (!graph.inputSource(ref.id, own + k, &source, &output))
+                continue;
+            const Value value = graph.evaluateOutput(source, output, ctx);
+            if (FieldPtr field = valueAs<FieldPtr>(value))
+                params.setField(exposed[k], field);
+            const UniformPtr uniform = valueAs<UniformPtr>(value);
+            if (uniform && !graph.paramDriven(ref.id, exposed[k]))
+                if (FieldPtr field = uniformField(*uniform))
+                    params.setField(exposed[k], field);
+        }
+        in.maps = simulationMaps(params, *in.guides, in.scalp);
+    }
+    if (hash)
+    {
+        std::uint64_t h = hashCombine(hash64(0x51A71), in.guides->contentHash());
+        h = hashCombine(h, in.scalp ? in.scalp->surfaceHash() : 0);
+        for (const MeshPtr& mesh : in.colliders)
+            h = hashCombine(h, mesh->surfaceHash());
+        if (in.water)
+            h = hashCombine(hashCombine(h, 0x3A7E), in.water->surfaceHash());
+        for (const float f : in.colliderFriction)
+            if (f >= 0.0f)
+                h = hashFloat(hashCombine(h, 0xF71C), f);
+        if (in.maps)
+            h = hashCombine(h, in.maps->hash());
+        *hash = h;
+    }
+    return in;
+}
+
+bool GroomEvaluator::bakeUsable(const SimNode& node, double seconds) const
+{
+    const BakedSimulationPtr& baked = node.baked;
+    if (!baked || !baked->read)
+        return false;
+    if (baked->stamp != 0 && baked->stamp != node.cache.settings().hash())
+        return false;
+    const double slack = 0.5 / mFps;
+    return seconds >= baked->firstSeconds - slack && seconds <= baked->lastSeconds + slack;
+}
+
+std::pair<GuidesPtr, std::uint64_t> GroomEvaluator::simFrameAt(const SimNode& node, double seconds) const
+{
+    double w = 0.0;
+    const int f0 = groomEvaluator::frameAt(seconds, mFps, &w);
+    if (f0 < node.cache.startFrame())
+        return {};
+    GuidesPtr frame;
+    std::uint64_t hash = 0;
+    const bool baked = bakeUsable(node, seconds);
+    if (baked)
+    {
+        frame = node.baked->read(seconds);
+        hash = frame ? hashCombine(hashCombine(hash64(0xBA4ED), frame->contentHash()), node.baked->stamp) : 0;
+    }
+    else if (node.cache.has(f0))
+    {
+        frame = node.cache.frame(f0);
+        hash = node.cache.frameHash(f0);
+        if (w > 0.0 && node.cache.has(f0 + 1))
+        {
+            frame = groomEvaluator::blendFrames(frame, node.cache.frame(f0 + 1), static_cast<float>(w));
+            hash = hashFloat(hashCombine(hash, node.cache.frameHash(f0 + 1)), static_cast<float>(w));
+        }
+    }
+    if (frame && mFollowing && mFollowRest && mScalp)
+    {
+        if (baked)
+        {
+            // A bake keeps no roots: each guide takes its hierarchy guide's, or the scalp point nearest its first.
+            auto rooted = std::make_shared<GuideSet>(*frame);
+            for (Guide& g : rooted->guides())
+            {
+                if (const HierarchyGuide* h = mHierarchy ? mHierarchy->guide(static_cast<GuideId>(g.id)) : nullptr)
+                    g.root = h->root;
+                else if (!g.points.empty())
+                    g.root = mScalp->closestPoint(g.points.front()).root;
+            }
+            frame = rooted;
+        }
+        frame = carryGuidesBack(frame, *mFollowRest, *mScalp);
+        hash = hashCombine(hash, mScalp->surfaceHash());
+    }
+    return {frame, hash};
+}
+
+void GroomEvaluator::checkSimInputs(SimRef& ref, double seconds, const ExternalInputs& externals)
+{
+    SimNode& node = *ref.node;
+    std::uint64_t hash = 0;
+    simInputs(ref, simContext(seconds, externals), &hash);
+    double w = 0.0;
+    const int f = groomEvaluator::frameAt(seconds, mFps, &w);
+    if (w == 0.0 && node.cache.has(f) && node.cache.inputHash(f) != 0)
+    {
+        if (hash != node.cache.inputHash(f))
+            node.cache.clear();
+    }
+    else if (node.checked && node.checkedSeconds == seconds && hash != node.checkedHash)
+        node.cache.clear();
+    node.checked = true;
+    node.checkedSeconds = seconds;
+    node.checkedHash = hash;
+}
+
+void GroomEvaluator::stepSimulations(const Request& request, std::vector<std::string>& errors)
+{
+    for (auto& [name, node] : mSims)
+    {
+        node->shown.reset();
+        node->shownHash = 0;
+    }
+    if (!mDoc || hasPreview())
+        return;
+    std::vector<SimRef> refs = simRefs(request.viewNode);
+    if (refs.empty())
+        return;
+    mSimDensity = request.density;
+    mSimPointBudget = request.pointBudget;
+    const double t = request.time;
+    double w = 0.0;
+    const int f0 = groomEvaluator::frameAt(t, mFps, &w);
+    const int f1 = w > 0.0 ? f0 + 1 : f0;
+    try
+    {
+        // Upstream first: each node's frame is in the externals of the nodes it feeds.
+        for (SimRef& ref : refs)
+        {
+            SimNode& node = *ref.node;
+            if (f0 >= node.cache.startFrame() && !bakeUsable(node, t))
+            {
+                {
+                    ExternalInputs externals;
+                    fillExternals(externals);
+                    checkSimInputs(ref, t, externals);
+                }
+                if (mSimStepping && node.cache.settings().live && !(node.cache.has(f0) && node.cache.has(f1)))
+                {
+                    std::vector<SimRef> one{ref};
+                    SimRun run;
+                    advanceSimulations(one, f1, t, {}, run);
+                    for (const std::string& e : run.errors)
+                        errors.push_back(e);
+                }
+            }
+            std::tie(node.shown, node.shownHash) = simFrameAt(node, t);
+        }
+    }
+    catch (const std::exception& e)
+    {
+        errors.push_back(std::string("simulation: ") + e.what());
+    }
+}
+
+void GroomEvaluator::advanceSimulations(std::vector<SimRef>& nodes, int target, double nowSeconds,
+                                        const SimProgress& progress, SimRun& run)
+{
+    const auto started = std::chrono::steady_clock::now();
+    auto nextFrame = [](const SimNode& n) { return n.cache.started() ? n.cache.lastFrame() + 1 : n.cache.startFrame(); };
+    int from = INT_MAX;
+    for (const SimRef& ref : nodes)
+        from = std::min(from, nextFrame(*ref.node));
+    if (nodes.empty() || from > target)
+        return;
+    const int count = target - from + 1;
+    auto stepError = [&](const SimRef& ref) {
+        run.errors.push_back("Simulate '" + ref.name +
+                             "': its guides changed (another count, other IDs or points per guide); it starts again "
+                             "from frame " +
+                             std::to_string(ref.node->cache.startFrame()));
+    };
+
+    // The inputs as they are at nowSeconds, put back after the frames the feed set.
+    struct Moving
+    {
+        MeshPtr scalp;
+        NamedScalps scalps;
+        GuidesPtr guides, poses;
+        std::uint64_t posesHash = 0;
+        std::map<std::string, MeshPtr> meshes;
+        std::map<std::string, float> controls;
+        ScalpHistoryPtr history;
+    };
+    const Moving saved{mData.scalp,  mData.scalps,   mData.guides,   mData.guidePoses,
+                       mPosesHash,   mData.meshes,   mData.controls, mData.scalpHistory};
+    bool fed = false;
+    std::vector<std::string> scratchErrors;
+    std::vector<Message> scratchMessages;
+    auto restore = [&] {
+        if (!fed)
+            return;
+        mData.scalp = saved.scalp;
+        mData.scalps = saved.scalps;
+        mData.guides = saved.guides;
+        mData.guidePoses = saved.poses;
+        mPosesHash = saved.posesHash;
+        mData.meshes = saved.meshes;
+        mData.controls = saved.controls;
+        mData.scalpHistory = saved.history;
+        fed = false;
+        scratchErrors.clear();
+        scratchMessages.clear();
+        prepareTime(nowSeconds, scratchErrors, scratchMessages);
+    };
+    try
+    {
+        for (int f = from; f <= target; ++f)
+        {
+            const double seconds = frameToSeconds(f, mFps);
+            const bool now = std::abs(seconds - nowSeconds) <= 1e-9 * std::max(1.0, std::abs(nowSeconds));
+            bool known = now; // the inputs are the host's at f
+            if (now || !mSimFeed)
+                restore();
+            else
+            {
+                const bool wasFed = fed;
+                fed = true;
+                if (mSimFeed(seconds))
+                {
+                    known = true;
+                    scratchErrors.clear();
+                    scratchMessages.clear();
+                    prepareTime(seconds, scratchErrors, scratchMessages);
+                }
+                else
+                {
+                    fed = wasFed;
+                    restore();
+                }
+            }
+            ExternalInputs externals;
+            fillExternals(externals);
+            for (const auto& [name, node] : mSims)
+            {
+                const auto [frame, frameHash] = simFrameAt(*node, seconds);
+                externals.set(simulationExternal(name), frame ? Value(frame) : Value{}, frameHash);
+            }
+            const EvalContext ctx = simContext(seconds, externals);
+            for (SimRef& ref : nodes)
+            {
+                SimNode& node = *ref.node;
+                const int next = nextFrame(node);
+                if (next > f)
+                    continue;
+                std::uint64_t hash = 0;
+                const SimInputs in = simInputs(ref, ctx, &hash);
+                // Frames whose inputs are unknown wait for the next known frame (or the last) and are stepped in one go
+                // toward it, the roots moving evenly; stepping each toward the inputs shown would put the head's whole
+                // motion into the first and whip the hair. They are stamped 0 so a later look with real inputs keeps
+                // them.
+                if (node.cache.started() && !known && f < target && hash != node.towardHash)
+                    continue;
+                const std::uint64_t stamp = known ? hash : 0;
+                if (!node.cache.started())
+                {
+                    if (next != f)
+                        continue;
+                    node.cache.start(in, stamp);
+                }
+                else if (!node.cache.step(in, stamp, f - next + 1))
+                {
+                    stepError(ref);
+                    continue;
+                }
+                node.towardHash = hash;
+                const auto [frame, frameHash] = simFrameAt(node, seconds);
+                externals.set(simulationExternal(ref.name), frame ? Value(frame) : Value{}, frameHash);
+            }
+            ++run.frames;
+            if (progress && !progress(f - from + 1, count))
+            {
+                run.cancelled = true;
+                break;
+            }
+        }
+    }
+    catch (...)
+    {
+        restore();
+        throw;
+    }
+    restore();
+    run.milliseconds += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+}
+
+SimRun GroomEvaluator::simulateTo(int frame, const SimProgress& progress)
+{
+    SimRun run;
+    if (!mDoc)
+    {
+        run.errors.push_back(mGraphError.empty() ? "the groom has no graph" : mGraphError);
+        return run;
+    }
+    std::vector<std::string> errors;
+    std::vector<Message> messages;
+    prepareTime(mTime, errors, messages);
+    std::vector<SimRef> refs = simRefs({});
+    try
+    {
+        ExternalInputs externals;
+        fillExternals(externals);
+        for (SimRef& ref : refs)
+            checkSimInputs(ref, mTime, externals);
+        advanceSimulations(refs, frame, mTime, progress, run);
+    }
+    catch (const std::exception& e)
+    {
+        run.errors.push_back(std::string("simulation: ") + e.what());
+    }
+    return run;
+}
+
+SimRun GroomEvaluator::simulateBefore(double seconds)
+{
+    SimRun run;
+    if (!mDoc || hasPreview() || !mSimStepping || !mSimFeed)
+        return run;
+    double w = 0.0;
+    const int f0 = groomEvaluator::frameAt(seconds, mFps, &w);
+    const int f1 = w > 0.0 ? f0 + 1 : f0;
+    const int target = f1 - 1;
+    std::vector<SimRef> refs;
+    for (SimRef& ref : simRefs({}))
+    {
+        const SimNode& node = *ref.node;
+        if (f0 >= node.cache.startFrame() && !bakeUsable(node, seconds) && node.cache.settings().live &&
+            !(node.cache.has(f0) && node.cache.has(f1)))
+            refs.push_back(ref);
+    }
+    try
+    {
+        advanceSimulations(refs, target, seconds, {}, run);
+    }
+    catch (const std::exception& e)
+    {
+        run.errors.push_back(std::string("simulation: ") + e.what());
+    }
+    return run;
+}
+
+void GroomEvaluator::invalidateSimulation(const std::string& node)
+{
+    for (auto& [name, sim] : mSims)
+    {
+        if (node.empty() || name == node)
+        {
+            sim->cache.clear();
+            sim->shown.reset();
+            sim->shownHash = 0;
+        }
+    }
+}
+
+std::vector<SimStatus> GroomEvaluator::simulationStatus() const
+{
+    std::vector<SimStatus> out;
+    if (!mDoc)
+        return out;
+    for (const auto& [name, id] : mDoc->nodesByName)
+    {
+        const Operator& op = mDoc->graph.node(id);
+        if (op.typeName() != op::kSimulate)
+            continue;
+        const SimSettings settings = SimSettings::fromParams(op.params());
+        SimStatus s;
+        s.node = name;
+        s.startFrame = settings.startFrame;
+        s.live = settings.live;
+        s.stamp = settings.hash();
+        if (const auto it = mSims.find(name); it != mSims.end())
+        {
+            const SimNode& node = *it->second;
+            if (node.cache.settings().hash() == s.stamp) // frames of these settings; else none until stepped
+            {
+                s.ranges = node.cache.ranges();
+                s.frames = node.cache.frameCount();
+                s.stepMs = node.cache.lastStepMs();
+                s.bytes = node.cache.bytes();
+            }
+            if (node.baked && node.baked->read)
+            {
+                const bool matches = node.baked->stamp == 0 || node.baked->stamp == s.stamp;
+                s.baked = matches;
+                s.bakeStale = !matches;
+                s.bakedFirst = static_cast<int>(std::lround(secondsToFrame(node.baked->firstSeconds, mFps)));
+                s.bakedLast = static_cast<int>(std::lround(secondsToFrame(node.baked->lastSeconds, mFps)));
+                s.bakedFile = node.baked->file;
+            }
+        }
+        out.push_back(std::move(s));
+    }
+    return out;
+}
+
+GuidesPtr GroomEvaluator::simulatedFrame(const std::string& node, int frame) const
+{
+    const auto it = mSims.find(node);
+    return it == mSims.end() ? nullptr : it->second->cache.frame(frame);
+}
+
+void GroomEvaluator::setBakedSimulation(const std::string& node, BakedSimulationPtr baked)
+{
+    std::unique_ptr<SimNode>& sim = mSims[node];
+    if (!sim)
+        sim = std::make_unique<SimNode>();
+    sim->baked = std::move(baked);
+}
+
+BakedSimulationPtr GroomEvaluator::bakedSimulation(const std::string& node) const
+{
+    const auto it = mSims.find(node);
+    return it == mSims.end() ? nullptr : it->second->baked;
+}
+
+std::uint64_t GroomEvaluator::simulationStamp(const std::string& node) const
+{
+    if (!mDoc)
+        return 0;
+    const auto it = mDoc->nodesByName.find(node);
+    if (it == mDoc->nodesByName.end() || mDoc->graph.node(it->second).typeName() != op::kSimulate)
+        return 0;
+    return SimSettings::fromParams(mDoc->graph.node(it->second).params()).hash();
 }
 } // namespace lila::groom

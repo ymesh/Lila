@@ -8,16 +8,20 @@
 #include "geo/Mesh.h"
 #include "geo/Symmetry.h"
 #include "scene/Components.h"
+#include "scene/Diagnostics.h"
 #include "scene/DeformerUtil.h"
 #include "scene/MeshNodes.h"
 #include "scene/Rig.h"
 #include "scene/RigUtil.h"
 #include "scene/SkinMethods.h"
+#include "scene/SkinPaint.h"
+#include "scene/WeightProxy.h"
 
 #include <glm/gtc/quaternion.hpp>
 #include <tbb/parallel_for.h>
 
 #include <algorithm>
+#include <map>
 #include <numeric>
 #include <unordered_map>
 
@@ -31,7 +35,10 @@ using namespace deformutil;
 json SkinWeights::toJson() const
 {
     // Flat numeric arrays, so the binary format stores them as raw blobs.
-    return {{"kind", kind()}, {"offsets", offsets}, {"influences", influences}, {"weights", weights}};
+    json j = {{"kind", kind()}, {"offsets", offsets}, {"influences", influences}, {"weights", weights}};
+    if (!automatic.empty())
+        j["automatic"] = automatic;
+    return j;
 }
 
 DataPtr SkinWeights::fromJson(const json& j)
@@ -49,6 +56,9 @@ DataPtr SkinWeights::fromJson(const json& j)
     read("offsets", w->offsets);
     read("influences", w->influences);
     read("weights", w->weights);
+    read("automatic", w->automatic);
+    if (w->automatic.size() != w->weights.size())
+        w->automatic.clear();
     if (w->offsets.empty())
         w->offsets = {0};
     // A damaged file must not index past the entry arrays.
@@ -66,9 +76,14 @@ WeightTable WeightTable::from(const SkinWeights* w, size_t pointCount)
     t.points.resize(pointCount);
     if (!w)
         return t;
+    const bool flags = w->automatic.size() == w->weights.size() && !w->automatic.empty();
     for (size_t p = 0; p < std::min<size_t>(pointCount, w->pointCount()); ++p)
         for (uint32_t k = w->offsets[p]; k < w->offsets[p + 1]; ++k)
+        {
             t.points[p].push_back({w->influences[k], w->weights[k]});
+            if (flags && w->automatic[k])
+                t.markAutomatic(p, w->influences[k]);
+        }
     return t;
 }
 
@@ -76,16 +91,23 @@ std::shared_ptr<const SkinWeights> WeightTable::pack() const
 {
     auto w = std::make_shared<SkinWeights>();
     w->offsets.reserve(points.size() + 1);
-    for (const auto& pt : points)
+    bool anyAutomatic = false;
+    std::vector<uint8_t> flags;
+    for (size_t p = 0; p < points.size(); ++p)
     {
-        for (const Entry& e : pt)
+        for (const Entry& e : points[p])
             if (e.second > 0.0f)
             {
                 w->influences.push_back(e.first);
                 w->weights.push_back(e.second);
+                const bool a = isAutomatic(p, e.first);
+                flags.push_back(uint8_t(a));
+                anyAutomatic |= a;
             }
         w->offsets.push_back(uint32_t(w->influences.size()));
     }
+    if (anyAutomatic)
+        w->automatic = std::move(flags);
     return w;
 }
 
@@ -121,9 +143,18 @@ void WeightTable::normalize(size_t p, const std::vector<char>& locked)
     if (free <= 0.0f)
         return;
     float s = room / free;
+    int movers = 0;
+    for (const Entry& e : pt)
+        movers += !isLocked(e.first) && e.second > 0.0f;
+    // A rescale of one entry has only one place to go; a split between several is Lila's choice.
+    const bool chose = movers > 1 && std::abs(s - 1.0f) > 1e-3f;
     for (Entry& e : pt)
         if (!isLocked(e.first))
+        {
             e.second *= s;
+            if (chose)
+                markAutomatic(p, e.first);
+        }
     std::erase_if(pt, [](const Entry& e) { return e.second <= 0.0f; });
 }
 
@@ -141,7 +172,107 @@ void WeightTable::prune(size_t p, int maxInfluences, float threshold, const std:
         });
         pt.resize(size_t(maxInfluences));
     }
+    if (p < automatic.size())
+        std::erase_if(automatic[p], [&](uint32_t i) { return std::none_of(pt.begin(), pt.end(), [&](const Entry& e) { return e.first == i; }); });
     normalize(p, locked);
+}
+
+bool WeightTable::isAutomatic(size_t p, uint32_t influence) const
+{
+    return p < automatic.size() && std::find(automatic[p].begin(), automatic[p].end(), influence) != automatic[p].end();
+}
+
+void WeightTable::markAutomatic(size_t p, uint32_t influence)
+{
+    if (automatic.size() <= p)
+        automatic.resize(std::max(points.size(), p + 1));
+    if (!isAutomatic(p, influence))
+        automatic[p].push_back(influence);
+}
+
+void WeightTable::markAuthored(size_t p, uint32_t influence)
+{
+    if (p < automatic.size())
+        std::erase(automatic[p], influence);
+}
+
+void WeightTable::markPointAutomatic(size_t p)
+{
+    if (p < points.size())
+        for (const Entry& e : points[p])
+            markAutomatic(p, e.first);
+}
+
+void WeightTable::markPointAuthored(size_t p)
+{
+    if (p < automatic.size())
+        automatic[p].clear();
+}
+
+bool WeightTable::pointAutomatic(size_t p) const
+{
+    if (p >= automatic.size() || p >= points.size())
+        return false;
+    for (const Entry& e : points[p])
+        if (e.second > 0.0f && isAutomatic(p, e.first))
+            return true;
+    return false;
+}
+
+std::vector<uint32_t> WeightTable::automaticPoints() const
+{
+    std::vector<uint32_t> out;
+    for (size_t p = 0; p < std::min(points.size(), automatic.size()); ++p)
+        if (pointAutomatic(p))
+            out.push_back(uint32_t(p));
+    return out;
+}
+
+// ------------------------------------------------------------------------------------------------ layers data
+
+size_t SkinLayers::bytes() const
+{
+    size_t b = 0;
+    for (const SkinLayer& l : layers)
+    {
+        b += l.mask.size() * 4 + l.name.size();
+        for (const auto& pt : l.weights.points)
+            b += pt.size() * 8;
+    }
+    return b;
+}
+
+json SkinLayers::toJson() const
+{
+    json arr = json::array();
+    for (const SkinLayer& l : layers)
+        arr.push_back({{"name", l.name}, {"enabled", l.enabled}, {"opacity", l.opacity}, {"weights", l.weights.pack()->toJson()}, {"mask", l.mask}});
+    return {{"kind", kind()}, {"active", active}, {"layers", arr}};
+}
+
+DataPtr SkinLayers::fromJson(const json& j)
+{
+    auto out = std::make_shared<SkinLayers>();
+    out->active = j.value("active", 0);
+    if (j.contains("layers") && j["layers"].is_array())
+        for (const json& lj : j["layers"])
+        {
+            SkinLayer l;
+            l.name = lj.value("name", std::string("Layer"));
+            l.enabled = lj.value("enabled", true);
+            l.opacity = lj.value("opacity", 1.0f);
+            if (lj.contains("mask") && lj["mask"].is_array())
+                for (const json& m : lj["mask"])
+                    l.mask.push_back(m.get<float>());
+            if (lj.contains("weights"))
+            {
+                auto w = std::static_pointer_cast<const SkinWeights>(SkinWeights::fromJson(lj["weights"]));
+                l.weights = WeightTable::from(w.get(), w->pointCount());
+            }
+            out->layers.push_back(std::move(l));
+        }
+    out->active = std::clamp(out->active, 0, std::max(0, int(out->layers.size()) - 1));
+    return out;
 }
 
 // ------------------------------------------------------------------------------------------------ nodes
@@ -327,6 +458,57 @@ void SkinClusterNode::compute(const EvalContext&)
 
 namespace skin
 {
+namespace
+{
+std::map<std::string, WeightHost, std::less<>>& hosts()
+{
+    static std::map<std::string, WeightHost, std::less<>> h;
+    return h;
+}
+
+const WeightHost& skinHost()
+{
+    static const WeightHost h{.weights = SkinClusterNode::kWeights,
+                              .layers = SkinClusterNode::kWeightLayers,
+                              .geomMatrix = SkinClusterNode::kGeomMatrix,
+                              .inMesh = SkinClusterNode::kInMesh,
+                              .outMesh = SkinClusterNode::kOutMesh,
+                              .maxInfluences = SkinClusterNode::kMaxInfluences};
+    return h;
+}
+} // namespace
+
+void registerWeightHost(const std::string& type, WeightHost host) { hosts()[type] = std::move(host); }
+
+const WeightHost* weightHost(const Graph& g, NodeId node)
+{
+    const Node* n = g.node(node);
+    if (!n)
+        return nullptr;
+    if (dynamic_cast<const SkinClusterNode*>(n))
+        return &skinHost();
+    const auto it = hosts().find(n->type().name);
+    return it != hosts().end() ? &it->second : nullptr;
+}
+
+NodeId findPainted(Graph& g, NodeId mesh)
+{
+    if (const NodeId s = find(g, mesh); s != kNoNode)
+        return s;
+    for (NodeId id : modifiers::stack(g, mesh))
+        if (weightHost(g, id))
+            return id;
+    return kNoNode;
+}
+
+int maxInfluencesOf(Graph& g, NodeId skin)
+{
+    const WeightHost* h = weightHost(g, skin);
+    if (!h)
+        return 4;
+    return h->maxInfluences >= 0 ? int(g.node(skin)->as<int64_t>(h->maxInfluences)) : h->fixedMaxInfluences;
+}
+
 NodeId find(Graph& g, NodeId mesh)
 {
     for (NodeId id : modifiers::stack(g, mesh))
@@ -370,6 +552,8 @@ NodeId meshOf(Graph& g, NodeId skin)
 
 std::vector<Influence> influences(Graph& g, NodeId skin)
 {
+    if (const WeightHost* h = weightHost(g, skin); h && h->influences)
+        return h->influences(g, skin);
     std::vector<Influence> out;
     PlugRef plug{skin, SkinClusterNode::kInfluences, -1};
     while (auto src = g.source(plug))
@@ -415,19 +599,24 @@ std::vector<char> lockMask(const std::vector<Influence>& infs)
 
 MeshPtr inputMesh(Graph& g, NodeId skin)
 {
-    return std::get<MeshPtr>(g.value({skin, SkinClusterNode::kInMesh, -1}));
+    const WeightHost* h = weightHost(g, skin);
+    return std::get<MeshPtr>(g.value({skin, h ? h->inMesh : int(SkinClusterNode::kInMesh), -1}));
 }
 
 WeightTable table(Graph& g, NodeId skin)
 {
+    const WeightHost* h = weightHost(g, skin);
     MeshPtr m = inputMesh(g, skin);
-    const auto* w = dynamic_cast<const SkinWeights*>(std::get<DataPtr>(g.storedValue({skin, SkinClusterNode::kWeights, -1})).get());
+    const auto* w = dynamic_cast<const SkinWeights*>(std::get<DataPtr>(g.storedValue({skin, h ? h->weights : int(SkinClusterNode::kWeights), -1})).get());
+    if (!w && h && h->seed)
+        return h->seed(g, skin);
     return WeightTable::from(w, m ? m->pointCapacity() : (w ? w->pointCount() : 0));
 }
 
 void setWeights(Graph& g, NodeId skin, const WeightTable& t)
 {
-    g.setValue({skin, SkinClusterNode::kWeights, -1}, DataPtr(t.pack()));
+    const WeightHost* h = weightHost(g, skin);
+    g.setValue({skin, h ? h->weights : int(SkinClusterNode::kWeights), -1}, DataPtr(t.pack()));
 }
 
 uint32_t addInfluence(Graph& g, NodeId skin, NodeId joint)
@@ -456,80 +645,447 @@ uint32_t addInfluence(Graph& g, NodeId skin, NodeId joint)
     g.connect({id, SkinInfluenceNode::kLink, -1}, end);
     return next;
 }
-void paintPoint(WeightTable& t, size_t p, uint32_t inf, PaintMode mode, bool invert, float value, float a, const std::vector<char>& locked,
-                int maxInf)
+const char* outcomeName(PaintOutcome o)
 {
-    if (p >= t.points.size() || mode == PaintMode::Smooth || (inf < locked.size() && locked[inf]))
-        return;
-    float lockedSum = 0.0f, others = 0.0f;
-    for (auto& [i, w] : t.points[p])
+    switch (o)
     {
-        if (i < locked.size() && locked[i])
-            lockedSum += w;
-        else if (i != inf)
-            others += w;
+    case PaintOutcome::Painted: return "painted";
+    case PaintOutcome::Unchanged: return "unchanged";
+    case PaintOutcome::Ambiguous: return "ambiguous";
+    case PaintOutcome::NowhereToGo: return "nowhereToGo";
+    case PaintOutcome::InfluenceLimit: return "influenceLimit";
+    case PaintOutcome::Locked: return "locked";
     }
-    float room = std::max(0.0f, 1.0f - lockedSum);
-    float old = t.get(p, inf), next = old;
-    switch (mode)
-    {
-    case PaintMode::Add: next = invert ? old - value * a : old + value * a; break;
-    case PaintMode::Replace: next = old + (value - old) * a; break;
-    case PaintMode::Scale: next = old * (1.0f - a * (1.0f - value)); break;
-    case PaintMode::Smooth: break;
-    }
-    next = std::clamp(next, 0.0f, room);
-    // With nothing else to hand weight to, a point can only be full or empty on this influence.
-    if (others <= 1e-6f)
-        next = next > 0.0f || old > 0.0f ? room : 0.0f;
-    t.set(p, inf, next);
-    std::vector<char> keep = locked;
-    if (inf >= keep.size())
-        keep.resize(inf + 1, 0);
-    keep[inf] = 1;
-    t.prune(p, maxInf, 1e-4f, keep);
+    return "unchanged";
 }
 
-void smoothPoints(const geo::Mesh& m, WeightTable& t, const std::vector<std::pair<uint32_t, float>>& pts, const std::vector<char>& locked, int maxInf)
+PaintOutcome paintPoint(WeightTable& t, size_t p, PaintMode mode, bool invert, float value, float a, const std::vector<char>& locked,
+                        const PaintOptions& o, bool dryRun)
+{
+    if (p >= t.points.size() || mode == PaintMode::Smooth)
+        return PaintOutcome::Unchanged;
+    auto isLocked = [&](uint32_t i) { return i < locked.size() && locked[i]; };
+    const uint32_t inf = o.influence;
+    if (isLocked(inf))
+        return PaintOutcome::Locked;
+    const bool hasReceiver = o.receiver >= 0 && uint32_t(o.receiver) != inf;
+    const auto receiver = uint32_t(std::max<int64_t>(0, o.receiver));
+    if (hasReceiver && isLocked(receiver))
+        return PaintOutcome::Locked;
+
+    auto& pt = t.points[p];
+    int present = 0;
+    std::vector<uint32_t> partners;
+    for (auto& [i, w] : pt)
+    {
+        if (w <= 0.0f)
+            continue;
+        ++present;
+        if (!isLocked(i) && i != inf && !hasReceiver)
+            partners.push_back(i);
+    }
+    if (hasReceiver)
+        partners = {receiver};
+    const float old = t.get(p, inf);
+    float want = old;
+    switch (mode)
+    {
+    case PaintMode::Add: want = invert ? old - value * a : old + value * a; break;
+    case PaintMode::Replace: want = old + (value - old) * a; break;
+    case PaintMode::Scale: want = old * (1.0f - a * (1.0f - value)); break;
+    case PaintMode::Smooth: break;
+    }
+    if (std::abs(want - old) < 1e-7f)
+        return PaintOutcome::Unchanged;
+
+    // An unweighted point can only become this influence's, whole.
+    if (present == 0)
+    {
+        if (want <= 0.0f)
+            return PaintOutcome::Unchanged;
+        if (!dryRun)
+        {
+            t.set(p, inf, 1.0f);
+            t.markAuthored(p, inf);
+        }
+        return PaintOutcome::Painted;
+    }
+
+    float partnerSum = 0.0f;
+    for (uint32_t i : partners)
+        partnerSum += t.get(p, i);
+    if (!hasReceiver && partners.empty())
+        return want < old ? PaintOutcome::NowhereToGo : PaintOutcome::Unchanged;
+    if (hasReceiver && want > old && partnerSum <= 0.0f)
+        return PaintOutcome::NowhereToGo;
+    if (!hasReceiver && partners.size() > 1 && o.strict)
+        return PaintOutcome::Ambiguous;
+
+    const float next = std::clamp(want, 0.0f, old + partnerSum);
+    const float delta = next - old;
+    if (std::abs(delta) < 1e-7f)
+        return want < old ? PaintOutcome::NowhereToGo : PaintOutcome::Unchanged;
+
+    // Slots: the painted influence may arrive or leave, the receiver may arrive or empty.
+    int slots = present + (old <= 0.0f && next > 0.0f) - (old > 0.0f && next <= 0.0f);
+    if (hasReceiver)
+    {
+        const float rw = t.get(p, receiver), rNext = rw - delta;
+        slots += (rw <= 0.0f && rNext > 1e-6f) - (rw > 0.0f && rNext <= 1e-6f);
+    }
+    if (o.maxInfluences > 0 && slots > o.maxInfluences && (o.strict || hasReceiver))
+        return PaintOutcome::InfluenceLimit;
+    if (dryRun)
+        return PaintOutcome::Painted;
+
+    t.set(p, inf, next);
+    t.markAuthored(p, inf);
+    if (partners.size() == 1)
+    {
+        const float pw = t.get(p, partners[0]);
+        t.set(p, partners[0], std::max(0.0f, pw - delta));
+        t.markAuthored(p, partners[0]);
+    }
+    else if (partnerSum > 0.0f)
+    {
+        const float scale = std::max(0.0f, partnerSum - delta) / partnerSum;
+        for (uint32_t i : partners)
+        {
+            t.set(p, i, t.get(p, i) * scale);
+            t.markAutomatic(p, i);
+        }
+    }
+    std::vector<char> keep = locked;
+    keep.resize(std::max<size_t>(keep.size(), size_t(std::max(inf, receiver)) + 1), 0);
+    keep[inf] = 1;
+    if (hasReceiver)
+        keep[receiver] = 1;
+    t.prune(p, o.maxInfluences, 1e-4f, keep);
+    return PaintOutcome::Painted;
+}
+
+namespace
+{
+/** Each listed point's edge neighbours on the rest mesh, weighted by inverse length so density doesn't bias a relax. */
+std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>> edgeWeights(const geo::Mesh& m, const std::vector<std::pair<uint32_t, float>>& pts)
+{
+    std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>> out;
+    out.reserve(pts.size());
+    const double floor = std::max(1e-9, glm::length(m.bounds().size()) * 1e-6);
+    for (auto [p, a] : pts)
+    {
+        if (p >= m.pointCapacity() || !m.pointValid(p) || out.contains(p))
+            continue;
+        auto& n = out[p];
+        m.forEachPointEdge(p, [&](geo::Index e) {
+            geo::Index q = m.edgeOtherPoint(e, p);
+            n.push_back({q, float(1.0 / std::max(glm::length(m.position(q) - m.position(p)), floor))});
+        });
+    }
+    return out;
+}
+} // namespace
+
+void relaxPoints(const geo::Mesh& rest, WeightTable& t, const std::vector<std::pair<uint32_t, float>>& pts, const std::vector<char>& locked, int maxInf,
+                 int iterations, const std::vector<char>* fixed)
 {
     LILA_ZONE();
 
-    std::vector<std::vector<WeightTable::Entry>> result(pts.size());
-    tbb::parallel_for(size_t(0), pts.size(), [&](size_t k) {
-        auto [p, a] = pts[k];
-        if (p >= t.points.size() || !m.pointValid(p))
-        {
-            result[k] = p < t.points.size() ? t.points[p] : std::vector<WeightTable::Entry>{};
-            return;
-        }
-        std::unordered_map<uint32_t, float> acc;
-        int count = 0;
-        m.forEachPointEdge(p, [&](geo::Index e) {
-            geo::Index o = m.edgeOtherPoint(e, p);
-            if (o >= t.points.size())
-                return;
-            for (auto& [i, w] : t.points[o])
-                acc[i] += w;
-            ++count;
+    auto isLocked = [&](uint32_t i) { return i < locked.size() && locked[i]; };
+    auto nbrs = edgeWeights(rest, pts);
+    std::vector<std::pair<uint32_t, float>> live;
+    for (auto [p, a] : pts)
+        if (p < t.points.size() && a > 0.0f && nbrs.contains(p) && !(fixed && p < fixed->size() && (*fixed)[p]))
+            live.push_back({p, std::min(1.0f, a)});
+    std::vector<std::vector<WeightTable::Entry>> result(live.size());
+    for (int it = 0; it < std::max(1, iterations); ++it)
+    {
+        tbb::parallel_for(size_t(0), live.size(), [&](size_t k) {
+            auto [p, a] = live[k];
+            std::unordered_map<uint32_t, float> acc;
+            float total = 0.0f;
+            for (auto [q, c] : nbrs.at(p))
+            {
+                if (q >= t.points.size())
+                    continue;
+                for (auto& [i, w] : t.points[q])
+                    acc[i] += w * c;
+                total += c;
+            }
+            std::unordered_map<uint32_t, float> blended;
+            float lockedSum = 0.0f;
+            for (auto& [i, w] : t.points[p])
+            {
+                if (isLocked(i))
+                    lockedSum += w;
+                blended[i] += isLocked(i) ? w : w * (1.0f - a);
+            }
+            if (total > 0.0f)
+                for (auto& [i, w] : acc)
+                    if (!isLocked(i))
+                        blended[i] += w / total * a;
+            float free = 0.0f;
+            for (auto& [i, w] : blended)
+                if (!isLocked(i))
+                    free += w;
+            const float s = free > 0.0f ? std::max(0.0f, 1.0f - lockedSum) / free : 0.0f;
+            auto& out = result[k];
+            out.clear();
+            for (auto& [i, w] : blended)
+                if (float v = isLocked(i) ? w : w * s; v > 0.0f)
+                    out.push_back({i, v});
+            std::sort(out.begin(), out.end());
         });
-        std::unordered_map<uint32_t, float> blended;
-        for (auto& [i, w] : t.points[p])
-            blended[i] += w * (1.0f - a);
-        if (count > 0)
-            for (auto& [i, w] : acc)
-                blended[i] += w / float(count) * a;
-        for (auto& [i, w] : blended)
-            if (i < locked.size() && locked[i])
-                w = t.get(p, i);
-        result[k].assign(blended.begin(), blended.end());
-        std::sort(result[k].begin(), result[k].end());
-    });
-    for (size_t k = 0; k < pts.size(); ++k)
-        if (pts[k].first < t.points.size())
+        for (size_t k = 0; k < live.size(); ++k)
         {
-            t.points[pts[k].first] = std::move(result[k]);
-            t.prune(pts[k].first, maxInf, 1e-4f, locked);
+            const uint32_t p = live[k].first;
+            t.points[p] = result[k];
+            t.prune(p, maxInf, 1e-4f, locked);
+            t.markPointAuthored(p);
         }
+    }
+}
+
+std::vector<glm::dmat4> objectMatrices(Graph& g, NodeId skin)
+{
+    g.evaluate();
+    const glm::dmat4 geom = g.node(skin)->as<glm::dmat4>(SkinClusterNode::kGeomMatrix), inv = glm::inverse(geom);
+    std::vector<glm::dmat4> out;
+    for (const Influence& i : influences(g, skin))
+    {
+        const Node* link = g.node(i.link);
+        if (!link)
+            continue;
+        if (out.size() <= i.index)
+            out.resize(i.index + 1, glm::dmat4(1.0));
+        out[i.index] = inv * link->as<glm::dmat4>(SkinInfluenceNode::kMatrix) * link->as<glm::dmat4>(SkinInfluenceNode::kBindPreMatrix) * geom;
+    }
+    return out;
+}
+
+std::shared_ptr<const SkinLayers> layers(Graph& g, NodeId skin)
+{
+    const WeightHost* h = weightHost(g, skin);
+    if (!h || h->layers < 0)
+        return nullptr;
+    auto l = std::dynamic_pointer_cast<const SkinLayers>(std::get<DataPtr>(g.storedValue({skin, h->layers, -1})));
+    return l && !l->layers.empty() ? l : nullptr;
+}
+
+void setLayers(Graph& g, NodeId skin, std::shared_ptr<const SkinLayers> l)
+{
+    const WeightHost* h = weightHost(g, skin);
+    if (!h || h->layers < 0)
+        throw CommandError(g.node(skin)->name() + " has no weight layers");
+    g.setValue({skin, h->layers, -1}, DataPtr(std::move(l)));
+}
+
+namespace
+{
+/** One layer's point standing in for what the layer stores, while a stroke paints it. */
+struct PointOverride
+{
+    int layer = -1;
+    const std::vector<WeightTable::Entry>* entries = nullptr;
+    const std::vector<uint32_t>* automatic = nullptr;
+    float mask = 0.0f;
+};
+
+void compositeAt(const SkinLayers& l, int upTo, size_t p, WeightTable& out, int maxInf, const PointOverride& ov)
+{
+    if (l.layers.empty() || p >= out.points.size())
+        return;
+    static const std::vector<WeightTable::Entry> kNoEntries;
+    static const std::vector<uint32_t> kNoIds;
+    auto entriesOf = [&](int k) -> const std::vector<WeightTable::Entry>& {
+        if (k == ov.layer)
+            return *ov.entries;
+        const WeightTable& t = l.layers[size_t(k)].weights;
+        return p < t.points.size() ? t.points[p] : kNoEntries;
+    };
+    auto autosOf = [&](int k) -> const std::vector<uint32_t>& {
+        if (k == ov.layer)
+            return ov.automatic ? *ov.automatic : kNoIds;
+        const WeightTable& t = l.layers[size_t(k)].weights;
+        return p < t.automatic.size() ? t.automatic[p] : kNoIds;
+    };
+    std::vector<WeightTable::Entry> acc = entriesOf(0);
+    std::vector<uint32_t> autos = autosOf(0);
+    bool blended = false;
+    for (int k = 1; k < std::min(upTo, int(l.layers.size())); ++k)
+    {
+        const SkinLayer& layer = l.layers[size_t(k)];
+        const float mask = k == ov.layer ? ov.mask : p < layer.mask.size() ? layer.mask[p] : 0.0f;
+        const float a = layer.enabled ? layer.opacity * mask : 0.0f;
+        if (a <= 0.0f)
+            continue;
+        const auto& top = entriesOf(k);
+        const auto& topAuto = autosOf(k);
+        if (a >= 1.0f)
+        {
+            acc = top;
+            autos = topAuto;
+            continue;
+        }
+        std::unordered_map<uint32_t, float> m;
+        for (auto& [i, w] : acc)
+            m[i] += w * (1.0f - a);
+        for (auto& [i, w] : top)
+            m[i] += w * a;
+        acc.assign(m.begin(), m.end());
+        std::sort(acc.begin(), acc.end());
+        blended = true;
+        for (uint32_t i : topAuto)
+            if (std::find(autos.begin(), autos.end(), i) == autos.end())
+                autos.push_back(i);
+    }
+    out.points[p] = std::move(acc);
+    out.markPointAuthored(p);
+    for (uint32_t i : autos)
+        out.markAutomatic(p, i);
+    // Only a blend can need pruning; a point a layer covers fully or not at all keeps its weights bit for bit.
+    if (blended)
+        out.prune(p, maxInf, 0.0f, {});
+}
+} // namespace
+
+void compositePoint(const SkinLayers& l, int upTo, size_t p, WeightTable& out, int maxInf) { compositeAt(l, upTo, p, out, maxInf, {}); }
+
+WeightTable composite(const SkinLayers& l, size_t pointCount, int maxInf)
+{
+    LILA_ZONE();
+
+    WeightTable out;
+    out.points.resize(pointCount);
+    // Sized up front: markAutomatic would grow it from several threads at once.
+    out.automatic.resize(pointCount);
+    tbb::parallel_for(size_t(0), pointCount, [&](size_t p) { compositePoint(l, int(l.layers.size()), p, out, maxInf); });
+    return out;
+}
+
+WeightEdit::WeightEdit(Graph& g, NodeId skin) : mGraph(g), mSkin(skin)
+{
+    mInfluences = skin::influences(g, skin);
+    mLocked = lockMask(mInfluences);
+    mMaxInf = maxInfluencesOf(g, skin);
+    mLayers = skin::layers(g, skin);
+    if (!mLayers)
+    {
+        mTable = skin::table(g, skin);
+        return;
+    }
+    MeshPtr m = inputMesh(g, skin);
+    const size_t n = m ? m->pointCapacity() : mLayers->layers[0].weights.points.size();
+    const auto active = size_t(std::clamp(mLayers->active, 0, int(mLayers->layers.size()) - 1));
+    mSeed = mLayers->layers[active].weights;
+    mSeed.points.resize(n);
+    mSeed.automatic.resize(n);
+    if (active > 0)
+    {
+        const auto& mask = mLayers->layers[active].mask;
+        for (size_t p = 0; p < n; ++p)
+            if (p >= mask.size() || mask[p] <= 0.0f)
+                compositePoint(*mLayers, int(active), p, mSeed, mMaxInf);
+    }
+    mTable = mSeed;
+}
+
+bool WeightEdit::changed(size_t p) const
+{
+    if (p >= mTable.points.size())
+        return false;
+    if (p >= mSeed.points.size())
+        return !mTable.points[p].empty();
+    return mTable.points[p] != mSeed.points[p];
+}
+
+void WeightEdit::compositeInto(size_t p, WeightTable& out) const
+{
+    if (p >= out.points.size() || p >= mTable.points.size())
+        return;
+    auto copyFlags = [&](WeightTable& dst) {
+        dst.markPointAuthored(p);
+        if (p < mTable.automatic.size())
+            for (uint32_t i : mTable.automatic[p])
+                dst.markAutomatic(p, i);
+    };
+    if (!mLayers)
+    {
+        out.points[p] = mTable.points[p];
+        copyFlags(out);
+        return;
+    }
+    // The active layer's point comes from the edit; every other point and layer is read where it is stored.
+    const auto active = std::clamp(mLayers->active, 0, int(mLayers->layers.size()) - 1);
+    const auto& stored = mLayers->layers[size_t(active)].mask;
+    PointOverride ov{.layer = active,
+                     .entries = &mTable.points[p],
+                     .automatic = p < mTable.automatic.size() ? &mTable.automatic[p] : nullptr,
+                     .mask = std::max(p < stored.size() ? stored[p] : 0.0f, changed(p) ? 1.0f : 0.0f)};
+    compositeAt(*mLayers, int(mLayers->layers.size()), p, out, mMaxInf, ov);
+}
+
+void WeightEdit::commit()
+{
+    if (!mLayers)
+    {
+        setWeights(mGraph, mSkin, mTable);
+        return;
+    }
+    auto l = std::make_shared<SkinLayers>(*mLayers);
+    const auto active = size_t(std::clamp(l->active, 0, int(l->layers.size()) - 1));
+    SkinLayer& layer = l->layers[active];
+    if (active > 0)
+    {
+        layer.mask.resize(mTable.points.size(), 0.0f);
+        for (size_t p = 0; p < mTable.points.size(); ++p)
+            if (layer.mask[p] <= 0.0f && changed(p))
+                layer.mask[p] = 1.0f;
+    }
+    layer.weights = mTable;
+    const size_t n = mTable.points.size();
+    setLayers(mGraph, mSkin, l);
+    setWeights(mGraph, mSkin, composite(*l, n, mMaxInf));
+}
+
+void reportAutomatic(Graph& g)
+{
+    diagnostics::clear("skinWeights");
+    for (NodeId id : g.nodes())
+    {
+        const Node* n = g.node(id);
+        if (!n || !dynamic_cast<const SkinClusterNode*>(n))
+            continue;
+        const auto* w = dynamic_cast<const SkinWeights*>(std::get<DataPtr>(g.storedValue({id, SkinClusterNode::kWeights, -1})).get());
+        if (!w || w->automatic.empty())
+            continue;
+        MeshPtr m = inputMesh(g, id);
+        size_t count = 0;
+        for (uint32_t p = 0; p < w->pointCount(); ++p)
+        {
+            if (m && (p >= m->pointCapacity() || !m->pointValid(p)))
+                continue;
+            for (uint32_t k = w->offsets[p]; k < w->offsets[p + 1]; ++k)
+                if (w->automatic[k])
+                {
+                    ++count;
+                    break;
+                }
+        }
+        const NodeId mesh = meshOf(g, id);
+        if (!count || mesh == kNoNode)
+            continue;
+        const std::string path = g.node(mesh)->path();
+        diagnostics::Issue issue;
+        issue.source = "skinWeights";
+        issue.severity = diagnostics::Severity::Warning;
+        issue.target = path;
+        issue.message = std::to_string(count) + (count == 1 ? " vertex has" : " vertices have") +
+                        " automatic weights (Lila chose the split). Paint, relax or settle them, or accept them.";
+        issue.select = "from lila import ops\nops.selectAutomaticWeights(" + json(path).dump() + ")";
+        issue.fix = "from lila import ops\nops.acceptSkinWeights(" + json(path).dump() + ")";
+        diagnostics::report(std::move(issue));
+    }
 }
 } // namespace skin
 
@@ -817,7 +1373,10 @@ void registerSkinCommandsImpl()
             WeightTable t = closestWeights(world, skinBones(g, infs), maxInf, a.get<double>("dropoffRate"), bvh.get());
             if (method == "heatmap")
                 smoothWeights(world, t, 6, maxInf, {});
+            for (size_t p = 0; p < t.points.size(); ++p)
+                t.markPointAutomatic(p);
             skin::setWeights(g, skin, t);
+            skin::reportAutomatic(g);
             return g.node(skin)->path();
         },
     });
@@ -840,13 +1399,16 @@ void registerSkinCommandsImpl()
                 throw CommandError("skinPercent: give a skinned mesh");
             NodeId skin = skin::resolve(g, objs.back(), "skinPercent");
             auto infs = skin::influences(g, skin);
-            WeightTable t = skin::table(g, skin);
+            skin::WeightEdit edit(g, skin);
+            WeightTable& t = edit.table();
             std::vector<uint32_t> pts = pointsArg(a, g, skin, !a.has("transformValue"));
             for (uint32_t p : pts)
                 if (p >= t.points.size())
                     throw CommandError("skinPercent: point " + std::to_string(p) + " is out of range");
             if (!a.has("transformValue"))
             {
+                // A query reads the weights the skin uses, not the active layer's.
+                t = skin::table(g, skin);
                 std::unordered_map<uint32_t, std::string> names;
                 for (const auto& i : infs)
                     names[i.index] = i.joint != kNoNode ? g.path(i.joint) : i.name;
@@ -888,11 +1450,15 @@ void registerSkinCommandsImpl()
             for (uint32_t p : pts)
             {
                 for (auto& [i, wt] : values)
+                {
                     t.set(p, i, wt);
+                    t.markAuthored(p, i);
+                }
                 if (a.get<bool>("normalize"))
                     t.normalize(p, mask);
             }
-            skin::setWeights(g, skin, t);
+            edit.commit();
+            skin::reportAutomatic(g);
             return nullptr;
         },
     });
@@ -958,8 +1524,14 @@ void registerSkinCommandsImpl()
             }
             std::vector<char> none;
             for (size_t p = 0; p < dst.points.size(); ++p)
+            {
                 dst.prune(p, maxInf, 1e-4f, none);
-            skin::setWeights(g, to, dst);
+                dst.markPointAutomatic(p);
+            }
+            skin::WeightEdit edit(g, to);
+            edit.table() = std::move(dst);
+            edit.commit();
+            skin::reportAutomatic(g);
             return nullptr;
         },
     });
@@ -1010,7 +1582,8 @@ void registerSkinCommandsImpl()
             geo::Mesh world = worldCopy(*m, g.node(skin)->as<glm::dmat4>(SkinClusterNode::kGeomMatrix));
             geo::SymmetryPlane plane{axis, 0.0};
             geo::SymmetryMap map = geo::SymmetryMap::build(world, plane, a.get<double>("tolerance"));
-            WeightTable t = skin::table(g, skin);
+            skin::WeightEdit edit(g, skin);
+            WeightTable& t = edit.table();
             double side = a.get<bool>("positiveToNegative") ? 1.0 : -1.0;
             int copied = 0;
             for (geo::Index p = 0; p < world.pointCapacity() && p < t.points.size(); ++p)
@@ -1022,11 +1595,18 @@ void registerSkinCommandsImpl()
                     continue;
                 auto& dst = t.points[q];
                 dst.clear();
+                t.markPointAuthored(q);
                 for (auto& [i, wt] : t.points[p])
-                    dst.push_back({partner.contains(i) ? partner[i] : i, wt});
+                {
+                    const uint32_t to = partner.contains(i) ? partner[i] : i;
+                    dst.push_back({to, wt});
+                    if (t.isAutomatic(p, i))
+                        t.markAutomatic(q, to);
+                }
                 ++copied;
             }
-            skin::setWeights(g, skin, t);
+            edit.commit();
+            skin::reportAutomatic(g);
             return copied;
         },
     });
@@ -1044,12 +1624,13 @@ void registerSkinCommandsImpl()
             if (objs.empty())
                 throw CommandError("normalizeWeights: give a skinned mesh");
             NodeId skin = skin::resolve(g, objs.back(), "normalizeWeights");
-            WeightTable t = skin::table(g, skin);
-            auto locked = skin::lockMask(skin::influences(g, skin));
+            skin::WeightEdit edit(g, skin);
+            WeightTable& t = edit.table();
             for (uint32_t p : pointsArg(a, g, skin, true))
                 if (p < t.points.size())
-                    t.normalize(p, locked);
-            skin::setWeights(g, skin, t);
+                    t.normalize(p, edit.locked());
+            edit.commit();
+            skin::reportAutomatic(g);
             return nullptr;
         },
     });
@@ -1070,14 +1651,14 @@ void registerSkinCommandsImpl()
             if (objs.empty())
                 throw CommandError("pruneWeights: give a skinned mesh");
             NodeId skin = skin::resolve(g, objs.back(), "pruneWeights");
-            WeightTable t = skin::table(g, skin);
-            auto locked = skin::lockMask(skin::influences(g, skin));
-            int maxInf = maxInfOf(g, skin);
+            skin::WeightEdit edit(g, skin);
+            WeightTable& t = edit.table();
             float threshold = a.get<float>("threshold");
             for (uint32_t p : pointsArg(a, g, skin, true))
                 if (p < t.points.size())
-                    t.prune(p, maxInf, threshold, locked);
-            skin::setWeights(g, skin, t);
+                    t.prune(p, edit.maxInfluences(), threshold, edit.locked());
+            edit.commit();
+            skin::reportAutomatic(g);
             return nullptr;
         },
     });
@@ -1102,7 +1683,7 @@ void registerSkinCommandsImpl()
                 if (i.locked)
                     locked.push_back(i.name);
             }
-            int maxUsed = 0, unnormalized = 0, unweighted = 0;
+            int maxUsed = 0, unnormalized = 0, unweighted = 0, automatic = 0;
             MeshPtr m = skin::inputMesh(g, skin);
             for (size_t p = 0; p < t.points.size(); ++p)
             {
@@ -1112,6 +1693,7 @@ void registerSkinCommandsImpl()
                 float sum = 0.0f;
                 for (auto& [i, wt] : t.points[p])
                     sum += wt;
+                automatic += t.pointAutomatic(p);
                 if (t.points[p].empty())
                     ++unweighted;
                 else if (std::abs(sum - 1.0f) > 1e-3f)
@@ -1128,6 +1710,14 @@ void registerSkinCommandsImpl()
                 {"points", t.points.size()},
                 {"unnormalized", unnormalized},
                 {"unweighted", unweighted},
+                {"automatic", automatic},
+                {"layers", [&] {
+                     json layerNames = json::array();
+                     if (auto l = skin::layers(g, skin))
+                         for (const SkinLayer& layer : l->layers)
+                             layerNames.push_back(layer.name);
+                     return layerNames;
+                 }()},
             };
         },
     });
@@ -1211,6 +1801,17 @@ void registerSkinCommandsImpl()
                     std::erase_if(t.points[p], [&](const WeightTable::Entry& e) { return e.first == it->index; });
                     t.normalize(p, locked);
                 }
+                if (auto l = skin::layers(g, skin))
+                {
+                    auto next = std::make_shared<SkinLayers>(*l);
+                    for (SkinLayer& layer : next->layers)
+                        for (size_t p = 0; p < layer.weights.points.size(); ++p)
+                        {
+                            std::erase_if(layer.weights.points[p], [&](const WeightTable::Entry& e) { return e.first == it->index; });
+                            layer.weights.normalize(p, locked);
+                        }
+                    skin::setLayers(g, skin, next);
+                }
                 // Splice the link out of the chain.
                 auto prev = g.source({it->link, SkinInfluenceNode::kPrevious, -1});
                 auto dsts = g.destinations({it->link, SkinInfluenceNode::kLink, -1});
@@ -1220,6 +1821,7 @@ void registerSkinCommandsImpl()
                         g.connect(*prev, d);
             }
             skin::setWeights(g, skin, t);
+            skin::reportAutomatic(g);
             return nullptr;
         },
     });
@@ -1268,6 +1870,7 @@ void registerSkinTypes()
     if (types::find("skinCluster"))
         return;
     data::registerKind("skinWeights", &SkinWeights::fromJson);
+    data::registerKind("skinLayers", &SkinLayers::fromJson);
 
     NodeType inf;
     inf.name = "skinInfluence";
@@ -1323,6 +1926,8 @@ void registerSkinTypes()
          .doc = "Centres of rotation: how alike two points' weights must be to share a centre.", .minValue = 0.0},
         {.name = "exportWeights", .type = PlugType::Data, .defaultValue = DataPtr(), .flags = AttrInput | AttrStorable | AttrHidden,
          .doc = "Linear weights fitted by bakeSkinWeights keep=true, exported in place of fitting at export time."},
+        {.name = "weightLayers", .type = PlugType::Data, .defaultValue = DataPtr(), .flags = AttrInput | AttrStorable | AttrHidden,
+         .doc = "Weight layers whose composite is the weights (see skinLayers)."},
     };
     sc.create = [] {
         auto n = std::make_unique<SkinClusterNode>();
@@ -1338,5 +1943,7 @@ void registerSkinTypes()
 void registerSkinCommands()
 {
     registerSkinCommandsImpl();
+    skinpaint::registerCommands();
+    weightproxy::registerCommands();
 }
 } // namespace lila::scene

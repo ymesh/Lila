@@ -69,6 +69,7 @@ public:
         kSpace,
         kSpaceFrames,
         kLinkId,
+        kOffsetParentMatrix,
         kCount
     };
 

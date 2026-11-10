@@ -58,6 +58,7 @@ MainWindow::MainWindow()
     restoreLayout();
     applyChromePrefs();
     modes::restore();
+    sceneLayout::install();
     connect(shelf, &QDockWidget::visibilityChanged, this, [this, shelf](bool visible) {
         // Layouts and Reset Layout reopen the shelf; the pref keeps it closed.
         if (visible && !mShelfShown)
@@ -251,7 +252,7 @@ void MainWindow::registerPanels()
     panels::add({.id = kGraphEditorDock, .title = "Graph Editor", .create = make([](QWidget* p) { return new GraphEditor(p); }),
                  .area = Qt::BottomDockWidgetArea, .icon = "chart-line", .open = false});
     panels::add({.id = kNodeEditorDock, .title = "Node Editor", .create = make([](QWidget* p) { return new NodeEditor(p); }),
-                 .area = Qt::BottomDockWidgetArea, .icon = "schema", .open = false, .place = [this, dock](QDockWidget* nodeDock) {
+                 .area = Qt::BottomDockWidgetArea, .icon = "node-editor", .open = false, .place = [this, dock](QDockWidget* nodeDock) {
                      arrangeBottomDocks(this, {dock("scriptOutput"), dock(kScriptEditorDock), dock(kTerminalDock), dock(kGraphEditorDock), nodeDock},
                                         dock(kScriptEditorDock), dock(kTimeSliderDock));
                  }, .docs = "node-editor"});
@@ -273,7 +274,7 @@ void MainWindow::arrangeDefaultDocks()
     if (!tools || !outliner || !channels)
         return;
     moveTo(tools, Qt::LeftDockWidgetArea);
-    for (const char* name : {kTopologyToolkitDock, kCurveToolkitDock, kLevelToolkitDock, "stagehand.library", "textureSets", "baker",
+    for (const char* name : {kTopologyToolkitDock, kCurveToolkitDock, kLevelToolkitDock, "tailorToolkit", "stagehand.library", "textureSets", "baker",
                              "materialBrowser", "sourceControl", kReferenceEditorDock})
         if (QDockWidget* d = dock(name))
         {

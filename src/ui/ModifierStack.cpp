@@ -792,7 +792,10 @@ ModifierStackWidget::ModifierStackWidget(QWidget* parent) : QWidget(parent)
     fillAddModifierMenu(addMenu);
     mAdd->setMenu(addMenu);
     top->addWidget(mAdd, 1);
-    mMore = stackButton("dots", "<b>Stack Actions</b><br>Apply or bake the whole stack, expand or collapse every card.", mHeader);
+    auto* graph = stackButton("node-editor", "<b>Show in Node Editor</b><br>The stack as nodes, with every connection.", mHeader);
+    connect(graph, &QToolButton::clicked, this, [] { actions::run("nodeEditor.showHistory"); });
+    top->addWidget(graph);
+    mMore = stackButton("dots","<b>Stack Actions</b><br>Apply or bake the whole stack, expand or collapse every card.", mHeader);
     mMore->setPopupMode(QToolButton::InstantPopup);
     auto* more = new QMenu(mMore);
     more->addAction(icon("check"), "Apply All", this, [this] {
@@ -1143,8 +1146,7 @@ QWidget* ModifierStackWidget::buildHeaderFor(QWidget* card, QWidget* body, NodeI
     down->setEnabled(index < count - 1);
     last->setEnabled(index < count - 1);
     menu->addSeparator();
-    menu->addAction(icon("focus-2"), "Select Node", this, [id] { runUi("select", {{"args", {nameOf(id)}}}); });
-    menu->addAction(icon("trash"), "Delete", this, [id] { runUi("removeModifier", {{"args", {nameOf(id)}}}); });
+    menu->addAction(icon("focus-2"), "Select Node", this, [id] { runUi("select", {{"args", {nameOf(id)}}}); });    menu->addAction(icon("trash"), "Delete", this, [id] { runUi("removeModifier", {{"args", {nameOf(id)}}}); });
     menuButton->setMenu(menu);
     h->addWidget(menuButton);
 

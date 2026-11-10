@@ -234,7 +234,7 @@ std::vector<Ghost> Cache::ghosts(const Settings& s)
     std::vector<GhostTime> times = ghostTimes(s, now, mKeys, fps());
     std::vector<double> missing;
     for (const auto& [t, offset] : times)
-        if (!mFrames.contains(ticks(t)))
+        if (!mFrames.contains(ticks(t)) && !mPreview.contains(ticks(t)))
             missing.push_back(t);
     if (!missing.empty() && !anyHeld())
     {
@@ -250,9 +250,42 @@ std::vector<Ghost> Cache::ghosts(const Settings& s)
         mGraph.evaluate();
     }
     for (const auto& [t, offset] : times)
-        if (auto it = mFrames.find(ticks(t)); it != mFrames.end())
+        if (auto p = mPreview.find(ticks(t)); p != mPreview.end())
+            out.push_back({p->second, offset});
+        else if (auto it = mFrames.find(ticks(t)); it != mFrames.end())
             out.push_back({it->second, offset});
     return out;
+}
+
+std::vector<GhostTime> Cache::shownTimes(const Settings& s)
+{
+    if (!s.enabled || (!s.mesh && !s.skeleton))
+        return {};
+    refreshTargets();
+    if (mTargets.empty())
+        return {};
+    if (!mKeysValid)
+    {
+        mKeys = anim::keyTimes(mGraph, mTargets);
+        mKeysValid = true;
+    }
+    return ghostTimes(s, mGraph.time(), mKeys, fps());
+}
+
+std::shared_ptr<const Frame> Cache::captureNow(double t)
+{
+    refreshTargets();
+    // Interactive edits defer the meshes; a ghost needs them as they are at t.
+    mGraph.evaluateUpstream(mMeshes);
+    return capture(t);
+}
+
+void Cache::setPreview(std::vector<std::shared_ptr<const Frame>> frames)
+{
+    mPreview.clear();
+    for (std::shared_ptr<const Frame>& f : frames)
+        if (f)
+            mPreview[ticks(f->time)] = std::move(f);
 }
 
 Cache& cache()

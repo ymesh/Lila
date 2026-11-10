@@ -7,6 +7,8 @@
 #include <tbb/parallel_reduce.h>
 
 #include <algorithm>
+#include <array>
+#include <unordered_map>
 
 namespace lila::sculpt
 {
@@ -60,6 +62,8 @@ std::shared_ptr<const SubdLevel> levelAbove(const geo::Mesh& below, const geo::S
 
     geo::SubdivideOptions once = opts;
     once.levels = 1;
+    // Levels are built one at a time, so fitting island interiors would cost a solve per level.
+    once.uvs = geo::SubdivideUvs::Blend;
     auto lvl = std::make_shared<SubdLevel>();
     stencil = std::move(geo::subdivideStencils(below, once).front());
     geo::SubdivideMap map;
@@ -317,5 +321,287 @@ DetailPtr stepDown(const SubdStack& s, int from, std::vector<glm::dvec3>& positi
     layerDown<float>(S, lvl, layers.mask, d->layers.mask);
     layerDown<float>(S, lvl, layers.freeze, d->layers.freeze);
     return d;
+}
+std::shared_ptr<const SubdStack> dropSubdLevelsBelow(const SubdStack& s, int bottom)
+{
+    auto out = std::make_shared<SubdStack>();
+    out->opts = s.opts;
+    out->opts.levels = s.top() - bottom;
+    auto base = std::make_shared<SubdLevel>();
+    base->mesh = s.levels[size_t(bottom)]->mesh;
+    out->levels.push_back(base);
+    out->levels.insert(out->levels.end(), s.levels.begin() + bottom + 1, s.levels.end());
+    out->stencils.assign(s.stencils.begin() + bottom, s.stencils.end());
+    return out;
+}
+
+std::vector<Index> coarsePoints(const SubdLevel& level)
+{
+    std::vector<Index> out(level.mesh.pointCapacity(), kInvalid);
+    for (Index c = 0; c < Index(level.parentPoint.size()); ++c)
+        if (level.parentPoint[c] != kInvalid)
+            out[level.parentPoint[c]] = c;
+    return out;
+}
+
+namespace
+{
+using PointKey = std::vector<Index>;
+
+struct PointKeyHash
+{
+    size_t operator()(const PointKey& k) const
+    {
+        size_t h = k.size();
+        for (Index i : k)
+            h ^= std::hash<Index>{}(i) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+        return h;
+    }
+};
+
+constexpr Index kSeveral = kInvalid - 1;
+
+/**
+ * Each point's place in one subdivision of a cage, in cage ids: a cage point is itself, an edge point the two cage points
+ * of its edge, a face point the cage points of its face. Every face of a subdivision has exactly one cage point corner,
+ * so the cage points of the faces around a point name it. Empty where that doesn't hold.
+ */
+std::vector<PointKey> subdivisionKeys(const geo::Mesh& m, std::span<const Index> coarse)
+{
+    std::vector<Index> faceCage(m.faceCapacity(), kInvalid);
+    for (Index f = 0; f < m.faceCapacity(); ++f)
+        if (m.faceValid(f))
+            m.forEachFaceCorner(f, [&](Index c) {
+                if (const Index k = coarse[m.cornerPoint(c)]; k != kInvalid)
+                    faceCage[f] = faceCage[f] == kInvalid ? k : kSeveral;
+            });
+    std::vector<PointKey> keys(m.pointCapacity());
+    tbb::parallel_for(Index(0), m.pointCapacity(), [&](Index p) {
+        if (!m.pointValid(p))
+            return;
+        if (coarse[p] != kInvalid)
+        {
+            keys[p] = {coarse[p]};
+            return;
+        }
+        PointKey k;
+        for (Index f : m.pointFaces(p))
+        {
+            if (faceCage[f] == kInvalid || faceCage[f] == kSeveral)
+                return;
+            k.push_back(faceCage[f]);
+        }
+        std::ranges::sort(k);
+        k.erase(std::unique(k.begin(), k.end()), k.end());
+        if (k.size() >= 2)
+            keys[p] = std::move(k);
+    });
+    return keys;
+}
+} // namespace
+
+std::vector<Index> matchSubdivisions(const geo::Mesh& a, std::span<const Index> coarseA, const geo::Mesh& b, std::span<const Index> coarseB)
+{
+    LILA_ZONE();
+
+    if (a.numPoints() != b.numPoints() || coarseA.size() < size_t(a.pointCapacity()) || coarseB.size() < size_t(b.pointCapacity()))
+        return {};
+    const std::vector<PointKey> ka = subdivisionKeys(a, coarseA);
+    const std::vector<PointKey> kb = subdivisionKeys(b, coarseB);
+    std::unordered_map<PointKey, Index, PointKeyHash> at;
+    at.reserve(size_t(b.numPoints()));
+    for (Index p = 0; p < b.pointCapacity(); ++p)
+        if (b.pointValid(p) && (kb[p].empty() || !at.emplace(kb[p], p).second))
+            return {};
+    std::vector<Index> out(a.pointCapacity(), kInvalid);
+    for (Index p = 0; p < a.pointCapacity(); ++p)
+        if (a.pointValid(p))
+        {
+            auto it = at.find(ka[p]);
+            if (it == at.end())
+                return {};
+            out[p] = it->second;
+        }
+    return out;
+}
+
+std::optional<geo::Mesh> reconstructCage(const geo::Mesh& fine, std::vector<Index>& coarseOf)
+{
+    LILA_ZONE();
+
+    // Around every face of a subdivision: its cage point, an edge point, its face point, an edge point.
+    enum : int8_t
+    {
+        kUnset = -1,
+        kCage = 0,
+        kEdge = 1,
+        kFace = 2,
+    };
+    constexpr int8_t kPattern[4] = {kCage, kEdge, kFace, kEdge};
+
+    if (fine.numFaces() == 0)
+        return std::nullopt;
+    for (Index f = 0; f < fine.faceCapacity(); ++f)
+        if (fine.faceValid(f) && fine.faceSize(f) != 4)
+            return std::nullopt;
+
+    std::vector<int8_t> label(fine.pointCapacity(), kUnset);
+    std::vector<int8_t> faceCageAt(fine.faceCapacity(), -1);
+    auto corners = [&](Index f) {
+        std::array<Index, 4> c;
+        Index x = fine.faceCorner(f);
+        for (Index& out : c)
+        {
+            out = x;
+            x = fine.cornerNext(x);
+        }
+        return c;
+    };
+    // Where face f's cage point corner must be, from the points already labelled; -1 when nothing says.
+    auto cageCornerOf = [&](Index f) {
+        const std::array<Index, 4> c = corners(f);
+        for (int i = 0; i < 4; ++i)
+            if (label[fine.cornerPoint(c[size_t(i)])] == kCage)
+                return i;
+        for (int i = 0; i < 4; ++i)
+            if (label[fine.cornerPoint(c[size_t(i)])] == kFace)
+                return (i + 2) % 4;
+        return -1;
+    };
+
+    // Labels the component of seed with its cage corner at `at`. Fails on a conflict, a face point on the border, or an
+    // edge point not between exactly two cage points. Fills the faces and points it touched, for rolling back.
+    auto attempt = [&](Index seed, int at, std::vector<Index>& faces, std::vector<Index>& touched, int& score) {
+        faces.clear();
+        touched.clear();
+        score = 0;
+        faceCageAt[seed] = int8_t(at);
+        faces.push_back(seed);
+        for (size_t q = 0; q < faces.size(); ++q)
+        {
+            const Index f = faces[q];
+            const std::array<Index, 4> c = corners(f);
+            for (int i = 0; i < 4; ++i)
+            {
+                const Index p = fine.cornerPoint(c[size_t(i)]);
+                const int8_t want = kPattern[(i - faceCageAt[f] + 4) % 4];
+                if (label[p] == kUnset)
+                {
+                    label[p] = want;
+                    touched.push_back(p);
+                }
+                else if (label[p] != want)
+                    return false;
+            }
+            for (Index corner : c)
+            {
+                bool ok = true;
+                fine.forEachEdgeCorner(fine.cornerEdge(corner), [&](Index r) {
+                    const Index g = fine.cornerFace(r);
+                    if (!ok || faceCageAt[g] >= 0)
+                        return;
+                    const int k = cageCornerOf(g);
+                    if (k < 0)
+                        ok = false;
+                    else
+                    {
+                        faceCageAt[g] = int8_t(k);
+                        faces.push_back(g);
+                    }
+                });
+                if (!ok)
+                    return false;
+            }
+        }
+        for (Index p : touched)
+        {
+            if (label[p] == kFace)
+            {
+                if (fine.isBoundaryPoint(p))
+                    return false;
+                score += fine.pointValence(p) == 4;
+            }
+            else if (label[p] == kEdge)
+            {
+                int cages = 0;
+                fine.forEachPointEdge(p, [&](Index e) { cages += label[fine.edgeOtherPoint(e, p)] == kCage; });
+                if (cages != 2)
+                    return false;
+            }
+        }
+        return true;
+    };
+    auto rollBack = [&](const std::vector<Index>& faces, const std::vector<Index>& touched) {
+        for (Index f : faces)
+            faceCageAt[f] = -1;
+        for (Index p : touched)
+            label[p] = kUnset;
+    };
+
+    std::vector<Index> faces, touched;
+    for (Index seed = 0; seed < fine.faceCapacity(); ++seed)
+    {
+        if (!fine.faceValid(seed) || faceCageAt[seed] >= 0)
+            continue;
+        // Swapping the cage and face points also labels a quad grid consistently; prefer the cage made of quads.
+        int best = -1, bestScore = -1;
+        for (int at = 0; at < 4; ++at)
+        {
+            int score = 0;
+            const bool ok = attempt(seed, at, faces, touched, score);
+            rollBack(faces, touched);
+            if (ok && score > bestScore)
+            {
+                best = at;
+                bestScore = score;
+            }
+        }
+        int score = 0;
+        if (best < 0 || !attempt(seed, best, faces, touched, score))
+            return std::nullopt;
+    }
+    for (Index p = 0; p < fine.pointCapacity(); ++p)
+        if (fine.pointValid(p) && label[p] == kUnset)
+            return std::nullopt;
+
+    geo::Mesh cage = fine;
+    const Index oldFaces = fine.faceCapacity();
+    for (Index p = 0; p < fine.pointCapacity(); ++p)
+    {
+        if (!fine.pointValid(p) || label[p] != kFace)
+            continue;
+        Index first = kInvalid;
+        fine.forEachPointCorner(p, [&](Index c) {
+            if (first == kInvalid)
+                first = c;
+        });
+        std::vector<Index> points, src;
+        Index c = first;
+        do
+        {
+            const Index v = fine.cornerNext(fine.cornerNext(c));
+            points.push_back(fine.cornerPoint(v));
+            src.push_back(v);
+            // The next face around p across the edge coming into p, so the cage points follow the faces' winding.
+            const Index r = fine.cornerRadial(fine.cornerPrev(c));
+            if (r == fine.cornerPrev(c) || fine.cornerPoint(r) != p || points.size() > 64)
+                return std::nullopt;
+            c = r;
+        } while (c != first);
+        if (cage.addFace(points, fine.cornerFace(first), src) == kInvalid)
+            return std::nullopt;
+    }
+    for (Index f = 0; f < oldFaces; ++f)
+        if (cage.faceValid(f))
+            cage.removeFace(f);
+    cage.removeAllLoose();
+    geo::MeshRemap remap;
+    cage.compact(&remap);
+    geo::clearSymmetryKeys(cage, 0);
+    coarseOf.assign(fine.pointCapacity(), kInvalid);
+    for (Index p = 0; p < fine.pointCapacity(); ++p)
+        if (fine.pointValid(p) && label[p] == kCage)
+            coarseOf[p] = remap.points[p];
+    return cage;
 }
 } // namespace lila::sculpt

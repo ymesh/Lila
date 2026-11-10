@@ -509,8 +509,10 @@ Traces trace(const Layout& lay, const std::vector<ExtraStart>& extras = {}, cons
                 const double phi = std::fmod(dir * kQuarter - start + 2.0 * glm::two_pi<double>(), glm::two_pi<double>());
                 if (phi >= span)
                     continue;
-                // Along a wall the line is already there.
-                if ((phi < 1e-3 && lay.wall[lay.triEdge[t][c]]) || (span - phi < 1e-3 && lay.wall[lay.triEdge[t][(c + 2) % 3]]))
+                // Along a wall the line is already there. A round crease leaves its corner a few degrees off the field,
+                // and a line traced beside it would wall off a sliver.
+                const double alongWall = glm::radians(15.0);
+                if ((phi < alongWall && lay.wall[lay.triEdge[t][c]]) || (span - phi < alongWall && lay.wall[lay.triEdge[t][(c + 2) % 3]]))
                     continue;
                 const glm::dvec3 d3 = lay.dir[t] * axis(dir).x + glm::cross(s.triNormal[t], lay.dir[t]) * axis(dir).y;
                 bool dup = false;
@@ -1100,7 +1102,7 @@ void matchSplitArcs(std::vector<Arc>& arcs, std::vector<PatchShape>& shapes, boo
  */
 Extracted buildPatchMesh(const Layout& lay, const std::vector<uint8_t>& blocked, const std::vector<std::vector<uint8_t>>& joined,
                          const std::vector<Piece>& pieces, const std::vector<Index>& patchOf, Index np, double targetCells, std::string& why,
-                         std::vector<std::pair<Index, Index>>* merge)
+                         std::vector<std::pair<Index, Index>>* merge, std::vector<Index>* wedges = nullptr)
 {
     LILA_ZONE();
     const Surface& s = lay.s;
@@ -1693,8 +1695,16 @@ Extracted buildPatchMesh(const Layout& lay, const std::vector<uint8_t>& blocked,
             const Side& shorter = a < b ? shape.sides[k] : shape.sides[k + 2];
             const bool borderSliver = std::min(a, b) < 1.0 && std::all_of(shorter.arcs.begin(), shorter.arcs.end(), [&](const auto& sa) { return arcs[sa.first].border; });
             const double held = borderSliver || std::min(a, b) < 0.3 ? 0.0 : 2.0;
-            if (std::abs(a - b) > std::max({1.5, held, 0.5 * std::max(a, b)}))
+            // A short strip (a finger side tapering to its tip) is held too: a pattern puts its poles side by side there.
+            const double c = latticeLength(shape.sides[k + 1]), d = latticeLength(shape.sides[(k + 3) % 4]);
+            const bool strip = std::min(c, d) >= 2.0 * std::max(a, b) && std::max(c, d) <= 20.0 && std::abs(a - b) <= 3.0;
+            if (!strip && std::abs(a - b) > std::max({1.5, held, 0.5 * std::max(a, b)}))
+            {
                 unequal[p] = 1;
+                // Far wider at one end (a foot top running on into a shin strip): no pattern fills that, so the layout cuts it.
+                if (wedges && std::abs(a - b) >= 6.0 && std::max(a, b) >= 2.5 * std::min(a, b))
+                    wedges->push_back(p);
+            }
             else if (debug && std::getenv("LILA_PATCH_LIST") && std::abs(a - b) > std::max(1.5, 0.5 * std::max(a, b)))
                 std::fprintf(stderr, "held patch %d: sides %.2f %.2f\n", int(p), a, b);
         }
@@ -2365,6 +2375,29 @@ Extracted buildPatchMesh(const Layout& lay, const std::vector<uint8_t>& blocked,
                     ids.push_back(sidePoint(side, c));
             }
             ok = b.corners.size() >= 3;
+            // Four sides, one collapsed, leaving a triangle whose longest side is as long as the other two together, by
+            // count and on the lattice: a strip with a corner partway along one side. Filled as a triangle its two poles land
+            // on one point, so it is filled as a rectangle with its fourth corner on the long side.
+            if (b.corners.size() == 3 && shape.sides.size() == 4)
+            {
+                int cnt[3];
+                double lat[3] = {};
+                for (int k = 0; k < 3; ++k)
+                    cnt[k] = (k + 1 < 3 ? b.corners[k + 1] : int(ids.size())) - b.corners[k];
+                for (int k = 0; const Side& side : shape.sides)
+                    if (sideCount(side) != 0 && k < 3)
+                        lat[k++] = latticeLength(side);
+                for (int m = 0; m < 3; ++m)
+                {
+                    const int i = (m + 1) % 3, j = (m + 2) % 3;
+                    if (cnt[i] > 0 && cnt[j] > 0 && cnt[m] == cnt[i] + cnt[j] && lat[m] >= 0.93 * (lat[i] + lat[j]) && lat[m] <= 1.02 * (lat[i] + lat[j]))
+                    {
+                        b.corners.push_back(b.corners[m] + cnt[i]);
+                        std::sort(b.corners.begin(), b.corners.end());
+                        break;
+                    }
+                }
+            }
             for (Index id : ids)
                 b.points.push_back(ex.mesh.position(id));
             if (!ok)
@@ -2806,13 +2839,16 @@ Extracted buildPatchMesh(const Layout& lay, const std::vector<uint8_t>& blocked,
 }
 
 /**
- * Slivers: patches thinner than half a row along most of their length, between two lines that run side by side. Of
- * each pair the line whose length is mostly in slivers is left out (marked in `dropped`), so the lines it stopped run
- * on and the other carries the row. Returns how many lines it left out.
+ * Slivers: patches thinner than half a row along most of their length, between two lines that run side by side, or a
+ * line beside a wall (a crease, the border). Of each pair of lines the one whose length is mostly in slivers is left out
+ * (marked in `dropped`), so the lines it stopped run on and the other carries the row; beside a wall the line goes.
+ * `partnerOf` keeps, per line left out, the line it ran beside, across rounds. Returns how many lines it left out.
  */
-size_t dropSlivers(const Layout& lay, const Traces& tr, const std::vector<Piece>& pieces, const std::vector<Index>& patchOf, Index np, std::vector<uint8_t>& dropped)
+size_t dropSlivers(const Layout& lay, const Traces& tr, const std::vector<Piece>& pieces, const std::vector<Index>& patchOf, Index np, std::vector<uint8_t>& dropped,
+                   std::vector<Index>& partnerOf)
 {
     constexpr double kThin = 0.4;
+    const Index wallLine = Index(tr.end.size()); // every wall counts as one line, which can't be left out
     std::vector<double> area(np, 0.0);
     std::vector<std::map<Index, double>> along(np);
     for (Index pi = 0; pi < Index(pieces.size()); ++pi)
@@ -2826,10 +2862,12 @@ size_t dropSlivers(const Layout& lay, const Traces& tr, const std::vector<Piece>
             a += cross2(u, v);
             if (P.side[k] >= kSegSide)
                 along[patchOf[pi]][tr.segments[P.side[k] - kSegSide].tracer] += glm::length(v - u);
+            else if (const Index e = lay.triEdge[P.tri][P.side[k]]; e != kInvalid && lay.wall[e])
+                along[patchOf[pi]][wallLine] += glm::length(v - u);
         }
         area[patchOf[pi]] += 0.5 * std::abs(a);
     }
-    std::vector<double> length(tr.end.size(), 0.0), inSlivers(tr.end.size(), 0.0);
+    std::vector<double> length(tr.end.size() + 1, 0.0), inSlivers(tr.end.size() + 1, 0.0);
     for (const Segment& g : tr.segments)
         length[g.tracer] += glm::length(g.b - g.a);
     std::vector<std::pair<Index, Index>> pairs;
@@ -2869,23 +2907,118 @@ size_t dropSlivers(const Layout& lay, const Traces& tr, const std::vector<Piece>
         return bool(dropped[lines[(i + 1) % n]] || dropped[lines[(i + n - 1) % n]]);
     };
     std::sort(pairs.begin(), pairs.end(), [&](const auto& x, const auto& y) { return inSlivers[x.first] + inSlivers[x.second] > inSlivers[y.first] + inSlivers[y.second]; });
+    partnerOf.resize(tr.end.size(), kInvalid);
+    // Both lines' poles have given up a line already. A valence 3 pole takes its earlier line back where the line that
+    // ran beside that one can go instead, which frees it to give up this one: four poles round a square, whose edges are
+    // each traced from both ends, need every pole to give up one, which the greedy order alone can miss.
+    auto swapFor = [&](Index a, Index b) {
+        for (Index line : {a, b})
+        {
+            const Index src = tr.sourceOf[line];
+            if (src == kInvalid || linesOf[src].size() != 3)
+                continue;
+            for (Index x : linesOf[src])
+            {
+                const Index y = x != line && dropped[x] ? partnerOf[x] : kInvalid;
+                if (y == kInvalid || y >= wallLine || dropped[y] || tr.sourceOf[y] == kInvalid || tr.sourceOf[y] == src || linesOf[tr.sourceOf[y]].size() != 3)
+                    continue;
+                dropped[x] = 0;
+                if (!blockedDrop(y))
+                {
+                    dropped[y] = 1;
+                    if (!blockedDrop(line))
+                    {
+                        dropped[line] = 1;
+                        partnerOf[y] = x;
+                        partnerOf[x] = kInvalid;
+                        partnerOf[line] = line == a ? b : a;
+                        if (std::getenv("LILA_PATCH_LIST"))
+                            std::fprintf(stderr, "sliver swap: line %d back, %d and %d left out, pole at %.2f %.2f %.2f, lengths %.2f %.2f %.2f %.2f\n", int(x), int(y), int(line),
+                                         lay.s.pos[src].x, lay.s.pos[src].y, lay.s.pos[src].z, length[a], length[b], length[x], length[y]);
+                        return true;
+                    }
+                    dropped[y] = 0;
+                }
+                dropped[x] = 1;
+            }
+        }
+        return false;
+    };
     size_t count = 0;
     for (auto [a, b] : pairs)
     {
-        if (dropped[a] || dropped[b])
+        if ((a != wallLine && dropped[a]) || (b != wallLine && dropped[b]))
             continue;
-        auto weight = [&](Index t) { return tr.sourceOf[t] == kInvalid || blockedDrop(t) ? -1.0 : inSlivers[t] / std::max(length[t], 1e-9); };
+        auto weight = [&](Index t) {
+            return t == wallLine || tr.sourceOf[t] == kInvalid || blockedDrop(t) ? -1.0 : inSlivers[t] / std::max(length[t], 1e-9);
+        };
         Index drop = weight(a) >= weight(b) ? a : b;
+        if (weight(drop) < 0.0 && a != wallLine && b != wallLine && swapFor(a, b))
+        {
+            ++count;
+            continue;
+        }
         if (weight(drop) < 0.0)
         {
             if (std::getenv("LILA_PATCH_LIST"))
-                std::fprintf(stderr, "sliver kept: lines %d (source %d) and %d (source %d)\n", int(a), int(tr.sourceOf[a]), int(b), int(tr.sourceOf[b]));
+                for (Index t : {a, b})
+                    if (t != wallLine)
+                    {
+                        const Index src = tr.sourceOf[t];
+                        std::fprintf(stderr, "sliver kept: line %d of %d (wall pair %d), source %d", int(t), int(t == a ? b : a), int(a == wallLine || b == wallLine),
+                                     int(src));
+                        if (src != kInvalid)
+                            std::fprintf(stderr, " at %.2f %.2f %.2f singular %d lines %zu", lay.s.pos[src].x, lay.s.pos[src].y, lay.s.pos[src].z,
+                                         int(lay.singular[src]), linesOf[src].size());
+                        std::fprintf(stderr, "\n");
+                    }
             continue;
         }
         dropped[drop] = 1;
+        partnerOf[drop] = drop == a ? b : a;
         ++count;
     }
     return count;
+}
+
+/** Points within `tol` of each other, chained, share an index (union over a grid of tol-sized cells). */
+std::vector<Index> clusterPoints(const std::vector<glm::dvec3>& pts, double tol)
+{
+    std::vector<Index> up(pts.size());
+    std::iota(up.begin(), up.end(), Index(0));
+    auto root = [&](Index x) {
+        while (up[x] != x)
+            x = up[x] = up[up[x]];
+        return x;
+    };
+    using Cell = std::tuple<int64_t, int64_t, int64_t>;
+    auto cellOf = [&](const glm::dvec3& p) { return Cell{int64_t(std::floor(p.x / tol)), int64_t(std::floor(p.y / tol)), int64_t(std::floor(p.z / tol))}; };
+    std::map<Cell, std::vector<Index>> grid;
+    for (Index i = 0; i < Index(pts.size()); ++i)
+        grid[cellOf(pts[i])].push_back(i);
+    for (const auto& [cell, members] : grid)
+    {
+        const auto [cx, cy, cz] = cell;
+        for (int64_t dx = 0; dx <= 1; ++dx)
+            for (int64_t dy = -1; dy <= 1; ++dy)
+                for (int64_t dz = -1; dz <= 1; ++dz)
+                {
+                    // Each pair of neighbouring cells once.
+                    if (dx == 0 && (dy < 0 || (dy == 0 && dz < 0)))
+                        continue;
+                    const auto it = grid.find({cx + dx, cy + dy, cz + dz});
+                    if (it == grid.end())
+                        continue;
+                    for (Index a : members)
+                        for (Index b : it->second)
+                            if (a != b && glm::length(pts[a] - pts[b]) <= tol)
+                                up[root(a)] = root(b);
+                }
+    }
+    std::vector<Index> out(pts.size());
+    for (Index i = 0; i < Index(pts.size()); ++i)
+        out[i] = root(i);
+    return out;
 }
 
 struct PatchStats
@@ -3059,290 +3192,338 @@ Extracted layoutPatches(const Surface& s, const std::vector<glm::dvec3>& q, cons
     Extracted ex;
     std::string why;
     std::vector<uint8_t> dropped; // per tracer: a line left out, running alongside another too close for a row between
+    std::vector<Index> partnerOf; // per tracer left out: the line it ran beside
     int dropRounds = 0;
-    for (int round = 0;; ++round)
+    std::vector<Index> wedges;
+    // Wedges the mesh build finds get a line across, and the layout is traced and built again, twice at most.
+    for (int wedgePass = 0;; ++wedgePass)
     {
-        st = {};
-        std::vector<ExtraStart> starts = crossStarts;
-        starts.insert(starts.end(), extras.begin(), extras.end());
-        tr = trace(lay, starts, dropped);
-        if (tr.runaway)
-            return fail("patch lines kept stopping each other");
-        st.tracers = int(tr.end.size());
-        st.segments = int(tr.segments.size());
-        blocked = lay.wall;
-        pieces = cutPieces(lay, tr, st.mismatched, blocked);
-        st.pieces = int(pieces.size());
+        for (int round = 0;; ++round)
+        {
+            st = {};
+            std::vector<ExtraStart> starts = crossStarts;
+            starts.insert(starts.end(), extras.begin(), extras.end());
+            tr = trace(lay, starts, dropped);
+            if (tr.runaway)
+                return fail("patch lines kept stopping each other");
+            st.tracers = int(tr.end.size());
+            st.segments = int(tr.segments.size());
+            blocked = lay.wall;
+            pieces = cutPieces(lay, tr, st.mismatched, blocked);
+            st.pieces = int(pieces.size());
 
-        // Patches: pieces joined across inner, non-wall triangle edges where their sides overlap.
-        std::vector<Index> parent(pieces.size());
-        std::iota(parent.begin(), parent.end(), Index(0));
-        auto find = [&](Index x) {
-            while (parent[x] != x)
-                x = parent[x] = parent[parent[x]];
-            return x;
-        };
-        struct Span
-        {
-            double lo, hi;
-            Index piece;
-            size_t side;
-        };
-        std::vector<std::vector<Span>> spans(s.edges.size());
-        // Along the edge from its lower vertex; the same in both triangles' charts, which are each the 3D triangle scaled.
-        auto edgeParam = [&](Index t, int k, const glm::dvec2& p, Index e) {
-            const glm::dvec2 a = lay.chart[t][k], b = lay.chart[t][(k + 1) % 3];
-            const double l2 = glm::dot(b - a, b - a);
-            const double r = l2 > 0.0 ? glm::dot(p - a, b - a) / l2 : 0.0;
-            return s.tris[t][k] == s.edges[e][0] ? r : 1.0 - r;
-        };
-        auto internalSide = [&](const Piece& P, Index side) {
-            if (side >= kSegSide)
-                return kInvalid;
-            const Index e = lay.triEdge[P.tri][side];
-            return e == kInvalid || blocked[e] ? kInvalid : e;
-        };
-        for (Index pi = 0; pi < Index(pieces.size()); ++pi)
-        {
-            const Piece& P = pieces[pi];
-            for (size_t k = 0; k < P.poly.size(); ++k)
-                if (const Index e = internalSide(P, P.side[k]); e != kInvalid)
-                {
-                    const int tk = int(P.side[k]);
-                    const double r0 = edgeParam(P.tri, tk, P.poly[k], e), r1 = edgeParam(P.tri, tk, P.poly[(k + 1) % P.poly.size()], e);
-                    spans[e].push_back({std::min(r0, r1), std::max(r0, r1), pi, k});
-                }
-        }
-        joined.assign(pieces.size(), {});
-        for (Index pi = 0; pi < Index(pieces.size()); ++pi)
-            joined[pi].assign(pieces[pi].poly.size(), 0);
-        for (Index e = 0; e < Index(s.edges.size()); ++e)
-            for (size_t i = 0; i < spans[e].size(); ++i)
-                for (size_t j = i + 1; j < spans[e].size(); ++j)
-                {
-                    const Span &a = spans[e][i], &b = spans[e][j];
-                    if (pieces[a.piece].tri != pieces[b.piece].tri && std::min(a.hi, b.hi) - std::max(a.lo, b.lo) > 1e-9)
-                    {
-                        parent[find(a.piece)] = find(b.piece);
-                        joined[a.piece][a.side] = joined[b.piece][b.side] = 1;
-                    }
-                }
-        std::unordered_map<Index, Index> patchIndex;
-        patchOf.assign(pieces.size(), 0);
-        for (Index pi = 0; pi < Index(pieces.size()); ++pi)
-            patchOf[pi] = patchIndex.try_emplace(find(pi), Index(patchIndex.size())).first->second;
-        np = Index(patchIndex.size());
-        st.patches = int(np);
-        if (extras.empty() && dropRounds < 6)
-        {
-            const size_t more = dropSlivers(lay, tr, pieces, patchOf, np, dropped);
-            if (debug)
-                std::fprintf(stderr, "patch slivers round %d: %zu lines dropped\n", dropRounds, more);
-            if (more > 0)
+            // Patches: pieces joined across inner, non-wall triangle edges where their sides overlap.
+            std::vector<Index> parent(pieces.size());
+            std::iota(parent.begin(), parent.end(), Index(0));
+            auto find = [&](Index x) {
+                while (parent[x] != x)
+                    x = parent[x] = parent[parent[x]];
+                return x;
+            };
+            struct Span
             {
-                ++dropRounds;
-                --round;
-                continue;
-            }
-            dropRounds = 6;
-        }
-
-        // Corners: at each point on a patch's border, the angle its pieces fill there, measured against the field, so the
-        // field's own smooth turning across triangle edges doesn't count and a corner reads as a quarter turn.
-        struct At
-        {
-            double angle = 0.0;
-            bool border = false;
-        };
-        std::map<std::tuple<Index, int64_t, int64_t, int64_t>, At> angleAt;
-        for (Index pi = 0; pi < Index(pieces.size()); ++pi)
-        {
-            const Piece& P = pieces[pi];
-            const size_t n = P.poly.size();
-            for (size_t k = 0; k < n; ++k)
-            {
-                const Index before = P.side[(k + n - 1) % n], after = P.side[k];
-                const glm::dvec2 u = P.poly[(k + n - 1) % n] - P.poly[k], v = P.poly[(k + 1) % n] - P.poly[k];
-                const glm::dvec3 p = at3d(P, P.poly[k]);
-                At& at = angleAt[{patchOf[pi], std::llround(p.x / unit), std::llround(p.y / unit), std::llround(p.z / unit)}];
-                at.angle += std::atan2(cross2(v, u), glm::dot(u, v));
-                at.border = at.border || internalSide(P, before) == kInvalid || internalSide(P, after) == kInvalid;
-                if (const Index e = internalSide(P, before); e != kInvalid)
-                    at.angle += lay.frameTurn(e, P.tri, lay.other(e, P.tri));
-            }
-        }
-        corners.assign(np, 0);
-        reflex.assign(np, 0);
-        for (const auto& [key, at] : angleAt)
-        {
-            if (!at.border)
-                continue;
-            const double deg = glm::degrees(at.angle);
-            if (deg > 45.0 && deg < 135.0)
-                ++corners[std::get<0>(key)];
-            else if (deg > 225.0)
-            {
-                if (std::getenv("LILA_PATCH_LIST") && reflex[std::get<0>(key)] < 3)
-                    std::fprintf(stderr, "reflex in %d: %.1f deg at %.4f %.4f %.4f\n", int(std::get<0>(key)), deg, std::get<1>(key) * unit,
-                                 std::get<2>(key) * unit, std::get<3>(key) * unit);
-                ++reflex[std::get<0>(key)];
-            }
-        }
-        // A patch with too few corners (a ring round a bare tube, a strip) or a reflex one (where a dropped line left a
-        // corner bent inward) gets a line across it from the middle of its longest side, and the layout is traced again.
-        // Three rounds of cuts, and one more for each that cut across a loop.
-        if (round >= 3 + loopRounds)
-            break;
-        // A line with the same patch both sides is the only cut through a tube, which leaves the patch no disk: a
-        // second cut from the far side splits it in two.
-        std::vector<Index> sideA(tr.segments.size(), kInvalid);
-        std::vector<uint8_t> slit(tr.segments.size(), 1), slitPatch(np, 0);
-        slitTracer.assign(tr.end.size(), 0);
-        for (Index pi = 0; pi < Index(pieces.size()); ++pi)
-            for (Index side : pieces[pi].side)
+                double lo, hi;
+                Index piece;
+                size_t side;
+            };
+            std::vector<std::vector<Span>> spans(s.edges.size());
+            // Along the edge from its lower vertex; the same in both triangles' charts, which are each the 3D triangle scaled.
+            auto edgeParam = [&](Index t, int k, const glm::dvec2& p, Index e) {
+                const glm::dvec2 a = lay.chart[t][k], b = lay.chart[t][(k + 1) % 3];
+                const double l2 = glm::dot(b - a, b - a);
+                const double r = l2 > 0.0 ? glm::dot(p - a, b - a) / l2 : 0.0;
+                return s.tris[t][k] == s.edges[e][0] ? r : 1.0 - r;
+            };
+            auto internalSide = [&](const Piece& P, Index side) {
                 if (side >= kSegSide)
+                    return kInvalid;
+                const Index e = lay.triEdge[P.tri][side];
+                return e == kInvalid || blocked[e] ? kInvalid : e;
+            };
+            for (Index pi = 0; pi < Index(pieces.size()); ++pi)
+            {
+                const Piece& P = pieces[pi];
+                for (size_t k = 0; k < P.poly.size(); ++k)
+                    if (const Index e = internalSide(P, P.side[k]); e != kInvalid)
+                    {
+                        const int tk = int(P.side[k]);
+                        const double r0 = edgeParam(P.tri, tk, P.poly[k], e), r1 = edgeParam(P.tri, tk, P.poly[(k + 1) % P.poly.size()], e);
+                        spans[e].push_back({std::min(r0, r1), std::max(r0, r1), pi, k});
+                    }
+            }
+            joined.assign(pieces.size(), {});
+            for (Index pi = 0; pi < Index(pieces.size()); ++pi)
+                joined[pi].assign(pieces[pi].poly.size(), 0);
+            for (Index e = 0; e < Index(s.edges.size()); ++e)
+                for (size_t i = 0; i < spans[e].size(); ++i)
+                    for (size_t j = i + 1; j < spans[e].size(); ++j)
+                    {
+                        const Span &a = spans[e][i], &b = spans[e][j];
+                        if (pieces[a.piece].tri != pieces[b.piece].tri && std::min(a.hi, b.hi) - std::max(a.lo, b.lo) > 1e-9)
+                        {
+                            parent[find(a.piece)] = find(b.piece);
+                            joined[a.piece][a.side] = joined[b.piece][b.side] = 1;
+                        }
+                    }
+            std::unordered_map<Index, Index> patchIndex;
+            patchOf.assign(pieces.size(), 0);
+            for (Index pi = 0; pi < Index(pieces.size()); ++pi)
+                patchOf[pi] = patchIndex.try_emplace(find(pi), Index(patchIndex.size())).first->second;
+            np = Index(patchIndex.size());
+            st.patches = int(np);
+            if (extras.empty() && dropRounds < 6)
+            {
+                const size_t more = dropSlivers(lay, tr, pieces, patchOf, np, dropped, partnerOf);
+                if (debug)
+                    std::fprintf(stderr, "patch slivers round %d: %zu lines dropped\n", dropRounds, more);
+                if (more > 0)
                 {
-                    Index& a = sideA[side - kSegSide];
-                    if (a == kInvalid)
-                        a = patchOf[pi];
-                    else if (a != patchOf[pi])
-                        slit[side - kSegSide] = 0;
+                    ++dropRounds;
+                    --round;
+                    continue;
                 }
-        std::vector<int> slitCount(tr.end.size(), 0), segCount(tr.end.size(), 0);
-        for (size_t g = 0; g < tr.segments.size(); ++g)
-            if (sideA[g] != kInvalid)
-            {
-                ++segCount[tr.segments[g].tracer];
-                slitCount[tr.segments[g].tracer] += slit[g];
+                dropRounds = 6;
             }
-        for (size_t g = 0; g < tr.segments.size(); ++g)
-            if (sideA[g] != kInvalid && slit[g] && 2 * slitCount[tr.segments[g].tracer] > segCount[tr.segments[g].tracer])
+
+            // Corners: at each point on a patch's border, the angle its pieces fill there, measured against the field, so the
+            // field's own smooth turning across triangle edges doesn't count and a corner reads as a quarter turn.
+            struct At
             {
-                slitTracer[tr.segments[g].tracer] = 1;
-                slitPatch[sideA[g]] = 1;
+                double angle = 0.0;
+                bool border = false;
+                glm::dvec3 pos{0.0};
+            };
+            std::vector<glm::dvec3> cornerPos;
+            std::vector<size_t> firstCorner(pieces.size(), 0);
+            for (Index pi = 0; pi < Index(pieces.size()); ++pi)
+            {
+                firstCorner[pi] = cornerPos.size();
+                for (const glm::dvec2& p : pieces[pi].poly)
+                    cornerPos.push_back(at3d(pieces[pi], p));
             }
-        std::vector<uint8_t> want(np, 0);
+            const std::vector<Index> cluster = clusterPoints(cornerPos, unit);
+            std::map<std::pair<Index, Index>, At> angleAt;
+            for (Index pi = 0; pi < Index(pieces.size()); ++pi)
+            {
+                const Piece& P = pieces[pi];
+                const size_t n = P.poly.size();
+                const Index* key = cluster.data() + firstCorner[pi];
+                // Points of one cluster in a row (a line stepping round a vertex just beside it) are one corner, measured
+                // between the points either side: the steps' own directions are noise at that scale.
+                std::vector<std::pair<size_t, size_t>> runs; // first, last
+                for (size_t k = 0; k < n; ++k)
+                    if (runs.empty() || key[k] != key[runs.back().second])
+                        runs.push_back({k, k});
+                    else
+                        runs.back().second = k;
+                if (runs.size() > 1 && key[runs.back().first] == key[runs.front().first])
+                {
+                    runs.front().first = runs.back().first;
+                    runs.pop_back();
+                }
+                if (runs.size() < 3)
+                    continue;
+                const size_t m = runs.size();
+                for (size_t r = 0; r < m; ++r)
+                {
+                    const auto [first, last] = runs[r];
+                    const size_t prev = runs[(r + m - 1) % m].second, next = runs[(r + 1) % m].first;
+                    const Index before = P.side[(first + n - 1) % n], after = P.side[last];
+                    const glm::dvec2 u = P.poly[prev] - P.poly[first], v = P.poly[next] - P.poly[last];
+                    At& at = angleAt[{patchOf[pi], key[first]}];
+                    at.pos = cornerPos[firstCorner[pi] + first];
+                    at.angle += std::atan2(cross2(v, u), glm::dot(u, v));
+                    at.border = at.border || internalSide(P, before) == kInvalid || internalSide(P, after) == kInvalid;
+                    if (const Index e = internalSide(P, before); e != kInvalid)
+                        at.angle += lay.frameTurn(e, P.tri, lay.other(e, P.tri));
+                }
+            }
+            corners.assign(np, 0);
+            reflex.assign(np, 0);
+            for (const auto& [key, at] : angleAt)
+            {
+                if (!at.border)
+                    continue;
+                const double deg = glm::degrees(at.angle);
+                if (deg > 45.0 && deg < 135.0)
+                    ++corners[key.first];
+                else if (deg > 225.0)
+                {
+                    if (std::getenv("LILA_PATCH_LIST") && reflex[key.first] < 3)
+                        std::fprintf(stderr, "reflex in %d: %.1f deg at %.4f %.4f %.4f\n", int(key.first), deg, at.pos.x, at.pos.y, at.pos.z);
+                    ++reflex[key.first];
+                }
+            }
+            // A patch with too few corners (a ring round a bare tube, a strip) or a reflex one (where a dropped line left a
+            // corner bent inward) gets a line across it from the middle of its longest side, and the layout is traced again.
+            // Three rounds of cuts, and one more for each that cut across a loop.
+            if (round >= 3 + loopRounds)
+                break;
+            // A line with the same patch both sides is the only cut through a tube, which leaves the patch no disk: a
+            // second cut from the far side splits it in two.
+            std::vector<Index> sideA(tr.segments.size(), kInvalid);
+            std::vector<uint8_t> slit(tr.segments.size(), 1), slitPatch(np, 0);
+            slitTracer.assign(tr.end.size(), 0);
+            for (Index pi = 0; pi < Index(pieces.size()); ++pi)
+                for (Index side : pieces[pi].side)
+                    if (side >= kSegSide)
+                    {
+                        Index& a = sideA[side - kSegSide];
+                        if (a == kInvalid)
+                            a = patchOf[pi];
+                        else if (a != patchOf[pi])
+                            slit[side - kSegSide] = 0;
+                    }
+            std::vector<int> slitCount(tr.end.size(), 0), segCount(tr.end.size(), 0);
+            for (size_t g = 0; g < tr.segments.size(); ++g)
+                if (sideA[g] != kInvalid)
+                {
+                    ++segCount[tr.segments[g].tracer];
+                    slitCount[tr.segments[g].tracer] += slit[g];
+                }
+            for (size_t g = 0; g < tr.segments.size(); ++g)
+                if (sideA[g] != kInvalid && slit[g] && 2 * slitCount[tr.segments[g].tracer] > segCount[tr.segments[g].tracer])
+                {
+                    slitTracer[tr.segments[g].tracer] = 1;
+                    slitPatch[sideA[g]] = 1;
+                }
+            std::vector<uint8_t> want(np, 0);
+            for (Index p = 0; p < np; ++p)
+                want[p] = corners[p] < 4 || reflex[p] || slitPatch[p];
+            const std::vector<ExtraStart> more = cutsFor(want);
+            if (more.empty())
+                break;
+            extras.insert(extras.end(), more.begin(), more.end());
+        }
+        if (std::getenv("LILA_PATCH_LIST"))
+        {
+            // Slits: a line with the same patch on both sides.
+            std::vector<std::vector<Index>> sideOf(tr.segments.size());
+            for (Index pi = 0; pi < Index(pieces.size()); ++pi)
+                for (Index side : pieces[pi].side)
+                    if (side >= kSegSide)
+                        sideOf[side - kSegSide].push_back(patchOf[pi]);
+            std::map<Index, int> slitTracers;
+            for (size_t g = 0; g < sideOf.size(); ++g)
+                if (sideOf[g].size() >= 2 && std::all_of(sideOf[g].begin(), sideOf[g].end(), [&](Index p) { return p == sideOf[g][0]; }))
+                    ++slitTracers[tr.segments[g].tracer];
+            for (const auto& [tracer, n] : slitTracers)
+            {
+                const Segment* last = nullptr;
+                for (const Segment& g : tr.segments)
+                    if (g.tracer == tracer && glm::length(g.b - g.a) > 1e-9)
+                        last = &g;
+                std::fprintf(stderr, "slit tracer %d: %d slit segments, source %d, end %.3f why %d, last tri %d ends on %d\n", int(tracer), n,
+                             int(tr.sourceOf[tracer]), tr.end[tracer], tr.endWhy[tracer], last ? int(last->tri) : -1, last ? int(last->endsOn) : -2);
+            }
+            {
+                std::map<Index, int> lines;
+                for (Index i = 0; i < Index(tr.sourceOf.size()); ++i)
+                    if (tr.sourceOf[i] != kInvalid)
+                        ++lines[tr.sourceOf[i]];
+                std::map<std::pair<int, int>, int> table;
+                for (const auto& [v, n] : lines)
+                    if (lay.singular[v])
+                        ++table[{lay.quarters[v], n}];
+                for (const auto& [k, n] : table)
+                    std::fprintf(stderr, "poles turning %d with %d lines: %d\n", k.first, k.second, n);
+                std::map<int, int> none;
+                for (Index v = 0; v < Index(lay.singular.size()); ++v)
+                    if (lay.singular[v] && !lines.count(v))
+                        ++none[lay.quarters[v]];
+                for (const auto& [k, n] : none)
+                    std::fprintf(stderr, "poles turning %d with no lines: %d\n", k, n);
+            }
+            std::vector<glm::dvec3> centre(np, glm::dvec3(0.0));
+            std::vector<int> count(np, 0);
+            for (Index pi = 0; pi < Index(pieces.size()); ++pi)
+            {
+                centre[patchOf[pi]] += at3d(pieces[pi], pieces[pi].poly[0]);
+                ++count[patchOf[pi]];
+            }
+            for (Index p = 0; p < np; ++p)
+                if (corners[p] != 4 || reflex[p])
+                {
+                    const glm::dvec3 c = centre[p] / double(count[p]);
+                    std::fprintf(stderr, "patch %d: %d corners, %d reflex, %d pieces, at %.2f %.2f %.2f\n", int(p), corners[p], reflex[p], count[p], c.x, c.y, c.z);
+                }
+        }
         for (Index p = 0; p < np; ++p)
-            want[p] = corners[p] < 4 || reflex[p] || slitPatch[p];
+        {
+            ++st.corners[std::min(8, corners[p])];
+            st.rectangles += corners[p] == 4 && reflex[p] == 0;
+            st.reflex += reflex[p] > 0;
+        }
+        if (std::getenv("LILA_PATCH_DEBUG"))
+        {
+            int sing = 0;
+            for (uint8_t v : lay.singular)
+                sing += v;
+            std::fprintf(stderr, "patches: %d singular, %d tracers, %d segments, %d mismatched, %d pieces, %d patches, %d rectangles, %d with reflex corners; corners",
+                         sing, st.tracers, st.segments, st.mismatched, st.pieces, st.patches, st.rectangles, st.reflex);
+            for (int c = 0; c < 9; ++c)
+                std::fprintf(stderr, " %d:%d", c, st.corners[c]);
+            std::fprintf(stderr, "; ends: on a line %d, killed %d, wall %d, source %d, lost %d, %d loops\n", tr.why[0], tr.why[1], tr.why[2], tr.why[3], tr.why[4], tr.loops);
+            if (const char* dump = std::getenv("LILA_PATCH_DUMP"))
+                if (FILE* f = std::fopen(dump, "w"))
+                {
+                    for (const Piece& P : pieces)
+                        for (const glm::dvec2& p : P.poly)
+                        {
+                            const glm::dvec3 x = at3d(P, p);
+                            std::fprintf(f, "v %.9g %.9g %.9g\n", x.x, x.y, x.z);
+                        }
+                    Index base = 1;
+                    for (Index pi = 0; pi < Index(pieces.size()); ++pi)
+                    {
+                        const Index patch = patchOf[pi];
+                        std::fprintf(f, "# fc %d %d\nf", int(patch), int(corners[patch] == 4 && reflex[patch] == 0));
+                        for (size_t k = 0; k < pieces[pi].poly.size(); ++k)
+                            std::fprintf(f, " %d", int(base + k));
+                        std::fprintf(f, "\n");
+                        base += Index(pieces[pi].poly.size());
+                    }
+                    std::fclose(f);
+                }
+        }
+        // Patches that aren't disks merge with the neighbours that close them up, and the mesh is built again.
+        for (int pass = 0; pass < 8; ++pass)
+        {
+            std::vector<std::pair<Index, Index>> merge;
+            why.clear();
+            wedges.clear();
+            ex = buildPatchMesh(lay, blocked, joined, pieces, patchOf, np, targetCells, why, &merge, &wedges);
+            if (debug && !merge.empty())
+                std::fprintf(stderr, "patch merge pass %d: %zu merges\n", pass, merge.size());
+            if (merge.empty())
+                break;
+            std::vector<Index> up(np);
+            std::iota(up.begin(), up.end(), Index(0));
+            auto root = [&](Index x) {
+                while (up[x] != x)
+                    x = up[x] = up[up[x]];
+                return x;
+            };
+            for (auto [a, b] : merge)
+                up[root(a)] = root(b);
+            std::unordered_map<Index, Index> renumber;
+            for (Index& p : patchOf)
+                p = renumber.try_emplace(root(p), Index(renumber.size())).first->second;
+            np = Index(renumber.size());
+        }
+        if (wedges.empty() || wedgePass >= 2)
+            break;
+        std::vector<uint8_t> want(np, 0);
+        for (Index p : wedges)
+            if (p < np)
+                want[p] = 1;
+        corners.resize(np, 4);
         const std::vector<ExtraStart> more = cutsFor(want);
+        if (debug)
+            std::fprintf(stderr, "wedge pass %d: %zu wedges, %zu cuts\n", wedgePass, wedges.size(), more.size());
         if (more.empty())
             break;
         extras.insert(extras.end(), more.begin(), more.end());
-    }
-    if (std::getenv("LILA_PATCH_LIST"))
-    {
-        // Slits: a line with the same patch on both sides.
-        std::vector<std::vector<Index>> sideOf(tr.segments.size());
-        for (Index pi = 0; pi < Index(pieces.size()); ++pi)
-            for (Index side : pieces[pi].side)
-                if (side >= kSegSide)
-                    sideOf[side - kSegSide].push_back(patchOf[pi]);
-        std::map<Index, int> slitTracers;
-        for (size_t g = 0; g < sideOf.size(); ++g)
-            if (sideOf[g].size() >= 2 && std::all_of(sideOf[g].begin(), sideOf[g].end(), [&](Index p) { return p == sideOf[g][0]; }))
-                ++slitTracers[tr.segments[g].tracer];
-        for (const auto& [tracer, n] : slitTracers)
-        {
-            const Segment* last = nullptr;
-            for (const Segment& g : tr.segments)
-                if (g.tracer == tracer && glm::length(g.b - g.a) > 1e-9)
-                    last = &g;
-            std::fprintf(stderr, "slit tracer %d: %d slit segments, source %d, end %.3f why %d, last tri %d ends on %d\n", int(tracer), n,
-                         int(tr.sourceOf[tracer]), tr.end[tracer], tr.endWhy[tracer], last ? int(last->tri) : -1, last ? int(last->endsOn) : -2);
-        }
-        {
-            std::map<Index, int> lines;
-            for (Index i = 0; i < Index(tr.sourceOf.size()); ++i)
-                if (tr.sourceOf[i] != kInvalid)
-                    ++lines[tr.sourceOf[i]];
-            std::map<std::pair<int, int>, int> table;
-            for (const auto& [v, n] : lines)
-                if (lay.singular[v])
-                    ++table[{lay.quarters[v], n}];
-            for (const auto& [k, n] : table)
-                std::fprintf(stderr, "poles turning %d with %d lines: %d\n", k.first, k.second, n);
-            std::map<int, int> none;
-            for (Index v = 0; v < Index(lay.singular.size()); ++v)
-                if (lay.singular[v] && !lines.count(v))
-                    ++none[lay.quarters[v]];
-            for (const auto& [k, n] : none)
-                std::fprintf(stderr, "poles turning %d with no lines: %d\n", k, n);
-        }
-        std::vector<glm::dvec3> centre(np, glm::dvec3(0.0));
-        std::vector<int> count(np, 0);
-        for (Index pi = 0; pi < Index(pieces.size()); ++pi)
-        {
-            centre[patchOf[pi]] += at3d(pieces[pi], pieces[pi].poly[0]);
-            ++count[patchOf[pi]];
-        }
-        for (Index p = 0; p < np; ++p)
-            if (corners[p] != 4 || reflex[p])
-            {
-                const glm::dvec3 c = centre[p] / double(count[p]);
-                std::fprintf(stderr, "patch %d: %d corners, %d reflex, %d pieces, at %.2f %.2f %.2f\n", int(p), corners[p], reflex[p], count[p], c.x, c.y, c.z);
-            }
-    }
-    for (Index p = 0; p < np; ++p)
-    {
-        ++st.corners[std::min(8, corners[p])];
-        st.rectangles += corners[p] == 4 && reflex[p] == 0;
-        st.reflex += reflex[p] > 0;
-    }
-    if (std::getenv("LILA_PATCH_DEBUG"))
-    {
-        int sing = 0;
-        for (uint8_t v : lay.singular)
-            sing += v;
-        std::fprintf(stderr, "patches: %d singular, %d tracers, %d segments, %d mismatched, %d pieces, %d patches, %d rectangles, %d with reflex corners; corners",
-                     sing, st.tracers, st.segments, st.mismatched, st.pieces, st.patches, st.rectangles, st.reflex);
-        for (int c = 0; c < 9; ++c)
-            std::fprintf(stderr, " %d:%d", c, st.corners[c]);
-        std::fprintf(stderr, "; ends: on a line %d, killed %d, wall %d, source %d, lost %d, %d loops\n", tr.why[0], tr.why[1], tr.why[2], tr.why[3], tr.why[4], tr.loops);
-        if (const char* dump = std::getenv("LILA_PATCH_DUMP"))
-            if (FILE* f = std::fopen(dump, "w"))
-            {
-                for (const Piece& P : pieces)
-                    for (const glm::dvec2& p : P.poly)
-                    {
-                        const glm::dvec3 x = at3d(P, p);
-                        std::fprintf(f, "v %.9g %.9g %.9g\n", x.x, x.y, x.z);
-                    }
-                Index base = 1;
-                for (Index pi = 0; pi < Index(pieces.size()); ++pi)
-                {
-                    const Index patch = patchOf[pi];
-                    std::fprintf(f, "# fc %d %d\nf", int(patch), int(corners[patch] == 4 && reflex[patch] == 0));
-                    for (size_t k = 0; k < pieces[pi].poly.size(); ++k)
-                        std::fprintf(f, " %d", int(base + k));
-                    std::fprintf(f, "\n");
-                    base += Index(pieces[pi].poly.size());
-                }
-                std::fclose(f);
-            }
-    }
-    // Patches that aren't disks merge with the neighbours that close them up, and the mesh is built again.
-    for (int pass = 0; pass < 8; ++pass)
-    {
-        std::vector<std::pair<Index, Index>> merge;
-        why.clear();
-        ex = buildPatchMesh(lay, blocked, joined, pieces, patchOf, np, targetCells, why, &merge);
-        if (debug && !merge.empty())
-            std::fprintf(stderr, "patch merge pass %d: %zu merges\n", pass, merge.size());
-        if (merge.empty())
-            break;
-        std::vector<Index> up(np);
-        std::iota(up.begin(), up.end(), Index(0));
-        auto root = [&](Index x) {
-            while (up[x] != x)
-                x = up[x] = up[up[x]];
-            return x;
-        };
-        for (auto [a, b] : merge)
-            up[root(a)] = root(b);
-        std::unordered_map<Index, Index> renumber;
-        for (Index& p : patchOf)
-            p = renumber.try_emplace(root(p), Index(renumber.size())).first->second;
-        np = Index(renumber.size());
     }
     if (!why.empty())
         return fail(why);

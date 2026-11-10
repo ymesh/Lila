@@ -1,0 +1,14 @@
+{
+    "id": "Plating",
+    "name": "Plating",
+    "version": "0.1.0",
+    "vendor": "Lila",
+    "description": "Hard-surface plating from Panel Layouts: thick plates with gaps, bevels and lips for armour and vehicles, per-panel heights, and fasteners placed along the lines.",
+    "sdk": "1.0",
+    "entry": {
+        "windows": "Plating.dll",
+        "linux": "Plating.so",
+        "macos": "Plating.dylib"
+    },
+    "enabledByDefault": true
+}

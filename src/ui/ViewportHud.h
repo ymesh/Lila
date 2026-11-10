@@ -70,6 +70,18 @@ LILA_UI_API std::optional<bool> actionState(const std::string& id, const Viewpor
 /** Where the view cube draws in a view that wide: the top-right corner, with the right-hand readouts below it. */
 LILA_UI_API QRectF viewCubeRect(double viewWidth);
 
+/** One View Switcher segment: "persp", "front", "right", "top" or "camera", and where it draws. */
+struct SwitcherSegment
+{
+    const char* view;
+    QRectF rect;
+};
+/**
+ * The View Switcher's segments in a view of that size, under the view cube when it shows; empty when the view is too
+ * small for it.
+ */
+LILA_UI_API std::vector<SwitcherSegment> viewSwitcherSegments(double viewWidth, double viewHeight, bool belowCube);
+
 /** The HUD menu of a viewport: the show-all switch, then one checkable entry per item, then options. */
 LILA_UI_API void fillMenu(QMenu* menu, ViewportWidget* view);
 

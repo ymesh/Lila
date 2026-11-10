@@ -24,6 +24,8 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <memory>
 
 namespace lila::ui
@@ -34,6 +36,26 @@ using scene::Graph;
 using scene::NodeId;
 
 const glm::vec4 kEdgeColor(0.8f, 0.8f, 0.8f, 1.0f);
+const glm::vec4 kLimitingColor(0.95f, 0.22f, 0.18f, 1.0f);
+const glm::vec4 kFreeColor(0.25f, 0.5f, 1.0f, 1.0f);
+
+/** Whether the clamp held the bevel's offset back. */
+bool clamped(const scene::BevelEdgeSet& set)
+{
+    return !set.limits.empty() && set.applied < set.offset * (1.0 - 1e-6);
+}
+
+/**
+ * How much an edge holds a clamped bevel back, 0 for the edges setting the applied offset to 1 for those leaving the asked
+ * offset alone, on a log scale since limits span orders of magnitude.
+ */
+float freedom(const scene::BevelEdgeSet& set, geo::Index e)
+{
+    const double limit = e < set.limits.size() ? set.limits[e] : std::numeric_limits<double>::infinity();
+    if (!(limit < set.offset) || set.applied <= 0.0)
+        return 1.0f;
+    return float(std::clamp(std::log(limit / set.applied) / std::log(set.offset / set.applied), 0.0, 1.0));
+}
 
 void drawBevelEdges(render::FrameState& s, OverlayPainter&, const ViewInfo& view)
 {
@@ -44,10 +66,9 @@ void drawBevelEdges(render::FrameState& s, OverlayPainter&, const ViewInfo& view
     for (scene::Node* n : scene::sceneIndex::matching(g, "autoBevel", scene::autoBevel::isAutoBevel))
     {
         const NodeId id = n->id();
-        if (scene::autoBevel::editing(*n))
-            continue;
+        const bool editing = scene::autoBevel::editing(*n);
         bool picked = std::find(sel.begin(), sel.end(), id) != sel.end();
-        if (!picked && !n->as<bool>(n->type().attrIndex("showEdges")))
+        if (!editing && !picked && !n->as<bool>(n->type().attrIndex("showEdges")))
             continue;
         NodeId meshId = scene::autoBevel::meshOf(g, id);
         scene::Node* mesh = g.node(meshId);
@@ -57,11 +78,21 @@ void drawBevelEdges(render::FrameState& s, OverlayPainter&, const ViewInfo& view
         if (!set || !set->mesh)
             continue;
         const geo::Mesh& m = *set->mesh;
+        // A clamped bevel colours its edges from the ones holding the offset back (red, thick) to free ones (blue). While
+        // editing, normal selection shows the edges, so only the ones holding it back are drawn.
+        const bool heat = clamped(*set);
+        if (editing && !heat)
+            continue;
         glm::dmat4 world = mesh->as<glm::dmat4>(scene::Transform::kWorldMatrix);
         for (geo::Index e : set->edges)
         {
             if (!m.edgeValid(e))
                 continue;
+            const float t = heat ? freedom(*set, e) : 1.0f;
+            if (editing && t >= 1.0f)
+                continue;
+            const glm::vec4 color = heat ? glm::mix(kLimitingColor, kFreeColor, t) : kEdgeColor;
+            const int half = heat && t < 0.5f ? 2 : 1;
             glm::dvec3 a = glm::dvec3(world * glm::dvec4(m.position(m.edgePoint(e, 0)), 1.0));
             glm::dvec3 b = glm::dvec3(world * glm::dvec4(m.position(m.edgePoint(e, 1)), 1.0));
             glm::dvec3 mid = (a + b) * 0.5;
@@ -69,10 +100,10 @@ void drawBevelEdges(render::FrameState& s, OverlayPainter&, const ViewInfo& view
             double len = glm::length(side);
             // Three lines a pixel apart read as one thick one.
             glm::dvec3 step = len > 0.0 ? side / len * view.unitsPerPixel(mid) : glm::dvec3(0.0);
-            for (double k : {-1.0, 0.0, 1.0})
+            for (int k = -half; k <= half; ++k)
             {
-                s.linesOnTop.push_back({glm::vec3(a + step * k), kEdgeColor});
-                s.linesOnTop.push_back({glm::vec3(b + step * k), kEdgeColor});
+                s.linesOnTop.push_back({glm::vec3(a + step * double(k)), color});
+                s.linesOnTop.push_back({glm::vec3(b + step * double(k)), color});
             }
         }
     }
@@ -104,7 +135,7 @@ QWidget* modifierPanel(NodeId mod, bool withSelect)
     auto call = [name](const char* cmd) { return [name, cmd] { runUi(cmd, {{"args", {name()}}}); }; };
 
     auto* row1 = new QHBoxLayout;
-    auto* edit = pushButton("Edit Edges", "Show the input mesh with these edges selected; change them with normal selection.", call("bevelEditEdges"));
+    auto* edit = pushButton("Edit Edges", "Show the input mesh with these edges selected; change them with normal selection. Red edges hold a clamped offset back.", call("bevelEditEdges"));
     auto* apply = pushButton("Apply", "Store the selected edges and finish editing.", call("bevelApplyEdges"));
     auto* cancel = pushButton("Cancel", "Finish editing without changing the edges.", call("bevelCancelEdges"));
     row1->addWidget(edit);
@@ -132,6 +163,8 @@ QWidget* modifierPanel(NodeId mod, bool withSelect)
         auto set = scene::autoBevel::chosen(g, mod);
         bool editing = scene::autoBevel::editing(*n);
         QString text = QString("%1 edges").arg(set ? int(set->edges.size()) : 0);
+        if (set && clamped(*set))
+            text += QString(", offset %1 of %2, clamped").arg(set->applied, 0, 'g', 3).arg(set->offset, 0, 'g', 3);
         if (set && set->lost > 0)
             text += QString(", %1 hand-picked edges lost").arg(set->lost);
         if (editing)

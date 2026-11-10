@@ -129,6 +129,11 @@ public:
     /** The slots holding a bookmark on the camera this view shows, ascending. */
     std::vector<int> bookmarks() const;
     const std::string& viewName() const { return mViewName; }
+    /**
+     * Switches to a view ("persp", "front", "right", "top"); asked for the side already shown, it flips to the opposite
+     * one (front to back), and asked again flips back.
+     */
+    void switchView(const std::string& view);
     /** Which viewport panel this is, in creation order; keys its heads-up display prefs. */
     int hudPanel() const { return mHudPanel; }
     /** The camera and size gizmos, tools and drawers get each frame. */
@@ -278,6 +283,10 @@ private:
     void drawViewCube(OverlayPainter& p);
     /** A click on a view cube face looks at that side; false when at is not on one. */
     bool viewCubeClick(QPointF at);
+    /** The HUD's View Switcher under the view cube. */
+    void drawViewSwitcher(OverlayPainter& p);
+    /** A click on a View Switcher segment switches to it (or flips it, see switchView); false when at is not on one. */
+    bool viewSwitcherClick(QPointF at);
     /** The perspective view orbits to look at that side ("front", "top", ...); an orthographic view switches to it. */
     void lookFromSide(const std::string& side);
     /** Ends a view cube turn where it is heading, recording it as one camera step. */
@@ -345,6 +354,9 @@ private:
     bool mChannelDrag = false; // middle drag driving the channel box's highlighted channels
     bool mToolDrag = false;
     bool mSoftDrag = false;
+    /** Shift+Alt+right-drag: turning the view's light (viewportDisplay::turnLight). */
+    bool mLightDrag = false;
+    bool mLightDragged = false;
     double mSoftStartRadius = 0.0;
     scene::componentPick::Hover mPreselect;
     std::vector<uint32_t> mPreselectIsland; // in uv island select, the hovered face's island

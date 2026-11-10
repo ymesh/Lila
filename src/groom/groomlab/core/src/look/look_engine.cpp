@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Modified for Lila (2026).
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -16,7 +17,9 @@
 
 namespace groomlab::gpu {
 
-const char* apiName(GpuApi api) { return api == GpuApi::D3D11 ? "DirectX11" : api == GpuApi::Cpu ? "CPU" : "OpenGL"; }
+const char* apiName(GpuApi api) {
+    return api == GpuApi::D3D11 ? "DirectX11" : api == GpuApi::Cpu ? "CPU" : api == GpuApi::Vulkan ? "Vulkan" : "OpenGL";
+}
 
 LookEngine::~LookEngine() = default;
 

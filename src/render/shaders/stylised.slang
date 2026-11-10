@@ -13,6 +13,7 @@ static const uint kCloth = 6;
 static const uint kClearcoat = 7;
 static const uint kHair = 8;
 static const uint kEye = 9;
+static const uint kMatcap = 10;
 
 static const uint kMapObject = 0;
 static const uint kMapWorld = 1;
@@ -51,7 +52,7 @@ float3 fromEnv(float3 d)
  */
 float3 keyLight(float3 v)
 {
-    if (pc.params.w > 0.5 && pc.params.w < 1.5)
+    if (environmentLighting())
     {
         float3 d = float3(luminance(envU.sh[3].rgb), luminance(envU.sh[1].rgb), luminance(envU.sh[2].rgb));
         if (dot(d, d) > 1e-8)
@@ -59,15 +60,16 @@ float3 keyLight(float3 v)
     }
     float3 up = pc.params.y > 0.5 ? float3(0, 0, 1) : float3(0, 1, 0);
     float3 fwd = -v;
-    float3 right = normalize(cross(fwd, up) + 1e-5);
-    float3 camUp = cross(right, fwd);
-    return normalize(-fwd * 0.6 + camUp * 0.7 - right * 0.5);
+    float3 right0 = normalize(cross(fwd, up) + 1e-5);
+    float3 up0 = cross(right0, fwd);
+    float ca = cos(pc.extra.w), sa = sin(pc.extra.w);
+    return normalize(-fwd * 0.6 + (right0 * sa + up0 * ca) * 0.7 - (right0 * ca - up0 * sa) * 0.5);
 }
 
 /** Light arriving along the key direction, matching the studio rig's key or the environment's brightness that way. */
 float3 keyRadiance(float3 l)
 {
-    if (pc.params.w > 0.5 && pc.params.w < 1.5)
+    if (environmentLighting())
         return irradiance(toEnv(l)) * pc.env.z * PI;
     return float3(2.6);
 }
@@ -244,7 +246,7 @@ float3 toonShade(float3 n, float3 v, float3 baseColor, Surface s)
     float rimLine = 1.0 - saturate(p1.y);
     float rim = smoothstep(rimLine, rimLine + 0.06, 1.0 - saturate(dot(n, v)));
     c += rimC * rim * p1.z * (0.3 + 0.7 * lit);
-    if (pc.params.w > 0.5)
+    if (environmentLighting() || flatLighting())
         c *= pc.env.z;
     return c;
 }

@@ -58,7 +58,7 @@ struct Window
 
     explicit Window(bool show = true)
     {
-        win.setDockOptions(QMainWindow::AnimatedDocks | QMainWindow::AllowNestedDocks | QMainWindow::AllowTabbedDocks);
+        win.setDockOptions(QMainWindow::AnimatedDocks | QMainWindow::AllowNestedDocks | QMainWindow::AllowTabbedDocks | QMainWindow::GroupedDragging);
         central = new QWidget;
         win.setCentralWidget(central);
         sidebars = new DockSidebars(&win);
@@ -200,14 +200,14 @@ TEST_CASE("a layout restored before the window shows keeps collapsed docks out o
     centralFills(w, w.docks["timeSlider"]->height());
 }
 
-TEST_CASE("tabified docks keep their own size")
+TEST_CASE("switching tabs keeps the tab group's size")
 {
     Window w;
     QDockWidget* channels = w.docks["channelBox"];
     QDockWidget* attrs = w.docks["attributeEditor"];
     w.win.resizeDocks({channels}, {300}, Qt::Horizontal);
     settle();
-    int narrow = channels->width();
+    const int narrow = channels->width();
 
     QTabBar* bar = w.tabBarFor(channels);
     REQUIRE(bar);
@@ -219,22 +219,51 @@ TEST_CASE("tabified docks keep their own size")
     click(bar, Qt::LeftButton, bar->tabRect(attrsTab).center());
     settle();
     CHECK(attrs->isVisible());
+    CHECK(std::abs(attrs->width() - narrow) < 4);
     w.win.resizeDocks({attrs}, {560}, Qt::Horizontal);
     settle();
-    int wide = attrs->width();
+    const int wide = attrs->width();
     CHECK(wide > narrow + 100);
 
     click(bar, Qt::LeftButton, bar->tabRect(channelsTab).center());
     settle();
     CHECK(channels->isVisible());
-    CHECK(std::abs(channels->width() - narrow) < 12);
+    CHECK(std::abs(channels->width() - wide) < 4);
+}
 
-    click(bar, Qt::LeftButton, bar->tabRect(attrsTab).center());
+TEST_CASE("toggling panels keeps every other panel's size")
+{
+    Window w;
+    QDockWidget* channels = w.docks["channelBox"];
+    QDockWidget* outliner = w.docks["outliner"];
+    QDockWidget* top = w.add("rightTop", Qt::RightDockWidgetArea);
+    QDockWidget* material = w.add("materialEditor", Qt::RightDockWidgetArea);
+    w.win.tabifyDockWidget(channels, material);
+    QDockWidget* uv = w.add("uvEditor", Qt::RightDockWidgetArea);
+    keepOwnColumn(uv);
+    uv->setProperty(kDefaultTabExtent, 400);
+    uv->hide();
+    channels->raise();
     settle();
-    CHECK(std::abs(attrs->width() - wide) < 12);
+    w.win.resizeDocks({outliner, channels}, {280, 330}, Qt::Horizontal);
+    w.win.resizeDocks({top, channels}, {250, 300}, Qt::Vertical);
+    settle();
 
-    auto sizes = w.sidebars->tabSizes();
-    CHECK(sizes.contains("channelBox"));
+    auto shape = [&] {
+        return std::vector<int>{outliner->width(), top->width(), top->height(), w.docks["scriptEditor"]->height()};
+    };
+    const std::vector<int> before = shape();
+    for (QDockWidget* d : {uv, material, material, material, material, uv})
+    {
+        toggleDock(d);
+        settle();
+        settle();
+        const std::vector<int> now = shape();
+        CAPTURE(d->objectName().toStdString());
+        for (size_t i = 0; i < now.size(); ++i)
+            CHECK(std::abs(now[i] - before[i]) < 3);
+    }
+    CHECK(dockShowing(channels));
 }
 
 TEST_CASE("middle-click closes a dock tab and a collapsed sidebar tab")
@@ -687,4 +716,39 @@ TEST_CASE("a tab hidden behind another doesn't hold its group wider; shown, it g
     settle();
     CHECK(attrs->width() >= 420);
     CHECK(attrs->widget()->minimumWidth() == 420);
+}
+
+TEST_CASE("dragging a tab out of its group keeps the tab bar carrying the drag")
+{
+    Window w;
+    QDockWidget* attrs = w.docks["attributeEditor"];
+    QTabBar* bar = w.tabBarFor(attrs);
+    REQUIRE(bar);
+    int tab = -1;
+    for (int i = 0; i < bar->count(); ++i)
+        if (bar->tabText(i) == attrs->windowTitle())
+            tab = i;
+    REQUIRE(tab >= 0);
+    auto send = [&](QEvent::Type type, QPoint at, Qt::MouseButton button, Qt::MouseButtons held) {
+        QMouseEvent e(type, QPointF(at), QPointF(bar->mapToGlobal(at)), button, held, Qt::NoModifier);
+        QApplication::sendEvent(bar, &e);
+    };
+    QPoint at = bar->tabRect(tab).center();
+    send(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton);
+    for (int step = 1; step <= 8; ++step)
+    {
+        send(QEvent::MouseMove, at + QPoint(-step * 20, step * 40), Qt::NoButton, Qt::LeftButton);
+        settle();
+    }
+    CHECK(attrs->isFloating());
+    CHECK(bar->isVisible());
+    send(QEvent::MouseButtonRelease, at + QPoint(-160, 320), Qt::LeftButton, Qt::NoButton);
+    settle();
+    CHECK(attrs->isFloating());
+
+    // A layout restore after the drag must find the main window's layout whole.
+    QByteArray state = w.win.saveState();
+    w.win.restoreState(state);
+    settle();
+    CHECK(w.docks["channelBox"]->isVisible());
 }

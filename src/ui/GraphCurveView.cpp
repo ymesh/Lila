@@ -17,6 +17,7 @@
 
 #include <QApplication>
 #include <QDateTime>
+#include <QKeyEvent>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
@@ -33,22 +34,12 @@ using scene::Graph;
 
 namespace
 {
-constexpr double kHandleLength = 36.0;
 constexpr double kStripHeight = 72.0;
 constexpr double kBandHalf = 1.25; // a Stacked band spans its -1..1 plus a margin
 
 double cvDegrees(double slope) { return std::atan(slope) * 180.0 / 3.14159265358979323846; }
 double cvRadians(double degrees) { return degrees * 3.14159265358979323846 / 180.0; }
 double cvFps() { return anim::playback().fps > 0.0 ? anim::playback().fps : 30.0; }
-
-/** Previews only dirty the curves, which sends no graph change, so the viewports are asked for a frame directly. */
-void redrawViewports()
-{
-    for (QWidget* top : QApplication::topLevelWidgets())
-        for (ViewportWidget* v : top->findChildren<ViewportWidget*>())
-            if (v->isVisible())
-                v->requestFrame();
-}
 
 /** Region handles 0..3 are corners, 4..7 the top, right, bottom and left edges; each needs extent along what it scales. */
 bool regionHandleUsable(int i, const QRectF& r)
@@ -167,6 +158,10 @@ CurveView::CurveView(GraphEditor* editor) : QWidget(editor), mEditor(editor)
     setFocusPolicy(Qt::ClickFocus);
     setContextMenuPolicy(Qt::PreventContextMenu);
     mAxisColors = axisColors();
+    onSelectionChanged = [this] {
+        mEditor->refreshKeyFields();
+        update();
+    };
     mPrefListener = PrefStore::get().onChanged([this](const std::string& file) {
         if (file != "general" || axisColors() == mAxisColors)
             return;
@@ -176,92 +171,6 @@ CurveView::CurveView(GraphEditor* editor) : QWidget(editor), mEditor(editor)
 }
 
 CurveView::~CurveView() { PrefStore::get().removeOnChanged(mPrefListener); }
-
-std::string CurveView::commandTarget(NodeId id) const
-{
-    Graph& g = Graph::current();
-    int slot = slotOf(id);
-    if (slot < 0)
-    {
-        scene::Node* n = g.node(id);
-        return n ? n->path() : std::string();
-    }
-    if (slot > 2 || !g.node(realCurve(id)))
-        return {};
-    const Channel* ch = channelOf(id);
-    return ch ? g.plugName(ch->plug) : std::string();
-}
-
-const Channel* CurveView::channelOf(NodeId curve) const
-{
-    for (const Channel& c : channels)
-        if (c.curve == curve)
-            return &c;
-    return nullptr;
-}
-
-bool CurveView::isSelected(NodeId curve, double t) const
-{
-    for (const KeySel& k : sel)
-        if (k.curve == curve && std::abs(k.time - t) <= kEps)
-            return true;
-    return false;
-}
-
-std::vector<NodeId> CurveView::targetCurves() const
-{
-    std::vector<NodeId> out;
-    for (const KeySel& k : sel)
-        if (std::find(out.begin(), out.end(), k.curve) == out.end())
-            out.push_back(k.curve);
-    if (out.empty() && activeCurve && channelOf(activeCurve))
-        out.push_back(activeCurve);
-    if (out.empty())
-        for (const Channel& c : channels)
-            if (c.shown)
-                out.push_back(c.curve);
-    return out;
-}
-
-void CurveView::dropMissing()
-{
-    std::erase_if(sel, [&](const KeySel& k) {
-        auto it = curves.find(k.curve);
-        return it == curves.end() || it->second.find(k.time) < 0 || !channelOf(k.curve) || !channelOf(k.curve)->shown;
-    });
-    if (activeCurve && !channelOf(activeCurve))
-        activeCurve = scene::kNoNode;
-}
-
-std::vector<double> CurveView::selectedTimes(NodeId id) const
-{
-    std::vector<double> out;
-    for (const KeySel& k : sel)
-        if (k.curve == id)
-            out.push_back(k.time);
-    return out;
-}
-
-json CurveView::keysArgument() const
-{
-    std::map<NodeId, std::vector<double>> byCurve;
-    for (const KeySel& k : sel)
-        byCurve[k.curve].push_back(k.time);
-    json keys = json::array();
-    for (auto& [id, times] : byCurve)
-        if (std::string target = commandTarget(id); !target.empty())
-            keys.push_back({{"curve", target}, {"times", times}});
-    return keys;
-}
-
-json CurveView::targetNames() const
-{
-    json names = json::array();
-    for (NodeId id : targetCurves())
-        if (std::string target = commandTarget(id); !target.empty() && std::find(names.begin(), names.end(), target) == names.end())
-            names.push_back(target);
-    return names;
-}
 
 void CurveView::updateMaps()
 {
@@ -393,214 +302,33 @@ void CurveView::loopKeys(bool on)
 
 void CurveView::beginTween(anim::BlendMode mode)
 {
-    mTweening = !sel.empty();
-    mTweenMode = mode;
-    mTweenAmount = 0.0;
+    if (sel.empty() || mDrag != Drag::None)
+        return;
+    edit = {};
+    edit.kind = KeyEdit::Kind::Tween;
+    edit.tweenMode = mode;
 }
 
 void CurveView::setTween(double amount)
 {
-    if (!mTweening)
+    if (!tweening())
         return;
-    mTweenAmount = amount;
+    edit.tweenAmount = amount;
     pushPreviews();
     update();
 }
 
 void CurveView::endTween()
 {
-    if (!mTweening)
+    if (!tweening())
         return;
-    dropPreviews();
-    mTweening = false;
-    if (std::abs(mTweenAmount) > 1e-6)
-    {
-        try
-        {
-            ops::execute("blendKeys", {{"keys", keysArgument()}, {"mode", anim::blendModeName(mTweenMode)}, {"amount", mTweenAmount}},
-                         CallSource::UI);
-        }
-        catch (const CommandError& e)
-        {
-            log::error("{}", e.what());
-        }
-    }
-    mTweenAmount = 0.0;
+    commit();
     update();
 }
 
 double CurveView::stripHeight() const
 {
     return kStripHeight * ((settings.speedStrip ? 1 : 0) + (settings.accelStrip ? 1 : 0));
-}
-
-std::vector<NodeId> CurveView::activeSet() const
-{
-    std::vector<NodeId> out;
-    for (const KeySel& k : sel)
-        if (std::find(out.begin(), out.end(), k.curve) == out.end())
-            out.push_back(k.curve);
-    if (activeCurve && std::find(out.begin(), out.end(), activeCurve) == out.end())
-        out.push_back(activeCurve);
-    return out;
-}
-
-double CurveView::defaultFor(const Channel& ch) const
-{
-    Graph& g = Graph::current();
-    if (!ch.plug.node || !g.node(ch.plug.node))
-        return 0.0;
-    const scene::PlugValue& d = g.attr(ch.plug).defaultValue;
-    if (const auto* v = std::get_if<double>(&d))
-        return *v;
-    if (const auto* v = std::get_if<glm::dvec3>(&d))
-        return (*v)[std::clamp(ch.plug.component, 0, 2)];
-    return 0.0;
-}
-
-anim::KeyTransform CurveView::transformFor(NodeId id) const
-{
-    anim::KeyTransform x = mXform;
-    const Channel* ch = channelOf(id);
-    x.valueOffset = ch ? mDisplayOffset / ch->mapScale : mDisplayOffset;
-    auto it = mValuePivots.find(id);
-    x.valuePivot = it != mValuePivots.end() ? it->second : 0.0;
-    x.falloff = settings.falloff ? settings.falloffFrames / cvFps() : 0.0;
-    x.snap = std::abs(x.timeScale - 1.0) > 1e-12;
-    return x;
-}
-
-double CurveView::keyTimeBeforeDrag(NodeId curve, double t) const
-{
-    if (!transforming())
-        return t;
-    const anim::KeyTransform x = transformFor(curve);
-    for (const KeySel& k : sel)
-        if (k.curve == curve && std::abs(x.time(k.time, cvFps()) - t) <= kEps)
-            return k.time;
-    return t + 1e9;
-}
-
-double CurveView::falloffWeightAt(NodeId id, double t) const
-{
-    if (!transforming() || !settings.falloff || isSelected(id, t))
-        return 0.0;
-    double nearest = 1e300;
-    for (const KeySel& k : sel)
-        if (k.curve == id)
-            nearest = std::min(nearest, std::abs(k.time - t));
-    return anim::falloffWeight(nearest, settings.falloffFrames / cvFps());
-}
-
-anim::RotationCurve CurveView::previewRotation(NodeId realId) const
-{
-    anim::RotationCurve rc = rotations.at(realId);
-    if (transforming())
-    {
-        std::array<std::vector<double>, 3> times;
-        std::array<anim::KeyTransform, 3> xs;
-        for (int a = 0; a < 3; ++a)
-        {
-            times[size_t(a)] = selectedTimes(slotId(realId, a));
-            xs[size_t(a)] = transformFor(slotId(realId, a));
-        }
-        anim::transformKeys(rc, times, xs, cvFps());
-    }
-    if (mTweening)
-        for (int a = 0; a < 3; ++a)
-            if (const Channel* ch = channelOf(slotId(realId, a)))
-                if (std::vector<double> times = selectedTimes(ch->curve); !times.empty())
-                    anim::blendKeys(rc, a, times, mTweenMode, mTweenAmount, defaultFor(*ch));
-    return rc;
-}
-
-anim::Curve CurveView::preview(NodeId id) const
-{
-    const int slot = slotOf(id);
-    anim::Curve c;
-    if (slot >= 0 && (transforming() || mTweening) && rotations.contains(realCurve(id)))
-        c = derivedChannel(previewRotation(realCurve(id)), slot);
-    else
-    {
-        c = curves.at(id);
-        if (slot < 0 && transforming())
-            anim::transformKeys(c, selectedTimes(id), transformFor(id), cvFps());
-        if (slot < 0 && mTweening)
-            if (const Channel* ch = channelOf(id); ch && !selectedTimes(id).empty())
-                anim::blendKeys(c, selectedTimes(id), mTweenMode, mTweenAmount, defaultFor(*ch));
-    }
-    if (mDrag == Drag::Tangent && mTangent.curve == id && mMoved)
-        if (int i = c.find(mTangent.time); i >= 0)
-        {
-            anim::Key& k = c.keys[size_t(i)];
-            const bool out = mTangentSide > 0;
-            if (!std::isnan(mTangentAngle))
-            {
-                if (k.broken)
-                {
-                    const double other = out ? c.inSlope(size_t(i)) : c.outSlope(size_t(i));
-                    k.in = k.out = anim::Tangent::Fixed;
-                    (out ? k.outAngle : k.inAngle) = mTangentAngle;
-                    (out ? k.inAngle : k.outAngle) = cvDegrees(other);
-                }
-                else
-                {
-                    k.in = k.out = anim::Tangent::Fixed;
-                    k.inAngle = k.outAngle = mTangentAngle;
-                }
-            }
-            if (!std::isnan(mTangentWeight))
-                (out ? k.outWeight : k.inWeight) = mTangentWeight;
-        }
-    if (mDrag == Drag::TangentRotate && mMoved)
-        if (const Channel* ch = channelOf(id))
-            for (size_t i = 0; i < c.keys.size(); ++i)
-                if (isSelected(id, c.keys[i].time))
-                {
-                    const double in = c.inSlope(i), out = c.outSlope(i);
-                    anim::Key& k = c.keys[i];
-                    k.in = k.out = anim::Tangent::Fixed;
-                    k.inAngle = cvDegrees(slopeOfScreenAngle(*ch, screenAngleOf(*ch, in) + mRotateDelta));
-                    k.outAngle = cvDegrees(slopeOfScreenAngle(*ch, screenAngleOf(*ch, out) + mRotateDelta));
-                }
-    return c;
-}
-
-std::function<double(double)> CurveView::sampler(NodeId id, const anim::Curve& c) const
-{
-    const Channel* ch = channelOf(id);
-    std::vector<anim::Modifier> mods = ch ? ch->modifiers : std::vector<anim::Modifier>{};
-    const int slot = slotOf(id);
-    auto it = rotations.find(realCurve(id));
-    const bool tangentEdit = (mDrag == Drag::Tangent && mTangent.curve == id) || (mDrag == Drag::TangentRotate && !selectedTimes(id).empty());
-    if (slot < 0 || it == rotations.end() || (slot < 3 && tangentEdit && mMoved))
-    {
-        if (mods.empty())
-            return [c](double t) { return c.evaluate(t); };
-        return [c, mods](double t) { return anim::evaluateModified(c, mods, t); };
-    }
-    anim::RotationCurve rc = (transforming() || mTweening) ? previewRotation(realCurve(id)) : it->second;
-    if (slot < 3)
-    {
-        if (mods.empty())
-            return [rc, slot](double t) { return rc.evaluate(t)[slot]; };
-        return [rc, slot, mods](double t) { return anim::evaluateModified(rc, mods, t)[slot]; };
-    }
-    glm::dquat ref = rc.keys.empty() ? glm::dquat(1.0, 0.0, 0.0, 0.0) : rc.keys.front().q;
-    return [rc, slot, ref](double t) {
-        glm::dquat q = rc.evaluateQuat(t);
-        return quatComponent(glm::dot(q, ref) < 0.0 ? -q : q, slot - 3);
-    };
-}
-
-double CurveView::screenAngleOf(const Channel& ch, double slope) const
-{
-    return cvDegrees(slope * ch.mapScale * mSy / mSx);
-}
-
-double CurveView::slopeOfScreenAngle(const Channel& ch, double degrees) const
-{
-    return std::tan(cvRadians(std::clamp(degrees, -89.9, 89.9))) * mSx / (mSy * ch.mapScale);
 }
 
 QPointF CurveView::handlePoint(const anim::Curve& c, size_t i, bool out, const Channel& ch) const
@@ -619,7 +347,7 @@ QPointF CurveView::handlePoint(const anim::Curve& c, size_t i, bool out, const C
     }
     QPointF d(mSx, -slope * ch.mapScale * mSy);
     const double len = std::hypot(d.x(), d.y());
-    d = len > 0 ? d * (kHandleLength / len) : QPointF(kHandleLength, 0);
+    d = len > 0 ? d * (look::kHandleLength / len) : QPointF(look::kHandleLength, 0);
     return out ? pt + d : pt - d;
 }
 
@@ -631,7 +359,7 @@ void CurveView::drawCurve(QPainter& p, const anim::Curve& c, const Channel& ch, 
     int level = active ? 255 : ch.level;
     // Curves the selection isn't on recede while some are picked.
     if (!active && !activeSet().empty())
-        level = int(level * 0.6);
+        level = int(level * look::kRecede);
     double w = width();
     double xFirst = xOf(c.keys.front().time), xLast = xOf(c.keys.back().time);
     // Regular samples plus both sides of every key, so steps and corners land on the keys.
@@ -927,25 +655,25 @@ void CurveView::paintEvent(QPaintEvent*)
                 p.drawLine(in, pt);
                 p.drawLine(pt, out);
                 p.setBrush(gray(170));
-                // Broken handles are squares, unified ones round.
+                constexpr double b = look::kBrokenHandleSize, r = look::kUnifiedHandleRadius;
                 for (QPointF h : {in, out})
                     if (k.broken)
-                        p.drawRect(QRectF(h.x() - 2.5, h.y() - 2.5, 5, 5));
+                        p.drawRect(QRectF(h.x() - b / 2, h.y() - b / 2, b, b));
                     else
-                        p.drawEllipse(h, 3, 3);
+                        p.drawEllipse(h, r, r);
             }
             const double fw = selected ? 0.0 : falloffWeightAt(ch.curve, k.time);
             p.setPen(QPen(selected ? gray(255) : channelColor(ch, isActive(ch.curve) ? 230 : ch.level), 1));
             p.setBrush(selected ? gray(255) : fw > 0.0 ? falloffTint(fw) : gray(22));
+            constexpr double d = look::kBreakdownSize / 2, h = look::kKeySize / 2;
             if (k.breakdown)
-                p.drawPolygon(QPolygonF({pt + QPointF(0, -4), pt + QPointF(4, 0), pt + QPointF(0, 4), pt + QPointF(-4, 0)}));
+                p.drawPolygon(QPolygonF({pt + QPointF(0, -d), pt + QPointF(d, 0), pt + QPointF(0, d), pt + QPointF(-d, 0)}));
             else
-                p.drawRect(QRectF(pt.x() - 3, pt.y() - 3, 6, 6));
-            // A loop key is ringed: it mirrors the first key.
+                p.drawRect(QRectF(pt.x() - h, pt.y() - h, 2 * h, 2 * h));
             if (i + 1 == c.keys.size() && i > 0 && loopCurves.contains(ch.curve))
             {
                 p.setBrush(Qt::NoBrush);
-                p.drawEllipse(pt, 6.5, 6.5);
+                p.drawEllipse(pt, look::kLoopRingRadius, look::kLoopRingRadius);
             }
         }
     }
@@ -998,6 +726,21 @@ void CurveView::paintEvent(QPaintEvent*)
     p.fillRect(lr, gray(200));
     p.setPen(gray(20));
     p.drawText(lr, Qt::AlignCenter, frameLabel);
+
+    if (const QString text = readout(); !text.isEmpty())
+    {
+        QRectF box = QRectF(p.fontMetrics().boundingRect(text)).adjusted(-6, -3, 6, 3);
+        box.moveTopLeft(mLast + QPointF(16, 14));
+        if (box.right() > w - 4)
+            box.moveRight(mLast.x() - 12);
+        if (box.bottom() > height() - 4)
+            box.moveBottom(mLast.y() - 8);
+        p.setPen(Qt::NoPen);
+        p.setBrush(gray(16, 210));
+        p.drawRoundedRect(box, 3, 3);
+        p.setPen(gray(230));
+        p.drawText(box, Qt::AlignCenter, text);
+    }
 }
 
 void CurveView::resizeEvent(QResizeEvent* e)
@@ -1015,6 +758,7 @@ void CurveView::mousePressEvent(QMouseEvent* e)
     mPress = mLast = e->position();
     mMoved = false;
     mPressCurve = scene::kNoNode;
+    mRightPending = false;
     // A click during a hold-key drag places the keys there.
     if (mHold.active)
     {
@@ -1057,7 +801,8 @@ void CurveView::mousePressEvent(QMouseEvent* e)
     }
     if (e->button() == Qt::RightButton)
     {
-        showMenu(e->globalPosition().toPoint());
+        // Decided on release or once the mouse travels: a click opens the full menu, a flick the tangent marking menu.
+        mRightPending = true;
         return;
     }
     const Drag toolDrag = settings.tool == Tool::Scale ? Drag::Scale : settings.tool == Tool::Rotate ? Drag::TangentRotate : Drag::Move;
@@ -1086,7 +831,6 @@ void CurveView::mousePressEvent(QMouseEvent* e)
     if (hitHandle(mPress))
     {
         mDrag = Drag::Tangent;
-        mTangentAngle = mTangentWeight = std::nan("");
         return;
     }
     if (int h = hitRegionHandle(mPress); h >= 0)
@@ -1098,23 +842,18 @@ void CurveView::mousePressEvent(QMouseEvent* e)
     }
     if (auto hit = hitKey(mPress))
     {
-        bool was = isSelected(hit->curve, hit->time);
-        auto drop = [&] { std::erase_if(sel, [&](const KeySel& k) { return k.curve == hit->curve && std::abs(k.time - hit->time) <= kEps; }); };
-        if (ctrl)
-            drop();
-        else if (shift)
-        {
-            if (was)
-                drop();
-            else
-                sel.push_back(*hit);
-        }
-        else if (!was)
-            sel = {*hit};
+        const SelectOp op = selectOpFor(shift, ctrl);
+        // A plain click on a selected key keeps the selection, so the drag moves all of it.
+        if (op != SelectOp::Replace || !isSelected(hit->curve, hit->time))
+            select(std::span(&*hit, 1), op);
         activeCurve = hit->curve;
-        selectionChanged();
-        if (!ctrl && isSelected(hit->curve, hit->time))
+        update();
+        if (isSelected(hit->curve, hit->time) && op != SelectOp::Remove)
+        {
             beginTransform(toolDrag);
+            if (mDrag == Drag::Move)
+                setAnchor(*hit);
+        }
         return;
     }
     if (QRectF r = regionRect(); !r.isNull() && r.adjusted(-8, -8, 8, 8).contains(mPress) && !shift && !ctrl)
@@ -1125,13 +864,22 @@ void CurveView::mousePressEvent(QMouseEvent* e)
     // A click on a curve picks its keys; a drag from it still boxes.
     mPressCurve = hitCurve(mPress);
     mDrag = Drag::Box;
-    mBoxMode = shift ? 1 : ctrl ? -1 : 0;
+    mBoxOp = selectOpFor(shift, ctrl);
 }
 
 void CurveView::mouseMoveEvent(QMouseEvent* e)
 {
     QPointF pos = e->position();
     mCursor = pos;
+    if (mRightPending)
+    {
+        if ((pos - mPress).manhattanLength() > 6)
+        {
+            mRightPending = false;
+            popupTangentMarkingMenu(*this, mapToGlobal(mPress.toPoint()), Qt::RightButton);
+        }
+        return;
+    }
     if (mRadiusDrag)
     {
         const double framesPerPixel = cvFps() / mSx;
@@ -1165,11 +913,20 @@ void CurveView::mouseMoveEvent(QMouseEvent* e)
     QPointF d = pos - mLast;
     if ((pos - mPress).manhattanLength() > 3)
         mMoved = true;
+    edit.moved = edit.moved || mMoved;
+    // A typed number holds the drag until Enter, Esc or the release.
+    if (!mTyped.isEmpty() && (mDrag == Drag::Move || mDrag == Drag::Tangent))
+    {
+        mLast = pos;
+        update();
+        return;
+    }
     const bool shift = e->modifiers() & Qt::ShiftModifier;
     QPointF total = pos - mPress;
     // Shift locks to the axis the drag mostly follows.
     const bool lockValue = shift && std::abs(total.x()) > std::abs(total.y());
     const bool lockTime = shift && !lockValue;
+    mLock = lockTime ? 1 : lockValue ? 2 : 0;
     switch (mDrag)
     {
     case Drag::Pan:
@@ -1188,15 +945,15 @@ void CurveView::mouseMoveEvent(QMouseEvent* e)
         if (!mMoved)
             break;
         double fps = cvFps();
-        mXform.timeOffset = lockTime ? 0.0 : std::round((timeAt(pos.x()) - timeAt(mPress.x())) * fps) / fps;
-        mDisplayOffset = lockValue ? 0.0 : displayAt(pos.y()) - displayAt(mPress.y());
+        edit.xform.timeOffset = lockTime ? 0.0 : std::round((timeAt(pos.x()) - timeAt(mPress.x())) * fps) / fps;
+        edit.displayOffset = lockValue ? 0.0 : displayAt(pos.y()) - displayAt(mPress.y());
         break;
     }
     case Drag::Scale:
         if (!mMoved)
             break;
-        mXform.timeScale = lockTime ? 1.0 : std::exp(total.x() / 200.0);
-        mXform.valueScale = lockValue ? 1.0 : std::exp(-total.y() / 200.0);
+        edit.xform.timeScale = lockTime ? 1.0 : std::exp(total.x() / 200.0);
+        edit.xform.valueScale = lockValue ? 1.0 : std::exp(-total.y() / 200.0);
         break;
     case Drag::Region:
     {
@@ -1207,19 +964,19 @@ void CurveView::mouseMoveEvent(QMouseEvent* e)
         const bool left = h == 0 || h == 3 || h == 7, right = h == 1 || h == 2 || h == 5;
         const bool top = h == 0 || h == 1 || h == 4, bot = h == 2 || h == 3 || h == 6;
         if ((left || right) && r.width() >= 1.0)
-            mXform.timeScale = right ? (r.width() + total.x()) / r.width() : (r.width() - total.x()) / r.width();
+            edit.xform.timeScale = right ? (r.width() + total.x()) / r.width() : (r.width() - total.x()) / r.width();
         if ((top || bot) && r.height() >= 1.0)
-            mXform.valueScale = top ? (r.height() - total.y()) / r.height() : (r.height() + total.y()) / r.height();
+            edit.xform.valueScale = top ? (r.height() - total.y()) / r.height() : (r.height() + total.y()) / r.height();
         break;
     }
     case Drag::Tangent:
     {
         double weight = std::nan("");
-        mTangentAngle = angleFor(pos, &weight);
-        mTangentWeight = weight;
+        edit.tangentAngle = angleFor(pos, &weight);
+        edit.tangentWeight = weight;
         break;
     }
-    case Drag::TangentRotate: mRotateDelta = -total.x() * 0.5; break;
+    case Drag::TangentRotate: edit.rotateDelta = -total.x() * 0.5; break;
     default: break;
     }
     mLast = pos;
@@ -1228,8 +985,15 @@ void CurveView::mouseMoveEvent(QMouseEvent* e)
     update();
 }
 
-void CurveView::mouseReleaseEvent(QMouseEvent*)
+void CurveView::mouseReleaseEvent(QMouseEvent* e)
 {
+    if (mRightPending)
+    {
+        mRightPending = false;
+        if (e->button() == Qt::RightButton)
+            showMenu(e->globalPosition().toPoint());
+        return;
+    }
     if (mRadiusDrag)
     {
         mRadiusDrag = false;
@@ -1237,23 +1001,121 @@ void CurveView::mouseReleaseEvent(QMouseEvent*)
         update();
         return;
     }
-    dropPreviews();
-    Drag drag = mDrag;
-    switch (drag)
-    {
-    case Drag::Box:
-        mDrag = Drag::None;
-        finishBox();
-        break;
-    case Drag::Move:
-    case Drag::Scale:
-    case Drag::Region: commitTransform(); break;
-    case Drag::Tangent: commitTangent(); break;
-    case Drag::TangentRotate: commitTangentRotate(); break;
-    default: break;
-    }
+    endDrag(false);
+}
+
+void CurveView::endDrag(bool cancel)
+{
+    const Drag drag = mDrag;
     mDrag = Drag::None;
+    mAnchor.reset();
+    mTyped.clear();
+    mLock = 0;
+    setProperty("keysCaptured", QVariant());
+    if (drag == Drag::Box)
+    {
+        dropPreviews();
+        if (!cancel)
+            finishBox();
+    }
+    else if (cancel)
+        GraphModel::cancel();
+    else if (edit.kind != KeyEdit::Kind::None && edit.kind != KeyEdit::Kind::Tween)
+        commit();
+    else
+        dropPreviews();
     update();
+}
+
+QString CurveView::readout() const
+{
+    const bool keyDrag = (mDrag == Drag::Move && mAnchor) || mDrag == Drag::Tangent;
+    if (!keyDrag || (!mMoved && mTyped.isEmpty()))
+        return {};
+    if (mDrag == Drag::Tangent)
+    {
+        const double a = std::isnan(edit.tangentAngle) ? 0.0 : edit.tangentAngle;
+        QString text = QString("Angle %1°").arg(mTyped.isEmpty() ? formatValue(a) : mTyped + "_");
+        if (!std::isnan(edit.tangentWeight))
+            text += QString("  Weight %1").arg(formatValue(edit.tangentWeight));
+        return text;
+    }
+    const Channel* ch = channelOf(mAnchor->curve);
+    const anim::KeyTransform x = transformFor(mAnchor->curve);
+    const double frame = anim::frameOf(x.time(mAnchor->time, cvFps()));
+    const double value = x.value(mAnchorValue);
+    const bool typingFrame = mLock == 2;
+    QString text = QString("Frame %1  Value %2%3")
+                       .arg(typingFrame && !mTyped.isEmpty() ? mTyped + "_" : formatValue(frame))
+                       .arg(!typingFrame && !mTyped.isEmpty() ? mTyped + "_" : formatValue(value))
+                       .arg(ch ? ch->unit : QString());
+    if (mLock == 1)
+        text += "  Time locked";
+    else if (mLock == 2)
+        text += "  Value locked";
+    return text;
+}
+
+void CurveView::applyTyped()
+{
+    bool ok = false;
+    const double x = mTyped.toDouble(&ok);
+    if (!ok)
+        return;
+    edit.moved = mMoved = true;
+    if (mDrag == Drag::Tangent)
+        edit.tangentAngle = std::clamp(x, -89.9, 89.9);
+    else if (mDrag == Drag::Move && mAnchor)
+    {
+        if (mLock == 2)
+            edit.xform.timeOffset = anim::secondsOf(std::round(x)) - mAnchor->time;
+        else
+        {
+            if (mLock == 0)
+                edit.xform.timeOffset = 0.0;
+            mLock = 1;
+            const Channel* ch = channelOf(mAnchor->curve);
+            edit.displayOffset = (x - mAnchorValue) * (ch ? ch->mapScale : 1.0);
+        }
+    }
+    pushPreviews();
+    update();
+}
+
+void CurveView::keyPressEvent(QKeyEvent* e)
+{
+    const bool keyDrag = (mDrag == Drag::Move && mAnchor) || mDrag == Drag::Tangent;
+    if (!keyDrag)
+    {
+        QWidget::keyPressEvent(e);
+        return;
+    }
+    const int k = e->key();
+    if (k == Qt::Key_Escape)
+    {
+        endDrag(true);
+        return;
+    }
+    if (k == Qt::Key_Return || k == Qt::Key_Enter)
+    {
+        endDrag(false);
+        return;
+    }
+    if (k == Qt::Key_Backspace)
+    {
+        mTyped.chop(1);
+        if (!mTyped.isEmpty())
+            applyTyped();
+        update();
+        return;
+    }
+    const QString t = e->text();
+    if (t.size() == 1 && (t[0].isDigit() || t == "." || (t == "-" && mTyped.isEmpty())))
+    {
+        mTyped += t;
+        applyTyped();
+    }
+    e->accept();
 }
 
 void CurveView::wheelEvent(QWheelEvent* e)
@@ -1271,7 +1133,7 @@ void CurveView::wheelEvent(QWheelEvent* e)
 std::optional<KeySel> CurveView::hitKey(QPointF pos) const
 {
     std::optional<KeySel> best;
-    double bestD = 7.0;
+    double bestD = look::kKeyHitRadius;
     for (const Channel& ch : channels)
     {
         if (!ch.shown || !curves.contains(ch.curve))
@@ -1304,10 +1166,14 @@ bool CurveView::hitHandle(QPointF pos)
         for (int side : {-1, 1})
         {
             QPointF h = handlePoint(c, size_t(i), side > 0, *ch);
-            if (std::hypot(h.x() - pos.x(), h.y() - pos.y()) < 6.0)
+            if (std::hypot(h.x() - pos.x(), h.y() - pos.y()) < look::kHandleHitRadius)
             {
-                mTangent = s;
-                mTangentSide = side;
+                edit = {};
+                edit.kind = KeyEdit::Kind::Tangent;
+                edit.tangent = s;
+                edit.tangentSide = side;
+                mTyped.clear();
+                setProperty("keysCaptured", true);
                 return true;
             }
         }
@@ -1319,30 +1185,30 @@ NodeId CurveView::hitCurve(QPointF pos) const
 {
     double t = timeAt(pos.x());
     for (const Channel& ch : channels)
-        if (ch.shown && curves.contains(ch.curve) && std::abs(yOfKey(ch, sampler(ch.curve, curves.at(ch.curve))(t)) - pos.y()) < 5.0)
+        if (ch.shown && curves.contains(ch.curve) && std::abs(yOfKey(ch, sampler(ch.curve, curves.at(ch.curve))(t)) - pos.y()) < look::kCurveHitRadius)
             return ch.curve;
     return scene::kNoNode;
 }
 
 double CurveView::angleFor(QPointF pos, double* weight) const
 {
-    const anim::Curve& c = curves.at(mTangent.curve);
-    const Channel* ch = channelOf(mTangent.curve);
-    int i = c.find(mTangent.time);
+    const anim::Curve& c = curves.at(edit.tangent.curve);
+    const Channel* ch = channelOf(edit.tangent.curve);
+    int i = c.find(edit.tangent.time);
     if (i < 0 || !ch)
         return 0.0;
     const anim::Key& k = c.keys[size_t(i)];
-    QPointF pt(xOf(mTangent.time), yOfKey(*ch, k.value));
+    QPointF pt(xOf(edit.tangent.time), yOfKey(*ch, k.value));
     double dx = pos.x() - pt.x(), dy = pos.y() - pt.y();
     // The in handle sits left of the key; dragging it past the key flips nothing.
-    if (mTangentSide > 0)
+    if (edit.tangentSide > 0)
         dx = std::max(dx, 1.0);
     else
         dx = std::min(dx, -1.0);
-    const bool neighbour = mTangentSide > 0 ? size_t(i) + 1 < c.keys.size() : i > 0;
+    const bool neighbour = edit.tangentSide > 0 ? size_t(i) + 1 < c.keys.size() : i > 0;
     if (weight && c.weighted && neighbour)
     {
-        const double dt = mTangentSide > 0 ? c.keys[size_t(i) + 1].time - k.time : k.time - c.keys[size_t(i) - 1].time;
+        const double dt = edit.tangentSide > 0 ? c.keys[size_t(i) + 1].time - k.time : k.time - c.keys[size_t(i) - 1].time;
         *weight = std::clamp(std::abs(dx) / mSx / (dt / 3.0), 0.05, 3.0);
     }
     double slope = (-dy / (mSy * ch->mapScale)) / (dx / mSx);
@@ -1360,7 +1226,7 @@ void CurveView::scrubTo(double x)
 
 void CurveView::setPivots(QPointF press)
 {
-    mValuePivots.clear();
+    edit.valuePivots.clear();
     double tMin = 1e300, tMax = -1e300;
     for (const KeySel& k : sel)
     {
@@ -1370,11 +1236,11 @@ void CurveView::setPivots(QPointF press)
     const double now = Graph::current().time();
     switch (settings.pivot)
     {
-    case Pivot::Selection: mXform.timePivot = 0.5 * (tMin + tMax); break;
-    case Pivot::Click: mXform.timePivot = timeAt(press.x()); break;
-    case Pivot::CurrentFrame: mXform.timePivot = now; break;
-    case Pivot::FirstKey: mXform.timePivot = tMin; break;
-    case Pivot::LastKey: mXform.timePivot = tMax; break;
+    case Pivot::Selection: edit.xform.timePivot = 0.5 * (tMin + tMax); break;
+    case Pivot::Click: edit.xform.timePivot = timeAt(press.x()); break;
+    case Pivot::CurrentFrame: edit.xform.timePivot = now; break;
+    case Pivot::FirstKey: edit.xform.timePivot = tMin; break;
+    case Pivot::LastKey: edit.xform.timePivot = tMax; break;
     }
     std::map<NodeId, std::vector<const KeySel*>> byCurve;
     for (const KeySel& k : sel)
@@ -1413,16 +1279,22 @@ void CurveView::setPivots(QPointF press)
         case Pivot::FirstKey: pivot = first; break;
         case Pivot::LastKey: pivot = last; break;
         }
-        mValuePivots[id] = pivot;
+        edit.valuePivots[id] = pivot;
     }
 }
 
 void CurveView::beginTransform(Drag kind)
 {
     mDrag = kind;
-    mXform = {};
-    mDisplayOffset = 0.0;
-    mRotateDelta = 0.0;
+    edit = {};
+    edit.kind = kind == Drag::TangentRotate ? KeyEdit::Kind::TangentRotate : KeyEdit::Kind::Transform;
+    edit.falloff = settings.falloff ? settings.falloffFrames / cvFps() : 0.0;
+    edit.aspect = mSy / mSx;
+    mTyped.clear();
+    mLock = 0;
+    mAnchor.reset();
+    if (kind == Drag::Move && !sel.empty())
+        setAnchor(sel.front());
     if (kind == Drag::Scale)
         setPivots(mPress);
     if (kind == Drag::Region)
@@ -1430,193 +1302,56 @@ void CurveView::beginTransform(Drag kind)
         const QRectF r = mRegionStart;
         const int h = mRegionHandle;
         const bool left = h == 0 || h == 3 || h == 7, top = h == 0 || h == 1 || h == 4;
-        mXform.timePivot = timeAt(left ? r.right() : r.left());
+        edit.xform.timePivot = timeAt(left ? r.right() : r.left());
         const double pivotDisplay = displayAt(top ? r.bottom() : r.top());
-        mValuePivots.clear();
         for (const KeySel& k : sel)
             if (const Channel* ch = channelOf(k.curve))
-                mValuePivots[k.curve] = ch->value(pivotDisplay);
+                edit.valuePivots[k.curve] = ch->value(pivotDisplay);
     }
+}
+
+void CurveView::setAnchor(const KeySel& key)
+{
+    auto it = curves.find(key.curve);
+    const int i = it == curves.end() ? -1 : it->second.find(key.time);
+    if (i < 0)
+        return;
+    mAnchor = key;
+    mAnchorValue = it->second.keys[size_t(i)].value;
+    setProperty("keysCaptured", true);
 }
 
 void CurveView::finishBox()
 {
+    std::vector<KeySel> hits;
     if (!mMoved && mPressCurve && channelOf(mPressCurve))
     {
-        const NodeId c = mPressCurve;
-        activeCurve = c;
-        if (mBoxMode == 0)
-            sel.clear();
-        if (auto it = curves.find(c); it != curves.end())
+        activeCurve = mPressCurve;
+        if (auto it = curves.find(mPressCurve); it != curves.end())
             for (const anim::Key& k : it->second.keys)
-            {
-                const bool was = isSelected(c, k.time);
-                if (mBoxMode < 0)
-                    std::erase_if(sel, [&](const KeySel& s) { return s.curve == c && std::abs(s.time - k.time) <= kEps; });
-                else if (!was)
-                    sel.push_back({c, k.time});
-            }
-        selectionChanged();
+                hits.push_back({mPressCurve, k.time});
+        select(hits, mBoxOp);
         return;
     }
     if (!mMoved)
     {
-        if (mBoxMode == 0)
+        if (mBoxOp == SelectOp::Replace)
         {
-            sel.clear();
             activeCurve = scene::kNoNode;
-            selectionChanged();
+            select({}, SelectOp::Replace);
         }
         return;
     }
-    QRectF box = QRectF(mPress, mLast).normalized();
-    if (mBoxMode == 0)
-        sel.clear();
+    const QRectF box = QRectF(mPress, mLast).normalized();
     for (const Channel& ch : channels)
     {
         if (!ch.shown || !curves.contains(ch.curve))
             continue;
         for (const anim::Key& k : curves.at(ch.curve).keys)
-        {
-            if (!box.contains(QPointF(xOf(k.time), yOfKey(ch, k.value))))
-                continue;
-            bool was = isSelected(ch.curve, k.time);
-            if (mBoxMode < 0)
-                std::erase_if(sel, [&](const KeySel& s) { return s.curve == ch.curve && std::abs(s.time - k.time) <= kEps; });
-            else if (!was)
-                sel.push_back({ch.curve, k.time});
-        }
+            if (box.contains(QPointF(xOf(k.time), yOfKey(ch, k.value))))
+                hits.push_back({ch.curve, k.time});
     }
-    selectionChanged();
-}
-
-void CurveView::commitTransform()
-{
-    const bool moved = mMoved;
-    const anim::KeyTransform base = mXform;
-    const double displayOffset = mDisplayOffset;
-    // Snapshot the per-channel transforms before the drag state resets.
-    std::map<NodeId, anim::KeyTransform> perCurve;
-    for (const KeySel& k : sel)
-        perCurve.try_emplace(k.curve, transformFor(k.curve));
-    mDrag = Drag::None;
-    if (!moved)
-        return;
-    const bool any = base.timeOffset != 0.0 || std::abs(base.timeScale - 1.0) > 1e-12 || std::abs(base.valueScale - 1.0) > 1e-12 ||
-                     displayOffset != 0.0;
-    if (!any)
-        return;
-    std::map<NodeId, std::vector<double>> byCurve;
-    for (const KeySel& k : sel)
-        byCurve[k.curve].push_back(k.time);
-    json keys = json::array();
-    for (auto& [id, times] : byCurve)
-    {
-        std::string target = commandTarget(id);
-        if (target.empty())
-            continue;
-        const anim::KeyTransform& x = perCurve[id];
-        json entry = {{"curve", target}, {"times", times}};
-        if (x.valueOffset != 0.0)
-            entry["valueOffset"] = x.valueOffset;
-        if (std::abs(x.valueScale - 1.0) > 1e-12)
-            entry["valuePivot"] = x.valuePivot;
-        keys.push_back(std::move(entry));
-    }
-    if (keys.empty())
-        return;
-    json call = {{"keys", keys}};
-    if (base.timeOffset != 0.0)
-        call["timeOffset"] = base.timeOffset;
-    if (std::abs(base.timeScale - 1.0) > 1e-12)
-    {
-        call["timeScale"] = base.timeScale;
-        call["timePivot"] = base.timePivot;
-        call["snap"] = true;
-    }
-    if (std::abs(base.valueScale - 1.0) > 1e-12)
-        call["valueScale"] = base.valueScale;
-    if (settings.falloff)
-        call["falloff"] = settings.falloffFrames / cvFps();
-    try
-    {
-        ops::execute("transformKeys", call, CallSource::UI);
-    }
-    catch (const CommandError& e)
-    {
-        log::error("{}", e.what());
-        return;
-    }
-    for (KeySel& k : sel)
-        k.time = perCurve[k.curve].time(k.time, cvFps());
-    selectionChanged();
-}
-
-void CurveView::commitTangent()
-{
-    if (!mMoved || (std::isnan(mTangentAngle) && std::isnan(mTangentWeight)))
-        return;
-    std::string name = commandTarget(mTangent.curve);
-    auto it = curves.find(mTangent.curve);
-    if (name.empty() || it == curves.end())
-        return;
-    int i = it->second.find(mTangent.time);
-    if (i < 0)
-        return;
-    const anim::Key& k = it->second.keys[size_t(i)];
-    const bool out = mTangentSide > 0;
-    json call = {{"args", {name}}, {"time", mTangent.time}};
-    if (!std::isnan(mTangentAngle))
-    {
-        if (k.broken)
-            call[out ? "outAngle" : "inAngle"] = mTangentAngle;
-        else
-            call["inAngle"] = call["outAngle"] = mTangentAngle;
-    }
-    if (!std::isnan(mTangentWeight))
-        call[out ? "outWeight" : "inWeight"] = mTangentWeight;
-    try
-    {
-        ops::execute("keyTangent", call, CallSource::UI);
-    }
-    catch (const CommandError& e)
-    {
-        log::error("{}", e.what());
-    }
-    mTangentAngle = mTangentWeight = std::nan("");
-}
-
-void CurveView::commitTangentRotate()
-{
-    if (!mMoved || std::abs(mRotateDelta) < 1e-6)
-        return;
-    int count = 0;
-    {
-        UndoChunk chunk("Rotate Tangents");
-        for (const KeySel& k : sel)
-        {
-            auto it = curves.find(k.curve);
-            const Channel* ch = channelOf(k.curve);
-            std::string name = commandTarget(k.curve);
-            if (it == curves.end() || !ch || name.empty())
-                continue;
-            int i = it->second.find(k.time);
-            if (i < 0)
-                continue;
-            const double in = it->second.inSlope(size_t(i)), out = it->second.outSlope(size_t(i));
-            const double inAngle = cvDegrees(slopeOfScreenAngle(*ch, screenAngleOf(*ch, in) + mRotateDelta));
-            const double outAngle = cvDegrees(slopeOfScreenAngle(*ch, screenAngleOf(*ch, out) + mRotateDelta));
-            count += runUnechoed("keyTangent", {{"args", {name}}, {"time", k.time}, {"inAngle", inAngle}, {"outAngle", outAngle}}) ? 1 : 0;
-        }
-    }
-    log::write(LogLevel::Echo, "# rotated " + std::to_string(count) + " tangents\n");
-    mRotateDelta = 0.0;
-}
-
-void CurveView::selectionChanged()
-{
-    mEditor->refreshKeyFields();
-    update();
+    select(hits, mBoxOp);
 }
 
 void CurveView::showMenu(QPoint at)
@@ -1625,34 +1360,6 @@ void CurveView::showMenu(QPoint at)
     mEditor->fillContextMenu(&menu);
     menu.exec(at);
 }
-void CurveView::pushPreviews()
-{
-    Graph& g = Graph::current();
-    std::set<NodeId> rotationsDone;
-    for (const KeySel& k : sel)
-    {
-        const NodeId real = realCurve(k.curve);
-        if (!g.node(real))
-            continue;
-        if (slotOf(k.curve) < 0)
-        {
-            if (curves.contains(k.curve))
-                anim::setPreview(g, real, preview(k.curve));
-            continue;
-        }
-        // Tangent drags on a rotation channel edit only the drawn Euler channel; the scene follows on release.
-        if (mDrag != Drag::Tangent && mDrag != Drag::TangentRotate && rotations.contains(real) && rotationsDone.insert(real).second)
-            anim::setPreview(g, real, previewRotation(real));
-    }
-    redrawViewports();
-}
-
-void CurveView::dropPreviews()
-{
-    anim::clearPreviews(Graph::current());
-    redrawViewports();
-}
-
 void CurveView::toolKeyDown(Tool tool, bool holdToDrag)
 {
     settings.tool = tool;

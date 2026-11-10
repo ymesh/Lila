@@ -17,6 +17,7 @@ public class LilaLinkRig : ModuleRules
 
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
+			"Eigen",
 			"Json",
 		});
 	}

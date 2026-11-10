@@ -72,7 +72,7 @@ QPointF polar(double r, double screenDegrees)
     return kCenter + QPointF(r * std::cos(a), r * std::sin(a));
 }
 const QPointF kXZone = polar(u(110.0), -90.0);
-const QPointF kYZone = polar(u(110.0), 210.0);
+const QPointF kYZone = polar(u(110.0), 170.0);
 const QPointF kZZone = polar(u(110.0), 30.0);
 const QPointF kRotateButton = polar(u(177.0), -90.0);
 const QPointF kScaleButton = polar(u(177.0), -60.0);

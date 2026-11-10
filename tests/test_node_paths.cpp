@@ -137,10 +137,10 @@ TEST_CASE("duplicate, group and parent leave other nodes' names alone")
 
     // Parenting into a real clash renames, and undo puts the name back.
     run("parent", {{"args", {"|Arm", "G"}}});
-    CHECK(g.find("|G|Arm1"));
+    CHECK(g.find("|Body|L|G|Arm1"));
     run("undo");
     CHECK(g.find("|Arm"));
-    CHECK_FALSE(g.find("|G|Arm1"));
+    CHECK_FALSE(g.find("|Body|L|G|Arm1"));
 }
 
 TEST_CASE("scene files keep duplicate short names apart")

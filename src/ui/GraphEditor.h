@@ -27,15 +27,17 @@ namespace lila::ui
 namespace graphed
 {
 class CurveView;
+class GraphModel;
 }
 
 /**
  * Maya's graph editor, extended: the selection's animated channels on the left, their curves on the right, speed and
  * acceleration strips under them. Alt+MMB pans, Alt+RMB zooms (drag sideways for time, up and down for value), the
- * wheel zooms both. LMB selects keys (click or box; Shift adds, Ctrl removes; a click on a curve picks its keys) and
- * drags them with the current tool: Move (W, with a box whose edges scale the selection), Rotate (E, turns each key's
- * tangents) or Scale (R, about the chosen pivot). MMB drags with the tool from anywhere. Shift constrains to one axis.
- * Every edit runs through commands, so it undoes.
+ * wheel zooms both. LMB selects keys (click or box; Shift toggles, Ctrl removes, Ctrl+Shift adds; a click on a curve
+ * picks its keys) and drags them with the current tool: Move (W, with a box whose edges scale the selection), Rotate
+ * (E, turns each key's tangents) or Scale (R, about the chosen pivot). MMB drags with the tool from anywhere. Shift
+ * constrains to one axis; a number typed mid-drag sets the dragged key's value (Enter commits, Esc cancels). RMB click
+ * opens the context menu, an RMB flick the tangent marking menu. Every edit runs through commands, so it undoes.
  */
 class LILA_UI_API GraphEditor : public QWidget
 {
@@ -65,6 +67,8 @@ public:
     void swapBuffer();
     /** Breaks (lock false) or unifies the selected keys' tangent handles. */
     void lockTangents(bool lock);
+    /** The channels, curves and key selection the editor shows. */
+    graphed::GraphModel& model();
     /** Runs a key command on the selected keys, or every key of the target curves when none are selected. */
     void runOnKeys(const std::string& command, const nlohmann::json& call);
     /** Adds or removes a modifier on the target curves through curveModifier, with its option box values. */

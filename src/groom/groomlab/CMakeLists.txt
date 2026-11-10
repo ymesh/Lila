@@ -39,6 +39,7 @@ set_source_files_properties(${_kernels_cpp} PROPERTIES GENERATED ON HEADER_FILE_
 add_library(groomlab_core STATIC
     core/src/attributes.cpp
     core/src/brush.cpp
+    core/src/brush_catalog.cpp
     core/src/brush_alpha.cpp
     core/src/camera_solve.cpp
     core/src/card_atlas.cpp
@@ -168,9 +169,10 @@ add_library(groomlab_core STATIC
     io/src/guide_cache_op.cpp
     io/src/import_curves_op.cpp
     io/src/sim_cache.cpp
+    gpu/src/look_chain.cpp
     ${_kernels_cpp})
 target_include_directories(groomlab_core
-    PUBLIC core/include io/include ${_gen}
+    PUBLIC core/include io/include gpu/include ${_gen}
     PRIVATE core/src/look ${CMAKE_SOURCE_DIR}/third_party/stb)
 target_compile_definitions(groomlab_core PUBLIC GROOMLAB_HAS_TBB=1 GROOMLAB_PORTABLE_MATH=1)
 target_link_libraries(groomlab_core PUBLIC TBB::tbb PRIVATE nlohmann_json::nlohmann_json Alembic::Alembic)
@@ -203,3 +205,14 @@ endif()
 # Shadowed locals and size_t narrowing are their style; the code is kept as imported.
 target_compile_options(groomlab_core PRIVATE /wd4456 /wd4457 /wd4267)
 set_target_properties(groomlab_core PROPERTIES LILA_NO_UNITY ON CXX_STANDARD 17 FOLDER groom)
+
+# look.slang's kernels as SPIR-V for the Vulkan look engine (src/groom/LookEngineDevice.cpp), next to the executables.
+set(_look_spv ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/shaders/look.spv)
+add_custom_command(OUTPUT ${_look_spv}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/shaders
+    COMMAND ${SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/look.slang -I ${CMAKE_CURRENT_SOURCE_DIR}/core/include -target spirv
+            -profile spirv_1_6 -fp-mode precise -fvk-use-entrypoint-name -o ${_look_spv}
+    DEPENDS shaders/look.slang core/include/groomlab/shared/groom_math.h
+    COMMENT "slangc: GroomLab look kernels for Vulkan")
+add_custom_target(groomlab_look_spirv DEPENDS ${_look_spv})
+add_dependencies(groomlab_core groomlab_look_spirv)
