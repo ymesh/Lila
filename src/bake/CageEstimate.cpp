@@ -149,7 +149,17 @@ public:
      * cap bounds the walk: far layers of the same mesh would otherwise read as material the low starts inside. own is
      * the sample's shell when the low bakes onto itself: its other shells hide what they cross.
      */
+#ifdef _WIN32
     Need at(uint32_t low, const glm::vec3& p, const glm::vec3& dir, float mCap, float mEps, const Own& own = {}) const
+#else
+    // GCC can't use Own's default member initializers in a default argument before Walker is complete (CWG 1397);
+    // a body can, so the no-own form forwards.
+    Need at(uint32_t low, const glm::vec3& p, const glm::vec3& dir, float mCap, float mEps) const
+    {
+        return at(low, p, dir, mCap, mEps, Own{});
+    }
+    Need at(uint32_t low, const glm::vec3& p, const glm::vec3& dir, float mCap, float mEps, const Own& own) const
+#endif
     {
         Need n;
         // A ray through a shared edge or vertex meets each triangle there: hits this close repeat one crossing.

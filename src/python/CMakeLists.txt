@@ -18,5 +18,11 @@ target_link_libraries(lila_python PUBLIC lila_scene lila_math lila_debug lila_vc
 nanobind_compile_options(lila_python)
 nanobind_link_options(lila_python)
 
-cmake_path(GET Python_EXECUTABLE PARENT_PATH LILA_PYTHON_HOME)
+if(WIN32)
+    cmake_path(GET Python_EXECUTABLE PARENT_PATH LILA_PYTHON_HOME)
+else()
+    # The interpreter is <home>/bin/python3.x here, not <home>/python.exe.
+    cmake_path(GET Python_EXECUTABLE PARENT_PATH LILA_PYTHON_HOME)
+    cmake_path(GET LILA_PYTHON_HOME PARENT_PATH LILA_PYTHON_HOME)
+endif()
 target_compile_definitions(lila_python PRIVATE LILA_PYTHON_HOME="${LILA_PYTHON_HOME}")

@@ -241,10 +241,10 @@ vcpkg_check_features(OUT_FEATURE_OPTIONS FEATURE_GUI_OPTIONS
     #"png"                 CMAKE_DISABLE_FIND_PACKAGE_PNG # Unable to disable if Freetype requires it
     "wayland"             CMAKE_DISABLE_FIND_PACKAGE_Wayland
     "xlib"                CMAKE_DISABLE_FIND_PACKAGE_X11
-    "xkb"                 CMAKE_DISABLE_FIND_PACKAGE_XKB
-    "xcb"                 CMAKE_DISABLE_FIND_PACKAGE_XCB
-    "xcb-xlib"            CMAKE_DISABLE_FIND_PACKAGE_X11_XCB
-    "xkbcommon-x11"       CMAKE_DISABLE_FIND_PACKAGE_XKB_COMMON_X11
+    #"xkb"                 CMAKE_DISABLE_FIND_PACKAGE_XKB # Handled explicitly below to prevent auto-detection issues
+    #"xcb"                 CMAKE_DISABLE_FIND_PACKAGE_XCB # Handled explicitly below to prevent auto-detection issues
+    #"xcb-xlib"            CMAKE_DISABLE_FIND_PACKAGE_X11_XCB # Handled explicitly below to prevent auto-detection issues
+    #"xkbcommon-x11"       CMAKE_DISABLE_FIND_PACKAGE_XKB_COMMON_X11 # Handled explicitly below to prevent auto-detection issues
     "xrender"             CMAKE_DISABLE_FIND_PACKAGE_XRender
     # There are more X features but I am unsure how to safely disable them! Most of them seem to be found automaticall with find_package(X11)
      )
@@ -264,11 +264,50 @@ if("xcb" IN_LIST FEATURES)
     list(APPEND FEATURE_GUI_OPTIONS -DINPUT_xcb=yes)
 else()
     list(APPEND FEATURE_GUI_OPTIONS -DINPUT_xcb=no)
+    # Force XCB and related features off on Linux when not explicitly requested - prevents auto-detection failures
+    list(APPEND FEATURE_GUI_OPTIONS -DFEATURE_xcb:BOOL=OFF)
+    list(APPEND FEATURE_GUI_OPTIONS -DFEATURE_xcb_sm:BOOL=OFF)
+    list(APPEND FEATURE_GUI_OPTIONS -DFEATURE_xcb_xlib:BOOL=OFF)
+    list(APPEND FEATURE_GUI_OPTIONS -DFEATURE_xrender:BOOL=OFF)
+    list(APPEND FEATURE_GUI_OPTIONS -DFEATURE_xcb_native_painting:BOOL=OFF)
 endif()
+
+# Disable XCB system libs test which can fail even with XCB present (only when xcb isn't requested)
+if(VCPKG_TARGET_IS_LINUX AND NOT "xcb" IN_LIST FEATURES)
+    list(APPEND FEATURE_GUI_OPTIONS -DCMAKE_DISABLE_FIND_PACKAGE_XCB:BOOL=ON)
+endif()
+
 if("xkb" IN_LIST FEATURES)
     list(APPEND FEATURE_GUI_OPTIONS -DINPUT_xkbcommon=yes)
 else()
     list(APPEND FEATURE_GUI_OPTIONS -DINPUT_xkbcommon=no)
+    list(APPEND FEATURE_GUI_OPTIONS -DFEATURE_xkbcommon_x11:BOOL=OFF)
+endif()
+
+# Force disable X11 system library tests which can fail even with libraries present
+# Qt's feature system tries to auto-enable these from Qt's defaults, but the tests may fail due to missing
+# transitive dependencies or linker issues, breaking the build with "feature forced ON" errors.
+# We must explicitly disable these even if not in FEATURES list, since Qt auto-enables them on Linux.
+if(VCPKG_TARGET_IS_LINUX)
+    # Block XCB detection and features
+    if(NOT "xcb" IN_LIST FEATURES)
+        list(APPEND FEATURE_GUI_OPTIONS -DFEATURE_xcb:BOOL=OFF)
+        list(APPEND FEATURE_GUI_OPTIONS -DFEATURE_xcb_sm:BOOL=OFF)
+        list(APPEND FEATURE_GUI_OPTIONS -DFEATURE_xcb_xlib:BOOL=OFF)
+        list(APPEND FEATURE_GUI_OPTIONS -DFEATURE_xcb_xinput:BOOL=OFF)
+    endif()
+    
+    # Force disable xcb_syslibs test which can fail with "feature forced ON" error (only when xcb isn't requested)
+    if(NOT "xcb" IN_LIST FEATURES)
+        list(APPEND FEATURE_GUI_OPTIONS -DQT_FEATURE_xcb_syslibs:BOOL=OFF)
+        list(APPEND FEATURE_GUI_OPTIONS -DFEATURE_system_xcb_xinput:BOOL=OFF)
+    endif()
+    
+    # Block xkbcommon_x11 explicitly
+    if(NOT "xkbcommon-x11" IN_LIST FEATURES)
+        list(APPEND FEATURE_GUI_OPTIONS -DFEATURE_xkbcommon_x11:BOOL=OFF)
+        list(APPEND FEATURE_GUI_OPTIONS -DCMAKE_DISABLE_FIND_PACKAGE_XKB_COMMON_X11:BOOL=ON)
+    endif()
 endif()
 
 # Disable OpenGL ES 3.1 and 3.2

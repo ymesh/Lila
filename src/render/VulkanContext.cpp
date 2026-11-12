@@ -136,6 +136,8 @@ bool VulkanContext::init(bool validation)
     std::vector<const char*> exts = {VK_KHR_SURFACE_EXTENSION_NAME};
 #ifdef _WIN32
     exts.push_back("VK_KHR_win32_surface");
+#else
+    exts.push_back("VK_KHR_xcb_surface");
 #endif
     std::vector<const char*> layers;
     validation = validation && hasLayer("VK_LAYER_KHRONOS_validation");

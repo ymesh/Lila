@@ -23,7 +23,9 @@
         "dnslookup",
         "openssl",
         "sql",
-        "sql-sqlite"
+        "sql-sqlite",
+        { "name": "xcb", "platform": "linux" },
+        { "name": "fontconfig", "platform": "linux" }
       ]
     },
     "qtsvg",

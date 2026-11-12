@@ -12,7 +12,11 @@ int main(int argc, char** argv)
     // Keep the tests out of the real user prefs.
     const auto dir = std::filesystem::temp_directory_path() / "lila_groomlab_gpu_tests";
     std::filesystem::create_directories(dir);
+#ifdef _WIN32
     _putenv_s("LILA_CONFIG_DIR", dir.string().c_str());
+#else
+    setenv("LILA_CONFIG_DIR", dir.string().c_str(), 1);
+#endif
     lila::mainq::init();
     ::testing::InitGoogleTest(&argc, argv);
     const int result = RUN_ALL_TESTS();

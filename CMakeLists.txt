@@ -50,6 +50,18 @@ if(MSVC)
     # compiler and runtime on both sides), so the warnings about it say nothing.
     add_compile_options(/wd4251 /wd4275)
 endif()
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    # Unity builds put several sources' anonymous namespaces in one TU, so GCC flags every pimpl holding a
+    # file-local type. Harmless here (the types never leave that TU), and MSVC has no such warning.
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wno-subobject-linkage>)
+    # GCC 13+ misreads inlined std::vector frees through lila::UninitAllocator as freeing a non-heap pointer.
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wno-free-nonheap-object>)
+endif()
+if(NOT WIN32)
+    # The helper static libraries (groom evaluator, groomlab, ufbx...) end up inside the shared Lila libraries, so
+    # everything is position-independent; ELF can't put non-PIC code in a .so. Windows has no such distinction.
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 

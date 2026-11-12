@@ -35,6 +35,7 @@
       },
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "x64-linux-dynamic",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/linux-gcc.cmake",
         "Python_ROOT_DIR": "$env{LILA_PYTHON_DIR}"
       }
     }

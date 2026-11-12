@@ -31,6 +31,11 @@ lila_module(lila_render UI
     VulkanContext.cpp)
 
 target_link_libraries(lila_render PUBLIC lila_core volk::volk Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
+if(NOT WIN32)
+    # Vulkan window surfaces through xcb (Surface.cpp), the X11 connection Qt's xcb platform uses too.
+    find_package(X11 REQUIRED COMPONENTS xcb)
+    target_link_libraries(lila_render PRIVATE X11::xcb)
+endif()
 
 lila_add_shaders(lila_render FILES
     shaders/ao.slang

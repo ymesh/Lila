@@ -127,9 +127,16 @@ bool init(const std::vector<std::string>& argv)
     config.write_bytecode = 1;
 
     // An installed build carries its own interpreter; dev builds use the one they were configured against.
+#ifdef _WIN32
     std::filesystem::path home = paths::executableDir() / "python-runtime";
     if (!std::filesystem::exists(home / "Lib"))
         home = LILA_PYTHON_HOME;
+#else
+    // The POSIX layout keeps the standard library in lib/python3.x, not Lib.
+    std::filesystem::path home = paths::executableDir() / "python-runtime";
+    if (!std::filesystem::exists(home / "lib" / ("python" + std::to_string(PY_MAJOR_VERSION) + "." + std::to_string(PY_MINOR_VERSION))))
+        home = LILA_PYTHON_HOME;
+#endif
     if (const char* env = std::getenv("LILA_PYTHON_HOME"); env && *env)
         home = env;
     PyConfig_SetString(&config, &config.home, widen(home).c_str());

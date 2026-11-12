@@ -179,7 +179,9 @@ target_link_libraries(groomlab_core PUBLIC TBB::tbb PRIVATE nlohmann_json::nlohm
 
 # The kernels' C++ through clang-cl when it is installed (about twice as fast for Interpolate, Collide and SelfCollide,
 # the same floats: no contraction into FMAs, no strict aliasing since the Slang prelude type-puns), else cl.
-find_program(GROOMLAB_CLANG_CL clang-cl HINTS C:/Tools/llvm/bin "$ENV{ProgramFiles}/LLVM/bin")
+if(WIN32)
+    find_program(GROOMLAB_CLANG_CL clang-cl HINTS C:/Tools/llvm/bin "$ENV{ProgramFiles}/LLVM/bin")
+endif()
 if(GROOMLAB_CLANG_CL)
     set(_kernels_obj ${_gen}/look_kernels_cpu_$<CONFIG>.obj)
     set(_kernels_dep ${_gen}/look_kernels_cpu_$<CONFIG>.d)
@@ -200,10 +202,14 @@ if(GROOMLAB_CLANG_CL)
     target_sources(groomlab_core PRIVATE ${_kernels_obj})
 else()
     target_sources(groomlab_core PRIVATE LookKernelsCpu.cpp)
+    if(MSVC)
     set_source_files_properties(LookKernelsCpu.cpp PROPERTIES COMPILE_OPTIONS /bigobj)
+    endif()
 endif()
 # Shadowed locals and size_t narrowing are their style; the code is kept as imported.
+if(MSVC)
 target_compile_options(groomlab_core PRIVATE /wd4456 /wd4457 /wd4267)
+endif()
 set_target_properties(groomlab_core PROPERTIES LILA_NO_UNITY ON CXX_STANDARD 17 FOLDER groom)
 
 # look.slang's kernels as SPIR-V for the Vulkan look engine (src/groom/LookEngineDevice.cpp), next to the executables.
