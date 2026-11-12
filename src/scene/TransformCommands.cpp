@@ -312,12 +312,24 @@ void registerTransformCommands()
 
     ops::registerCommand({
         .name = "zeroPivot",
-        .doc = "Move the pivots to the world origin, keeping the object where it is.",
+        .doc = "Move the pivots to the world origin, keeping the object where it is. axes zeroes only those world axes, "
+               "so axes=\"y\" drops the pivot to the ground plane.",
         .positionalDoc = "objects",
+        .flags = {{"axes", "a", T::String, "xyz", "World axes to zero: any of x, y and z."}},
         .run = [](const Args& a) -> json {
+            const std::string axes = a.get<std::string>("axes", "xyz");
+            if (axes.empty() || axes.find_first_not_of("xyzXYZ") != std::string::npos)
+                throw CommandError("zeroPivot: axes takes x, y and z, got '" + axes + "'");
             Graph& g = Graph::current();
-            for (NodeId id : transformsOf(a, "zeroPivot"))
-                xformops::setWorldPivot(g, id, glm::dvec3(0.0));
+            const auto ids = transformsOf(a, "zeroPivot");
+            g.evaluate();
+            for (NodeId id : ids)
+            {
+                glm::dvec3 p = xformops::worldPivot(g, id);
+                for (char c : axes)
+                    p[(c | 0x20) - 'x'] = 0.0;
+                xformops::setWorldPivot(g, id, p);
+            }
             return nullptr;
         },
     });

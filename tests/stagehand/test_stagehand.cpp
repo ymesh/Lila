@@ -199,6 +199,64 @@ TEST_CASE("stagehand: drop onto stacks the drops above the target, and dressChec
     CHECK(check["issues"][0]["kind"] == "floating");
 }
 
+TEST_CASE("stagehand: sweep brooms things along the stroke, and gather pulls them together")
+{
+    loadStagehand();
+    run("newScene");
+    auto worldXZ = [](const std::string& n) {
+        const json t = run("xform", {{"args", {n}}, {"query", true}, {"worldSpace", true}, {"translation", true}});
+        return glm::dvec2(t[0].get<double>(), t[2].get<double>());
+    };
+    std::vector<std::string> litter;
+    for (int k = 0; k < 5; ++k)
+        litter.push_back(cube(("Can" + std::to_string(k)).c_str(), {k * 10.0, 0, (k % 2) * 12.0 - 6.0}, {8, 8, 8}));
+    double before = 0.0;
+    for (const std::string& c : litter)
+        before += worldXZ(c).x;
+    const json r = run("sweep", {{"args", litter}, {"path", json::array({json::array({-40, 0, 0}), json::array({200, 0, 0})})}, {"radius", 40.0}});
+    CHECK(r["atRest"].get<bool>());
+    double after = 0.0;
+    for (const std::string& c : litter)
+        after += worldXZ(c).x;
+    CHECK((after - before) / double(litter.size()) > 40.0);
+    CHECK(run("dressCheck", {{"args", litter}})["ok"].get<bool>());
+    run("undo");
+    CHECK(worldXZ(litter[0]).x == doctest::Approx(0.0));
+
+    run("newScene");
+    std::vector<std::string> books;
+    const glm::dvec2 corners[] = {{-100, -100}, {100, -100}, {100, 100}, {-100, 100}};
+    for (int k = 0; k < 4; ++k)
+        books.push_back(cube(("Book" + std::to_string(k)).c_str(), {corners[k].x, 0, corners[k].y}, {16, 4, 22}));
+    run("sweep", {{"args", books}, {"path", json::array({json::array({0, 0, 0})})}, {"gather", true}, {"radius", 200.0}});
+    for (const std::string& b : books)
+        CHECK(glm::length(worldXZ(b)) < 100.0);
+    CHECK_THROWS(run("sweep", {{"args", books}, {"path", json::array({json::array({0, 0, 0})})}}));
+}
+
+TEST_CASE("arrange: pathProps spaces items along a curve, to its side, standing on the surface below")
+{
+    loadStagehand();
+    run("newScene");
+    const std::string kerb = cube("Kerb", {0, 0, 0}, {1200, 15, 300});
+    const std::string cone = cube("Cone", {0, 0, 2000}, {20, 40, 20});
+    const std::string curve = run("curve", {{"type", "poly"}, {"points", json::array({json::array({-500, 15, 0}), json::array({500, 15, 0})})}, {"name", "Edge"}})
+                                  .get<std::string>();
+    const json r = run("pathProps", {{"args", {curve}}, {"items", {cone}}, {"spacing", 100.0}, {"spacingJitter", 0.0}, {"offset", 40.0}, {"turn", 0.0}});
+    REQUIRE(r["nodes"].is_array());
+    CHECK(r["nodes"].size() == 11);
+    for (const json& n : r["nodes"])
+    {
+        const json info = run("dressInfo", {{"args", {n}}})[0];
+        // Bottom on the kerb's top, 40 cm to the right of a curve running along +X.
+        CHECK(info["boundsMin"][1].get<double>() == doctest::Approx(15.0).epsilon(0.01));
+        CHECK((info["boundsMin"][2].get<double>() + info["boundsMax"][2].get<double>()) * 0.5 == doctest::Approx(40.0).epsilon(0.01));
+    }
+    run("undo");
+    CHECK_FALSE(run("objExists", {{"args", {r["group"]}}}).get<bool>());
+    CHECK_THROWS(run("pathProps", {{"args", {kerb}}, {"items", {cone}}}));
+}
+
 TEST_CASE("stagehand: physicsBody makes a body child with the material's numbers")
 {
     loadStagehand();

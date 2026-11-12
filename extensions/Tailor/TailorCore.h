@@ -35,7 +35,7 @@ struct Fabric
     float shrinkWeft = 1.f;
 };
 
-/** Built-in presets: Cotton, Linen, Denim, Canvas, Wool, Leather, Suede, Silk, Chiffon, Rubber, Burlap, Heavy (chainmail look), Fleece, Plush, Banner. */
+/** Built-in presets: Cotton, Linen, Denim, Canvas, Wool, Leather, Suede, Silk, Chiffon, Rubber, Burlap, Heavy (chainmail look), Fleece, Plush, Banner, Spandex, Neoprene, Nylon, Twill. */
 const std::vector<Fabric>& fabricPresets();
 const Fabric* findFabric(const std::string& name);
 

@@ -44,8 +44,26 @@ std::shared_ptr<const gn::Volume> volumeOf(scene::Graph& g, scene::Node& target)
 }
 
 /** A sparse NanoVDB float grid of the voxels that differ from the background, with the volume's transform. */
+nanovdb::GridHandle<nanovdb::HostBuffer> toNanoVector(const gn::Volume& v)
+{
+    using BuildGrid = nanovdb::tools::build::Grid<nanovdb::Vec3f>;
+    BuildGrid grid(nanovdb::Vec3f(0.0f), v.name, nanovdb::GridClass::Unknown);
+    glm::dmat3 linear(v.indexToWorld);
+    glm::dmat3 inverse = glm::inverse(linear);
+    grid.mMap.set(linear, inverse, glm::dvec3(v.indexToWorld[3]));
+    auto acc = grid.getAccessor();
+    for (int k = 0; k < v.dims.z; ++k)
+        for (int j = 0; j < v.dims.y; ++j)
+            for (int i = 0; i < v.dims.x; ++i)
+                if (glm::vec3 x = v.vectors[v.index(i, j, k)]; x != glm::vec3(0.0f))
+                    acc.setValue(nanovdb::Coord(i, j, k), nanovdb::Vec3f(x.x, x.y, x.z));
+    return nanovdb::tools::createNanoGrid(grid);
+}
+
 nanovdb::GridHandle<nanovdb::HostBuffer> toNano(const gn::Volume& v)
 {
+    if (v.isVector())
+        return toNanoVector(v);
     using BuildGrid = nanovdb::tools::build::Grid<float>;
     BuildGrid grid(v.background, v.name, v.isSdf() ? nanovdb::GridClass::LevelSet : nanovdb::GridClass::FogVolume);
     glm::dmat3 linear(v.indexToWorld);
@@ -60,13 +78,19 @@ nanovdb::GridHandle<nanovdb::HostBuffer> toNano(const gn::Volume& v)
     return nanovdb::tools::createNanoGrid(grid);
 }
 
-/** A NanoVDB float grid made dense over its active voxels. Throws past about 64 million voxels. */
-gn::Volume fromNano(const nanovdb::NanoGrid<float>& grid)
+/** A NanoVDB float or vector grid made dense over its active voxels. Throws past about 64 million voxels. */
+template <class ValueT> gn::Volume fromNano(const nanovdb::NanoGrid<ValueT>& grid)
 {
+    constexpr bool vector = std::is_same_v<ValueT, nanovdb::Vec3f>;
     gn::Volume v;
     v.name = grid.gridName();
-    v.kind = grid.gridClass() == nanovdb::GridClass::LevelSet ? gn::Volume::Kind::Sdf : gn::Volume::Kind::Density;
-    v.background = grid.tree().background();
+    if constexpr (vector)
+        v.kind = gn::Volume::Kind::Vector;
+    else
+    {
+        v.kind = grid.gridClass() == nanovdb::GridClass::LevelSet ? gn::Volume::Kind::Sdf : gn::Volume::Kind::Density;
+        v.background = grid.tree().background();
+    }
     const nanovdb::CoordBBox box = grid.indexBBox();
     if (box.empty())
         return v;
@@ -85,10 +109,23 @@ gn::Volume fromNano(const nanovdb::NanoGrid<float>& grid)
     v.indexToWorld = m * glm::translate(glm::dmat4(1.0), glm::dvec3(lo[0], lo[1], lo[2]));
     v.values.assign(size_t(v.dims.x) * size_t(v.dims.y) * size_t(v.dims.z), v.background);
     auto acc = grid.getAccessor();
-    for (int k = 0; k < v.dims.z; ++k)
-        for (int j = 0; j < v.dims.y; ++j)
-            for (int i = 0; i < v.dims.x; ++i)
-                v.values[v.index(i, j, k)] = acc.getValue(nanovdb::Coord(lo[0] + i, lo[1] + j, lo[2] + k));
+    if constexpr (vector)
+    {
+        std::vector<glm::vec3> vectors(v.values.size());
+        for (int k = 0; k < v.dims.z; ++k)
+            for (int j = 0; j < v.dims.y; ++j)
+                for (int i = 0; i < v.dims.x; ++i)
+                {
+                    nanovdb::Vec3f x = acc.getValue(nanovdb::Coord(lo[0] + i, lo[1] + j, lo[2] + k));
+                    vectors[v.index(i, j, k)] = glm::vec3(x[0], x[1], x[2]);
+                }
+        v.setVectors(std::move(vectors));
+    }
+    else
+        for (int k = 0; k < v.dims.z; ++k)
+            for (int j = 0; j < v.dims.y; ++j)
+                for (int i = 0; i < v.dims.x; ++i)
+                    v.values[v.index(i, j, k)] = acc.getValue(nanovdb::Coord(lo[0] + i, lo[1] + j, lo[2] + k));
     return v;
 }
 
@@ -111,9 +148,10 @@ std::shared_ptr<const gn::Volume> readVolume(const std::filesystem::path& file, 
     nanovdb::GridHandle<nanovdb::HostBuffer> handle =
         gridName.empty() ? nanovdb::io::readGrid(paths::toUtf8(file)) : nanovdb::io::readGrid(paths::toUtf8(file), gridName);
     const nanovdb::NanoGrid<float>* grid = handle.grid<float>();
-    if (!grid)
-        throw std::runtime_error(paths::toUtf8(file) + " has no float grid" + (gridName.empty() ? "" : " named " + gridName));
-    auto v = std::make_shared<const gn::Volume>(fromNano(*grid));
+    const nanovdb::NanoGrid<nanovdb::Vec3f>* vectorGrid = grid ? nullptr : handle.grid<nanovdb::Vec3f>();
+    if (!grid && !vectorGrid)
+        throw std::runtime_error(paths::toUtf8(file) + " has no float or vector grid" + (gridName.empty() ? "" : " named " + gridName));
+    auto v = std::make_shared<const gn::Volume>(grid ? fromNano(*grid) : fromNano(*vectorGrid));
     std::lock_guard lock(mutex);
     recent.emplace_front(key, v);
     if (recent.size() > 8)
@@ -128,8 +166,8 @@ gn::NodeDecl readNode()
         .type = "ReadNanoVDB",
         .label = "Read NanoVDB",
         .category = "Volume",
-        .doc = "A float grid from a NanoVDB file (.nvdb) as a volume: level sets as signed distances, fog volumes as densities. Read "
-               "whole over the grid's active voxels.",
+        .doc = "A float or vec3 grid from a NanoVDB file (.nvdb) as a volume: level sets as signed distances, fog volumes as densities, vec3 "
+               "grids as vectors. Read whole over the grid's active voxels.",
         .sockets = {.inputs = {{.id = "path", .type = T::String, .defaultValue = "", .doc = "The .nvdb file; relative paths are against the scene."},
                                {.id = "grid", .type = T::String, .defaultValue = "", .doc = "Grid name; empty reads the first."}},
                     .outputs = {{.id = "volume", .type = T::Geometry}}},
@@ -160,8 +198,8 @@ void registerCommands(ext::Context& ctx)
     using AT = ArgType;
     ctx.registerCommand({
         .name = "exportNanoVDB",
-        .doc = "Write the volume a mesh's geometry nodes make (or a geometry-nodes modifier's) to a NanoVDB file: a sparse float grid, "
-               "a level set for signed distances and a fog volume for densities. Returns the file written.",
+        .doc = "Write the volume a mesh's geometry nodes make (or a geometry-nodes modifier's) to a NanoVDB file: a sparse grid, "
+               "a level set for signed distances, a fog volume for densities and a vec3 grid for vectors. Returns the file written.",
         .positionalDoc = "target path",
         .flags = {{"compress", "", AT::Bool, true, "Zip-compress the grid."}},
         .undoable = false,

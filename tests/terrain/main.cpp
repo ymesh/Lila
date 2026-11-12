@@ -2,6 +2,7 @@
 #include <doctest/doctest.h>
 
 #include "ops/Command.h"
+#include "bake/Bake.h"
 #include "core/MainQueue.h"
 #include "curve/CurveNodes.h"
 #include "extensions/ExtensionManager.h"
@@ -36,6 +37,7 @@ int main(int argc, char** argv)
     lila::io::registerCommands();
     lila::extensions::registerCommands();
     lila::gn::registerCommands();
+    lila::bake::registerCommands();
 
     doctest::Context ctx(argc, argv);
     int result = ctx.run();

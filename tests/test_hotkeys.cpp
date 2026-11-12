@@ -53,6 +53,15 @@ TEST_CASE("hotkey values split into press, hold, release and mouse buttons")
     CHECK_FALSE(b.hasButtons());
 }
 
+TEST_CASE("momentary keys run their press at once, even with mouse buttons")
+{
+    CHECK(hotkeys::isMomentary(hotkeys::splitSlots(json::parse(R"("tool.move")"))));
+    CHECK(hotkeys::isMomentary(hotkeys::splitSlots(json::parse(R"({"press": "tool.pivotEditOn", "release": "tool.pivotEditOff"})"))));
+    CHECK(hotkeys::isMomentary(hotkeys::splitSlots(json::parse(R"({"press": "tool.pivotEditOn", "release": "tool.pivotEditOff", "RMB": {"markingMenu": "pivotTool"}})"))));
+    CHECK_FALSE(hotkeys::isMomentary(hotkeys::splitSlots(json::parse(R"({"press": "tool.move", "LMB": {"markingMenu": "moveTool"}})"))));
+    CHECK_FALSE(hotkeys::isMomentary(hotkeys::splitSlots(json::parse(R"({"press": "a", "hold": "b", "release": "c"})"))));
+}
+
 TEST_CASE("held key: tap, hold and key + mouse button")
 {
     auto parse = [](const char* text) { return hotkeys::splitSlots(json::parse(text)); };

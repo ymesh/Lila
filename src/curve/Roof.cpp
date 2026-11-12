@@ -344,6 +344,35 @@ SkeletonCurvesResult centerLines(const Splines& curves, const glm::dvec3& normal
     return res;
 }
 
+SkeletonCurvesResult skeletonArcs(const Splines& curves, double rise, const glm::dvec3& normal, double tolerance)
+{
+    LILA_ZONE();
+
+    SkeletonCurvesResult res;
+    Regions regs = regionsOf(curves, normal, tolerance);
+    res.warnings = regs.warnings;
+    for (const auto& polys : regs.loops)
+    {
+        StraightSkeleton sk = straightSkeleton(polys);
+        if (!sk.ok())
+            res.warnings.push_back(sk.error);
+        for (const SkeletonArc& a : sk.arcs)
+        {
+            if (a.a < 0 || a.b < 0 || a.a == a.b)
+                continue;
+            Spline s;
+            s.kind = Kind::Poly;
+            for (int n : {a.a, a.b})
+                s.points.push_back(regs.plane.to3(sk.nodes[size_t(n)], sk.times[size_t(n)] * rise));
+            if (glm::distance(s.points[0], s.points[1]) <= 1e-9)
+                continue;
+            s.normalize();
+            res.curves.push_back(std::move(s));
+        }
+    }
+    return res;
+}
+
 namespace
 {
 /** Least-squares affine map from plane coordinates to uv0 over the region's corners; false without uvs. */

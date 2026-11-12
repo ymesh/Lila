@@ -345,7 +345,8 @@ uint64_t GpuResident::normalMapTable(size_t g)
         const GpuHigh& gh = *mB.mHighs[mB.mGroupBase[g] + h];
         const uint32_t materialBase = mB.mMaterialBase[mB.mGroupBase[g] + h];
         refs.resize(std::max(refs.size(), size_t(materialBase) + gh.slotTriangle.size() + 1));
-        if (soup.uvs.empty())
+        // A self high's material normal map is usually this bake's last output (see bake::prepareHighNormalMaps).
+        if (soup.uvs.empty() || (h < gi.highSelfLow.size() && gi.highSelfLow[h] >= 0))
             continue;
         for (size_t m = 0; m < soup.materialNames.size() && m < gh.slotTriangle.size(); ++m)
         {

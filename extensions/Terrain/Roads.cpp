@@ -669,24 +669,66 @@ std::vector<double> solveRoadProfile(const std::vector<double>& s, const std::ve
             break;
     }
     // The curves' lengths are settled: Newton steps put each key exactly on its curve.
-    for (int it = 0; it < 30; ++it)
-    {
-        double worst = 0.0;
-        for (size_t j = 1; j + 1 < S.size(); ++j)
+    auto onKeys = [&] {
+        for (int it = 0; it < 30; ++it)
         {
-            if (K[j] == 0.0)
-                continue;
-            const double s1 = S[j] - S[j - 1], s2 = S[j + 1] - S[j];
-            const double A = (Y[j + 1] - Y[j]) / s2 - (Y[j] - Y[j - 1]) / s1;
-            const double miss = Y[j] + A * L[j] / 8.0 - keyHeight[j];
-            Y[j] -= miss / (1.0 - L[j] / 8.0 * (1.0 / s1 + 1.0 / s2));
-            worst = std::max(worst, std::abs(miss));
+            double worst = 0.0;
+            for (size_t j = 1; j + 1 < S.size(); ++j)
+            {
+                if (K[j] == 0.0)
+                    continue;
+                const double s1 = S[j] - S[j - 1], s2 = S[j + 1] - S[j];
+                const double A = (Y[j + 1] - Y[j]) / s2 - (Y[j] - Y[j - 1]) / s1;
+                const double miss = Y[j] + A * L[j] / 8.0 - keyHeight[j];
+                Y[j] -= miss / (1.0 - L[j] / 8.0 * (1.0 / s1 + 1.0 / s2));
+                worst = std::max(worst, std::abs(miss));
+            }
+            for (size_t j = 0; j + 1 < S.size(); ++j)
+                gr[j] = (Y[j + 1] - Y[j]) / (S[j + 1] - S[j]);
+            if (worst < 1e-6)
+                break;
         }
         for (size_t j = 0; j + 1 < S.size(); ++j)
             gr[j] = (Y[j + 1] - Y[j]) / (S[j + 1] - S[j]);
-        if (worst < 1e-6)
+    };
+    onKeys();
+    // A key moved onto its curve can steepen the grade beside it past maxGrade: that curve is tightened (reported
+    // below as a tighter radius) and the free grade points follow, until the grades hold or the keys themselves need more.
+    bool steepKeys = false;
+    for (int round = 0; round < 16 && G > 0.0; ++round)
+    {
+        bool steep = false, tightened = false;
+        for (size_t j = 0; j + 1 < S.size(); ++j)
+            if (std::abs(gr[j]) > G + 1e-9)
+            {
+                steep = true;
+                for (size_t k : {j, j + 1})
+                    if (K[k] != 0.0 && L[k] > 0.0)
+                    {
+                        L[k] = L[k] < 2.0 ? 0.0 : 0.5 * L[k];
+                        tightened = true;
+                    }
+            }
+        if (!steep)
             break;
+        for (int pass = 0; pass < 2; ++pass)
+        {
+            for (size_t j = 1; j < S.size(); ++j)
+                if (!F[j])
+                    Y[j] = std::clamp(Y[j], Y[j - 1] - G * (S[j] - S[j - 1]), Y[j - 1] + G * (S[j] - S[j - 1]));
+            for (size_t j = S.size() - 1; j-- > 0;)
+                if (!F[j])
+                    Y[j] = std::clamp(Y[j], Y[j + 1] - G * (S[j + 1] - S[j]), Y[j + 1] + G * (S[j + 1] - S[j]));
+        }
+        onKeys();
+        if (!tightened)
+        {
+            steepKeys = std::ranges::any_of(gr, [&](double v) { return std::abs(v) > G + 1e-9; });
+            break;
+        }
     }
+    if (steepKeys && warnings && std::ranges::find(*warnings, std::string("the height keys need grades over maxGrade")) == warnings->end())
+        warn("the height keys need grades over maxGrade");
     double achieved = kInf;
     for (size_t j = 1; j + 1 < S.size(); ++j)
         if (std::abs(change(j)) > 1e-12)

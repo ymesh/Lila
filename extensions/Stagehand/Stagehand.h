@@ -247,8 +247,10 @@ void tagAssembly(Graph& g, NodeId root, const std::string& kind, const std::stri
 void registerUnrealExport(lila::ext::Context& ctx);
 /** instancesToObjects (Realize.cpp). */
 void registerRealizeCommands(lila::ext::Context& ctx);
-/** fillShelf, scatterProps, pileProps, stackProps (ArrangeCommands.cpp). */
+/** fillShelf, scatterProps, pileProps, stackProps, pathProps, debrisProps (ArrangeCommands.cpp). */
 void registerArrangeCommands(lila::ext::Context& ctx);
+/** arrangementPresets, arrangePreset, arrangementSave (Presets.cpp). */
+void registerPresetCommands(lila::ext::Context& ctx);
 /** The Library panel and dragging assets from it into viewports (LibraryUi.cpp). */
 void registerLibraryUi(lila::ext::Context& ctx);
 } // namespace stagehand

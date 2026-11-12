@@ -187,6 +187,16 @@ TEST_CASE("edit edge flow bends a flat loop to its neighbours' curve")
     CHECK(loose[0].position.y < heightAt(up, m, 0.0));
 }
 
+TEST_CASE("edit edge flow ignores a far point folded back between the anchors")
+{
+    Mesh m = makePlane({100, 100, 4, 4});
+    for (Index p = 0; p < m.pointCapacity(); ++p)
+        if (std::abs(m.position(p).x + 50.0) < 1e-9)
+            m.setPosition(p, m.position(p) + glm::dvec3(55.0, 0.5, 0.0));
+    for (const PointMove& mv : editEdgeFlow(m, columnEdges(m, 0.0, -50.0, 50.0), {}, {}))
+        CHECK(glm::distance(mv.position, m.position(mv.point)) < 25.0);
+}
+
 TEST_CASE("edit edge flow selections of points")
 {
     Mesh m = makePlane({100, 100, 4, 4});

@@ -489,7 +489,7 @@ void registerSurfaceMaps()
 {
     const char* curvatureOptions = "options source (mesh: the high's cotangent mean curvature; normals: derived from the baked normals, "
                                    "no new rays), range (1/cm at full strength, 0 = auto: the 99th percentile), radius (texels, normals "
-                                   "source), highNormalMap (true).";
+                                   "source), highNormalMap (off).";
     registerMap({.id = "curvature",
                  .label = "Curvature",
                  .suffix = "curvature",

@@ -1,6 +1,7 @@
 #include "LilaLinkSettlement.h"
 
 #include "LilaLinkMethodRegistry.h"
+#include "LilaLinkSettlementTraffic.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Components/SplineComponent.h"
@@ -430,7 +431,7 @@ struct FZoneSettingsAccess
 		return FZoneGraphTag::None;
 	}
 
-	/** Tags another system expects on lanes of each kind (Vehicle, Pedestrian, Intersection, Crossing, Parking). */
+	/** Tags another system expects on lanes of each kind (Vehicle, Intersection, Crossing, Trunk). */
 	TMap<FString, FZoneGraphTagMask> Extra;
 
 	FZoneGraphTagMask Mask(const TArray<TSharedPtr<FJsonValue>>& Names, TArray<FString>& Warnings)
@@ -447,83 +448,21 @@ struct FZoneSettingsAccess
 		return Out;
 	}
 
-	/**
-	 * MassTraffic (a City Sample project plugin, not a dependency) names the tags it reads in its settings. Its settings
-	 * classes are found by package, their tag properties read by reflection and sorted by what their names say they are
-	 * for. Returns what was found, by kind, for the reply; empty when the project has no MassTraffic.
-	 */
-	TSharedPtr<FJsonObject> ReadMassTraffic()
+	/** Fills MassTraffic's empty lane filters with Lila's tags and picks up the ones the project set; null without MassTraffic. */
+	TSharedPtr<FJsonObject> ReadMassTraffic(TArray<FString>& Warnings)
 	{
-		TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkSettlement::ReadMassTraffic);
-
-		TSharedPtr<FJsonObject> Found;
-		const UScriptStruct* FilterStruct = FZoneGraphTagFilter::StaticStruct();
-		const UScriptStruct* MaskStruct = FZoneGraphTagMask::StaticStruct();
-		const UScriptStruct* TagStruct = FZoneGraphTag::StaticStruct();
-		for (TObjectIterator<UClass> It; It; ++It)
-		{
-			if (!It->GetOutermost()->GetName().Equals(TEXT("/Script/MassTraffic"), ESearchCase::IgnoreCase) || It->HasAnyClassFlags(CLASS_Abstract))
-			{
-				continue;
-			}
-			const UObject* Defaults = It->GetDefaultObject(false);
-			if (!Defaults)
-			{
-				continue;
-			}
-			for (TFieldIterator<FStructProperty> Prop(*It); Prop; ++Prop)
-			{
+		return LilaLinkSettlementTraffic::ConfigureSettings(
+			[&](const TCHAR* Names) {
+				TArray<FString> Parts;
+				FString(Names).ParseIntoArray(Parts, TEXT(","));
 				FZoneGraphTagMask Mask = FZoneGraphTagMask::None;
-				const void* Value = Prop->ContainerPtrToValuePtr<void>(Defaults);
-				if (Prop->Struct == FilterStruct)
+				for (const FString& Part : Parts)
 				{
-					const FZoneGraphTagFilter& Filter = *static_cast<const FZoneGraphTagFilter*>(Value);
-					Mask.Add(Filter.AnyTags);
-					Mask.Add(Filter.AllTags);
+					Mask.Add(Tag(Part, Warnings));
 				}
-				else if (Prop->Struct == MaskStruct)
-				{
-					Mask = *static_cast<const FZoneGraphTagMask*>(Value);
-				}
-				else if (Prop->Struct == TagStruct)
-				{
-					Mask = FZoneGraphTagMask(*static_cast<const FZoneGraphTag*>(Value));
-				}
-				else
-				{
-					continue;
-				}
-				if (Mask == FZoneGraphTagMask::None || Mask == FZoneGraphTagMask::All)
-				{
-					continue;
-				}
-				const FString Name = Prop->GetName().ToLower();
-				const TCHAR* Kind = Name.Contains(TEXT("intersection")) ? TEXT("Intersection")
-					: Name.Contains(TEXT("crosswalk")) || Name.Contains(TEXT("crossing")) ? TEXT("Crossing")
-					: Name.Contains(TEXT("parking")) ? TEXT("Parking")
-					: Name.Contains(TEXT("pedestrian")) || Name.Contains(TEXT("crowd")) ? TEXT("Pedestrian")
-					: Name.Contains(TEXT("vehicle")) || Name.Contains(TEXT("traffic")) || Name.Contains(TEXT("lane")) ? TEXT("Vehicle")
-					: nullptr;
-				if (!Kind)
-				{
-					continue;
-				}
-				Extra.FindOrAdd(Kind).Add(Mask);
-				if (!Found.IsValid())
-				{
-					Found = MakeShared<FJsonObject>();
-				}
-				TArray<TSharedPtr<FJsonValue>> Props;
-				const TArray<TSharedPtr<FJsonValue>>* Existing = nullptr;
-				if (Found->TryGetArrayField(Kind, Existing))
-				{
-					Props = *Existing;
-				}
-				Props.Add(MakeShared<FJsonValueString>(It->GetName() + TEXT(".") + Prop->GetName()));
-				Found->SetArrayField(Kind, Props);
-			}
-		}
-		return Found;
+				return Mask;
+			},
+			Extra);
 	}
 };
 
@@ -556,7 +495,7 @@ TSharedPtr<FJsonValue> SetZoneGraph(const TSharedPtr<FJsonObject>& Params, FStri
 		return nullptr;
 	}
 	TArray<FString> Warnings;
-	const TSharedPtr<FJsonObject> MassTraffic = Access.ReadMassTraffic();
+	const TSharedPtr<FJsonObject> MassTraffic = Access.ReadMassTraffic(Warnings);
 	FScopedTransaction Transaction(NSLOCTEXT("LilaLink", "SetZoneGraph", "Lila: Update Settlement Lanes"));
 
 	// Lane profiles, matched by name so a resend keeps their ids and the shapes already referring to them.
@@ -702,6 +641,7 @@ TSharedPtr<FJsonValue> SetZoneGraph(const TSharedPtr<FJsonObject>& Params, FStri
 			FVector Forward;
 			FString Profile;
 			double Angle;
+			bool bReverse = false;
 		};
 		TArray<FEnd> Ends;
 		for (const TSharedPtr<FJsonValue>& EndValue : ArrayOf(Junction, TEXT("points")))
@@ -716,6 +656,7 @@ TSharedPtr<FJsonValue> SetZoneGraph(const TSharedPtr<FJsonObject>& Params, FStri
 			E.Forward = ReadPoint(End->TryGetField(TEXT("forward"))).GetSafeNormal();
 			E.Profile = End->GetStringField(TEXT("profile"));
 			E.Angle = FMath::Atan2(E.Position.Y - Center.Y, E.Position.X - Center.X);
+			End->TryGetBoolField(TEXT("reverse"), E.bReverse);
 		}
 		if (Ends.Num() < 2)
 		{
@@ -734,12 +675,28 @@ TSharedPtr<FJsonValue> SetZoneGraph(const TSharedPtr<FJsonObject>& Params, FStri
 			Point.SetRotationFromForwardAndUp(E.Forward, FVector::UpVector);
 			const int32 Profile = Shape->AddUniquePerPointLaneProfile(RefOf(E.Profile));
 			Point.LaneProfile = Profile >= 0 && Profile < 255 ? static_cast<uint8>(Profile) : FZoneShapePoint::InheritLaneProfile;
+			Point.bReverseLaneProfile = E.bReverse;
 		}
 		Shape->RegisterComponent();
 		Shape->UpdateShape();
 	}
 	Actor->MarkPackageDirty();
 	UE::ZoneGraphDelegates::OnZoneGraphRequestRebuild.Broadcast();
+	if (MassTraffic.IsValid())
+	{
+		FString Folder = TEXT("/Game/Lila/Settlement");
+		Params->TryGetStringField(TEXT("folder"), Folder);
+		FString Name = Label;
+		for (TCHAR& C : Name)
+		{
+			C = FChar::IsAlnum(C) ? C : TEXT('_');
+		}
+		const TSharedPtr<FJsonObject> Data = LilaLinkSettlementTraffic::WriteData(World, Params, Folder, Name, Warnings);
+		for (const auto& Field : Data->Values)
+		{
+			MassTraffic->SetField(FString(Field.Key), Field.Value);
+		}
+	}
 	UE_LOG(LogLilaLinkSettlement, Log, TEXT("setZoneGraph: %s (%d shapes, %d profiles)"), *Label, Shapes, ProfileRefs.Num());
 
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();

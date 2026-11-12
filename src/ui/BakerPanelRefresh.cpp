@@ -234,6 +234,7 @@ const std::vector<MapOption>& mapOptions()
     static const std::vector<MapOption> o = {
         {"normal", "greenUp", opt::FieldKind::Check, false, {}, "OpenGL normals (green up); off writes DirectX, as Unreal reads them."},
         {"normal", "flipX", opt::FieldKind::Check, false, {}, "Flip the red channel."},
+        {"normal", "highNormalMap", opt::FieldKind::Check, false, {}, "Add each high's material normal map. Self highs never use it."},
         {"height", "range", opt::FieldKind::Float, 0.0, {}, "Distance in cm that maps to 0 and 1 around the 0.5 low; 0 is auto."},
         {"id", "source", opt::FieldKind::Choice, "material", {"material", "object", "group", "vertexColor"}, "What gets a colour."},
         {"baseColor", "source", opt::FieldKind::Choice, "material", {"material", "vertexColor"},

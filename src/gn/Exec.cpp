@@ -5,6 +5,7 @@
 #include "core/Profile.h"
 #include "gn/Routing.h"
 #include "gn/Stateful.h"
+#include "gn/Tool.h"
 #include "gn/Zones.h"
 
 #include <functional>
@@ -29,7 +30,7 @@ void markDependencies(Plan& plan)
                        // Nodes with side-panel actions record their inputs for them (gn/Bake.h), so they must run each time.
                        !step.decl->actions.empty() ||
                        (runsGroup(step.decl->type) && (plan.usesTime || plan.usesView)) ||
-                       step.decl->type == "Viewer" || int(s) == plan.outputStep;
+                       step.decl->type == "Viewer" || isGizmoType(step.decl->type) || int(s) == plan.outputStep;
         for (const std::vector<Plan::Source>& links : step.inputs)
             for (const Plan::Source& src : links)
                 step.dynamic = step.dynamic || plan.steps[size_t(src.step)].dynamic;
@@ -62,6 +63,7 @@ void markNeeded(Plan& plan)
     for (int root : {plan.outputStep, plan.viewerStep, plan.statefulStep})
         if (root >= 0)
             stack.push_back(root);
+    stack.insert(stack.end(), plan.gizmoSteps.begin(), plan.gizmoSteps.end());
     while (!stack.empty())
     {
         int s = stack.back();
@@ -204,6 +206,22 @@ PlanPtr compile(const Group& g)
         }
         plan->error = error;
     }
+    {
+        const std::string error = plan->error;
+        bool added = false;
+        for (size_t n = 0; n < grp.nodes.size(); ++n)
+            if (isGizmoType(grp.nodes[n].type) && !grp.nodes[n].muted && visit(n))
+            {
+                plan->gizmoSteps.push_back(stepOf[n]);
+                added = true;
+            }
+        plan->error = error;
+        if (added)
+        {
+            markDependencies(*plan);
+            markNeeded(*plan);
+        }
+    }
     return plan;
 }
 
@@ -294,6 +312,9 @@ std::vector<Value> executeOutputs(const Plan& plan, const ExecEnv& env)
         for (size_t k = 0; k < step.sockets.outputs.size(); ++k)
             ctx.outputs[k] = defaultValue(step.sockets.outputs[k].type);
         bool isViewer = int(s) == plan.viewerStep;
+        const bool isGizmo = isGizmoType(step.decl->type);
+        if (isGizmo && !env.gizmos)
+            continue;
         try
         {
             if (step.decl->stateful)
@@ -303,7 +324,7 @@ std::vector<Value> executeOutputs(const Plan& plan, const ExecEnv& env)
         }
         catch (const std::exception& e)
         {
-            if (isViewer)
+            if (isViewer || isGizmo)
                 continue;
             if (dynamic_cast<const ExecError*>(&e))
                 throw;

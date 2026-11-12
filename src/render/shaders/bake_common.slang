@@ -120,6 +120,8 @@ struct CornerColors
 static const uint kNoHit = 0xffffffffu;
 static const uint kHitValid = 1;
 static const uint kHitBackface = 2;
+static const uint kHitReaimed = 4;
+static const uint kHitProbed = 8;
 
 static const uint kMapNormal = 0;
 static const uint kMapObjectNormal = 1;
@@ -213,6 +215,18 @@ float radicalInverse(uint bits)
     bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
     bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
     return float(bits) * 2.3283064365386963e-10;
+}
+
+// Rings of probes widening around a missed projection ray, as kProbeRings / kProbePerRing in MapMath.h.
+static const uint kProbeRings = 22;
+static const uint kProbePerRing = 16;
+
+// Probe j of ring k around unit axis d, ring k at k + 1 degrees off it, as probeDirection in MapMath.h.
+float3 probeDirection(uint k, uint j, float3 d, float3 t, float3 b)
+{
+    float a = radians(float(k + 1));
+    float phi = 6.28318530718 * (float(j) + 0.5 * float(k & 1u)) / float(kProbePerRing);
+    return normalize(d * cos(a) + (t * cos(phi) + b * sin(phi)) * sin(a));
 }
 
 void basis(float3 n, out float3 t, out float3 b)

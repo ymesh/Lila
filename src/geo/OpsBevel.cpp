@@ -170,6 +170,22 @@ glm::dvec3 safeNormalize(const glm::dvec3& v)
 }
 
 /**
+ * The face's tangent plane at corner c, spanned by its two edges there, facing the face's way. On a planar face it is
+ * the face normal; on a bent one it contains both edges, so faces sharing an edge agree on it.
+ */
+glm::dvec3 cornerNormal(const Mesh& mesh, Index c)
+{
+    const glm::dvec3 nf = mesh.faceNormal(mesh.cornerFace(c));
+    const glm::dvec3 p = mesh.position(mesh.cornerPoint(c));
+    const glm::dvec3 a = mesh.position(mesh.cornerPoint(mesh.cornerPrev(c))) - p, b = mesh.position(mesh.cornerNextPoint(c)) - p;
+    const glm::dvec3 n = glm::cross(b, a);
+    // Nearly straight corners say little about the plane.
+    if (glm::length(n) < 0.05 * glm::length(a) * glm::length(b))
+        return nf;
+    return safeNormalize(glm::dot(n, nf) < 0.0 ? -n : n);
+}
+
+/**
  * The point nearest `near` that best satisfies the planes in the least-squares sense; directions the planes leave
  * free stay at `near`.
  */
@@ -554,7 +570,7 @@ std::vector<Index> bevel(Mesh& mesh, std::span<const Index> edgesIn, const Bevel
             if (!bIn && !bOut)
                 continue;
             const Index c = v.corners[i];
-            const glm::dvec3 n = mesh.faceNormal(mesh.cornerFace(c));
+            const glm::dvec3 n = cornerNormal(mesh, c);
             const glm::dvec3 eIn = safeNormalize(mesh.position(mesh.cornerPoint(mesh.cornerPrev(c))) - pv);
             const glm::dvec3 eOut = safeNormalize(mesh.position(mesh.cornerNextPoint(c)) - pv);
             const glm::dvec3 perpIn = safeNormalize(glm::cross(eIn - n * glm::dot(eIn, n), n));
@@ -847,8 +863,8 @@ std::vector<Index> bevel(Mesh& mesh, std::span<const Index> edgesIn, const Bevel
             }
             v.profileAt[i] = it->second;
             // The profile leaves a tangent to the face of a and arrives tangent to the face of b.
-            const glm::dvec3 na = mesh.faceNormal(mesh.cornerFace(v.corners[j]));
-            const glm::dvec3 nb = mesh.faceNormal(mesh.cornerFace(v.corners[i]));
+            const glm::dvec3 na = cornerNormal(mesh, v.corners[j]);
+            const glm::dvec3 nb = cornerNormal(mesh, v.corners[i]);
             Profile& pr = profiles[it->second];
             if (pr.planes.empty())
                 pr.axis = safeNormalize(mesh.position(mesh.edgeOtherPoint(v.inEdge(i), v.point)) - mesh.position(v.point));

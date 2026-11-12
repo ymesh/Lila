@@ -583,8 +583,14 @@ struct Flow
         const glm::dvec3 flat = A + chord * l.t;
         const double ease = o.amount * (1.0 - o.tension);
         // Arcs through the points beyond, blended toward the nearer end: a circle comes back exactly, evenly spaced.
-        const std::optional<glm::dvec3> fromA = o.edgeFlow && l.a2 != kInvalid ? std::optional(arcPoint(pos[l.a2], A, B, l.t)) : std::nullopt;
-        const std::optional<glm::dvec3> fromB = o.edgeFlow && l.b2 != kInvalid ? std::optional(arcPoint(pos[l.b2], B, A, 1.0 - l.t)) : std::nullopt;
+        // A point beyond that folds back over the span would make its arc go the long way round, so it is ignored.
+        auto arcFrom = [&](Index far, const glm::dvec3& near, const glm::dvec3& other, double t) -> std::optional<glm::dvec3> {
+            if (!o.edgeFlow || far == kInvalid || glm::dot(near - pos[far], other - pos[far]) < 0.0)
+                return std::nullopt;
+            return arcPoint(pos[far], near, other, t);
+        };
+        const std::optional<glm::dvec3> fromA = arcFrom(l.a2, A, B, l.t);
+        const std::optional<glm::dvec3> fromB = arcFrom(l.b2, B, A, 1.0 - l.t);
         if (fromA && fromB)
             return flat + ease * ((1.0 - l.t) * *fromA + l.t * *fromB - flat);
         if (fromA || fromB)

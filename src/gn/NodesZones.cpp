@@ -73,6 +73,7 @@ std::vector<Value> runInner(const ExecContext& c, const Plan& plan, GeometryPtr 
 {
     ExecEnv env;
     env.time = c.env.time;
+    env.tool = c.env.tool;
     env.input = std::move(input);
     env.params = std::move(params);
     env.objects = c.env.objects;

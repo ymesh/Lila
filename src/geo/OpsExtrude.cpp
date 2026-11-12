@@ -421,12 +421,27 @@ ExtrudeResult extrudeRegion(Mesh& mesh, const std::vector<Index>& faces, const R
     return result;
 }
 
+void transformPoints(Mesh& mesh, const glm::dmat3& m)
+{
+    for (glm::dvec3& p : mesh.positions())
+        p = m * p;
+}
+
 ExtrudeResult runRegions(Mesh& mesh, std::span<const Index> faces, bool individual, const SymmetryMap* symmetry,
-                         const RegionMove& move)
+                         RegionMove move, const glm::dmat3& space = glm::dmat3(1.0))
 {
     std::vector<Index> sel = symmetry ? symmetry->expandFaces(mesh, faces) : uniqueSorted(faces);
     sel.erase(std::remove_if(sel.begin(), sel.end(), [&](Index f) { return !mesh.faceValid(f); }), sel.end());
     const Index firstNew = mesh.pointCapacity();
+    const double det = glm::determinant(space);
+    const bool warp = space != glm::dmat3(1.0) && std::abs(det) > 1e-30;
+    if (warp)
+    {
+        transformPoints(mesh, space);
+        // A mirrored object's face normals flip in world space; the inward direction in the face does not.
+        if (det < 0.0)
+            move.offset = -move.offset;
+    }
     ExtrudeResult out;
     if (individual)
     {
@@ -440,6 +455,8 @@ ExtrudeResult runRegions(Mesh& mesh, std::span<const Index> faces, bool individu
     }
     else if (!sel.empty())
         out = extrudeRegion(mesh, sel, move);
+    if (warp)
+        transformPoints(mesh, glm::inverse(space));
     applySymmetrySnap(mesh, symmetry, firstNew);
     return out;
 }
@@ -449,7 +466,7 @@ ExtrudeResult extrudeFaces(Mesh& mesh, std::span<const Index> faces, const Extru
 {
     LILA_ZONE();
 
-    return runRegions(mesh, faces, opts.individual, opts.symmetry, {opts.offset, opts.inset, false, opts.keepBack});
+    return runRegions(mesh, faces, opts.individual, opts.symmetry, {opts.offset, opts.inset, false, opts.keepBack}, opts.space);
 }
 
 ExtrudeCopy extrudeCopy(const Mesh& mesh, std::span<const Index> faces, const ExtrudeOptions& opts, bool keepSides)
@@ -556,6 +573,6 @@ ExtrudeResult insetFaces(Mesh& mesh, std::span<const Index> faces, const InsetOp
 {
     LILA_ZONE();
 
-    return runRegions(mesh, faces, opts.individual, opts.symmetry, {opts.depth, opts.thickness, opts.clamp});
+    return runRegions(mesh, faces, opts.individual, opts.symmetry, {opts.depth, opts.thickness, opts.clamp}, opts.space);
 }
 } // namespace lila::geo

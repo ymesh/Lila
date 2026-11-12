@@ -403,6 +403,10 @@ TEST_CASE("library: an assembly saves its props by id, nests, and places as a wh
     CHECK(saved["assembly"]["members"].size() == 3);
     CHECK(saved["assembly"]["kind"] == "packedLevelActor");
     CHECK(saved["model"].get<std::string>().find("Gate.glb") != std::string::npos);
+    const json found = run("librarySearch", {{"args", {"gate"}}, {"collection", "Kits"}, {"tier", "studio"}});
+    REQUIRE(found.size() >= 1);
+    CHECK(found[0]["id"] == "Kits/Gate");
+    CHECK(found[0]["assembly"]["members"].size() == 3);
 
     // Two gates side by side make a court: an assembly of assemblies.
     run("newScene");
@@ -471,6 +475,7 @@ TEST_CASE("library: starter thumbnails are drawn without leaving anything in the
                                     {"isolate", "", ArgType::Bool, nullptr, ""},
                                     {"frameSelection", "", ArgType::Bool, nullptr, ""},
                                     {"grid", "", ArgType::Bool, nullptr, ""},
+                                    {"label", "", ArgType::Bool, nullptr, ""},
                                     {"showSelection", "", ArgType::Bool, nullptr, ""}},
                           .undoable = false,
                           .run = [&calls](const Args& a) -> json {
@@ -492,6 +497,28 @@ TEST_CASE("library: starter thumbnails are drawn without leaving anything in the
     // The last undo step is still the cube.
     run("undo");
     CHECK_FALSE(run("objExists", {{"args", {keep}}}).get<bool>());
+
+    // A script that empties the scene while a thumbnail is drawn (drawing pumps events) leaves nothing to roll back.
+    ops::registerCommand({.name = "captureView",
+                          .flags = {{"path", "", ArgType::String, nullptr, ""},
+                                    {"view", "", ArgType::String, nullptr, ""},
+                                    {"width", "", ArgType::Int, nullptr, ""},
+                                    {"height", "", ArgType::Int, nullptr, ""},
+                                    {"display", "", ArgType::String, nullptr, ""},
+                                    {"isolate", "", ArgType::Bool, nullptr, ""},
+                                    {"frameSelection", "", ArgType::Bool, nullptr, ""},
+                                    {"grid", "", ArgType::Bool, nullptr, ""},
+                                    {"label", "", ArgType::Bool, nullptr, ""},
+                                    {"showSelection", "", ArgType::Bool, nullptr, ""}},
+                          .undoable = false,
+                          .run = [](const Args& a) -> json {
+                              ops::execute("newScene", json::object());
+                              std::ofstream(a.get<std::string>("path"), std::ios::binary) << "png";
+                              return a.get<std::string>("path");
+                          }});
+    CHECK_NOTHROW(run("libraryStarter", {{"rebuild", true}}));
+    ops::unregisterCommand("captureView");
+    CHECK(scene::Graph::current().nodes().size() <= nodes);
 }
 
 TEST_CASE("library: a saved prop comes back with one body and its snap points, and no empty transforms for them")
@@ -556,4 +583,95 @@ TEST_CASE("stagehand: terrain roads stand the starter library's road props, turn
         CHECK(node.find("Delineator") == std::string::npos);
     }
     run("newScene");
+}
+
+TEST_CASE("arrange: debrisProps strews chips sized from the pieces beside them, at rest, in one undo step")
+{
+    load();
+    run("newScene");
+    run("libraryStarter", {{"thumbnails", false}});
+    const std::string big = cube("BigPiece", {0, 0, 0}, {100, 100, 100});
+    const std::string small = cube("SmallPiece", {300, 0, 0}, {25, 25, 25});
+    run("group", {{"args", {big, small}}, {"name", "Broken"}});
+    const json r = run("debrisProps", {{"args", {"Broken"}}, {"amount", 6.0}});
+    REQUIRE(r["nodes"].is_array());
+    const size_t chips = r["nodes"].size();
+    CHECK(chips >= 4);
+    CHECK(r["atRest"].get<int64_t>() == int64_t(chips));
+    int nearBig = 0, nearSmall = 0;
+    json chipMeshes = json::array();
+    double biggest = 0.0;
+    for (const json& n : r["nodes"])
+    {
+        json info;
+        for (const json& d : run("listRelatives", {{"args", {n}}, {"allDescendents", true}}))
+            if (run("nodeType", {{"args", {d}}}) == "mesh")
+                info = run("dressInfo", {{"args", {d}}})[0];
+        REQUIRE(info.is_object());
+        chipMeshes.push_back(info["node"]);
+        const glm::dvec3 lo(info["boundsMin"][0].get<double>(), info["boundsMin"][1].get<double>(), info["boundsMin"][2].get<double>());
+        const glm::dvec3 hi(info["boundsMax"][0].get<double>(), info["boundsMax"][1].get<double>(), info["boundsMax"][2].get<double>());
+        biggest = std::max(biggest, std::max({hi.x - lo.x, hi.y - lo.y, hi.z - lo.z}));
+        const glm::dvec3 c = (lo + hi) * 0.5;
+        (glm::length(glm::dvec2(c.x, c.z)) < glm::length(glm::dvec2(c.x - 300.0, c.z)) ? nearBig : nearSmall) += 1;
+    }
+    // Resting on the ground or the pieces: nothing floats or sinks in.
+    CHECK(run("dressCheck", {{"args", chipMeshes}})["ok"].get<bool>());
+    // Chips are a fraction of their piece, and the big piece sheds more of them.
+    CHECK(biggest < 50.0);
+    CHECK(nearBig > nearSmall);
+    run("undo");
+    CHECK_FALSE(run("objExists", {{"args", {r["group"]}}}).get<bool>());
+    CHECK_THROWS(run("debrisProps", {{"args", {"NoSuchWall"}}}));
+}
+
+TEST_CASE("presets: a built-in preset dresses a floor in one undo step; a saved one runs; unset slots are named")
+{
+    load();
+    run("newScene");
+    run("libraryStarter", {{"thumbnails", false}});
+    const json all = run("arrangementPresets");
+    std::vector<std::string> names;
+    for (const json& p : all)
+        names.push_back(p["name"].get<std::string>());
+    for (const char* want : {"Storeroom", "Rubble Corner", "Library Shelf", "Messy Desk"})
+        CHECK(std::ranges::find(names, want) != names.end());
+
+    const std::string floor = cube("Floor", {0, -10, 0}, {800, 10, 800});
+    const json r = run("arrangePreset", {{"args", {"Storeroom"}}, {"slots", {{"floor", floor}}}});
+    REQUIRE(r["group"].is_string());
+    CHECK(r["steps"].size() == 2);
+    CHECK(r["steps"][0]["result"]["count"].get<int64_t>() > 0);
+    CHECK(r["steps"][1]["result"]["count"].get<int64_t>() == 6);
+    const std::string group = r["group"].get<std::string>();
+    CHECK(run("listRelatives", {{"args", {group}}}).size() == 2);
+    run("undo");
+    CHECK_FALSE(run("objExists", {{"args", {group}}}).get<bool>());
+
+    // The optional broken slot left out skips the chips.
+    const json rubble = run("arrangePreset", {{"args", {"rubble corner"}}, {"slots", {{"floor", floor}}}, {"seed", 3}});
+    CHECK(rubble["steps"][2]["skipped"].get<bool>());
+
+    try
+    {
+        run("arrangePreset", {{"args", {"Library Shelf"}}, {"slots", {{"boards", {floor}}}}});
+        FAIL("no books given");
+    }
+    catch (const std::exception& e)
+    {
+        CHECK(std::string(e.what()).find("books") != std::string::npos);
+    }
+    CHECK_THROWS(run("arrangePreset", {{"args", {"No Such Preset"}}}));
+
+    const json spec = {{"description", "A row of crates."},
+                       {"slots", {{"floor", {{"kind", "mesh"}}}}},
+                       {"steps", json::array({{{"command", "stackProps"},
+                                               {"flags", {{"items", json::array({"Industrial/Crate"})}, {"at", "$floor.top"}, {"count", 3}, {"realize", true}}}}})}};
+    const std::string file = run("arrangementSave", {{"args", {"Crate Tower"}}, {"spec", spec}, {"overwrite", true}}).get<std::string>();
+    CHECK(std::filesystem::exists(file));
+    const json tower = run("arrangePreset", {{"args", {"Crate Tower"}}, {"slots", {{"floor", floor}}}});
+    CHECK(tower["steps"][0]["result"]["count"].get<int64_t>() == 3);
+    CHECK_THROWS(run("arrangementSave", {{"args", {"Bad"}}, {"spec", {{"steps", json::array({{{"command", "noSuchCommand"}}})}}}}));
+    std::error_code ec;
+    std::filesystem::remove(file, ec);
 }

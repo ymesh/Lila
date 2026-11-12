@@ -82,6 +82,9 @@ struct TriMesh
     std::vector<float> ca;
     std::vector<std::string> vertexNames;
     std::vector<std::string> cornerNames;
+    /** The colour set the corner "cr" "cg" "cb" "ca" values came from, and the source's material slot names. */
+    std::string colorSet;
+    std::vector<std::string> materials;
 
     size_t addVertex(const glm::dvec3& q);
     float* vattr(size_t v) { return va.data() + v * size_t(vertexStride); }
@@ -106,11 +109,11 @@ std::vector<glm::dvec3> vertexNormals(const TriMesh& m);
 /** 1 on vertices of open edges. */
 std::vector<uint8_t> borderVertices(const TriMesh& m);
 
-/** Triangles of a geo::Mesh with its float point attributes and corner uv0 and normal. */
+/** Triangles of a geo::Mesh with its float point attributes, corner uv0, normal and first colour set, and face materials. */
 TriMesh fromMesh(const lila::geo::Mesh& m);
 /**
  * A geo::Mesh: vertex attributes named "color" become the point colour (float4), "nx" "ny" "nz" become corner normals,
- * other single floats point attributes; corner "u0" "v0" become uv0.
+ * other single floats point attributes; corner "u0" "v0" become uv0, "cr".."ca" the colour set, "mat" face materials.
  */
 lila::geo::Mesh toMesh(const TriMesh& m);
 
@@ -466,13 +469,23 @@ std::vector<ScatterPoint> scatterTiers(const TriMesh& m, const std::vector<Tier>
  */
 glm::dvec3 projectionWeights(const glm::dvec3& n, double slopeStart, double blend, bool biplanar);
 /**
- * Texels per cm a face gets from the projection at tile cm per repeat: the largest stretch of the weighted projections,
- * for the stretch test (1 / tile on every face when nothing stretches).
+ * The normal the projection weights read: the shading normal, giving way to the face's own where the two part by more
+ * than kProjectionTrust degrees (fully past kProjectionFace). Across a one-cell landscape step the interpolated normal
+ * leans halfway between plateau and face, which would project the plateau's lip from the side and the face from above.
  */
-double texelDensity(const glm::dvec3& a, const glm::dvec3& b, const glm::dvec3& c, double tile, double slopeStart, double blend, bool biplanar);
+glm::dvec3 projectionNormal(const glm::dvec3& shading, const glm::dvec3& face);
+/**
+ * Texels per cm a face gets from the projection at tile cm per repeat: the largest stretch of the weighted projections,
+ * for the stretch test (1 / tile on every face when nothing stretches). With shading, the weights read
+ * projectionNormal(shading, face) as the materials do; without, the face's own normal.
+ */
+double texelDensity(const glm::dvec3& a, const glm::dvec3& b, const glm::dvec3& c, double tile, double slopeStart, double blend, bool biplanar,
+                    const glm::dvec3* shading = nullptr);
 
 inline constexpr double kSlopeStart = 35.0;
 inline constexpr double kSlopeBlend = 15.0;
+inline constexpr double kProjectionTrust = 10.0;
+inline constexpr double kProjectionFace = 25.0;
 
 // ---------------------------------------------------------------------------------------------------- shared
 

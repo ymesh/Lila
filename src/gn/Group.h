@@ -147,7 +147,7 @@ struct GOutput
  *   { "name", "typeVersion", "inputs": [{name, type, default, label, description, subtype, min, max, softMin, softMax,
  *     step, panel}], "outputs": [{name, type, description}], "nodes": [{name, type, position, values, muted, collapsed, hideUnused}],
  *     "links": [[fromNode, fromSocket, toNode, toSocket]], "ties": [see tiesToJson], "frames": [see framesToJson],
- *     "bookmarks": {slot: [x, y, zoom]}, "subgroups": {name: definition} }
+ *     "bookmarks": {slot: [x, y, zoom]}, "subgroups": {name: definition}, "tool": true when a tool }
  */
 struct LILA_SCENE_API Group
 {
@@ -162,6 +162,8 @@ struct LILA_SCENE_API Group
     /** Saved canvas views by slot ("1".."5"): [centre x, centre y, zoom]. */
     json bookmarks = json::object();
     std::string description;
+    /** Runs on the selected meshes as a viewport tool (gn/Tool.h) rather than only as a modifier. */
+    bool tool = false;
     /** Definitions of the groups its Group nodes use, by name, each self-contained (with its own subgroups). */
     std::map<std::string, json> subgroups;
 

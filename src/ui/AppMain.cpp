@@ -80,6 +80,7 @@
 #include "ui/Modes.h"
 #include "ui/ModifierStack.h"
 #include "ui/NodeEditor.h"
+#include "ui/NodeTools.h"
 #include "ui/Panels.h"
 #include "ui/PoseLibrary.h"
 #include "ui/ControlPicker.h"
@@ -151,6 +152,7 @@ void registerUi()
     docs::registerDocsUi();
     registerMaterialUi();
     registerNodeEditorActions();
+    nodeTools::registerNodeToolUi();
     registerUvActions();
     registerModelingToolkitActions();
     registerModifierStackActions();

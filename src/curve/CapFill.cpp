@@ -1,4 +1,5 @@
 #include "curve/CapFill.h"
+#include "curve/Cdt.h"
 
 #include "core/Profile.h"
 #include "curve/CurveMath.h"
@@ -996,6 +997,84 @@ CapFillResult capFill(const std::vector<std::vector<glm::dvec2>>& loops, const C
                 g.push_back(map[size_t(v)]);
             res.faces.push_back(std::move(g));
         }
+    }
+    return res;
+}
+CdtResult constrainedDelaunay(const std::vector<D2>& points, const std::vector<std::pair<int, int>>& segments, bool insideOnly)
+{
+    LILA_ZONE();
+
+    CdtResult res;
+    if (points.size() < 3)
+        return res;
+    D2 lo(std::numeric_limits<double>::max()), hi(-std::numeric_limits<double>::max());
+    for (const D2& p : points)
+    {
+        lo = glm::min(lo, p);
+        hi = glm::max(hi, p);
+    }
+    double extent = std::max(hi.x - lo.x, hi.y - lo.y);
+    if (!(extent > 0.0))
+        return res;
+    std::vector<D2> unit;
+    std::vector<int> uid(points.size()), firstOf;
+    std::map<std::pair<double, double>, int> seen;
+    for (size_t i = 0; i < points.size(); ++i)
+    {
+        auto [it, fresh] = seen.try_emplace({points[i].x, points[i].y}, int(unit.size()));
+        if (fresh)
+        {
+            unit.push_back((points[i] - lo) / extent);
+            firstOf.push_back(int(i));
+        }
+        uid[i] = it->second;
+    }
+    Cdt cdt(unit);
+    for (int i = 0; i < int(unit.size()); ++i)
+        cdt.insert(i);
+    cdt.rebuildAdjacency();
+    for (auto [a, b] : segments)
+    {
+        if (a < 0 || b < 0 || size_t(a) >= points.size() || size_t(b) >= points.size() || uid[size_t(a)] == uid[size_t(b)])
+            continue;
+        if (!cdt.recover(uid[size_t(a)], uid[size_t(b)]))
+            ++res.lostSegments;
+    }
+    size_t T = cdt.tris.size();
+    std::vector<int> depth(T, -1);
+    std::vector<size_t> queue;
+    for (size_t t = 0; t < T; ++t)
+        for (int v : cdt.tris[t].v)
+            if (v >= cdt.real && depth[t] < 0)
+            {
+                depth[t] = 0;
+                queue.push_back(t);
+            }
+    for (size_t k = 0; k < queue.size(); ++k)
+    {
+        size_t t = queue[k];
+        const auto& tr = cdt.tris[t];
+        for (int i = 0; i < 3; ++i)
+        {
+            int n = tr.n[size_t(i)];
+            if (n < 0 || depth[size_t(n)] >= 0)
+                continue;
+            bool wall = cdt.constrained.count(edgeKey(tr.v[size_t((i + 1) % 3)], tr.v[size_t((i + 2) % 3)])) > 0;
+            depth[size_t(n)] = depth[t] + (wall ? 1 : 0);
+            queue.push_back(size_t(n));
+        }
+    }
+    for (size_t t = 0; t < T; ++t)
+    {
+        const auto& v = cdt.tris[t].v;
+        if (v[0] >= cdt.real || v[1] >= cdt.real || v[2] >= cdt.real)
+            continue;
+        if (insideOnly && depth[t] % 2 != 1)
+            continue;
+        std::array<int, 3> tri = {firstOf[size_t(v[0])], firstOf[size_t(v[1])], firstOf[size_t(v[2])]};
+        if (orient(points[size_t(tri[0])], points[size_t(tri[1])], points[size_t(tri[2])]) < 0.0)
+            std::swap(tri[1], tri[2]);
+        res.triangles.push_back(tri);
     }
     return res;
 }

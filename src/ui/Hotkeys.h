@@ -110,6 +110,7 @@ private:
     static bool textInputFocused(QWidget* w);
     void onHoldTimeout();
     bool onMousePress(QObject* obj, QMouseEvent* e);
+    bool fireButton(const nlohmann::json& target, QMouseEvent* e);
     void releaseAll();
     void startRepeat(QKeyEvent* e, const nlohmann::json& target);
     void stopRepeat();

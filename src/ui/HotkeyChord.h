@@ -150,6 +150,16 @@ inline Slots overlaySlots(Slots below, const nlohmann::json& over)
 }
 
 /**
+ * A key whose press runs at once and whose release runs at key up (hold D for pivot mode), as opposed to one whose
+ * press waits for key up to tell a tap from a hold or a click. Its mouse-button targets fire while it is down and its
+ * unbound buttons pass through, so D+LMB still drags the pivot while D+RMB opens a menu.
+ */
+inline bool isMomentary(const Slots& s)
+{
+    return s.hold.is_null() && (!s.release.is_null() || !s.hasButtons());
+}
+
+/**
  * State of a key that is down and has a hold or mouse-button targets, so its press target waits for key up. Using a
  * mouse button while it is down replaces the tap: the press, hold and release targets then never run.
  */

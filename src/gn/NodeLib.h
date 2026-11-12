@@ -127,6 +127,8 @@ LILA_SCENE_API std::string compatibleSocket(const Group& g, const NodeDecl& d, S
 struct Bundle;
 struct Closure;
 struct Plan;
+struct ToolContext;
+struct GizmoSpec;
 
 /** What a socket carries during evaluation. Which member is used follows the socket type. */
 struct Value
@@ -177,6 +179,16 @@ struct ObjectInput
     /** The splines of a curve object, in its own space; null for a mesh. */
     std::shared_ptr<const CurveSet> curves;
     glm::dmat4 matrix{1.0};
+    /** The world matrix of its parent; Bone Info reads a joint's local transform against it. */
+    glm::dmat4 parent{1.0};
+};
+
+/** The mesh and curve objects under a transform, as a Collection Info node sees them. */
+struct CollectionInput
+{
+    glm::dmat4 parent{1.0};
+    std::vector<std::string> names;
+    std::vector<ObjectInput> members;
 };
 
 /** What the active Viewer node saw: its geometry and the field to colour it by (null when unlinked). */
@@ -196,7 +208,8 @@ struct ExecEnv
     double time = 0.0; // seconds
     GeometryPtr input;
     std::map<std::string, Value> params;        // group inputs by name
-    std::map<std::string, ObjectInput> objects; // by Object Info node name
+    std::map<std::string, ObjectInput> objects; // by Object Info and Bone Info node name
+    std::map<std::string, CollectionInput> collections; // by Collection Info node name
     /** The owner mesh's world matrix when the Object Info inputs were connected; Relative To owner reads objects against it. */
     glm::dmat4 ownerMatrix{1.0};
     /** Set by the modifier while a Viewer is active; nested groups run without one. */
@@ -207,6 +220,10 @@ struct ExecEnv
     bool sampleOnly = false;
     /** Results of time-independent steps, kept by the modifier between evaluations (gn/Exec.h). */
     StepCache* cache = nullptr;
+    /** Set while the group runs as a tool (gn/Tool.h): the pointer, view and active element its tool nodes read. */
+    const ToolContext* tool = nullptr;
+    /** Where gizmo nodes record their handles; null skips them. Nested groups run without one. */
+    std::vector<GizmoSpec>* gizmos = nullptr;
 };
 
 /** Turns a JSON value (node value, exposed default) into a socket value. Rotations are given in degrees. */

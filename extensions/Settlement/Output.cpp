@@ -2,6 +2,7 @@
 
 #include "SettlementCore.h"
 #include "Parcels.h"
+#include "Streetscape.h"
 
 #include <lila/Profile.h>
 
@@ -804,6 +805,7 @@ RoadNetwork roadNetwork(const Layout& l, const Ground& ground)
     }
     for (Junction& j : net.junctions)
         controlJunction(j, net);
+    finishSignals(net, l);
     parkAlong(net, l);
     return net;
 }

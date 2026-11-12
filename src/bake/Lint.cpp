@@ -507,7 +507,7 @@ void highRange(const BakeInputs& in, const Backend& backend, const LintOptions& 
             backend.endBand(samples);
             size_t missed = 0;
             for (const HitRecord& h : hits)
-                if (h.high == kNoHit || !(h.flags & kHitValid))
+                if (h.high == kNoHit || !(h.flags & kHitValid) || (h.flags & kHitProbed))
                     ++missed;
             const double frac = samples.empty() ? 0.0 : double(missed) / double(samples.size());
             if (missed == samples.size())

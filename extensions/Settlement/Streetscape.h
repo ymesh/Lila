@@ -243,6 +243,13 @@ struct LaneGraph
  */
 LaneGraph laneGraph(const Layout& l, const RoadNetwork& net);
 
+/**
+ * Settles each signalised junction's phases from its lane graph (skewed junctions' extra phases included) and gives
+ * each phase its pedestrian walks, adding a pedestrian-only phase for crosswalks no vehicle phase leaves clear.
+ * roadNetwork calls it, so every exporter sees the final phases.
+ */
+void finishSignals(RoadNetwork& net, const Layout& l);
+
 struct TransitOptions
 {
     int busRoutes = -1;  // -1: from the style (none in medieval styles, else one per two districts, at most 4)

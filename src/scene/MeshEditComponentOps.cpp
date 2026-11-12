@@ -130,6 +130,7 @@ json extrudeDuplicate(geo::ExtrudeOptions opts, bool keepSides)
         geo::Mesh m = baseMesh(basePlug(n));
         auto sym = symmetryFor(n, m);
         opts.symmetry = sym ? &*sym : nullptr;
+        opts.space = glm::dmat3(n.as<glm::dmat4>(Transform::kWorldMatrix));
         geo::ExtrudeCopy copy = geo::extrudeCopy(m, sel, opts, keepSides);
         if (copy.cap.empty())
             continue;
@@ -186,7 +187,8 @@ void registerMeshEditComponentCommands()
                     return edges(geo::extrudeEdges(m, sel, o).edges);
                 });
             return editSelected("Extrude", K::Face, [&](geo::Mesh& m, const Ids& sel, const geo::SymmetryMap* s) {
-                geo::ExtrudeOptions o{a.get<double>("thickness"), a.get<bool>("individual"), s, a.get<double>("offset"), a.get<bool>("keepBack")};
+                geo::ExtrudeOptions o{a.get<double>("thickness"), a.get<bool>("individual"), s, a.get<double>("offset"), a.get<bool>("keepBack"),
+                                      editSpace()};
                 return faces(geo::extrudeFaces(m, sel, o).faces);
             });
         },
@@ -203,7 +205,7 @@ void registerMeshEditComponentCommands()
             selectWholeInObjectMode(K::Face);
             return editSelected("Inset", K::Face, [&](geo::Mesh& m, const Ids& sel, const geo::SymmetryMap* s) {
                 geo::InsetOptions o{a.get<double>("thickness"), a.get<double>("depth"), a.get<bool>("individual"), s,
-                                    a.get<bool>("clamp")};
+                                    a.get<bool>("clamp"), editSpace()};
                 return faces(geo::insetFaces(m, sel, o).faces);
             });
         },

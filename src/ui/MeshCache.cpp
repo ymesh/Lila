@@ -273,7 +273,7 @@ std::shared_ptr<const geo::RenderMesh> pickFrom(const geo::Mesh& m, const geo::R
  * A copy of `from`'s render data for a mesh with the same layout key: new positions, normals and tangents only. With
  * an owner node, the vertices go to that node's GPU copy in place instead of a new upload.
  */
-Entry rebuildPositions(const scene::MeshPtr& source, const Entry& from, uint64_t layoutKey, scene::NodeId owner)
+Entry rebuildPositions(const scene::MeshPtr& source, const Entry& from, scene::NodeId owner)
 {
     LILA_ZONE();
 
@@ -318,7 +318,9 @@ Entry rebuildPositions(const scene::MeshPtr& source, const Entry& from, uint64_t
             l.clear();
             liveHolders().clear();
         }
-        Live& live = l[{owner, layoutKey}];
+        // Keyed by the full build whose vertices and indices this copies: one layout key can weld into different
+        // vertex layouts (stored split normals, tangents), and the renderer keeps one index buffer per live key.
+        Live& live = l[{owner, from.built->key}];
         if (!live.vertices)
         {
             live.vertices = std::make_shared<render::DynamicVertices>();
@@ -429,7 +431,7 @@ const Entry* entryFor(const scene::MeshPtr& mesh, bool tangents = false, scene::
         for (const Layout& l : layouts())
             if (l.key == key && (l.entry.tangents || !tangents) && l.entry.pick && l.entry.built &&
                 l.entry.pick->positions.size() == l.entry.built->vertices.size())
-                return &(c[mesh.get()] = rebuildPositions(mesh, l.entry, key, owner));
+                return &(c[mesh.get()] = rebuildPositions(mesh, l.entry, owner));
         Entry e = build(mesh, tangents);
         rememberLayout(key, e);
         return &(c[mesh.get()] = std::move(e));

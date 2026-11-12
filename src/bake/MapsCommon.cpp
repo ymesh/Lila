@@ -250,7 +250,7 @@ float percentileAbs(const std::vector<float>& v, const std::vector<uint8_t>& cov
 
 std::shared_ptr<const void> prepareHighNormalMaps(const MapSettings& settings, const BakeInputs& inputs)
 {
-    if (!settings.options.value("highNormalMap", true))
+    if (!settings.options.value("highNormalMap", false))
         return nullptr;
     auto maps = std::make_shared<HighNormalMaps>();
     TextureCache cache;
@@ -263,7 +263,9 @@ std::shared_ptr<const void> prepareHighNormalMaps(const MapSettings& settings, c
         for (size_t h = 0; h < gi.highs.size(); ++h)
         {
             const MeshSoup& soup = gi.highs[h].soup;
-            if (soup.uvs.empty())
+            // A self high wears its low's material, whose normal map is usually this bake's last output: applying it would
+            // fold every previous bake into the next.
+            if (soup.uvs.empty() || (h < gi.highSelfLow.size() && gi.highSelfLow[h] >= 0))
                 continue;
             auto& slots = maps->slots[g][h];
             slots.resize(soup.materialNames.size());

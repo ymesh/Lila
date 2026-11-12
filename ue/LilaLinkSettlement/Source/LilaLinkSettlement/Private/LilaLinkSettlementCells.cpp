@@ -12,6 +12,11 @@
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "ScopedTransaction.h"
 #include "Misc/PackageName.h"
+#include "ObjectTools.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "UObject/Package.h"
+#include "UObject/SavePackage.h"
+#include "StructUtils/PropertyBag.h"
 #include "UObject/SoftObjectPath.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogLilaLinkSettlementCells, Log, All);
@@ -30,6 +35,9 @@ FString CellPrefix(const FString& Id)
 {
 	return TEXT("LilaLink.SettlementCell:") + (Id + TEXT("/")).Right(900);
 }
+
+/** The cell actor carries its data asset's path, so removing the cell removes the asset too. */
+const FString CellAssetPrefix(TEXT("LilaLink.SettlementCellAsset:"));
 
 UWorld* CellsEditorWorld()
 {
@@ -68,6 +76,35 @@ bool SetDataParameter(UPCGComponent* Component, const FString& AssetPath)
 	}
 	UObject* Loaded = Path.TryLoad();
 	return Loaded && Instance->SetGraphParameter<UObject*>(SettlementDataParameter, Loaded) == EPropertyBagResult::Success;
+}
+
+/** An empty PCG graph with the SettlementData parameter cells bind their data asset to, made and saved at Path. */
+UPCGGraphInterface* MakeSettlementGraph(const FString& Path, FString& OutError)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkSettlementCells::MakeSettlementGraph);
+
+	const FString PackageName = Path.Contains(TEXT(".")) ? Path.Left(Path.Find(TEXT("."))) : Path;
+	UPackage* Package = CreatePackage(*PackageName);
+	if (!Package)
+	{
+		OutError = TEXT("setSettlementCell: could not make the package ") + PackageName;
+		return nullptr;
+	}
+	UPCGGraph* Graph = NewObject<UPCGGraph>(Package, *FPackageName::GetShortName(PackageName), RF_Public | RF_Standalone | RF_Transactional);
+	TArray<FPropertyBagPropertyDesc> Params;
+	Params.Emplace(SettlementDataParameter, EPropertyBagPropertyType::SoftObject, UObject::StaticClass());
+	Graph->AddUserParameters(Params);
+	FAssetRegistryModule::AssetCreated(Graph);
+	Package->MarkPackageDirty();
+	FSavePackageArgs Save;
+	Save.TopLevelFlags = RF_Public | RF_Standalone;
+	const FString File = FPackageName::LongPackageNameToFilename(PackageName, FPackageName::GetAssetPackageExtension());
+	if (!UPackage::SavePackage(Package, Graph, *File, Save))
+	{
+		UE_LOG(LogLilaLinkSettlementCells, Warning, TEXT("setSettlementCell: made %s but could not save it"), *PackageName);
+	}
+	UE_LOG(LogLilaLinkSettlementCells, Log, TEXT("setSettlementCell: made PCG graph %s with a SettlementData parameter"), *PackageName);
+	return Graph;
 }
 
 TSharedPtr<FJsonValue> SetSettlementCell(const TSharedPtr<FJsonObject>& Params, FString& OutError)
@@ -133,6 +170,8 @@ TSharedPtr<FJsonValue> SetSettlementCell(const TSharedPtr<FJsonObject>& Params, 
 		bSpawned = true;
 	}
 	Actor->Modify();
+	Actor->Tags.RemoveAll([](const FName& T) { return T.ToString().StartsWith(CellAssetPrefix); });
+	Actor->Tags.Add(FName(*(CellAssetPrefix + AssetPath)));
 	Actor->SetActorLocation(Center);
 	if (UBoxComponent* Box = Actor->FindComponentByClass<UBoxComponent>())
 	{
@@ -153,6 +192,17 @@ TSharedPtr<FJsonValue> SetSettlementCell(const TSharedPtr<FJsonObject>& Params, 
 		if (!Graph && !GraphPath.Contains(TEXT(".")))
 		{
 			Graph = LoadObject<UPCGGraphInterface>(nullptr, *(GraphPath + TEXT(".") + FPackageName::GetShortName(GraphPath)), nullptr, LOAD_NoWarn | LOAD_Quiet);
+		}
+		bool bMakeGraph = false;
+		Params->TryGetBoolField(TEXT("makeGraph"), bMakeGraph);
+		if (!Graph && bMakeGraph)
+		{
+			FString MakeError;
+			Graph = MakeSettlementGraph(GraphPath, MakeError);
+			if (!Graph)
+			{
+				Warnings.Add(MakeShared<FJsonValueString>(MakeError));
+			}
 		}
 		if (!Graph)
 		{
@@ -180,6 +230,12 @@ TSharedPtr<FJsonValue> SetSettlementCell(const TSharedPtr<FJsonObject>& Params, 
 	Out->SetStringField(TEXT("actor"), Actor->GetActorLabel());
 	Out->SetBoolField(TEXT("spawned"), bSpawned);
 	Out->SetBoolField(TEXT("generated"), bGenerated);
+	if (Component && !GraphPath.IsEmpty() && Component->GetGraphInstance())
+	{
+		const TValueOrError<TSoftObjectPtr<UObject>, EPropertyBagResult> Read =
+			Component->GetGraphInstance()->GetGraphParameter<TSoftObjectPtr<UObject>>(SettlementDataParameter);
+		Out->SetStringField(TEXT("boundData"), Read.HasValue() ? Read.GetValue().ToSoftObjectPath().ToString() : FString());
+	}
 	Out->SetArrayField(TEXT("warnings"), Warnings);
 	return MakeShared<FJsonValueObject>(Out);
 }
@@ -224,13 +280,41 @@ TSharedPtr<FJsonValue> RemoveSettlementCells(const TSharedPtr<FJsonObject>& Para
 			}
 		}
 	}
+	TSet<FString> AssetPaths;
+	for (AActor* Actor : Doomed)
+	{
+		for (const FName& Tag : Actor->Tags)
+		{
+			const FString T = Tag.ToString();
+			if (T.StartsWith(CellAssetPrefix))
+			{
+				AssetPaths.Add(T.RightChop(CellAssetPrefix.Len()));
+			}
+		}
+	}
 	int32 Removed = 0;
 	for (AActor* Actor : Doomed)
 	{
 		Removed += World->EditorDestroyActor(Actor, true) ? 1 : 0;
 	}
+	// The data assets go with their cells; nothing else in the level reads them.
+	TArray<UObject*> Assets;
+	TArray<TSharedPtr<FJsonValue>> Deleted;
+	for (const FString& Path : AssetPaths)
+	{
+		const FString ObjectPath = Path + TEXT(".") + FPackageName::GetShortName(Path);
+		if (UObject* Asset = LoadObject<UObject>(nullptr, *ObjectPath, nullptr, LOAD_NoWarn | LOAD_Quiet))
+		{
+			Assets.Add(Asset);
+			Deleted.Add(MakeShared<FJsonValueString>(Path));
+		}
+	}
+	const int32 AssetsDeleted = Assets.Num() > 0 ? ObjectTools::ForceDeleteObjects(Assets, false) : 0;
+	UE_LOG(LogLilaLinkSettlementCells, Log, TEXT("removeSettlementCells: %s: %d cells, %d data assets"), *Id, Removed, AssetsDeleted);
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetNumberField(TEXT("removed"), Removed);
+	Out->SetNumberField(TEXT("assetsDeleted"), AssetsDeleted);
+	Out->SetArrayField(TEXT("assets"), Deleted);
 	return MakeShared<FJsonValueObject>(Out);
 }
 } // namespace

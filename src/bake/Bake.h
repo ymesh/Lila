@@ -67,6 +67,10 @@ struct LILA_SCENE_API GroupStats
     uint64_t misses = 0;
     /** Rays whose nearest surface faced away (included in misses when backfaces are ignored). */
     uint64_t backfaces = 0;
+    /** Rays that met the far side of a thin part and were re-aimed along the low's face normal. */
+    uint64_t reaimed = 0;
+    /** Samples no ray along the normal reached, taken from the nearest high facing the low's way. */
+    uint64_t probed = 0;
     uint64_t highTriangles = 0;
     uint64_t lowTriangles = 0;
     /** The frontal and rear distances the group baked with, cm; Auto ones are measured when measured is set. */

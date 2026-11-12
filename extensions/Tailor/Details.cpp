@@ -135,7 +135,7 @@ int addPocket(Garment& g, int host, const Vec2& at, float width, float height, b
     const float rc = 0.2f * std::min(width, height);
     p.outline.push_back({width, height});
     p.outline.push_back({0.f, height});
-    for (int k = 0; k <= 4; ++k)
+    for (int k = 4; k >= 0; --k)
     {
         const float t = 1.5707963f * float(k) / 4.f;
         p.outline.push_back({rc - rc * std::sin(t), rc - rc * std::cos(t)});
@@ -145,7 +145,6 @@ int addPocket(Garment& g, int host, const Vec2& at, float width, float height, b
         const float t = 1.5707963f * float(k) / 4.f;
         p.outline.push_back({width - rc + rc * std::sin(t), rc - rc * std::cos(t)});
     }
-    std::reverse(p.outline.begin(), p.outline.end());
     p.fabric = hostPanel.fabric;
     p.layer = hostPanel.layer + 1;
     p.particleDistance = std::min(hostPanel.particleDistance, 0.25f * std::min(width, height));
@@ -181,6 +180,38 @@ int addPocket(Garment& g, int host, const Vec2& at, float width, float height, b
         g.panels.push_back(std::move(f));
         tackRow(g, fi, {0.f, 0.f}, {fw, 0.f}, host, {at[0] + width + 0.005f, at[1] + height + 0.01f}, {at[0] - 0.005f, at[1] + height + 0.01f},
                 g.panels[size_t(fi)].particleDistance);
+    }
+    return index;
+}
+
+int addPatch(Garment& g, int host, const Vec2& centre, float width, float height, const std::string& name)
+{
+    if (host < 0 || size_t(host) >= g.panels.size() || width <= 0.f || height <= 0.f)
+        return -1;
+    const Panel hostPanel = g.panels[size_t(host)];
+    Panel p;
+    p.name = detailName(g, hostPanel.name + " " + name);
+    const float rc = 0.3f * std::min(width, height), hw = 0.5f * width, hh = 0.5f * height;
+    const Vec2 corners[4] = {{hw - rc, -hh + rc}, {hw - rc, hh - rc}, {-hw + rc, hh - rc}, {-hw + rc, -hh + rc}};
+    for (int c = 0; c < 4; ++c)
+        for (int k = 0; k <= 4; ++k)
+        {
+            const float t = 1.5707963f * (float(c) + float(k) / 4.f) - 1.5707963f;
+            p.outline.push_back({corners[c][0] + rc * std::cos(t), corners[c][1] + rc * std::sin(t)});
+        }
+    p.fabric = hostPanel.fabric;
+    p.layer = hostPanel.layer + 1;
+    p.particleDistance = std::min(hostPanel.particleDistance, 0.2f * std::min(width, height));
+    placeOnPanel(hostPanel, centre, kLift, p);
+    const int index = int(g.panels.size());
+    const std::vector<Vec2> outline = p.outline;
+    g.panels.push_back(std::move(p));
+    const float step = g.panels[size_t(index)].particleDistance;
+    const int n = int(outline.size());
+    for (int i = 0; i < n; ++i)
+    {
+        const Vec2 &a = outline[size_t(i)], &b = outline[size_t((i + 1) % n)];
+        tackRow(g, index, a, b, host, {centre[0] + a[0], centre[1] + a[1]}, {centre[0] + b[0], centre[1] + b[1]}, step);
     }
     return index;
 }

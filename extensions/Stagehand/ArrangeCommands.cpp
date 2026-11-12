@@ -9,10 +9,13 @@
 #include "Stagehand.h"
 
 #include <lila/Command.h>
+#include <lila/Curves.h>
 #include <lila/Extension.h>
 #include <lila/Mesh.h>
 #include <lila/Profile.h>
 #include <lila/Transform.h>
+
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -677,6 +680,205 @@ void registerArrangeCommands(ext::Context& ctx)
             return out;
         },
         .examples = {"stackProps(items=['Kitchen/Plate'], at=[30, 90, 0], onto=['Counter'], count=8)"},
+    });
+
+    std::vector<FlagDef> pathFlags;
+    for (FlagDef& f : commonFlags(false))
+        if (f.name != "realize" && f.name != "variants")
+            pathFlags.push_back(std::move(f));
+    const std::vector<FlagDef> pathFlagsExtra = {
+        {"spacing", "sp", T::Float, 100.0, "Distance between items along the curve, cm.", {}, {}, 1.0},
+        {"spacingJitter", "sj", T::Float, 0.3, "0 to 1: how much each gap varies.", {}, {}, 0.0, 0.95},
+        {"offset", "of", T::Float, 0.0, "Distance to the curve's right, cm (negative: its left)."},
+        {"spread", "sd", T::Float, 0.0, "Random sideways wander either way, cm.", {}, {}, 0.0},
+        {"turn", "tu", T::Float, 15.0, "Random turn about up either way, degrees.", {}, {}, 0.0, 180.0},
+        {"along", "al", T::Bool, true, "Items face along the curve; off turns each at random."},
+        {"scaleMin", "smn", T::Float, 0.9, "Smallest scale.", {}, {}, 0.0},
+        {"scaleMax", "smx", T::Float, 1.1, "Largest scale.", {}, {}, 0.0},
+        {"snap", "sn", T::Bool, true, "Stand each item on the surface below the curve (looked for from 50 cm above it)."},
+        nodeFlag({"onto", "on", T::List, nullptr, "Meshes they settle on; default a floor plane at the curve's lowest point."}, "mesh")};
+    pathFlags.insert(pathFlags.end(), pathFlagsExtra.begin(), pathFlagsExtra.end());
+    ctx.registerCommand({
+        .name = "pathProps",
+        .doc = "Place items along curves: litter along a kerb, cones down a road, posts along a fence, cable drums by a "
+               "track. Spaced along each curve, offset or wandering to the side, turned a little, stood on the surface below "
+               "and optionally settled. Places scene instances (mode='copy' for copies) in one group. Returns the same as "
+               "fillShelf with realize=True.",
+        .positionalDoc = "curves (default the selection)",
+        .flags = pathFlags,
+        .run = [](const Args& a) -> json {
+            LILA_ZONE();
+
+            Graph& g = Graph::current();
+            const std::vector<ItemSource> items = itemsArg(g, a, "pathProps");
+            std::vector<std::string> curves = a.objects();
+            if (curves.empty())
+                throw CommandError("pathProps: give curves");
+            g.evaluate();
+            arrange::PathOptions o;
+            o.spacing = a.get<double>("spacing", 100.0);
+            o.spacingJitter = a.get<double>("spacingJitter", 0.3);
+            o.offset = a.get<double>("offset", 0.0);
+            o.spread = a.get<double>("spread", 0.0);
+            o.turn = a.get<double>("turn", 15.0);
+            o.along = a.get<bool>("along", true);
+            o.scaleMin = a.get<double>("scaleMin", 0.9);
+            o.scaleMax = a.get<double>("scaleMax", 1.1);
+            std::vector<arrange::Item> bounds;
+            for (const ItemSource& it : items)
+                bounds.push_back(arrange::itemOf(meshOf(g, it.mesh, false)));
+            std::vector<arrange::Placed> placed;
+            double lowest = 1e300;
+            uint32_t seed = uint32_t(a.get<int64_t>("seed", 1));
+            for (const std::string& c : curves)
+            {
+                json data;
+                try
+                {
+                    data = ops::execute("curveData", {{"args", {c}}, {"worldSpace", true}});
+                }
+                catch (const std::exception&)
+                {
+                    throw CommandError("pathProps: " + c + " is not a curve");
+                }
+                for (const json& sp : data.is_array() ? data : json::array())
+                {
+                    curve::Polyline pl;
+                    try
+                    {
+                        pl = curve::tessellate(curve::splineFromJson(sp));
+                    }
+                    catch (const std::exception& e)
+                    {
+                        throw CommandError("pathProps: " + c + ": " + e.what());
+                    }
+                    std::vector<glm::dvec3> line = pl.points;
+                    if (pl.closed && !line.empty())
+                        line.push_back(line.front());
+                    for (const glm::dvec3& p : line)
+                        lowest = std::min(lowest, p.y);
+                    // Each spline gets its own seed so two curves don't repeat the same pattern.
+                    o.seed = seed++;
+                    for (arrange::Placed& x : arrange::path(line, bounds, o))
+                        placed.push_back(x);
+                }
+            }
+            if (placed.empty())
+                throw CommandError("pathProps: nothing placed: the curves have no length");
+            if (a.get<bool>("snap", true))
+                for (arrange::Placed& x : placed)
+                {
+                    const glm::dvec3 at(x.transform[3]);
+                    if (const auto hit = surfaceUnder(g, at, {}, 50.0))
+                        x.transform = glm::translate(glm::dmat4(1.0), glm::dvec3(0.0, hit->point.y - at.y, 0.0)) * x.transform;
+                }
+            const std::vector<NodeId> onto = meshListArg(g, a, "onto", "pathProps");
+            arrange::SettleOptions so = settleOptions(a);
+            so.ground = onto.empty();
+            so.groundHeight = lowest;
+            const Result r = settleIf(std::move(placed), g, items, onto, so, a.get<bool>("settle", false));
+            return finishRealized(g, a, r, items, a.get<std::string>("name", "PathProps"));
+        },
+        .examples = {"pathProps('Kerb', items=['Debris/Rebar', 'Debris/RebarBent'], spacing=60, offset=40, spread=20, along=False)",
+                     "pathProps('Road_Edge', items=['Road/Delineator'], spacing=500, offset=-150, turn=0)"},
+    });
+
+    std::vector<FlagDef> debrisFlags;
+    for (FlagDef& f : commonFlags(true))
+        if (f.name != "realize" && f.name != "variants" && f.name != "items" && f.name != "density")
+            debrisFlags.push_back(std::move(f));
+    const std::vector<FlagDef> debrisFlagsExtra = {
+        {"items", "it", T::List, nullptr, "Chips: library asset ids and/or scene meshes (default the starter library's stone chunks)."},
+        {"amount", "a", T::Float, 6.0, "Chips per piece of median size, on average; bigger pieces shed more.", {}, {}, 0.0, 1000.0},
+        {"size", "sz", T::Float, 0.12, "Chip size as a fraction of the piece it comes off.", {}, {}, 0.001, 1.0},
+        {"minSize", "mns", T::Float, 2.0, "Smallest chip, cm.", {}, {}, 0.1},
+        {"maxSize", "mxs", T::Float, 40.0, "Largest chip, cm.", {}, {}, 0.1},
+        {"spread", "sd", T::Float, 1.0, "How far out they land, in piece radii beyond each piece.", {}, {}, 0.0},
+        {"density", "", T::Float, 2400.0, "kg/m3 of the chips, for the settle.", {}, {}, 1.0},
+        nodeFlag({"onto", "on", T::List, nullptr, "Meshes they land on besides the pieces; default a floor plane at the pieces' lowest point."}, "mesh")};
+    debrisFlags.insert(debrisFlags.end(), debrisFlagsExtra.begin(), debrisFlagsExtra.end());
+    ctx.registerCommand({
+        .name = "debrisProps",
+        .doc = "Strew debris around broken things: chips sized from each piece of a fracture, ruin or wall (bigger pieces shed "
+               "more and bigger chips), dropped beside it and settled against the pieces and the ground. Places scene "
+               "instances (mode='copy' for copies) in one group. Returns the same as fillShelf with realize=True.",
+        .positionalDoc = "broken objects: their meshes are the pieces (default the selection)",
+        .flags = debrisFlags,
+        .run = [](const Args& a) -> json {
+            LILA_ZONE();
+
+            Graph& g = Graph::current();
+            std::vector<ItemSource> items;
+            if (a.has("items"))
+                items = itemsArg(g, a, "debrisProps");
+            else
+            {
+                library::Query q;
+                q.tags = {"debris", "stone"};
+                json ids = json::array();
+                for (const library::Asset& x : library::search(q))
+                    if (x.id.find("StoneChunk") != std::string::npos)
+                        ids.push_back(x.id);
+                if (ids.empty())
+                    throw CommandError("debrisProps: no stone chunks in the library (libraryStarter builds them); give items=[...]");
+                Args withItems = a;
+                withItems.flags["items"] = ids;
+                items = itemsArg(g, withItems, "debrisProps");
+            }
+            const std::vector<std::string> sources = a.objects();
+            if (sources.empty())
+                throw CommandError("debrisProps: give the broken objects");
+            g.evaluate();
+            std::vector<NodeId> pieceMeshes;
+            std::vector<std::pair<glm::dvec3, glm::dvec3>> pieces;
+            double lowest = 1e300;
+            for (const std::string& name : sources)
+            {
+                Node* n = g.find(name);
+                if (!n)
+                    throw CommandError("debrisProps: no node named '" + name + "'");
+                for (NodeId m : meshesOf(g, n->id()))
+                {
+                    const geo::Mesh w = meshOf(g, m, true);
+                    glm::dvec3 lo(1e300), hi(-1e300);
+                    for (geo::Index p = 0; p < w.pointCapacity(); ++p)
+                        if (w.pointValid(p))
+                        {
+                            lo = glm::min(lo, w.position(p));
+                            hi = glm::max(hi, w.position(p));
+                        }
+                    if (lo.x > hi.x)
+                        continue;
+                    pieceMeshes.push_back(m);
+                    pieces.emplace_back(lo, hi);
+                    lowest = std::min(lowest, lo.y);
+                }
+            }
+            if (pieces.empty())
+                throw CommandError("debrisProps: the objects have no meshes");
+            arrange::DebrisOptions o;
+            o.amount = a.get<double>("amount", 6.0);
+            o.size = a.get<double>("size", 0.12);
+            o.minSize = a.get<double>("minSize", 2.0);
+            o.maxSize = std::max(o.minSize, a.get<double>("maxSize", 40.0));
+            o.spread = a.get<double>("spread", 1.0);
+            o.seed = uint32_t(a.get<int64_t>("seed", 1));
+            std::vector<arrange::Item> bounds;
+            for (const ItemSource& it : items)
+                bounds.push_back(arrange::itemOf(meshOf(g, it.mesh, false)));
+            std::vector<NodeId> colliders = meshListArg(g, a, "onto", "debrisProps");
+            const bool floor = colliders.empty();
+            colliders.insert(colliders.end(), pieceMeshes.begin(), pieceMeshes.end());
+            arrange::SettleOptions so = settleOptions(a);
+            so.density = a.get<double>("density", 2400.0);
+            so.ground = floor;
+            so.groundHeight = lowest;
+            const Result r = settleIf(arrange::debris(pieces, bounds, o), g, items, colliders, so, a.get<bool>("settle", true));
+            if (r.placed.empty())
+                throw CommandError("debrisProps: nothing placed (amount is 0?)");
+            return finishRealized(g, a, r, items, a.get<std::string>("name", "Debris"));
+        },
+        .examples = {"debrisProps('Wall_fractured')", "debrisProps('RuinedArch', amount=12, size=0.08, onto=['Terrain'])"},
     });
 }
 } // namespace stagehand

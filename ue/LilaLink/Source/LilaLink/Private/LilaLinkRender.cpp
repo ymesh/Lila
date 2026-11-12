@@ -1,6 +1,7 @@
 #include "LilaLinkRender.h"
 
 #include "Components/SceneCaptureComponent2D.h"
+#include "Components/SkyLightComponent.h"
 #include "ContentStreaming.h"
 #include "DataDrivenShaderPlatformInfo.h"
 #include "Editor.h"
@@ -16,6 +17,7 @@
 #include "RenderingThread.h"
 #include "ShaderCompiler.h"
 #include "TextureResource.h"
+#include "UObject/UObjectIterator.h"
 
 namespace
 {
@@ -87,6 +89,14 @@ TSharedPtr<FJsonValue> RendererInfo(const TSharedPtr<FJsonObject>&, FString& Out
 		Flu->SetField(Name, V);
 	}
 	Out->SetBoolField(TEXT("forwardLevelUp"), bAny);
+	int32 SkyLights = 0;
+	for (TObjectIterator<USkyLightComponent> It; It; ++It)
+	{
+		SkyLights += It->GetWorld() == World && It->IsRegistered();
+	}
+	// Faces turned from the sun get their light from a sky light. In mobile preview captures a SkyAtmosphere draws black, so
+	// a sky light capturing the scene captures black there and only a cubemap sky light lights those faces.
+	Out->SetNumberField(TEXT("skyLights"), SkyLights);
 	Out->SetObjectField(TEXT("forwardLevelUpSettings"), Flu);
 	return MakeShared<FJsonValueObject>(Out);
 }

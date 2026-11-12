@@ -428,6 +428,68 @@ void registerCommands(ext::Context& ctx)
         .examples = {"wiggle(['book_01', 'book_02', 'book_03'], strength=60)"},
     });
 
+    std::vector<FlagDef> sweepFlags = worldFlags();
+    sweepFlags.insert(sweepFlags.begin(), {{"path", "p", T::List, nullptr, "The broom's stroke, world points [[x, y, z], ...]; with gather=True, one point to gather toward."},
+                                           {"radius", "r", T::Float, 30.0, "Size of the broom, cm.", {}, {}, 1.0},
+                                           {"speed", "sp", T::Float, 60.0, "How fast the broom moves along the stroke, and what it sweeps with it, cm/s.", {}, {}, 1.0},
+                                           {"gather", "ga", T::Bool, false, "Pull everything under the broom toward its centre instead of along the stroke."}});
+    ctx.registerCommand({
+        .name = "sweep",
+        .doc = "Sweep meshes along a stroke like a broom, or gather them toward a point, then let them settle: push litter into "
+               "a corner, herd scattered books into a heap.\n\n"
+               "Only the targets (and dynamic bodies) move; the broom carries whatever is within radius of it as it travels "
+               "the stroke at speed. One undo step. Returns the same report as settle.",
+        .positionalDoc = "meshes (default the selection)",
+        .flags = sweepFlags,
+        .run = [](const Args& a) -> json {
+            LILA_ZONE();
+
+            Graph& g = Graph::current();
+            if (!a.has("path") || !a.flags["path"].is_array() || a.flags["path"].empty())
+                throw CommandError("sweep: give path=[[x, y, z], ...]");
+            std::vector<glm::dvec3> path;
+            for (const json& p : a.flags["path"])
+            {
+                if (!p.is_array() || p.size() != 3)
+                    throw CommandError("sweep: each point of path is [x, y, z]");
+                path.emplace_back(p[0].get<double>(), p[1].get<double>(), p[2].get<double>());
+            }
+            const bool gather = a.get<bool>("gather", false);
+            if (!gather && path.size() < 2)
+                throw CommandError("sweep: a stroke needs two points or more (or gather=True)");
+            WorldOptions o = optionsOf(g, a, meshesNamed(g, a.objects(), "sweep"), "sweep", false);
+            Session s(g, o);
+            const double radius = a.get<double>("radius", 30.0);
+            const double speed = a.get<double>("speed", 60.0);
+            const double dt = s.step();
+            if (gather)
+            {
+                // Long enough for the rim of the broom to reach its centre.
+                for (double t = 0.0; t < radius / speed * 3.0 + 0.5; t += dt)
+                {
+                    s.sweep(path[0], {}, radius, speed, true);
+                    s.advance(dt);
+                }
+            }
+            else
+                for (size_t k = 1; k < path.size(); ++k)
+                {
+                    const glm::dvec3 seg = path[k] - path[k - 1];
+                    const double len = glm::length(seg);
+                    for (double d = 0.0; d < len; d += speed * dt)
+                    {
+                        s.sweep(path[k - 1] + seg * (d / len), seg, radius, speed, false);
+                        s.advance(dt);
+                    }
+                }
+            const physics::SettleResult done = s.world().settle(a.get<double>("time", 120.0));
+            s.world().write(g);
+            return reportOf(g, s.world(), s.time() + done.seconds, o.gravity, done.capped);
+        },
+        .examples = {"sweep(['can_01', 'can_02', 'wrapper_01'], path=[[0, 0, 0], [200, 0, 0]], radius=40)",
+                     "sweep(ls('Book*'), path=[[50, 0, 50]], gather=True, radius=120)"},
+    });
+
     std::vector<FlagDef> dropFlags = worldFlags();
     dropFlags.insert(dropFlags.begin(), {{"height", "h", T::Float, 0.0, "Lift this far first, cm."},
                                          nodeFlag({"onto", "on", T::String, nullptr, "Drop onto this mesh: moved above its top first (at= picks where)."}, "mesh"),

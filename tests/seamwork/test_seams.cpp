@@ -6,6 +6,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <tbb/global_control.h>
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 
@@ -463,6 +464,8 @@ void checkSkirt(const Mesh& m, const Object& wall, const Ground* ground, const O
     REQUIRE(!side.empty());
     REQUIRE(!normal.empty());
     double worstDistance = 0.0, worstAngle = 0.0;
+    glm::dvec3 atDistance(0.0);
+    glm::dvec4 atAngle(0.0);
     const glm::dmat4 inv = glm::inverse(wall.world);
     auto wallNormalAt = [&](const glm::dvec3& q) {
         lila::geo::BvhClosest cl;
@@ -501,7 +504,6 @@ void checkSkirt(const Mesh& m, const Object& wall, const Ground* ground, const O
         }
         else
             continue;
-        worstDistance = std::max(worstDistance, distance);
         const glm::dvec3 cn(normal[c]);
         double off = angle(cn, surfaceNormal);
         if (side[p] < 1e-6)
@@ -511,8 +513,15 @@ void checkSkirt(const Mesh& m, const Object& wall, const Ground* ground, const O
             const glm::dvec3 na = wallNormalAt(pos - t), nb = wallNormalAt(pos + t);
             off = std::min(off, angle(cn, na) + angle(cn, nb) - angle(na, nb));
         }
+        if (distance > worstDistance)
+            atDistance = pos;
+        worstDistance = std::max(worstDistance, distance);
+        if (off > worstAngle)
+            atAngle = glm::dvec4(pos, side[p]);
         worstAngle = std::max(worstAngle, off);
     }
+    INFO("farthest " << atDistance.x << "," << atDistance.y << "," << atDistance.z << "; worst normal at " << atAngle.x << "," << atAngle.y << ","
+                     << atAngle.z << " side " << atAngle.w);
     CHECK(worstDistance < 0.01);
     CHECK(worstAngle < 1.0);
     // No crack: every open edge lies on a source surface (the borders, and fillet ends that taper onto the ground).
@@ -549,20 +558,75 @@ TEST_CASE("skirt: a sunk round column is swept, its borders on both surfaces wit
     checkSkirt(s.mesh, objs[0], &g, nullptr);
 }
 
-TEST_CASE("skirt: a box wall on a floor mesh gets a skirt and says which method made it")
+TEST_CASE("skirt: a box wall on a floor mesh is unioned, on a closed floor and on one open quad")
 {
-    Object floor = object("Floor", box({-1000, -50, -1000}, {1000, 0, 1000}));
-    floor.ground = true;
-    const std::vector<Object> objs = {object("Wall", box({-200, -20, -10}, {200, 280, 10})), floor};
-    const Result r = findSeams(objs, nullptr, quick());
+    const std::vector<glm::dvec3> quad = {{-5000, 0, -5000}, {-5000, 0, 5000}, {5000, 0, 5000}, {5000, 0, -5000}};
+    const std::vector<Index> qs = {4}, qi = {0, 1, 2, 3};
+    const std::shared_ptr<const Mesh> floors[] = {box({-1000, -50, -1000}, {1000, 0, 1000}),
+                                                  std::make_shared<const Mesh>(Mesh::fromPolygons(quad, qs, qi))};
+    for (const auto& fm : floors)
+    {
+        Object floor = object("Floor", fm);
+        floor.ground = true;
+        const std::vector<Object> objs = {object("Wall", box({-200, -20, -10}, {200, 280, 10})), floor};
+        const Result r = findSeams(objs, nullptr, quick());
+        SkirtOptions o;
+        o.width = 15.0;
+        o.method = SkirtMethod::Union;
+        const SkirtResult s = buildSkirt(r, objs, nullptr, o);
+        REQUIRE_FALSE(s.curves.empty());
+        INFO(s.curves[0].reason);
+        CHECK(s.curves[0].method == "union");
+        checkSkirt(s.mesh, objs[0], nullptr, &objs[1]);
+    }
+}
+
+TEST_CASE("skirt: a union's ground border keeps the full width along the wall, whatever the ground's resolution")
+{
+    // The ground border's distance from the 400 x 20 wall's footprint, along its long sides.
+    auto alongWidth = [](const SkirtResult& s) {
+        const auto side = s.mesh.pointAttrs().get<float>("side");
+        std::vector<uint8_t> border(s.mesh.pointCapacity(), 0);
+        for (Index e = 0; e < s.mesh.edgeCapacity(); ++e)
+            if (s.mesh.edgeValid(e) && s.mesh.isBoundaryEdge(e))
+                border[s.mesh.edgePoint(e, 0)] = border[s.mesh.edgePoint(e, 1)] = 1;
+        glm::dvec2 range(1e300, 0.0);
+        for (Index p = 0; p < s.mesh.pointCapacity(); ++p)
+            if (s.mesh.pointValid(p) && border[p] && side[p] > 0.99f && std::abs(s.mesh.position(p).x) < 200.0)
+            {
+                const double d = std::abs(s.mesh.position(p).z) - 10.0;
+                range = {std::min(range.x, d), std::max(range.y, d)};
+            }
+        return range;
+    };
     SkirtOptions o;
-    o.width = 15.0;
-    const SkirtResult s = buildSkirt(r, objs, nullptr, o);
+    o.width = 30.0;
+    o.method = SkirtMethod::Union;
+    const std::vector<Object> wall = {object("Wall", box({-200, -20, -10}, {200, 280, 10}))};
+    for (const double cell : {50.0, 10.0})
+    {
+        Ground g;
+        g.field = std::make_shared<const Heightfield>(lila::geo::makeHeightfield(int(2000.0 / cell) + 1, int(2000.0 / cell) + 1, cell, {-1000.0, -1000.0}));
+        const SkirtResult s = buildSkirt(findSeams(wall, &g, quick()), wall, &g, o);
+        REQUIRE(s.curves.size() == 1);
+        INFO(s.curves[0].reason);
+        REQUIRE(s.curves[0].method == "union");
+        const glm::dvec2 w = alongWidth(s);
+        INFO("terrain cell " << cell << ": " << w.x << " to " << w.y);
+        CHECK(w.x > o.width * 0.85);
+        CHECK(w.y < o.width * 1.15);
+    }
+    const std::vector<glm::dvec3> quad = {{-5000, 0, -5000}, {-5000, 0, 5000}, {5000, 0, 5000}, {5000, 0, -5000}};
+    Object floor = object("Floor", std::make_shared<const Mesh>(Mesh::fromPolygons(quad, std::vector<Index>{4}, std::vector<Index>{0, 1, 2, 3})));
+    floor.ground = true;
+    const std::vector<Object> objs = {wall[0], floor};
+    const SkirtResult s = buildSkirt(findSeams(objs, nullptr, quick()), objs, nullptr, o);
     REQUIRE_FALSE(s.curves.empty());
-    // Whatever ran is named with its reason (a fallback says what it fell back from).
-    CHECK_FALSE(s.curves[0].reason.empty());
-    CHECK(s.curves[0].method != "none");
-    checkSkirt(s.mesh, objs[0], nullptr, &objs[1]);
+    REQUIRE(s.curves[0].method == "union");
+    const glm::dvec2 w = alongWidth(s);
+    INFO("floor quad: " << w.x << " to " << w.y);
+    CHECK(w.x > o.width * 0.85);
+    CHECK(w.y < o.width * 1.15);
 }
 
 TEST_CASE("skirt: on terrain the box wall is unioned with a fillet, borders on both surfaces")
@@ -574,6 +638,7 @@ TEST_CASE("skirt: on terrain the box wall is unioned with a fillet, borders on b
     o.width = 15.0;
     const SkirtResult s = buildSkirt(r, objs, &g, o);
     REQUIRE(s.curves.size() == 1);
+    INFO(s.curves[0].reason);
     CHECK(s.curves[0].method == "union");
     CHECK(s.curves[0].reason.find("past") != std::string::npos);
     checkSkirt(s.mesh, objs[0], &g, nullptr);
@@ -589,6 +654,7 @@ TEST_CASE("skirt: a unioned box wall's outer corners are rounded, not tapered")
     o.method = SkirtMethod::Union;
     const SkirtResult s = buildSkirt(r, objs, &g, o);
     REQUIRE(s.curves.size() == 1);
+    INFO(s.curves[0].reason);
     REQUIRE(s.curves[0].method == "union");
     checkSkirt(s.mesh, objs[0], &g, nullptr);
     // At each corner the ground border runs round it at the fillet width, like the ball the fillet rolls.
@@ -624,4 +690,211 @@ TEST_CASE("skirt: a unioned box wall's outer corners are rounded, not tapered")
             worst = std::max(worst, glm::degrees(std::acos(std::clamp(glm::dot(fn, glm::dvec3(normal[c])), -1.0, 1.0))));
     }
     CHECK(worst < 60.0);
+}
+
+namespace
+{
+/** A closed vertical prism over a simple footprint polygon (x, z), from y0 to y1, faces wound outward. */
+std::shared_ptr<const Mesh> prism(std::vector<glm::dvec2> foot, double y0, double y1)
+{
+    double area = 0.0;
+    for (size_t k = 0; k < foot.size(); ++k)
+        area += foot[k].x * foot[(k + 1) % foot.size()].y - foot[(k + 1) % foot.size()].x * foot[k].y;
+    // Same turning as cylinder(): clockwise in (x, z).
+    if (area > 0.0)
+        std::reverse(foot.begin(), foot.end());
+    const int n = int(foot.size());
+    std::vector<glm::dvec3> p;
+    for (const glm::dvec2& f : foot)
+    {
+        p.push_back({f.x, y0, f.y});
+        p.push_back({f.x, y1, f.y});
+    }
+    std::vector<Index> sizes, idx;
+    for (int k = 0; k < n; ++k)
+    {
+        const Index a = Index(2 * k), b = Index(2 * ((k + 1) % n));
+        sizes.push_back(4);
+        idx.insert(idx.end(), {a, b, b + 1, a + 1});
+    }
+    sizes.push_back(Index(n));
+    for (int k = n - 1; k >= 0; --k)
+        idx.push_back(Index(2 * k));
+    sizes.push_back(Index(n));
+    for (int k = 0; k < n; ++k)
+        idx.push_back(Index(2 * k + 1));
+    return std::make_shared<const Mesh>(Mesh::fromPolygons(p, sizes, idx));
+}
+
+/** A 2000 cm square terrain at cell, heights from f(x, z). */
+template <typename F>
+Ground groundOf(double cell, F f)
+{
+    const int n = int(2000.0 / cell) + 1;
+    Heightfield h = lila::geo::makeHeightfield(n, n, cell, {-1000.0, -1000.0});
+    for (int z = 0; z < n; ++z)
+        for (int x = 0; x < n; ++x)
+        {
+            const glm::dvec2 q = h.samplePos(x, z);
+            h.heights[h.index(x, z)] = float(f(q.x, q.y));
+        }
+    Ground g;
+    g.field = std::make_shared<const Heightfield>(std::move(h));
+    g.name = "terrain";
+    return g;
+}
+
+double segmentDistance(const glm::dvec3& p, const glm::dvec3& a, const glm::dvec3& b)
+{
+    const glm::dvec3 ab = b - a;
+    const double t = std::clamp(glm::dot(p - a, ab) / std::max(glm::dot(ab, ab), 1e-12), 0.0, 1.0);
+    return glm::distance(p, a + ab * t);
+}
+
+/**
+ * The skirt's ground border against the contact curves: every border point at the width from the nearest curve, and
+ * every point along the curves with border within the width, so no face is left narrow or bare. In an inner corner the
+ * border runs the width from both walls, so the corner itself is further from it and is left out.
+ */
+void checkGroundWidth(const SkirtResult& s, const Result& r, double width)
+{
+    const Mesh& m = s.mesh;
+    const auto side = m.pointAttrs().get<float>("side");
+    std::vector<uint8_t> border(m.pointCapacity(), 0);
+    for (Index e = 0; e < m.edgeCapacity(); ++e)
+        if (m.edgeValid(e) && m.isBoundaryEdge(e))
+            border[m.edgePoint(e, 0)] = border[m.edgePoint(e, 1)] = 1;
+    std::vector<glm::dvec3> ground;
+    for (Index p = 0; p < m.pointCapacity(); ++p)
+        if (m.pointValid(p) && border[p] && side[p] > 0.99f)
+            ground.push_back(m.position(p));
+    REQUIRE_FALSE(ground.empty());
+    std::vector<std::pair<glm::dvec3, glm::dvec3>> groundEdges;
+    for (Index e = 0; e < m.edgeCapacity(); ++e)
+        if (m.edgeValid(e) && m.isBoundaryEdge(e) && side[m.edgePoint(e, 0)] > 0.99f && side[m.edgePoint(e, 1)] > 0.99f)
+            groundEdges.push_back({m.position(m.edgePoint(e, 0)), m.position(m.edgePoint(e, 1))});
+    std::vector<glm::dvec3> innerCorners;
+    for (const Curve& c : r.curves)
+        for (size_t k = 0, n = c.points.size(); c.closed && k < n; ++k)
+        {
+            const glm::dvec3 in = c.points[k] - c.points[(k + n - 1) % n], out = c.points[(k + 1) % n] - c.points[k];
+            if (glm::length(in) > 1e-6 && glm::length(out) > 1e-6 && glm::dot(glm::normalize(in), glm::normalize(out)) < 0.5 &&
+                glm::dot(out, c.normalA[(k + n - 1) % n]) > 0.0)
+                innerCorners.push_back(c.points[k]);
+        }
+    auto toCurves = [&](const glm::dvec3& p) {
+        double d = 1e300;
+        for (const Curve& c : r.curves)
+        {
+            const size_t n = c.points.size();
+            for (size_t k = 0; k + 1 < n + (c.closed ? 1 : 0); ++k)
+                d = std::min(d, segmentDistance(p, c.points[k], c.points[(k + 1) % n]));
+        }
+        return d;
+    };
+    double lo = 1e300, hi = 0.0;
+    glm::dvec3 atLo(0.0), atHi(0.0);
+    for (const glm::dvec3& p : ground)
+    {
+        const double d = toCurves(p);
+        if (d < lo)
+            lo = d, atLo = p;
+        if (d > hi)
+            hi = d, atHi = p;
+    }
+    INFO("border " << lo << " at " << atLo.x << "," << atLo.y << "," << atLo.z << " to " << hi << " at " << atHi.x << "," << atHi.y << "," << atHi.z);
+    CHECK(lo > width * 0.85);
+    CHECK(hi < width * 1.15);
+    double bare = 0.0;
+    glm::dvec3 atBare(0.0);
+    for (const Curve& c : r.curves)
+    {
+        const size_t n = c.points.size();
+        for (size_t k = 0; k + 1 < n + (c.closed ? 1 : 0); ++k)
+        {
+            const glm::dvec3 a = c.points[k], b = c.points[(k + 1) % n];
+            const int steps = std::max(1, int(glm::distance(a, b) / (width * 0.25)));
+            for (int i = 0; i <= steps; ++i)
+            {
+                const glm::dvec3 q = a + (b - a) * (double(i) / steps);
+                if (std::any_of(innerCorners.begin(), innerCorners.end(), [&](const glm::dvec3& ic) { return glm::distance(ic, q) < width; }))
+                    continue;
+                double nearest = 1e300;
+                for (const auto& [e0, e1] : groundEdges)
+                    nearest = std::min(nearest, segmentDistance(q, e0, e1));
+                if (nearest > bare)
+                    bare = nearest, atBare = q;
+            }
+        }
+    }
+    INFO("curve point " << atBare.x << "," << atBare.y << "," << atBare.z << " has border " << bare << " away");
+    CHECK(bare < width * 1.15);
+}
+
+void checkUnionSkirt(const std::vector<Object>& objs, const Ground& g, double width)
+{
+    const Result r = findSeams(objs, &g, quick());
+    REQUIRE_FALSE(r.curves.empty());
+    SkirtOptions o;
+    o.width = width;
+    o.method = SkirtMethod::Union;
+    const SkirtResult s = buildSkirt(r, objs, &g, o);
+    REQUIRE_FALSE(s.curves.empty());
+    for (const SkirtCurve& sc : s.curves)
+    {
+        INFO(sc.reason);
+        REQUIRE(sc.method == "union");
+    }
+    for (const std::string& w : s.warnings)
+        FAIL_CHECK(w);
+    checkSkirt(s.mesh, objs[0], &g, nullptr);
+    checkGroundWidth(s, r, width);
+}
+} // namespace
+
+TEST_CASE("skirt: a box wall's union keeps the full width round every face on flat ground")
+{
+    const std::vector<Object> objs = {object("Wall", box({-200, -20, -10}, {200, 280, 10}))};
+    for (const double cell : {50.0, 10.0})
+    {
+        INFO("terrain cell " << cell);
+        checkUnionSkirt(objs, groundOf(cell, [](double, double) { return 0.0; }), 30.0);
+    }
+}
+
+TEST_CASE("skirt: an L-shaped wall's union keeps the full width along every outside face, the notch included")
+{
+    const std::vector<glm::dvec2> foot = {{-200, -200}, {200, -200}, {200, -170}, {-170, -170}, {-170, 200}, {-200, 200}};
+    const std::vector<Object> objs = {object("Wall", prism(foot, -20.0, 280.0))};
+    for (const double cell : {50.0, 10.0})
+    {
+        INFO("terrain cell " << cell);
+        checkUnionSkirt(objs, groundOf(cell, [](double, double) { return 0.0; }), 30.0);
+    }
+}
+
+TEST_CASE("skirt: a box wall's union on a slope and on bumpy terrain keeps its borders on the ground at full width")
+{
+    const std::vector<Object> objs = {object("Wall", box({-200, -300, -10}, {200, 500, 10}))};
+    const double slope = std::tan(glm::radians(25.0));
+    auto sloped = [&](double x, double z) { return slope * (x * 0.8 + z * 0.6); };
+    auto bumpy = [](double x, double z) { return 10.0 * std::sin(x / 90.0) * std::cos(z / 70.0) + 4.0 * std::sin((x + z) / 55.0); };
+    // Curvature radius near 2 x the width.
+    auto harsh = [](double x, double z) { return 12.0 * std::sin(x / 70.0) * std::cos(z / 55.0) + 6.0 * std::sin((x + z) / 31.0); };
+    for (const double cell : {50.0, 10.0})
+    {
+        INFO("terrain cell " << cell);
+        {
+            INFO("slope");
+            checkUnionSkirt(objs, groundOf(cell, sloped), 30.0);
+        }
+        {
+            INFO("bumpy");
+            checkUnionSkirt(objs, groundOf(cell, bumpy), 30.0);
+        }
+        {
+            INFO("harsh bumps");
+            checkUnionSkirt(objs, groundOf(cell, harsh), 30.0);
+        }
+    }
 }

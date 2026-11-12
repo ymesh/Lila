@@ -51,6 +51,18 @@ inline void basis(const glm::vec3& n, glm::vec3& t, glm::vec3& b)
     b = {c, s + n.y * n.y * a, -n.y};
 }
 
+/** A projection miss retries on rings of probes widening around its ray: kProbeRings rings of kProbePerRing. */
+inline constexpr uint32_t kProbeRings = 22;
+inline constexpr uint32_t kProbePerRing = 16;
+
+/** Probe j of ring k around unit axis d (t, b its basis), ring k at k + 1 degrees off it. Same on the GPU. */
+inline glm::vec3 probeDirection(uint32_t k, uint32_t j, const glm::vec3& d, const glm::vec3& t, const glm::vec3& b)
+{
+    const float a = glm::radians(float(k + 1));
+    const float phi = 6.28318530718f * (float(j) + 0.5f * float(k & 1u)) / float(kProbePerRing);
+    return glm::normalize(d * std::cos(a) + (t * std::cos(phi) + b * std::sin(phi)) * std::sin(a));
+}
+
 /** A per-sample seed that is the same on every run and thread count. */
 inline uint32_t sampleSeed(const TexelSample& s) { return hashBits(s.texel * 64u + s.sub) ^ hashBits(s.tile + 0x9e3779b9u); }
 

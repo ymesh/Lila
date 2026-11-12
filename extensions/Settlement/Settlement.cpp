@@ -150,11 +150,13 @@ void settlementExec(ExecContext& c)
     c.out("lots", parts.lots);
     c.out("buildings", parts.buildings);
     c.out("water", parts.water);
+    c.out("levels", parts.levels);
     std::vector<GeometryPtr> shown;
     if (c.b("showStreets"))
     {
         shown.push_back(parts.streets);
         shown.push_back(parts.water);
+        shown.push_back(parts.levels);
     }
     if (c.b("showLots"))
         shown.push_back(parts.lots);
@@ -215,7 +217,10 @@ gn::NodeDecl settlementDecl()
                                 geoSocket("streets", "Street ribbons and centreline curves."),
                                 geoSocket("lots", "Lot outlines as loose edges and closed curves."),
                                 geoSocket("buildings", "Building envelopes as closed meshes, footprints as closed curves."),
-                                geoSocket("water", "River ribbons.")}},
+                                geoSocket("water", "River ribbons."),
+                                geoSocket("levels", "Levels above the ground as curves: deck streets and outlines, elevated roads, ramps, "
+                                                    "skybridges and air lanes, with class, layer and kind (0 deck, 1 elevated, 2 ramp, "
+                                                    "3 skybridge, 4 air, 5 deck outline).")}},
         .exec = settlementExec,
     };
 }
@@ -428,6 +433,30 @@ Parts toGeometry(const Layout& l, const Ground& ground)
     }
     setCurveInts(footprints, {{"lot", fpLot}, {"use", fpUse}, {"floors", fpFloors}});
 
+    gn::CurveSet levels;
+    std::vector<int32_t> levelClass, levelLayer, levelKind;
+    for (const LevelLine& line : levelLines(l, ground))
+    {
+        levels.addCurve(line.pts, false);
+        levelClass.push_back(int32_t(line.cls));
+        levelLayer.push_back(line.layer);
+        const char* kinds[] = {"deck", "elevated", "ramp", "skybridge", "air"};
+        levelKind.push_back(int32_t(std::ranges::find(kinds, line.kind) - std::begin(kinds)));
+    }
+    if (l.gen)
+        for (size_t k = 0; k < l.gen->levels.size(); ++k)
+            if (const Level& lv = l.gen->levels[k]; lv.kind == "deck" && lv.outline.pts.size() >= 3)
+            {
+                std::vector<glm::dvec3> ring;
+                for (const Vec2& q : lv.outline.pts)
+                    ring.push_back({q.x, lv.height, q.y});
+                levels.addCurve(ring, true);
+                levelClass.push_back(int32_t(StreetClass::Boundary));
+                levelLayer.push_back(int32_t(k) + 1);
+                levelKind.push_back(5);
+            }
+    setCurveInts(levels, {{"class", levelClass}, {"layer", levelLayer}, {"kind", levelKind}});
+
     auto pack = [](geo::Mesh m, gn::CurveSet cs) {
         Geometry g;
         if (m.numPoints() > 0)
@@ -437,7 +466,8 @@ Parts toGeometry(const Layout& l, const Ground& ground)
         return gn::makeGeometry(std::move(g));
     };
     return {pack(std::move(meshes.streets), std::move(centre)), pack(std::move(meshes.lots), std::move(lotCurves)),
-            pack(std::move(meshes.envelopes), std::move(footprints)), pack(std::move(meshes.water), gn::CurveSet())};
+            pack(std::move(meshes.envelopes), std::move(footprints)), pack(std::move(meshes.water), gn::CurveSet()),
+            pack(geo::Mesh(), std::move(levels))};
 }
 
 bool registerNodes(ext::Context& ctx) { return gn::registerDecl(ctx, settlementDecl()) != nullptr; }

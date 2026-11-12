@@ -33,7 +33,7 @@ GraphBackend::SocketStyle GraphBackend::socketStyle(const std::string& type) con
     if (type == "int")
         return {themeColor("socketInt"), SocketShape::Square};
     if (type == "bool")
-        return {themeColor("socketBool"), SocketShape::Square};
+        return {themeColor("socketBool"), SocketShape::Square, SocketMark::Dot};
     if (type == "string")
         return {themeColor("socketString"), SocketShape::Pill};
     if (type == "color")

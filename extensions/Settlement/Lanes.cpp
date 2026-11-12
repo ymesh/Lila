@@ -429,10 +429,16 @@ LaneGraph laneGraph(const Layout& l, const RoadNetwork& net)
             const LineLanes& x = per[size_t(e.line)];
             if (x.pedR == x.pedL)
                 continue;
-            bool marked = false;
-            for (const Crosswalk& c : j.crosswalks)
-                marked |= j.ends[size_t(c.end)].line == e.line && j.ends[size_t(c.end)].start == e.start;
-            link(x.pedR, x.pedL, ji, marked ? Movement::Crosswalk : Movement::Crossing);
+            int marked = -1;
+            for (size_t c = 0; c < j.crosswalks.size(); ++c)
+                if (j.ends[size_t(j.crosswalks[c].end)].line == e.line && j.ends[size_t(j.crosswalks[c].end)].start == e.start)
+                    marked = int(c);
+            // People cross in the first phase that walks them.
+            int walkPhase = -1;
+            for (size_t p = 0; p < j.walks.size() && walkPhase < 0 && marked >= 0; ++p)
+                if (std::ranges::find(j.walks[p], marked) != j.walks[p].end())
+                    walkPhase = int(p);
+            link(x.pedR, x.pedL, ji, marked >= 0 ? Movement::Crosswalk : Movement::Crossing, walkPhase);
         }
     }
     for (const auto& [node, ends] : atNode)
@@ -498,6 +504,76 @@ LaneGraph laneGraph(const Layout& l, const RoadNetwork& net)
             if (auto it = newPhase.find({k.junction, g.lanes[size_t(k.from)].line, int(g.lanes[size_t(k.from)].dir)}); it != newPhase.end())
                 k.phase = it->second;
     return g;
+}
+
+void finishSignals(RoadNetwork& net, const Layout& l)
+{
+    LILA_ZONE();
+
+    if (std::ranges::none_of(net.junctions, [](const Junction& j) { return j.control == Control::Signal; }))
+        return;
+    const LaneGraph g = laneGraph(l, net);
+    std::map<int, std::vector<const LaneLink*>> byJunction;
+    for (const LaneLink& k : g.links)
+        if (k.junction >= 0 && k.phase >= 0 && g.lanes[size_t(k.from)].mode == LaneMode::Vehicle)
+            byJunction[k.junction].push_back(&k);
+    for (size_t ji = 0; ji < net.junctions.size(); ++ji)
+    {
+        Junction& j = net.junctions[ji];
+        if (j.control != Control::Signal)
+            continue;
+        auto endOf = [&](int line, bool start) {
+            for (size_t e = 0; e < j.ends.size(); ++e)
+                if (j.ends[e].line == line && j.ends[e].start == start)
+                    return int(e);
+            return -1;
+        };
+        // Vehicle lanes along their line arrive at its end and leave from its start.
+        std::map<int, int> phaseOf;
+        std::map<int, std::set<int>> leftBy;
+        for (const LaneLink* k : byJunction[int(ji)])
+        {
+            const Lane &from = g.lanes[size_t(k->from)], &to = g.lanes[size_t(k->to)];
+            if (const int e = endOf(from.line, from.dir < 0); e >= 0)
+                phaseOf[e] = k->phase;
+            if (k->move == Movement::Through && !k->yields)
+                if (const int e = endOf(to.line, to.dir > 0); e >= 0)
+                    leftBy[k->phase].insert(e);
+        }
+        for (size_t p = 0; p < j.phases.size(); ++p)
+            for (int e : j.phases[p])
+                phaseOf.emplace(e, int(p));
+        std::map<int, std::vector<int>> groups;
+        for (const auto& [e, p] : phaseOf)
+            groups[p].push_back(e);
+        j.phases.clear();
+        std::vector<std::set<int>> left;
+        for (auto& [p, ends] : groups)
+        {
+            j.phases.push_back(std::move(ends));
+            left.push_back(leftBy[p]);
+        }
+        j.walks.assign(j.phases.size(), {});
+        std::vector<int> unserved;
+        for (size_t c = 0; c < j.crosswalks.size(); ++c)
+        {
+            const int e = j.crosswalks[c].end;
+            bool served = false;
+            for (size_t p = 0; p < j.phases.size(); ++p)
+                if (std::ranges::find(j.phases[p], e) == j.phases[p].end() && !left[p].contains(e))
+                {
+                    j.walks[p].push_back(int(c));
+                    served = true;
+                }
+            if (!served)
+                unserved.push_back(int(c));
+        }
+        if (!unserved.empty())
+        {
+            j.phases.push_back({});
+            j.walks.push_back(std::move(unserved));
+        }
+    }
 }
 
 void addTransit(LaneGraph& g, const Layout& l, const RoadNetwork& net, const TransitOptions& o)

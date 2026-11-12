@@ -776,14 +776,72 @@ std::vector<Vec2> route(const Layout& l, const Ground& g, const Profile& p, Vec2
     return smooth;
 }
 
+namespace
+{
+/**
+ * Picks street edges by a key from where each one lies, so a pick lands on the same street whatever else the graph
+ * holds: u in [0, 1) takes the first edge whose key is at or past it.
+ */
+class ParentPicker
+{
+public:
+    explicit ParentPicker(const StreetGraph& g) : mGraph(g) { update(); }
+
+    /** Takes in the edges added or reshaped since the last call. */
+    void update()
+    {
+        for (size_t e = mSeen; e < mGraph.edges.size(); ++e)
+            add(int(e));
+        mSeen = mGraph.edges.size();
+    }
+
+    int pick(double u)
+    {
+        while (!mByKey.empty())
+        {
+            auto it = mByKey.lower_bound(uint64_t(u * 18446744073709551615.0));
+            if (it == mByKey.end())
+                it = mByKey.begin();
+            const auto [k, e] = *it;
+            if (mGraph.isStreet(e) && keyOf(e) == k)
+                return e;
+            // Split or removed since it went in: it goes back under its key now, if it is still a street.
+            mByKey.erase(it);
+            add(e);
+        }
+        return -1;
+    }
+
+private:
+    const StreetGraph& mGraph;
+    std::map<uint64_t, int> mByKey;
+    size_t mSeen = 0;
+
+    uint64_t keyOf(int e) const
+    {
+        const StreetEdge& x = mGraph.edges[size_t(e)];
+        auto q = [&](int n) { return std::pair{std::llround(mGraph.nodes[size_t(n)].p.x), std::llround(mGraph.nodes[size_t(n)].p.y)}; };
+        const auto qa = q(x.a), qb = q(x.b);
+        const auto [lo, hi] = std::minmax(qa, qb);
+        return hash64(hash64(hash64(hash64(uint64_t(lo.first)) ^ uint64_t(lo.second)) ^ uint64_t(hi.first)) ^ uint64_t(hi.second));
+    }
+
+    void add(int e)
+    {
+        if (mGraph.isStreet(e))
+            mByKey.emplace(keyOf(e), e);
+    }
+};
+} // namespace
+
 void growOrganic(Layout& l, const Ground& g, const Options& o, double limit)
 {
     LILA_ZONE();
 
     const Profile& p = o.profile;
-    Rng rng(o.seed, 1);
+    Rng gateRng(o.seed, 1);
     const double radius = limit > 0.0 ? limit : l.radius;
-    const std::vector<Vec2> gates = gatePoints(l, p, rng, limit);
+    const std::vector<Vec2> gates = gatePoints(l, p, gateRng, limit);
 
     std::vector<Vec2> targets = gates;
     if (p.pattern == Pattern::Linear && gates.size() == 2)
@@ -821,12 +879,15 @@ void growOrganic(Layout& l, const Ground& g, const Options& o, double limit)
     const double bend = p.turn * kPi / 180.0;
     const double linearDamp = p.pattern == Pattern::Linear ? 0.25 : 1.0;
 
+    ParentPicker parents(l.graph);
     for (int attempt = 0; attempt < attempts && built < target; ++attempt)
     {
-        // Pick a parent street, favouring important streets near the centre.
-        const int e = int(rng.next() * double(l.graph.edges.size()));
-        if (e >= int(l.graph.edges.size()) || !l.graph.isStreet(e))
-            continue;
+        // Each attempt draws from its own stream and picks its parent by where streets lie, not by their order in the
+        // graph: an edit somewhere changes only the attempts that land near it.
+        Rng rng(o.seed, hash64(0x6A09E667ull + uint64_t(attempt)));
+        const int e = parents.pick(rng.next());
+        if (e < 0)
+            break;
         const StreetEdge parent = l.graph.edges[size_t(e)];
         const Vec2 pa = l.graph.nodes[size_t(parent.a)].p, pb = l.graph.nodes[size_t(parent.b)].p;
         const double plen = glm::length(pb - pa);
@@ -927,6 +988,7 @@ void growOrganic(Layout& l, const Ground& g, const Options& o, double limit)
             continue;
         }
         l.graph.addPolyline(pts, cls);
+        parents.update();
         built += polylineLength(pts);
     }
 }
@@ -995,7 +1057,6 @@ void cutLargeBlocks(Layout& l, const Ground& g, const Options& o)
     LILA_ZONE();
 
     const Profile& p = o.profile;
-    Rng rng(o.seed, 2);
     const StreetClass cls = (p.pattern == Pattern::Grid || p.pattern == Pattern::OrganicGrid) ? StreetClass::Alley : StreetClass::Local;
     for (int pass = 0; pass < 8; ++pass)
     {
@@ -1019,6 +1080,8 @@ void cutLargeBlocks(Layout& l, const Ground& g, const Options& o)
             }
             const Vec2 u = glm::normalize(poly.pts[(longest + 1) % poly.size()] - poly.pts[longest]), v = leftNormal(u);
             const Vec2 c = centroid(poly);
+            // Seeded by where the block is, so an edit elsewhere leaves this cut where it was.
+            Rng rng(o.seed, hash64(hash64(uint64_t(std::llround(c.x / 10.0))) ^ uint64_t(std::llround(c.y / 10.0))) + uint64_t(pass));
             double u0 = 1e300, u1 = -1e300, v0 = 1e300, v1 = -1e300;
             for (const Vec2& q : poly.pts)
             {
@@ -1615,7 +1678,8 @@ void assignStreetIds(Layout& l)
         }
         // Keyed by where it runs, not by how it was found: the same street gets the same id from either end.
         auto q = [](Vec2 p) { return std::pair<int64_t, int64_t>{std::llround(p.x / 10.0), std::llround(p.y / 10.0)}; };
-        const auto ends = std::minmax(q(g.nodes[size_t(start)].p), q(g.nodes[size_t(node)].p));
+        const auto qa = q(g.nodes[size_t(start)].p), qb = q(g.nodes[size_t(node)].p);
+        const auto ends = std::minmax(qa, qb);
         uint64_t h = hash64(uint64_t(ends.first.first));
         for (int64_t v : {ends.first.second, ends.second.first, ends.second.second, int64_t(std::llround(length / 100.0)),
                           int64_t(g.edges[size_t(chain.front())].path)})
@@ -1698,7 +1762,6 @@ Layout build(const Site& site, const Ground& g, const Options& in, const WalkSur
         if (s.size() >= 2)
             for (const std::vector<Vec2>& run : clipPolyline(s, l.outline, l.center, 0.0, 0.0, l.exclusions))
                 l.graph.addPolyline(run, StreetClass::Collector);
-    layPaths(l, site, g, o, walk);
     // Attractors past the centre pull arterials to them: a bridge, a harbour, a mine.
     for (size_t k = site.hasCenter ? 1 : 0; k < site.attractors.size(); ++k)
         if (contains(l.outline.pts, site.attractors[k]))
@@ -1740,6 +1803,8 @@ Layout build(const Site& site, const Ground& g, const Options& in, const WalkSur
     case Pattern::Osm:
     case Pattern::Example: layPattern(l, g, o, p.pattern); break;
     }
+    // Drawn streets and routes go in over what grew, so drawing one leaves the rest of the layout where it was.
+    layPaths(l, site, g, o, walk);
     afterPattern(l, g, o);
     if (o.blocks)
         cutLargeBlocks(l, g, o);

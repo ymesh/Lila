@@ -27,7 +27,7 @@ namespace stagehand::library
 namespace
 {
 /** Bumped whenever an asset changes, so existing starter folders are rebuilt. */
-constexpr int kStarterVersion = 2;
+constexpr int kStarterVersion = 3;
 constexpr double kPi = 3.14159265358979323846;
 
 /** Polygons built up piece by piece, written as one OBJ object. */
@@ -419,6 +419,8 @@ json buildStarter(bool force)
         const fs::path folder = dir / s.collection / s.name;
         fs::create_directories(folder, ec);
         std::ofstream(folder / (s.name + ".obj"), std::ios::binary) << b.obj(s.name);
+        // The old drawing may show the old model; a missing one is drawn again the next time the library shows.
+        fs::remove(folder / "thumb.png", ec);
         const glm::dvec3 size = b.size();
         json physics = {{"role", s.role}, {"material", s.material}, {"shape", s.shape}};
         if (s.maxParts > 0)

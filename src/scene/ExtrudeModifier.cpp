@@ -34,6 +34,7 @@ public:
         kIndividual,
         kKeepBack,
         kComponents,
+        kMeshMatrix,
         kOutMesh,
         kLost,
     };
@@ -171,7 +172,8 @@ void ExtrudeModifierNode::compute(const EvalContext&)
         if (r.kind == ComponentMode::Edge)
             geo::extrudeEdges(m, r.ids, geo::EdgeExtrudeOptions{as<double>(kThickness), as<double>(kOffset), nullptr});
         else
-            geo::extrudeFaces(m, r.ids, geo::ExtrudeOptions{as<double>(kThickness), as<bool>(kIndividual), nullptr, as<double>(kOffset), as<bool>(kKeepBack)});
+            geo::extrudeFaces(m, r.ids, geo::ExtrudeOptions{as<double>(kThickness), as<bool>(kIndividual), nullptr, as<double>(kOffset), as<bool>(kKeepBack),
+                                                          glm::dmat3(as<glm::dmat4>(kMeshMatrix))});
         m.compact();
         setOutput(kOutMesh, MeshPtr(std::make_shared<geo::Mesh>(std::move(m))));
     }
@@ -206,6 +208,8 @@ void takeSelection(Graph& g, Node& mod, NodeId mesh)
 {
     if (DataPtr c = extrudeModifier::selectedComponents(g, mesh))
         g.setValue({mod.id(), ExtrudeModifierNode::kComponents, -1}, c);
+    if (Node* n = g.node(mesh))
+        g.setValue({mod.id(), ExtrudeModifierNode::kMeshMatrix, -1}, n->as<glm::dmat4>(Transform::kWorldMatrix));
 }
 } // namespace
 
@@ -352,6 +356,8 @@ void registerTypes()
         param("keepBack", PlugType::Bool, true, "Where the faces only border open edges, as a whole open shell, keep a copy facing back at the base."),
         {.name = "components", .type = PlugType::Data, .defaultValue = DataPtr(), .flags = AttrInput | AttrStorable | AttrHidden,
          .doc = "The faces or edges to extrude."},
+        {.name = "meshMatrix", .type = PlugType::Matrix, .defaultValue = glm::dmat4(1.0), .flags = AttrInput | AttrStorable | AttrHidden,
+         .doc = "The mesh's world matrix when the modifier was added; thickness and offset are world distances under it."},
         {.name = "outMesh", .type = PlugType::Mesh, .defaultValue = MeshPtr(), .flags = AttrOutput | AttrHidden},
         {.name = "lostComponents", .type = PlugType::Int, .defaultValue = int64_t(0), .flags = AttrOutput,
          .doc = "Faces or edges no longer found on the input mesh."},

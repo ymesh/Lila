@@ -14,7 +14,7 @@
 namespace lila::ui
 {
 /** Buttons per row in the toolkit panels' button grids. */
-inline constexpr int kToolkitColumns = 4;
+inline constexpr int kToolkitColumns = 2;
 
 /** A widget holding a FixedRowLayout of buttons, returned in `layout`. */
 inline QWidget* rowBox(QWidget* parent, FixedRowLayout** layout, int columns = 0)

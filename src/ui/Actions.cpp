@@ -545,6 +545,9 @@ void registerBuiltins()
         "Puts translate, rotate and scale back to their defaults, moving the object.");
     cmd("modify.resetPivot", "Reset Pivot", "Modify", "resetPivot", json::object(), "Moves the pivot back to the object's origin.");
     cmd("modify.zeroPivot", "Zero Pivot", "Modify", "zeroPivot", json::object(), "Moves the pivot to the world origin.");
+    cmd("modify.zeroPivotX", "Zero Pivot X", "Modify", "zeroPivot", {{"axes", "x"}}, "Moves the pivot to 0 on world X, keeping its other coordinates.");
+    cmd("modify.zeroPivotY", "Zero Pivot Y", "Modify", "zeroPivot", {{"axes", "y"}}, "Moves the pivot to 0 on world Y, keeping its other coordinates.");
+    cmd("modify.zeroPivotZ", "Zero Pivot Z", "Modify", "zeroPivot", {{"axes", "z"}}, "Moves the pivot to 0 on world Z, keeping its other coordinates.");
     cmd("modify.zeroPivotRotation", "Zero Pivot Rotation", "Modify", "zeroPivotRotation", json::object(),
         "Lines the selected objects' pivot axes up with the world, leaving the pivot and the objects where they are.");
     cmd("modify.bakePivot", "Bake Pivot", "Modify", "bakePivot", json::object(),
@@ -559,7 +562,8 @@ void registerBuiltins()
         setEnabledWhen(id, [] { return scene::Graph::current().selection().size() >= 2; });
     cmd("modify.orientPivot", "Orient Pivot", "Modify", "orientPivot", json::object(),
         "Turns the object so its X aims from the first picked component to the second, or along a single face, edge or loop, "
-        "leaving the mesh where it is. Adjust the axes, up and mode in the popup after.");
+        "leaving the mesh where it is. With objects selected, the others take the first one's pivot. Adjust the axes, up and mode in "
+        "the popup after.");
     cmd("modify.pinComponentPivot", "Pin Component Pivot", "Modify", "pinComponentPivot", json::object(),
         "Keeps the component manipulator's axes, and its position once moved with Edit Pivot, through selection changes until "
         "reset. Click its label in the viewport to reset.");

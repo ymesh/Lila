@@ -379,6 +379,45 @@ TEST_CASE("settlement streetscape: lane graph is strongly connected per mode, gr
     CHECK(c["ok"] == true);
     CHECK(checkLanes(l, Ground::plane())["ok"] == true);
 
+    // Junction phases are the ones the lanes move in, extra skewed-junction phases included, and every crosswalk walks
+    // in a phase that holds the traffic over it.
+    int walksChecked = 0;
+    for (const LaneLink& k : g.links)
+    {
+        if (k.junction < 0 || k.phase < 0)
+            continue;
+        const Junction& j = net.junctions[size_t(k.junction)];
+        REQUIRE(size_t(k.phase) < j.phases.size());
+        const Lane& from = g.lanes[size_t(k.from)];
+        if (from.mode == LaneMode::Vehicle)
+        {
+            bool listed = false;
+            for (int e : j.phases[size_t(k.phase)])
+                listed |= j.ends[size_t(e)].line == from.line && j.ends[size_t(e)].start == (from.dir < 0);
+            CHECK(listed);
+        }
+        else if (k.move == Movement::Crosswalk)
+            ++walksChecked;
+    }
+    CHECK(walksChecked > 0);
+    for (const Junction& j : net.junctions)
+    {
+        if (j.control != Control::Signal)
+            continue;
+        REQUIRE(j.walks.size() == j.phases.size());
+        for (size_t w = 0; w < j.crosswalks.size(); ++w)
+        {
+            bool walks = false;
+            for (size_t p = 0; p < j.phases.size(); ++p)
+                if (std::ranges::find(j.walks[p], int(w)) != j.walks[p].end())
+                {
+                    walks = true;
+                    CHECK(std::ranges::find(j.phases[p], j.crosswalks[w].end) == j.phases[p].end());
+                }
+            CHECK(walks);
+        }
+    }
+
     // Every movement of a signalised junction given green together, none yielding, is caught.
     LaneGraph bad = laneGraph(l, net);
     int junction = -1;
@@ -396,9 +435,15 @@ TEST_CASE("settlement streetscape: lane graph is strongly connected per mode, gr
     CHECK_FALSE(cb["conflictingGreens"].empty());
     CHECK(cb["ok"] == false);
 
-    // A one-way street cut off at a dead end: its lanes cannot get out.
+    // A one-way street off a two-way one, cut off at a dead end: its lanes cannot get out.
     Options o = styled("europeanCity", false);
+    o.profile.pattern = Pattern::None;
     Site oneWay{.size = 160000.0};
+    SitePath main;
+    main.id = 2;
+    main.cls = StreetClass::Collector;
+    main.pts = {{-30000, std::nan(""), 3000}, {30000, std::nan(""), 3000}};
+    oneWay.paths.push_back(main);
     SitePath spur;
     spur.id = 1;
     spur.cls = StreetClass::Local;

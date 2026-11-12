@@ -607,7 +607,7 @@ TEST_CASE("settlement gen: a 5 km city grows in seconds and a one-block edit re-
     CHECK(remade >= 2);
     CHECK(remade < 20);
     CHECK(l.blocks.size() >= before + 1);
-    CHECK(edit < 0.3 * grow); // relative, so a loaded machine slows both alike
+    CHECK(edit < 0.04 * grow); // relative, so a loaded machine slows both alike; 100 ms is the target on an idle one
     for (size_t k = 0; k < l.lots.size(); ++k)
     {
         CHECK(l.lots[k].id == int(k));

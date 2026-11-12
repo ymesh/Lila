@@ -212,6 +212,7 @@ void registerStreetscapeCommands(ext::Context& ctx)
                         e.line = remap[size_t(e.line)];
                     j.crosswalks.clear();
                     j.phases.clear();
+                    j.walks.clear();
                 }
                 net.lines = std::move(kept);
                 net.parking.clear();

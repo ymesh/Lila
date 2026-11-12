@@ -51,19 +51,10 @@ constexpr const char* kDefaultsPref = "/uvEditor/defaults";
 constexpr size_t kLeftSections = 3;
 constexpr int kPanelColumnGap = 8;
 
-/** A tile for a toolkit action the editor runs itself (it needs the editor's size, padding or state). */
-QToolButton* uvKitTile(const QString& label, const char* iconName, const QString& tip, QWidget* parent, const std::string& optionsId = {})
+/** An action row for a toolkit action the editor runs itself (it needs the editor's size, padding or state). */
+QToolButton* uvKitAction(const QString& label, const char* iconName, const QString& tip, QWidget* parent, const std::string& optionsId = {})
 {
-    auto* b = new QToolButton(parent);
-    b->setText(label);
-    b->setToolTip(tip);
-    b->setAccessibleName(label);
-    b->setIcon(icon(iconName));
-    b->setIconSize(QSize(24, 24));
-    b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-    b->setFixedHeight(58);
-    b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    controls::setRole(b, "tile");
+    QToolButton* b = controls::plainRow(label, iconName, tip, parent);
     if (!optionsId.empty())
         optionBox::withOptionBox(b, optionsId, parent);
     return b;
@@ -83,36 +74,37 @@ QToolButton* uvKitPush(const QString& label, const QString& tip, QWidget* parent
     return b;
 }
 
-/** Keeps a strip laid over a tile's icon area as the tile resizes. */
-class IconAreaFit : public QObject
+constexpr int kPlanarCell = 26;
+
+/** Keeps a strip against a row's right edge, clear of its option-box corner, as the row resizes. */
+class RightStripFit : public QObject
 {
 public:
-    IconAreaFit(QToolButton* tile, QWidget* strip) : QObject(tile), mTile(tile), mStrip(strip) {}
+    RightStripFit(QToolButton* row, QWidget* strip) : QObject(row), mRow(row), mStrip(strip) {}
 
 protected:
     bool eventFilter(QObject*, QEvent* e) override
     {
         if (e->type() == QEvent::Resize || e->type() == QEvent::Show)
-            mStrip->setGeometry(3, 2, mTile->width() - 6, 33);
+        {
+            const int w = 4 * kPlanarCell + 2;
+            mStrip->setGeometry(mRow->width() - w - 12, 3, w, mRow->height() - 6);
+        }
         return false;
     }
 
 private:
-    QToolButton* mTile;
+    QToolButton* mRow;
     QWidget* mStrip;
 };
 
 /**
- * The Planar tile: camera, X, Y and Z project in one click from a 2x2 grid where the icon would be; the tile keeps its
- * label (best fit by default) and option box (the axis there is what the grid overrides), so it sits in the grid like its
- * neighbours.
+ * The Planar row: best-fit planar on the row itself, and camera, X, Y and Z in one click from a strip at its right end. The
+ * row keeps its option box (the axis there is what the strip overrides).
  */
-QToolButton* planarTile(QWidget* parent)
+QToolButton* planarRow(QWidget* parent)
 {
-    QToolButton* t = controls::tile("uv.projectPlanar", "square", parent, "Planar");
-    QPixmap blank(24, 24);
-    blank.fill(Qt::transparent);
-    t->setIcon(QIcon(blank));
+    QToolButton* t = controls::row("uv.projectPlanar", "square", parent, "Planar");
     auto* strip = new QWidget(t);
     controls::setRole(strip, "segmented");
     strip->setAttribute(Qt::WA_StyledBackground);
@@ -142,10 +134,10 @@ QToolButton* planarTile(QWidget* parent)
         if (axisToken)
             b->setProperty("lilaRawColors", true);
         QObject::connect(b, &QToolButton::clicked, b, [id] { actions::run(nlohmann::json(id)); });
-        cells->addWidget(b, i / 2, i % 2);
+        cells->addWidget(b, 0, i);
         ++i;
     }
-    t->installEventFilter(new IconAreaFit(t, strip));
+    t->installEventFilter(new RightStripFit(t, strip));
     return t;
 }
 
@@ -377,9 +369,9 @@ UvEditor::UvEditor(QWidget* parent) : QWidget(parent)
             PrefStore::get().set("general", kToolkitWidthPref, mToolkitScroll->width());
     });
     auto tile = [body](const char* actionId, const char* ic, const QString& label = {}) -> QWidget* {
-        return controls::tile(actionId, ic, body, label);
+        return controls::row(actionId, ic, body, label);
     };
-    auto push = [body](const char* actionId, const QString& label = {}) -> QWidget* { return controls::push(actionId, body, label); };
+    auto push = [body](const char* actionId, const QString& label = {}) -> QWidget* { return controls::row(actionId, nullptr, body, label); };
 
     // The uv set every tool works on.
     auto* setBox = new QWidget(body);
@@ -428,40 +420,38 @@ UvEditor::UvEditor(QWidget* parent) : QWidget(parent)
     auto addSection = [this](QWidget* s) { mSections.push_back(s); };
 
     auto packCall = [this] { return json{{"resolution", mResolution->value()}, {"padding", mPadding->value()}}; };
-    QToolButton* autoBtn = uvKitTile("Auto", "wand", QString::fromStdString(actions::tooltip("uv.auto")), body, "uv.auto");
+    QToolButton* autoBtn = uvKitAction("Auto", "wand", QString::fromStdString(actions::tooltip("uv.auto")), body, "uv.auto");
     connect(autoBtn, &QToolButton::clicked, this, [this, packCall] { runCommand("uvAuto", packCall()); });
-    QWidget* unwrapTiles = controls::grid({autoBtn, tile("uv.unwrap", "cube-unfolded"), tile("uv.cut", "scissors", "Cut"),
-                                           tile("uv.sew", "needle-thread", "Sew")},
-                                          kToolkitColumns, body);
-    QWidget* unwrapPush = controls::grid({controls::split("uv.autoSeams", {"uv.autoSeams2"}, body, "Seams"), push("uv.weld", "Weld"),
-                                          controls::split("uv.bff", {"uv.bffDisk", "uv.bffRectangle", "uv.bffCones"}, body, "Conformal"),
-                                          controls::split("uv.unwrapSymmetric", {"uv.unwrapSymmetricStack"}, body, "Symmetric"),
+    QWidget* unwrapGrid = controls::grid({autoBtn, tile("uv.unwrap", "cube-unfolded"), tile("uv.cut", "scissors", "Cut"),
+                                          tile("uv.sew", "needle-thread", "Sew"),
+                                          controls::splitRow("uv.autoSeams", {"uv.autoSeams2"}, "line-dashed", body, "Seams"), push("uv.weld", "Weld"),
+                                          controls::splitRow("uv.bff", {"uv.bffDisk", "uv.bffRectangle", "uv.bffCones"}, "grid-dots", body, "Conformal"),
+                                          controls::splitRow("uv.unwrapSymmetric", {"uv.unwrapSymmetricStack"}, "flip-vertical", body, "Symmetric"),
                                           push("uv.lightmap", "Lightmap"), push("mesh.transferAttributes", "Transfer"),
                                           controls::overflow({"uv.seamView", "uv.seamViewPlane", "uv.delete"}, body)},
                                          2, body);
-    addSection(collapsibleSection("Unwrap", stacked(body, {unwrapTiles, unwrapPush}), body, kUvCollapsed));
+    addSection(collapsibleSection("Unwrap", unwrapGrid, body, kUvCollapsed));
 
-    QToolButton* hoseBtn = uvKitTile("Hose", "pipeline", QString::fromStdString(actions::tooltip("uv.hose")), body, "uv.hose");
+    QToolButton* hoseBtn = uvKitAction("Hose", "pipeline", QString::fromStdString(actions::tooltip("uv.hose")), body, "uv.hose");
     connect(hoseBtn, &QToolButton::clicked, this, [this, packCall] { runCommand("uvHose", packCall()); });
-    QWidget* projectTiles = controls::grid({planarTile(body), tile("uv.projectBox", "box", "Box"),
-                                            tile("uv.projectSpherical", "sphere", "Spherical"), hoseBtn},
-                                           kToolkitColumns, body);
-    addSection(collapsibleSection("Project", stacked(body, {projectTiles, controls::overflow({"uv.projectCylindrical"}, body)}), body,
-                                  kUvCollapsed));
+    QWidget* projectGrid = controls::grid({tile("uv.projectBox", "box", "Box"), tile("uv.projectSpherical", "sphere", "Spherical"), hoseBtn,
+                                           controls::overflow({"uv.projectCylindrical"}, body)},
+                                          2, body);
+    addSection(collapsibleSection("Project", controls::grid({planarRow(body), projectGrid}, 1, body), body, kUvCollapsed));
 
     // Relaxing: live solving, one-shot solves, pins, the stretch/compress balance and the brushes.
-    QToolButton* live = uvKitTile("Live", "bolt", QString::fromStdString(actions::tooltip("uv.liveMode")), body);
+    QToolButton* live = uvKitAction("Live", "bolt", QString::fromStdString(actions::tooltip("uv.liveMode")), body);
     live->setCheckable(true);
     live->setChecked(uvLive::liveMode());
     live->setObjectName("live");
     panelDefaults::setToggleDefault(live, false);
-    QWidget* relaxTiles = controls::grid({tile("uv.liveRelax", "ripple", "Relax"), tile("uv.liveFlatten", "arrows-diagonal-minimize-2", "Flatten"),
-                                          tile("uv.liveSettle", "circle-check", "Settle"), live},
-                                         kToolkitColumns, body);
-    QWidget* relaxPush = controls::grid({controls::split("uv.optimizeConformal", {"uv.optimizeAuthalic", "uv.optimizeBlend", "uv.optimizeIsometric", "uv.mosaic"},
-                                                         body, "Optimize"),
-                                         push("uv.brush3d", "Brush on Mesh"), push("uv.pin", "Pin"), push("uv.unpin", "Unpin")},
-                                        2, body);
+    QWidget* relaxActions = controls::grid(
+        {tile("uv.liveRelax", "ripple", "Relax"), tile("uv.liveFlatten", "arrows-diagonal-minimize-2", "Flatten"), tile("uv.liveSettle", "circle-check", "Settle"),
+         live,
+         controls::splitRow("uv.optimizeConformal", {"uv.optimizeAuthalic", "uv.optimizeBlend", "uv.optimizeIsometric", "uv.mosaic"}, "adjustments", body,
+                            "Optimize"),
+         push("uv.brush3d", "Brush on Mesh"), push("uv.pin", "Pin"), push("uv.unpin", "Unpin")},
+        2, body);
     auto* relaxForm = new QWidget(body);
     QGridLayout* relaxGrid = uvKitForm(relaxForm);
     auto* balance = new controls::SliderField(relaxForm);
@@ -482,7 +472,7 @@ UvEditor::UvEditor(QWidget* parent) : QWidget(parent)
     brushCombo->setObjectName("brush");
     brushCombo->setToolTip("Brush: for the Brush tool here and Brush on Mesh in the viewport");
     uvKitRow(relaxGrid, "Brush", brushCombo);
-    addSection(collapsibleSection("Relax", stacked(body, {relaxTiles, relaxPush, relaxForm}), body, kUvCollapsed));
+    addSection(collapsibleSection("Relax", stacked(body, {relaxActions, relaxForm}), body, kUvCollapsed));
 
     // Packing and texel density share the texture size; the pack options fold beneath.
     auto* packForm = new QWidget(body);
@@ -514,11 +504,11 @@ UvEditor::UvEditor(QWidget* parent) : QWidget(parent)
     controls::setPresets(mDensity, {2.56, 5.12, 10.24, 20.48, 40.96});
     mDensity->setToolTip("Texel Density: at the texture size");
     uvKitRow(packGrid, "Texel Density", mDensity);
-    QToolButton* packBtn = uvKitTile("Pack", "packages", QString::fromStdString(actions::tooltip("uv.pack")), body, "uv.pack");
+    QToolButton* packBtn = uvKitAction("Pack", "packages", QString::fromStdString(actions::tooltip("uv.pack")), body, "uv.pack");
     connect(packBtn, &QToolButton::clicked, this, [this] { runPack(); });
-    QToolButton* getTd = uvKitTile("Get Density", "color-picker", "Get Density: measure the texel density of the selection", body);
-    QToolButton* setTd = uvKitTile("Set Density", "ruler-measure", "Set Density: scale each selected island to the texel density", body);
-    QToolButton* infoBtn = mInfo = uvKitTile("Info", "info-circle", "Info: islands, overlaps, distortion and density under the view while on (uvLayout)", body);
+    QToolButton* getTd = uvKitAction("Get Density", "color-picker", "Get Density: measure the texel density of the selection", body);
+    QToolButton* setTd = uvKitAction("Set Density", "ruler-measure", "Set Density: scale each selected island to the texel density", body);
+    QToolButton* infoBtn = mInfo = uvKitAction("Info", "info-circle", "Info: islands, overlaps, distortion and density under the view while on (uvLayout)", body);
     mInfo->setCheckable(true);
     mInfoRefresh = new QTimer(this);
     mInfoRefresh->setSingleShot(true);
@@ -534,14 +524,14 @@ UvEditor::UvEditor(QWidget* parent) : QWidget(parent)
             mStatus->clear();
     });
     connect(mResolution, &QSpinBox::valueChanged, mInfoRefresh, qOverload<>(&QTimer::start));
-    QWidget* packTiles = controls::grid({packBtn, getTd, setTd, infoBtn}, kToolkitColumns, body);
     QWidget* packMore = controls::overflow({"uv.packAroundSelected", "uv.packSelectionOnly", "uv.packStacked", "uv.packPerObject",
                                             "uv.packPerMaterial", "uv.packUdimByMaterial", "uv.selectStacks"},
                                            body);
+    QWidget* packActions = controls::grid({packBtn, getTd, setTd, infoBtn, packMore}, 2, body);
     mPackPanel = new UvPackPanel(body);
     mPackPanel->onShowStacks = [this](bool on) { mView->setShowStacks(on); };
     QWidget* packOptions = collapsibleSection("Pack Options", mPackPanel, body, kUvCollapsed, false, &mPackOptions);
-    addSection(collapsibleSection("Pack", stacked(body, {packTiles, packForm, packMore, packOptions}), body, kUvCollapsed, true, &mPackSection));
+    addSection(collapsibleSection("Pack", stacked(body, {packActions, packForm, packOptions}), body, kUvCollapsed, true, &mPackSection));
 
     auto* viewportForm = new QWidget(body);
     auto* viewportRow = new QHBoxLayout(viewportForm);
@@ -572,9 +562,9 @@ UvEditor::UvEditor(QWidget* parent) : QWidget(parent)
     addSection(collapsibleSection("Arrange",
                                   stacked(body, {controls::grid({push("uv.straighten", "Straighten"), push("uv.orient", "Orient"),
                                                                  push("uv.rotateLeft", "Left 90"), push("uv.rotateRight", "Right 90"),
-                                                                 push("uv.flipX", "Flip U"), push("uv.flipY", "Flip V")},
-                                                                3, body),
-                                                 controls::overflow({"uv.straightenEdges", "uv.alignU", "uv.alignV", "uv.orientByEdge"}, body)}),
+                                                                 push("uv.flipX", "Flip U"), push("uv.flipY", "Flip V"),
+                                                                 controls::overflow({"uv.straightenEdges", "uv.alignU", "uv.alignV", "uv.orientByEdge"}, body)},
+                                                                2, body)}),
                                   body, kUvCollapsed, false));
 
     // Numeric transforms: each row's button applies its fields.

@@ -3093,17 +3093,99 @@ Extracted layoutPatches(const Surface& s, const std::vector<glm::dvec3>& q, cons
     std::vector<uint8_t> blocked;            // walls, and triangle edges a line runs along
     std::vector<std::vector<uint8_t>> joined; // per piece side: joined to a piece across it
     Index np = 0;
+    int loopRounds = 0;
+    const bool noSources = std::none_of(lay.source.begin(), lay.source.end(), [](uint8_t v) { return v != 0; });
+    /**
+     * A wedge cut from the middle of the patch's longest piece edge can land near one end of a long line, cutting off a
+     * kite there. Where the patch runs at least 20 lattice along one line and the cut starts in an outer quarter of its own
+     * line's run, it starts at the middle of that longest run instead.
+     */
+    auto moveToRunMiddle = [&](const std::vector<uint8_t>& want, std::vector<ExtraStart>& cut, const std::vector<Index>& cutTracer) {
+        struct Run
+        {
+            double lo = std::numeric_limits<double>::max(), hi = -std::numeric_limits<double>::max(), length = 0.0;
+        };
+        auto edgeTimes = [&](const Piece& P, size_t k) {
+            const Segment& g = tr.segments[P.side[k] - kSegSide];
+            const glm::dvec2 a = P.poly[k], b = P.poly[(k + 1) % P.poly.size()];
+            return std::pair{g.t0 + glm::length(a - g.a), g.t0 + glm::length(b - g.a)};
+        };
+        auto lineEdge = [&](const Piece& P, size_t k) { return P.side[k] >= kSegSide && !slitTracer[tr.segments[P.side[k] - kSegSide].tracer]; };
+        std::map<std::pair<Index, Index>, Run> runs; // (patch, tracer)
+        for (Index pi = 0; pi < Index(pieces.size()); ++pi)
+        {
+            const Piece& P = pieces[pi];
+            if (!want[patchOf[pi]])
+                continue;
+            for (size_t k = 0; k < P.poly.size(); ++k)
+                if (lineEdge(P, k))
+                {
+                    const auto [ta, tb] = edgeTimes(P, k);
+                    Run& r = runs[{patchOf[pi], tr.segments[P.side[k] - kSegSide].tracer}];
+                    r.lo = std::min({r.lo, ta, tb});
+                    r.hi = std::max({r.hi, ta, tb});
+                    r.length += glm::length(P.poly[(k + 1) % P.poly.size()] - P.poly[k]);
+                }
+        }
+        std::vector<double> best(np, 0.0), middle(np, 0.0);
+        std::vector<Index> line(np, kInvalid);
+        for (const auto& [key, r] : runs)
+            if (r.length > best[key.first])
+            {
+                best[key.first] = r.length;
+                line[key.first] = key.second;
+                middle[key.first] = 0.5 * (r.lo + r.hi);
+            }
+        for (Index p = 0; p < np; ++p)
+        {
+            const auto own = cutTracer[p] == kInvalid ? runs.end() : runs.find({p, cutTracer[p]});
+            if (best[p] < 20.0 || own == runs.end() || own->second.hi <= own->second.lo)
+            {
+                line[p] = kInvalid;
+                continue;
+            }
+            const double f = (cut[p].time - own->second.lo) / (own->second.hi - own->second.lo);
+            if (f >= 0.25 && f <= 0.75)
+                line[p] = kInvalid;
+        }
+        std::vector<double> gap(np, std::numeric_limits<double>::max());
+        for (Index pi = 0; pi < Index(pieces.size()); ++pi)
+        {
+            const Piece& P = pieces[pi];
+            const Index patch = patchOf[pi];
+            if (!want[patch] || line[patch] == kInvalid)
+                continue;
+            glm::dvec2 centroid(0.0);
+            for (const glm::dvec2& p : P.poly)
+                centroid += p / double(P.poly.size());
+            for (size_t k = 0; k < P.poly.size(); ++k)
+            {
+                if (!lineEdge(P, k) || tr.segments[P.side[k] - kSegSide].tracer != line[patch])
+                    continue;
+                const Segment& g = tr.segments[P.side[k] - kSegSide];
+                const auto [ta, tb] = edgeTimes(P, k);
+                const double lo = std::min(ta, tb), hi = std::max(ta, tb), m = middle[patch];
+                const double off = m < lo ? lo - m : m > hi ? m - hi : 0.0;
+                if (off >= gap[patch] || hi <= lo)
+                    continue;
+                gap[patch] = off;
+                const double t = std::clamp(m, lo, hi);
+                const glm::dvec2 a = P.poly[k], b = P.poly[(k + 1) % P.poly.size()];
+                const glm::dvec2 at = a + (t - ta) / (tb - ta) * (b - a);
+                const int inward = cross2(axis(g.dirK), centroid - at) > 0.0 ? 1 : 3;
+                cut[patch] = {P.tri, at, mod4(g.dirK + inward), t};
+            }
+        }
+    };
     // A line across each wanted patch from the middle of its longest traced side, started as that side's line passes;
     // a patch walled in by creases alone (the side of a cylinder) gets it from the middle of its longest wall side, and
     // one with no side at all (a torus has no poles) from the middle of its first piece. On a surface with no poles, a
     // patch with no corners whose only sides are lines with it on both sides (that seed's loop) gets two lines across,
     // a quarter and three quarters along the loop: one crossing would leave a patch meeting itself there, its four
     // corners at one point.
-    int loopRounds = 0;
-    const bool noSources = std::none_of(lay.source.begin(), lay.source.end(), [](uint8_t v) { return v != 0; });
-    auto cutsFor = [&](const std::vector<uint8_t>& want) {
+    auto cutsFor = [&](const std::vector<uint8_t>& want, bool fromRunMiddle = false) {
         std::vector<double> longest(np, 0.0), longestWall(np, 0.0);
-        std::vector<Index> slitOnly(np, kInvalid);
+        std::vector<Index> slitOnly(np, kInvalid), cutTracer(np, kInvalid);
         std::vector<ExtraStart> cut(np, ExtraStart{kInvalid}), wallCut(np, ExtraStart{kInvalid}), seed(np, ExtraStart{kInvalid});
         for (Index pi = 0; pi < Index(pieces.size()); ++pi)
         {
@@ -3148,9 +3230,12 @@ Extracted layoutPatches(const Surface& s, const std::vector<glm::dvec3>& q, cons
                 const glm::dvec2 mid = 0.5 * (a + b);
                 const int inward = cross2(axis(g.dirK), centroid - mid) > 0.0 ? 1 : 3;
                 longest[patch] = len;
+                cutTracer[patch] = g.tracer;
                 cut[patch] = {P.tri, mid, mod4(g.dirK + inward), g.t0 + glm::length(mid - g.a)};
             }
         }
+        if (fromRunMiddle)
+            moveToRunMiddle(want, cut, cutTracer);
         std::vector<ExtraStart> out;
         bool looped = false;
         auto acrossLoop = [&](Index tracer) {
@@ -3518,7 +3603,7 @@ Extracted layoutPatches(const Surface& s, const std::vector<glm::dvec3>& q, cons
             if (p < np)
                 want[p] = 1;
         corners.resize(np, 4);
-        const std::vector<ExtraStart> more = cutsFor(want);
+        const std::vector<ExtraStart> more = cutsFor(want, true);
         if (debug)
             std::fprintf(stderr, "wedge pass %d: %zu wedges, %zu cuts\n", wedgePass, wedges.size(), more.size());
         if (more.empty())

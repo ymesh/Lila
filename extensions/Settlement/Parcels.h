@@ -64,6 +64,8 @@ void planParcels(Layout& l, const Site& site, const Ground& g, const Options& o)
  * survives outside the region keeps its lots and envelopes as they were. Landmarks are not re-placed. Returns the blocks cut afresh.
  */
 int replanParcels(Layout& l, const Site& site, const Ground& g, const Options& o, Vec2 lo, Vec2 hi);
+/** True when the polygons share area: sides crossing, or a corner more than tol inside the other. */
+bool polygonsShareArea(const Polygon& a, const Polygon& b, double tol);
 
 /** The lots a block's method cuts it into. Side tags are street edge ids (-1 none), as planParcels keeps them until uses are set. */
 std::vector<Polygon> cutBlock(const Block& b, const Layout& l, const Options& o, std::vector<Polygon>* courtyards = nullptr,

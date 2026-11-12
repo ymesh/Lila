@@ -21,6 +21,8 @@ struct TileItem
     uint64_t hash = 0;
     /** importAsset mapping (contentPath, kind, ...); see importParams. */
     json mapping;
+    /** materialParams for the tile's slots, so LilaLink assigns them (masters included); null leaves the importer's own. */
+    json materials;
     /** Writes the tile's file (FBX) and returns its path. */
     std::function<fs::path()> write;
     /** Runs after the import with the imported asset path, e.g. to place it; throwing fails the tile. */

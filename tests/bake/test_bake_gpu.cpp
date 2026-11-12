@@ -295,6 +295,67 @@ TEST_CASE("GPU bake matches the CPU: isolated groups, AO scopes and backfaces")
         }
     }
 
+    // A floor running through a closed box: the buried texels see only front faces, on the GPU too.
+    newScene();
+    const std::string floor = addMesh("d_low", plane(1));
+    const std::string box = addMesh("d_box", geo::makeCube({.width = 30.0, .height = 30.0, .depth = 30.0}));
+    const std::string p3 = project(dir, 32, 4);
+    ops::execute("bakeGroup", {{"args", {"d"}}, {"project", p3}, {"lows", {floor}}, {"self", true}, {"addHigh", {box}}, {"frontal", 2.0}, {"rear", 2.0}});
+    ops::execute("setBakeMap", {{"args", {"ao"}}, {"project", p3}, {"options", {{"rays", 32}, {"distance", 100.0}}}});
+    const Baked cpuBuried = bakeWith(p3, {"ao"}, "cpu");
+    for (const std::string& be : gpuBackends())
+    {
+        INFO("backend " << be);
+        compare(cpuBuried, bakeWith(p3, {"ao"}, be), "ao", 0.02f, 0.1f, 0.01);
+    }
+
+    // A high under a roof covering only the floor's middle: missed texels fill from their neighbours on the GPU too.
+    newScene();
+    const std::string rim = addMesh("e_low", plane(1));
+    const std::string middle = addMesh("e_mid", plane(1, {0.0f, 0.0f}, {1.0f, 1.0f}, 60.0));
+    const std::string roof = addMesh("e_roof", lifted(plane(1, {0.0f, 0.0f}, {1.0f, 1.0f}, 100.0), 5.0));
+    const std::string p4 = project(dir, 32, 4);
+    ops::execute("bakeGroup", {{"args", {"e"}}, {"project", p4}, {"lows", {rim}}, {"highs", {middle, roof}}, {"frontal", 2.0}, {"rear", 2.0}});
+    ops::execute("setBakeMap", {{"args", {"ao"}}, {"project", p4}, {"options", {{"rays", 32}, {"distance", 100.0}}}});
+    const Baked cpuMiss = bakeWith(p4, {"ao"}, "cpu");
+    for (const std::string& be : gpuBackends())
+    {
+        INFO("backend " << be);
+        compare(cpuMiss, bakeWith(p4, {"ao"}, be), "ao", 0.02f, 0.1f, 0.01);
+    }
+
+    // Rays tilted off the cube's hard top rim into a wall facing away: re-aimed along the face normal on the GPU too.
+    newScene();
+    const std::string rimmed = addMesh("f_low", geo::makeCube({.width = 20.0, .height = 20.0, .depth = 20.0, .subdivX = 8, .subdivY = 8, .subdivZ = 8}));
+    geo::Mesh wall = plane(1, {0.0f, 0.0f}, {1.0f, 1.0f}, 8.0);
+    const double a = glm::radians(-108.0);
+    for (geo::Index q = 0; q < wall.pointCapacity(); ++q)
+    {
+        const glm::dvec3 v = wall.position(q);
+        wall.setPosition(q, glm::dvec3(v.x * std::cos(a) - v.y * std::sin(a) + 8.0, v.x * std::sin(a) + v.y * std::cos(a) + 8.0, v.z * 2.5));
+    }
+    const std::string wallMesh = addMesh("f_wall", std::move(wall));
+    const std::string p5 = project(dir, 64, 1);
+    ops::execute("bakeGroup", {{"args", {"f"}}, {"project", p5}, {"lows", {rimmed}}, {"highs", {wallMesh}}, {"frontal", 0.5}, {"rear", 10.0}});
+    const Baked cpuReaim = bakeWith(p5, {"normal"}, "cpu");
+    for (const std::string& be : gpuBackends())
+    {
+        INFO("backend " << be);
+        compare(cpuReaim, bakeWith(p5, {"normal"}, be), "normal", 0.05f, 0.5f);
+    }
+
+    // A slab smoothed onto itself pulls its rim back past the low's side faces: probes find the nearest high on the GPU too.
+    newScene();
+    const std::string slab = addMesh("g_low", geo::makeCube({.width = 40.0, .height = 1.0, .depth = 40.0, .subdivX = 10, .subdivZ = 10}));
+    const std::string p6 = project(dir, 64, 1);
+    ops::execute("bakeGroup", {{"args", {"g"}}, {"project", p6}, {"lows", {slab}}, {"self", true}, {"preset", "Smooth x4"}, {"frontal", 0.5}, {"rear", 20.0}});
+    const Baked cpuProbe = bakeWith(p6, {"normal"}, "cpu");
+    for (const std::string& be : gpuBackends())
+    {
+        INFO("backend " << be);
+        compare(cpuProbe, bakeWith(p6, {"normal"}, be), "normal", 0.05f, 0.5f);
+    }
+
     // A high facing away: every ray meets a back face, and the GPU must call it one too.
     newScene();
     const std::string low = addMesh("c_low", plane(1));
@@ -358,6 +419,32 @@ TEST_CASE("GPU bake matches the CPU: self highs per low and unlinked occluders, 
                 compare(cpu, gpu, std::string(grp) + "_ao", 0.02f, 0.1f, 0.01);
             }
         }
+    }
+}
+
+TEST_CASE("GPU bake: a self high ignores its low's normal map")
+{
+    if (gpuBackends().empty())
+        return;
+    newScene();
+    const fs::path dir = tempDir("lila_bake_gpu_selfnormal");
+    const glm::vec3 tilt(std::sin(glm::radians(30.0f)), 0.0f, std::cos(glm::radians(30.0f)));
+    image::Image nm{2, 2, {}};
+    for (int i = 0; i < 4; ++i)
+        nm.rgba.insert(nm.rgba.end(), {tilt.x * 0.5f + 0.5f, 0.5f, tilt.z * 0.5f + 0.5f, 1.0f});
+    image::write(dir / "n.png", nm, 16);
+    ops::execute("createMaterial", {{"args", {"M_Baked"}}, {"normalMap", (dir / "n.png").generic_string()}});
+    geo::Mesh flat = plane(4);
+    scene::materials::assign(flat, "M_Baked", {});
+    const std::string low = addMesh("low", std::move(flat));
+    const std::string p = project(dir, 16, 1, "png");
+    ops::execute("bakeGroup", {{"args", {"g"}}, {"project", p}, {"lows", {low}}, {"self", true}, {"frontal", 1.0}, {"rear", 1.0}});
+    ops::execute("setBakeMap", {{"args", {"normal"}}, {"project", p}, {"options", {{"highNormalMap", true}}}});
+    for (const std::string& be : gpuBackends())
+    {
+        INFO("backend " << be);
+        const Baked gpu = bakeWith(p, {"normal"}, be);
+        CHECK(angleDegOrFlat(glm::vec3(texel(gpu.maps.at("normal"), 8, 8)) * 2.0f - 1.0f, glm::vec3(0, 0, 1)) < 0.5f);
     }
 }
 
@@ -580,6 +667,7 @@ TEST_CASE("GPU bake matches the CPU: material transfer, vertex colours, the high
     opts("vertexColor", {{"set", "paint"}});
     opts("id", {{"source", "vertexColor"}});
     opts("wireframe", {{"width", 1.5}});
+    opts("normal", {{"highNormalMap", true}});
     const std::vector<std::string> maps{"baseColor", "roughness", "metallic", "emissive", "materialOpacity", "normal", "vertexColor",
                                         "id",        "wireframe", "islandBorder", "uvIslands", "error", "alpha"};
     const Baked cpu = bakeWith(p, maps, "cpu");

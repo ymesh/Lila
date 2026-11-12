@@ -3,6 +3,7 @@
 // the last send.
 
 #include "Export.h"
+#include "Generators.h"
 #include "Settlement.h"
 
 #include <lila/Command.h>
@@ -23,6 +24,7 @@
 #include <format>
 #include <fstream>
 #include <map>
+#include <numeric>
 #include <set>
 #include <string_view>
 
@@ -115,8 +117,12 @@ json call(link::RpcClient& c, const char* method, const json& params, const char
     return r.result;
 }
 
-/** ZoneGraph lanes of a cross-section, left to right looking along the road: sidewalks, driving lanes, median. */
-json lanesOf(const RoadProfile& p)
+/**
+ * ZoneGraph lanes of a cross-section: sidewalks, driving lanes, median, listed right to left looking along the road as
+ * ZoneGraph lays them out. Driving lanes of an access direction are tagged Access instead of Vehicle, so Mass traffic
+ * never routes into them.
+ */
+json lanesOf(const RoadProfile& p, bool accessForward = false, bool accessBackward = false)
 {
     json lanes = json::array();
     auto lane = [&](double w, const char* dir, std::initializer_list<const char*> tags) {
@@ -129,16 +135,20 @@ json lanesOf(const RoadProfile& p)
     };
     lane(p.sidewalk, "forward", {"Pedestrian"});
     lane(p.parking, "none", {"Parking"});
-    const int back = p.oneWay ? 0 : p.lanes / 2, fwd = p.lanes - back;
+    // A single lane that is not one-way carries both directions, as the lane graph has it: half its width each way.
+    const bool shared = p.lanes == 1 && !p.oneWay;
+    const int back = shared ? 1 : p.oneWay ? 0 : p.lanes / 2, fwd = shared ? 1 : p.lanes - back;
+    const double width = shared ? 0.5 * p.laneWidth : p.laneWidth;
     for (int k = 0; k < back; ++k)
-        lane(p.laneWidth, "backward", {"Vehicle"});
+        lane(width, "backward", {accessBackward ? "Access" : "Vehicle"});
     lane(p.median, "none", {});
     for (int k = 0; k < fwd; ++k)
-        lane(p.laneWidth, "forward", {"Vehicle"});
+        lane(width, "forward", {accessForward ? "Access" : "Vehicle"});
     lane(p.parking, "none", {"Parking"});
     lane(p.sidewalk, "forward", {"Pedestrian"});
     if (lanes.empty())
         lane(std::max(p.width(), 100.0), "forward", {"Pedestrian"});
+    std::reverse(lanes.begin(), lanes.end());
     return lanes;
 }
 
@@ -246,60 +256,401 @@ json pcgData(const Rebuilt& r, const RoadNetwork& net, const CellContents* only 
     return {{"lots", lots}, {"envelopes", envelopes}, {"roads", roads}, {"intersections", intersections}, {"parking", parking}};
 }
 
-/** ZoneGraph shapes: a spline per road with its lane profile, a polygon per junction joining the road ends. */
+glm::dvec3 ueVec(const glm::dvec3& p)
+{
+    const math::Vector v = math::toUnreal(math::Vector(p));
+    return {v.x, v.y, v.z};
+}
+
+json jsonVec(const glm::dvec3& v)
+{
+    return json::array({v.x, v.y, v.z});
+}
+
+/** The polyline cut back by d at its start (front) or its end. */
+std::vector<glm::dvec3> trimmed(std::vector<glm::dvec3> pts, double d, bool front)
+{
+    if (front)
+        std::reverse(pts.begin(), pts.end());
+    while (pts.size() >= 2 && d > 0.0)
+    {
+        const glm::dvec3 a = pts[pts.size() - 2];
+        const double len = glm::length(pts.back() - a);
+        if (len > d)
+        {
+            pts.back() = a + (pts.back() - a) * ((len - d) / len);
+            d = 0.0;
+        }
+        else
+        {
+            d -= len;
+            pts.pop_back();
+        }
+    }
+    if (front)
+        std::reverse(pts.begin(), pts.end());
+    return pts;
+}
+
+double polylineLength(const std::vector<glm::dvec3>& pts)
+{
+    double len = 0.0;
+    for (size_t k = 1; k < pts.size(); ++k)
+        len += glm::length(pts[k] - pts[k - 1]);
+    return len;
+}
+
+/**
+ * A polygon point where a road meets a junction, Unreal space. ZoneGraph links a polygon point to a spline end only when
+ * their lane profiles face opposite ways, so the profile is reversed where the road starts at the junction.
+ */
+json polygonEnd(const glm::dvec3& position, const glm::dvec3& into, const std::string& profile, bool vehicle, bool reverse)
+{
+    return {{"position", jsonVec(position)}, {"forward", jsonVec(into)}, {"profile", profile}, {"vehicle", vehicle}, {"reverse", reverse}};
+}
+
+/** Largest strongly connected set of a directed graph's nodes, as a flag per node (Tarjan, iterative). */
+std::vector<char> largestStronglyConnected(const std::vector<std::vector<int>>& next)
+{
+    const int n = int(next.size());
+    std::vector<int> index(size_t(n), -1), low(size_t(n), 0), stack, comp(size_t(n), -1);
+    std::vector<char> onStack(size_t(n), 0);
+    int counter = 0, comps = 0;
+    std::vector<int> sizes;
+    for (int root = 0; root < n; ++root)
+    {
+        if (index[size_t(root)] >= 0)
+            continue;
+        std::vector<std::pair<int, size_t>> work{{root, 0}};
+        while (!work.empty())
+        {
+            auto& [v, child] = work.back();
+            if (child == 0 && index[size_t(v)] < 0)
+            {
+                index[size_t(v)] = low[size_t(v)] = counter++;
+                stack.push_back(v);
+                onStack[size_t(v)] = 1;
+            }
+            if (child < next[size_t(v)].size())
+            {
+                const int w = next[size_t(v)][child++];
+                if (index[size_t(w)] < 0)
+                    work.push_back({w, 0});
+                else if (onStack[size_t(w)])
+                    low[size_t(v)] = std::min(low[size_t(v)], index[size_t(w)]);
+                continue;
+            }
+            if (low[size_t(v)] == index[size_t(v)])
+            {
+                int size = 0, w = -1;
+                do
+                {
+                    w = stack.back();
+                    stack.pop_back();
+                    onStack[size_t(w)] = 0;
+                    comp[size_t(w)] = comps;
+                    ++size;
+                } while (w != v);
+                sizes.push_back(size);
+                ++comps;
+            }
+            const int done = v;
+            work.pop_back();
+            if (!work.empty())
+                low[size_t(work.back().first)] = std::min(low[size_t(work.back().first)], low[size_t(done)]);
+        }
+    }
+    std::vector<char> out(size_t(n), 0);
+    if (sizes.empty())
+        return out;
+    const int best = int(std::max_element(sizes.begin(), sizes.end()) - sizes.begin());
+    for (int v = 0; v < n; ++v)
+        out[size_t(v)] = comp[size_t(v)] == best && sizes[size_t(best)] > 1;
+    return out;
+}
+
+/**
+ * ZoneGraph shapes: a spline per road with its lane profile, a polygon per junction joining the road ends. Mass traffic
+ * has no exits and cannot turn back where a lane ends, so a two-way road's dead end gets a turning loop, two roads of
+ * different profiles meeting end to end get a polygon between them, and the driving lanes of road directions cars could
+ * enter but never leave (one-way stubs, one-way roads carrying on from two-way ones) are Access lanes; accessLines counts
+ * the roads with any. Junctions a few metres apart are one polygon.
+ */
 json zoneData(const Rebuilt& r, const RoadNetwork& net)
 {
     const Layout& l = r.layout;
     json profiles = json::object();
     json roads = json::array();
-    for (const StreetLine& s : net.lines)
+    json junctions = json::array();
+    const size_t lineCount = net.lines.size();
+    std::vector<std::vector<glm::dvec3>> linePts(lineCount);
+    for (size_t k = 0; k < lineCount; ++k)
+        linePts[k] = net.lines[k].pts;
+    auto profileOf = [&](int line) -> const RoadProfile& { return l.roads[size_t(net.lines[size_t(line)].profile)]; };
+    auto vehicleLine = [&](int line) { return profileOf(line).lanes > 0 && net.lines[size_t(line)].cls != StreetClass::Path; };
+    auto backLanes = [&](int line) {
+        const RoadProfile& p = profileOf(line);
+        return p.oneWay ? 0 : p.lanes == 1 ? 1 : p.lanes / 2;
+    };
+    auto forwardLanes = [&](int line) {
+        const RoadProfile& p = profileOf(line);
+        return p.lanes == 1 && !p.oneWay ? 1 : p.lanes - backLanes(line);
+    };
+
+    // Road ends that no junction takes: pairs where two roads meet end to end, and dead ends.
+    struct FreeEnd
     {
-        const RoadProfile& p = l.roads[size_t(s.profile)];
-        profiles[p.name] = {{"lanes", lanesOf(p)}};
-        json tags = json::array({s.cls == StreetClass::Path ? "Pedestrian" : "Vehicle"});
+        int line;
+        bool start;
+    };
+    std::set<std::pair<int, bool>> atJunction;
+    for (const Junction& j : net.junctions)
+        for (const RoadEnd& e : j.ends)
+            atJunction.insert({e.line, e.start});
+    std::vector<std::vector<FreeEnd>> groups;
+    for (size_t k = 0; k < lineCount; ++k)
+        for (bool start : {true, false})
+        {
+            const StreetLine& s = net.lines[k];
+            if (s.pts.size() < 2 || !vehicleLine(int(k)) || atJunction.contains({int(k), start}))
+                continue;
+            const glm::dvec3 p = start ? s.pts.front() : s.pts.back();
+            auto at = std::ranges::find_if(groups, [&](const std::vector<FreeEnd>& g) {
+                const StreetLine& o = net.lines[size_t(g[0].line)];
+                return glm::length((g[0].start ? o.pts.front() : o.pts.back()) - p) < 1.0;
+            });
+            if (at == groups.end())
+                groups.push_back({{int(k), start}});
+            else
+                at->push_back({int(k), start});
+        }
+    constexpr double kJoinTrim = 300.0;
+    std::map<std::pair<int, bool>, std::pair<int, bool>> linked;
+    std::set<std::pair<int, bool>> turning;
+    for (const std::vector<FreeEnd>& g : groups)
+    {
+        if (g.size() == 2 && polylineLength(linePts[size_t(g[0].line)]) > 3.0 * kJoinTrim &&
+            polylineLength(linePts[size_t(g[1].line)]) > 3.0 * kJoinTrim)
+        {
+            linked[{g[0].line, g[0].start}] = {g[1].line, g[1].start};
+            linked[{g[1].line, g[1].start}] = {g[0].line, g[0].start};
+            continue;
+        }
+        for (const FreeEnd& e : g)
+            if (forwardLanes(e.line) > 0 && backLanes(e.line) > 0)
+                turning.insert({e.line, e.start});
+    }
+
+    // The road directions Mass traffic can drive round forever: arc 2k runs line k start to end, 2k + 1 end to start.
+    auto leaving = [&](int line, bool start) {
+        const int arc = 2 * line + (start ? 0 : 1);
+        return (start ? forwardLanes(line) : backLanes(line)) > 0 ? arc : -1;
+    };
+    std::vector<std::vector<int>> next(2 * lineCount);
+    auto link = [&](int from, int to) {
+        if (to >= 0)
+            next[size_t(from)].push_back(to);
+    };
+    std::map<std::pair<int, bool>, const Junction*> junctionAt;
+    for (const Junction& j : net.junctions)
+        for (const RoadEnd& e : j.ends)
+            junctionAt[{e.line, e.start}] = &j;
+    for (size_t k = 0; k < lineCount; ++k)
+        for (int dir = 0; dir < 2; ++dir)
+        {
+            const int line = int(k), arc = 2 * line + dir;
+            if (!vehicleLine(line) || (dir == 0 ? forwardLanes(line) : backLanes(line)) == 0)
+                continue;
+            const std::pair<int, bool> head{line, dir == 1}; // forward arrives at the end, backward at the start
+            if (const auto j = junctionAt.find(head); j != junctionAt.end())
+            {
+                for (const RoadEnd& e : j->second->ends)
+                    if (e.vehicle && (e.line != head.first || e.start != head.second))
+                        link(arc, leaving(e.line, e.start));
+            }
+            else if (turning.contains(head))
+                link(arc, leaving(head.first, head.second));
+            else if (const auto partner = linked.find(head); partner != linked.end())
+                link(arc, leaving(partner->second.first, partner->second.second));
+        }
+    const std::vector<char> driven = largestStronglyConnected(next);
+    std::vector<std::string> laneProfile(lineCount);
+    int accessLines = 0;
+    for (size_t k = 0; k < lineCount; ++k)
+    {
+        const RoadProfile& p = profileOf(int(k));
+        const bool vehicle = vehicleLine(int(k));
+        const bool accessForward = vehicle && forwardLanes(int(k)) > 0 && !driven[2 * k];
+        const bool accessBackward = vehicle && backLanes(int(k)) > 0 && !driven[2 * k + 1];
+        laneProfile[k] = p.name + (accessForward && accessBackward ? "_access" : accessForward ? "_accessForward" : accessBackward ? "_accessBackward" : "");
+        profiles[laneProfile[k]] = {{"lanes", lanesOf(p, accessForward, accessBackward)}};
+        accessLines += accessForward || accessBackward;
+    }
+
+    for (const auto& [end, partner] : linked)
+    {
+        if (end > partner)
+            continue;
+        const StreetLine& s0 = net.lines[size_t(end.first)];
+        const glm::dvec3 node = end.second ? s0.pts.front() : s0.pts.back();
+        json ends = json::array();
+        for (const auto& [line, start] : {end, partner})
+        {
+            std::vector<glm::dvec3>& pts = linePts[size_t(line)];
+            pts = trimmed(pts, kJoinTrim, start);
+            const glm::dvec3 at = ueVec(start ? pts.front() : pts.back());
+            ends.push_back(polygonEnd(at, glm::normalize(ueVec(node) - at), laneProfile[size_t(line)], true, start));
+        }
+        junctions.push_back({{"center", ue(node)}, {"points", ends}, {"tags", json::array()}, {"control", "none"}});
+    }
+    for (const auto& [line, start] : turning)
+    {
+        const RoadProfile& p = profileOf(line);
+        const std::vector<glm::dvec3>& pts = linePts[size_t(line)];
+        const glm::dvec3 end = ueVec(start ? pts.front() : pts.back());
+        glm::dvec3 out = end - ueVec(start ? pts[1] : pts[pts.size() - 2]);
+        out.z = 0.0;
+        if (glm::length(out) < 1e-6)
+            continue;
+        // A loop past the road's end turning onto the other side: in on the right, out on the left.
+        out = glm::normalize(out);
+        const glm::dvec3 right(-out.y, out.x, 0.0);
+        const double radius = std::max(300.0, 0.5 * (p.lanes * p.laneWidth + p.median));
+        const glm::dvec3 centre = end + out * 200.0;
+        json loop = json::array();
+        constexpr int kSteps = 8;
+        for (int i = 0; i <= kSteps; ++i)
+        {
+            const double a = glm::pi<double>() * double(i) / kSteps;
+            loop.push_back(jsonVec(centre + right * (radius * std::cos(a)) + out * (radius * std::sin(a))));
+        }
+        roads.push_back({{"points", loop}, {"profile", "turnaround"}, {"tags", json::array()}});
+        profiles["turnaround"] = {{"lanes", json::array({{{"width", 300.0}, {"direction", "forward"}, {"tags", json::array({"Vehicle"})}}})}};
+        json ends = json::array({polygonEnd(end, out, laneProfile[size_t(line)], true, start),
+                                 polygonEnd(centre + right * radius, -out, "turnaround", true, true),
+                                 polygonEnd(centre - right * radius, -out, "turnaround", true, false)});
+        junctions.push_back({{"center", jsonVec(end + out * 100.0)}, {"points", ends}, {"tags", json::array()}, {"control", "none"}});
+    }
+
+    // Junctions joined by a road too short for a car to wait on are one polygon: MassTraffic lets a car into a junction
+    // only when it fits on the road beyond, so a stub shorter than a car would hold its approach for good.
+    constexpr double kMinLink = 1500.0;
+    std::vector<size_t> group(net.junctions.size());
+    std::iota(group.begin(), group.end(), size_t(0));
+    auto root = [&](size_t j) {
+        while (group[j] != j)
+            j = group[j] = group[group[j]];
+        return j;
+    };
+    std::vector<char> internal(lineCount, 0);
+    for (size_t k = 0; k < lineCount; ++k)
+    {
+        const auto a = junctionAt.find({int(k), true}), b = junctionAt.find({int(k), false});
+        if (a == junctionAt.end() || b == junctionAt.end() || a->second == b->second || polylineLength(net.lines[k].pts) >= kMinLink)
+            continue;
+        internal[k] = 1;
+        group[root(size_t(a->second - net.junctions.data()))] = root(size_t(b->second - net.junctions.data()));
+    }
+
+    for (size_t k = 0; k < lineCount; ++k)
+    {
+        if (internal[k])
+            continue;
+        const StreetLine& s = net.lines[k];
+        // Vehicle and Access are on the lanes: ZoneGraph adds a shape's tags to all its lanes.
+        json tags = json::array();
+        if (s.cls == StreetClass::Path)
+            tags.push_back("Pedestrian");
         if (s.surface)
             tags.push_back("Structure");
-        roads.push_back({{"points", uePoints(s.pts)}, {"profile", p.name}, {"tags", tags}});
+        roads.push_back({{"points", uePoints(linePts[k])}, {"profile", laneProfile[k]}, {"tags", tags}});
     }
-    json junctions = json::array();
-    for (const Junction& j : net.junctions)
+    std::map<size_t, std::vector<size_t>> merged;
+    for (size_t j = 0; j < net.junctions.size(); ++j)
+        merged[root(j)].push_back(j);
+    for (const auto& [rootJunction, members] : merged)
     {
-        json ends = json::array();
-        for (const RoadEnd& e : j.ends)
+        json ends = json::array(), crosswalks = json::array();
+        glm::dvec3 centre(0.0);
+        Control control = Control::None;
+        for (size_t m : members)
         {
-            const StreetLine& s = net.lines[size_t(e.line)];
+            const Junction& j = net.junctions[m];
+            centre += j.p / double(members.size());
+            control = std::max(control, j.control);
             // ZoneGraph's lane profile points face into the shape, so the polygon's points point at the junction.
-            ends.push_back({{"position", ue(e.p)}, {"forward", ue(-e.out)}, {"profile", l.roads[size_t(s.profile)].name}});
+            for (const RoadEnd& e : j.ends)
+                if (!internal[size_t(e.line)])
+                    ends.push_back(polygonEnd(ueVec(e.p), ueVec(-e.out), laneProfile[size_t(e.line)], e.vehicle, e.start));
+            for (const Crosswalk& c : j.crosswalks)
+            {
+                crosswalks.push_back({{"a", ue(c.a)}, {"b", ue(c.b)}, {"end", c.end}});
+                // People cross on a lane of their own, which MassCrowd and the signal phases both see.
+                const glm::dvec3 ab[] = {c.a, c.b};
+                roads.push_back({{"points", uePoints(ab)}, {"profile", "crosswalk"}, {"tags", json::array({"Pedestrian", "Crossing"})}});
+                profiles["crosswalk"] = {{"lanes", json::array({{{"width", 300.0}, {"direction", "forward"}, {"tags", json::array({"Pedestrian", "Crossing"})}}})}};
+            }
         }
         if (ends.size() < 2)
             continue;
         json tags = json::array({"Intersection"});
-        if (j.control != Control::None)
-            tags.push_back("Vehicle");
-        if (j.control == Control::Signal)
+        if (control == Control::Signal)
             tags.push_back("TrafficLight");
-        if (j.control == Control::Stop || j.control == Control::Yield)
+        if (control == Control::Stop || control == Control::Yield)
             tags.push_back("StopSign");
-        json crosswalks = json::array();
-        for (const Crosswalk& c : j.crosswalks)
-        {
-            crosswalks.push_back({{"a", ue(c.a)}, {"b", ue(c.b)}, {"end", c.end}});
-            // People cross on a lane of their own, which MassCrowd and the signal phases both see.
-            const glm::dvec3 ab[] = {c.a, c.b};
-            roads.push_back({{"points", uePoints(ab)}, {"profile", "crosswalk"}, {"tags", json::array({"Pedestrian", "Crossing"})}});
-            profiles["crosswalk"] = {{"lanes", json::array({{{"width", 300.0}, {"direction", "forward"}, {"tags", json::array({"Pedestrian", "Crossing"})}}})}};
-        }
-        junctions.push_back({{"center", ue(j.p)},
+        // Phases and walks index a junction's own ends, so a merged junction leaves its signals to the engine.
+        const bool single = members.size() == 1;
+        junctions.push_back({{"center", ue(centre)},
                              {"points", ends},
                              {"tags", tags},
-                             {"control", controlName(j.control)},
-                             {"phases", j.phases},
-                             {"crosswalks", crosswalks}});
+                             {"control", controlName(control)},
+                             {"phases", single ? json(net.junctions[members[0]].phases) : json::array()},
+                             {"walks", single ? json(net.junctions[members[0]].walks) : json::array()},
+                             {"crosswalks", crosswalks},
+                             {"merged", members.size()}});
+    }
+    // Levels above the ground: each deck's own road network, and the elevated roads, ramps and skybridges joining them.
+    auto levelRoad = [&](std::span<const glm::dvec3> pts, StreetClass cls, int layer, const std::string& kind) {
+        const RoadProfile& p = l.roads[size_t(std::min(cls, StreetClass::Path))];
+        profiles[p.name] = {{"lanes", lanesOf(p)}};
+        roads.push_back({{"points", uePoints(pts)},
+                         {"profile", p.name},
+                         {"tags", json::array({cls == StreetClass::Path ? "Pedestrian" : "Vehicle", "Level"})},
+                         {"layer", layer},
+                         {"kind", kind}});
+    };
+    if (l.gen)
+    {
+        for (size_t k = 0; k < l.gen->levels.size(); ++k)
+            if (l.gen->levels[k].kind == "deck")
+            {
+                const RoadNetwork deck = levelNetwork(l, int(k));
+                for (const StreetLine& s : deck.lines)
+                    levelRoad(s.pts, s.cls, int(k) + 1, "deck");
+                for (const Junction& j : deck.junctions)
+                {
+                    json ends = json::array();
+                    for (const RoadEnd& e : j.ends)
+                        ends.push_back(polygonEnd(ueVec(e.p), ueVec(-e.out), l.roads[size_t(deck.lines[size_t(e.line)].profile)].name, e.vehicle, e.start));
+                    if (ends.size() >= 2)
+                        junctions.push_back({{"center", ue(j.p)},
+                                             {"points", ends},
+                                             {"tags", json::array({"Intersection", "Vehicle", "Level"})},
+                                             {"control", controlName(j.control)},
+                                             {"phases", j.phases},
+                                             {"walks", j.walks},
+                                             {"crosswalks", json::array()},
+                                             {"layer", int(k) + 1}});
+                }
+            }
+        for (const LevelLine& line : levelLines(l, r.ground))
+            if (line.kind != "deck" && line.kind != "air")
+                levelRoad(line.pts, line.cls, line.layer, line.kind);
     }
     json parking = json::array();
     for (const ParkingSpot& p : net.parking)
         parking.push_back({{"position", ue(p.p)}, {"forward", ue(p.dir)}, {"length", p.length}, {"width", p.width}});
-    return {{"profiles", profiles}, {"roads", roads}, {"junctions", junctions}, {"parking", parking}};
+    return {{"profiles", profiles}, {"roads", roads}, {"junctions", junctions}, {"parking", parking}, {"accessLines", accessLines}};
 }
 
 std::string assetName(const std::string& s)
@@ -387,6 +738,23 @@ json sendSplines(link::RpcClient& c, const Rebuilt& r, const Args& a, const std:
     if (a.has("roadMesh"))
         params["mesh"] = {{"asset", a.get<std::string>("roadMesh")}, {"forwardAxis", "x"}};
     return call(c, "setSpline", params, cmd);
+}
+
+/** Levels above the ground as one spline actor: deck streets, elevated roads, ramps and skybridges at their heights. */
+json sendLevels(link::RpcClient& c, const Rebuilt& r, const std::string& key, const std::string& label, const char* cmd)
+{
+    curve::Splines splines;
+    for (const LevelLine& line : levelLines(r.layout, r.ground))
+        if (line.kind != "air")
+            splines.push_back(smoothSpline(line.pts, 0.0));
+    return call(c, "setSpline",
+                {{"id", key + "/levels"},
+                 {"label", label + "_Levels"},
+                 {"mode", "actor"},
+                 {"location", json::array({0, 0, 0})},
+                 {"splines", link::splinePoints(splines, glm::dvec3(0.0))},
+                 {"folder", "Lila/Settlement"}},
+                cmd);
 }
 
 json readJsonFile(const fs::path& path)
@@ -485,7 +853,7 @@ json sendToUnreal(const Args& a)
         for (const std::string& k : *keys)
         {
             const std::string& kind = byKey[k]->kind;
-            splines |= (kind == "roads" && mode != "meshes") || kind == "paths";
+            splines |= (kind == "roads" && mode != "meshes") || kind == "paths" || kind == "levels";
             settlement |= kind == "pcg" || kind == "zoneGraph";
             cellData |= kind == "pcg" && o.partition;
         }
@@ -511,6 +879,7 @@ json sendToUnreal(const Args& a)
     if (o.massing)
         massingCells = massingByCell(r.layout, cellSize);
     json sent = json::object(), errors = json::array();
+    json warnings = json::array();
     std::set<std::string> failed;
     auto send = [&](const SyncItem& i) -> json {
         const Vec2 mid = i.cell.center(cellSize);
@@ -519,6 +888,8 @@ json sendToUnreal(const Args& a)
                                 {mid.x, 0.0, mid.y}, cellFolder, dir, cmd);
         if (i.kind == "roads" || i.kind == "paths")
             return sendSplines(*c, r, a, key, label, i.kind == "paths", cmd);
+        if (i.kind == "levels")
+            return sendLevels(*c, r, key, label, cmd);
         if (i.kind == "massing")
             return sendCellMesh(*c, massingCells.at(i.cell), "SM_" + assetName(label) + "_Massing_" + i.cell.name(), i.key,
                                 {mid.x, 0.0, mid.y}, cellFolder, dir, cmd);
@@ -532,7 +903,10 @@ json sendToUnreal(const Args& a)
             params["center"] = ue({mid.x, r.ground.height(mid), mid.y});
             params["size"] = cellSize;
             if (!graph.empty())
+            {
                 params["graph"] = graph;
+                params["makeGraph"] = a.get<bool>("makeGraph", false);
+            }
             return call(*c, "setSettlementCell", params, cmd);
         }
         if (i.kind == "pcg")
@@ -560,8 +934,12 @@ json sendToUnreal(const Args& a)
         if (i.kind == "zoneGraph")
         {
             json params = zoneData(r, net);
+            if (const int access = params.value("accessLines", 0); access > 0)
+                warnings.push_back(std::format("{} roads carry Access lanes Mass traffic stays off: cars could drive in but never back out "
+                                               "(one-way dead ends, one-way roads carrying on from two-way ones)", access));
             params["id"] = key;
             params["label"] = label + "_Lanes";
+            params["folder"] = folder;
             return call(*c, "setZoneGraph", params, cmd);
         }
         throw CommandError(std::string(cmd) + ": no sender for " + i.kind);
@@ -587,16 +965,19 @@ json sendToUnreal(const Args& a)
 
     // What the last send made that this layout no longer has.
     const json before = previous.is_object() ? previous.value("items", json::object()) : json::object();
-    json groups = json::array(), pcgCells = json::array(), removed = json::object();
+    json groups = json::array(), meshGroups = json::array(), pcgCells = json::array(), removed = json::object();
     std::set<std::string> keptRemoved;
     for (const std::string& k : d.removed)
     {
         const std::string kind = before[k].value("kind", std::string());
         try
         {
-            if (kind == "massing" || kind == "place" || (kind == "roads" && k.find("/roads/") != std::string::npos))
+            // Massing and road mesh cells own their static meshes, which go with them; placements show the project's.
+            if (kind == "massing" || (kind == "roads" && k.find("/roads/") != std::string::npos))
+                meshGroups.push_back(k);
+            else if (kind == "place")
                 groups.push_back(k);
-            else if (kind == "roads" || kind == "paths")
+            else if (kind == "roads" || kind == "paths" || kind == "levels")
                 removed[k] = call(*c, "removeSpline", {{"id", k}}, cmd);
             else if (kind == "pcg" && k.find("/pcg/") != std::string::npos)
                 pcgCells.push_back(cellNameOf(k));
@@ -624,6 +1005,7 @@ json sendToUnreal(const Args& a)
         }
     };
     removeBatch(groups, "removePlacements", {{"groups", groups}}, "placements");
+    removeBatch(meshGroups, "removePlacements", {{"groups", meshGroups}, {"deleteMeshes", true}, {"meshFolder", cellFolder}}, "meshCells");
     removeBatch(pcgCells, "removeSettlementCells", {{"id", key}, {"cells", pcgCells}}, "pcgCells");
 
     // The manifest records what Unreal holds now: failed sends keep their old hash (or none) so the next send retries them.
@@ -646,10 +1028,12 @@ json sendToUnreal(const Args& a)
     if (!missingAssets.empty())
     {
         out["missingAssets"] = missingAssets;
-        out["warnings"] = json::array({std::format("placements of {} assets not sent: the project has no static mesh at those paths (missingAssets); "
-                                                   "name the project's assets with settlementFurniture(engineAssets=...) or add them, then send again",
-                                                   missingAssets.size())});
+        warnings.push_back(std::format("placements of {} assets not sent: the project has no static mesh at those paths (missingAssets); "
+                                       "name the project's assets with settlementFurniture(engineAssets=...) or add them, then send again",
+                                       missingAssets.size()));
     }
+    if (!warnings.empty())
+        out["warnings"] = warnings;
     out["manifest"] = manifestPath.generic_string();
     return out;
 }
@@ -685,6 +1069,7 @@ void registerUnrealCommands(ext::Context& ctx)
                   {"pcg", "pc", Arg::Bool, true, "Lots, envelopes and roads as PCG data."},
                   {"partition", "pt", Arg::Bool, true, "PCG data per cell (a data asset and a cell actor each); off for one asset."},
                   {"pcgGraph", "pg", Arg::String, nullptr, "PCG graph each cell actor runs; it reads the cell's data asset from its SettlementData parameter."},
+                  {"makeGraph", "mg", Arg::Bool, false, "Make pcgGraph when the project has none: an empty PCG graph with the SettlementData parameter, ready for its nodes."},
                   {"zoneGraph", "zg", Arg::Bool, true, "Lanes as ZoneGraph shapes, for Mass traffic and crowds."},
                   {"placeMode", "pm", Arg::String, "hism", "How placements go.", {"hism", "ism", "actors"}},
                   {"placements", "pl", Arg::Any, nullptr,

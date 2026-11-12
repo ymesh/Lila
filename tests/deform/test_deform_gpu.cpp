@@ -4,6 +4,8 @@
 
 #include "core/PrefStore.h"
 #include "geo/Mesh.h"
+#include "geo/Normals.h"
+#include "geo/Primitives.h"
 #include "ops/Command.h"
 #include "render/DeformGpu.h"
 #include "render/Renderer.h"
@@ -349,4 +351,53 @@ TEST_CASE("Deformer benchmark: bend, ffd and delta mush on 500k points" * doctes
                << "\n  move a lattice point (ffd, deltaMush): " << top << "\n";
     }
     MESSAGE(report.str());
+}
+
+TEST_CASE("A node's live render buffer never mixes two vertex layouts of the same topology")
+{
+    // Stored split normals are not part of the layout key, yet they decide how corners weld into render vertices.
+    auto withNormals = [](bool split, double shift) {
+        auto m = std::make_shared<geo::Mesh>(geo::makeCube());
+        m->cornerAttrs().remove(geo::attr::kNormal);
+        const std::vector<glm::dvec3> faces = geo::faceNormals(*m);
+        const std::vector<glm::vec3> points = geo::pointNormals(*m);
+        std::span<glm::vec3> n = m->cornerAttrs().add(std::string(geo::attr::kNormal), geo::AttrType::Float3).values<glm::vec3>();
+        for (geo::Index c = 0; c < m->cornerCapacity(); ++c)
+            if (m->cornerValid(c))
+                n[c] = split ? glm::vec3(faces[m->cornerFace(c)]) : points[m->cornerPoint(c)];
+        for (geo::Index p = 0; p < m->pointCapacity(); ++p)
+            if (m->pointValid(p))
+                m->setPosition(p, m->position(p) + glm::dvec3(shift, 0.0, 0.0));
+        return MeshPtr(std::move(m));
+    };
+    const NodeId owner = 987654;
+    const MeshPtr smooth = withNormals(false, 0.0), smoothMoved = withNormals(false, 1.0);
+    ui::renderMeshFor(smooth, false, owner);
+    auto first = ui::renderMeshFor(smoothMoved, false, owner);
+    REQUIRE(first);
+    REQUIRE(first->dynamic);
+
+    // Other meshes push the smooth layout out of the cache, so the split one is built in full under the same key.
+    std::vector<MeshPtr> others;
+    for (int k = 1; k <= 12; ++k)
+    {
+        geo::CubeOptions o;
+        o.subdivX = k + 1;
+        others.push_back(std::make_shared<geo::Mesh>(geo::makeCube(o)));
+        ui::renderMeshFor(others.back());
+    }
+    const MeshPtr split = withNormals(true, 0.0), splitMoved = withNormals(true, 1.0);
+    auto full = ui::renderMeshFor(split, false, owner);
+    auto second = ui::renderMeshFor(splitMoved, false, owner);
+    REQUIRE(full);
+    REQUIRE(second);
+    REQUIRE(full->vertices.size() != first->vertices.size());
+    CHECK(second->vertices.size() == full->vertices.size());
+    // The renderer keeps one GPU copy per key, indices included, so a shared key must mean the same layout.
+    if (second->key == first->key)
+    {
+        CHECK(second->indices == first->indices);
+        CHECK(second->vertices.size() == first->vertices.size());
+    }
+    CHECK(second->dynamic != first->dynamic);
 }

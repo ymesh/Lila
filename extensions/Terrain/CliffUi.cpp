@@ -49,7 +49,7 @@ void registerCliffUi(ext::Context& ctx)
     levelToolkit::add(ctx, {.id = "cliffs",
                             .title = "Cliffs",
                             .items = {{"cliffs.find", "scan", "Find", "Cliffs"}, {"cliffs.mesh", "mountain", "Mesh", "Cliff Mesh"}, {"cliffs.extrude", "chart-area-line", "Extrude"}, {},
-                                      {"cliffs.kit", "", "Kit"}, {"cliffs.scatter", "", "Scatter"}, {"cliffs.send", "", "Unreal"}},
+                                      {"cliffs.kit", "box-multiple", "Kit"}, {"cliffs.scatter", "grain", "Scatter"}, {"cliffs.send", "send", "Unreal"}},
                             .order = 12,
                             .docs = "terrain-cliffs"});
 }

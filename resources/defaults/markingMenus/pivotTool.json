@@ -1,0 +1,18 @@
+{
+  "N": { "label": "Zero Y", "action": "modify.zeroPivotY" },
+  "E": { "label": "Zero X", "action": "modify.zeroPivotX" },
+  "SW": { "label": "Zero Z", "action": "modify.zeroPivotZ" },
+  "S": { "label": "Zero All", "action": "modify.zeroPivot" },
+  "W": { "label": "Center", "action": "modify.centerPivot" },
+  "NW": { "label": "Reset", "action": "modify.resetPivot" },
+  "NE": { "label": "Orient", "action": "modify.orientPivot" },
+  "SE": { "label": "Pin", "action": "modify.pinComponentPivot" },
+  "overflow": [
+    { "label": "Zero Rotation", "action": "modify.zeroPivotRotation" },
+    { "label": "Bake Pivot", "action": "modify.bakePivot" },
+    { "label": "Match Pivot", "action": "modify.matchPivot" },
+    { "label": "Match Position", "action": "modify.matchPivotPosition" },
+    { "label": "Match Orientation", "action": "modify.matchPivotOrient" },
+    { "label": "Unpin", "action": "modify.resetComponentPivot" }
+  ]
+}

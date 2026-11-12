@@ -54,9 +54,14 @@ struct BooleanOptions
     /** Width of a rounded strip along the seam, cm; 0 leaves it sharp. */
     double filletWidth = 0.0;
     int filletSegments = 2;
+    /** Mark the fillet's faces with kFilletFaceAttr = 1. */
+    bool markFillet = false;
     /** New edges sharper than this many degrees are marked hard. */
     double hardAngle = 30.0;
 };
+
+/** Face int attribute on a boolean's result with BooleanOptions::markFillet: 1 on the faces of the fillet strip. */
+inline constexpr std::string_view kFilletFaceAttr = "booleanFillet";
 
 struct BooleanResult
 {

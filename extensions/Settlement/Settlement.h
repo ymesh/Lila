@@ -42,10 +42,13 @@ Options optionsFrom(const std::function<double(const char*)>& number, const std:
 
 struct Parts
 {
-    lila::gn::GeometryPtr streets, lots, buildings, water;
+    lila::gn::GeometryPtr streets, lots, buildings, water, levels;
 };
 
-/** Streets (ribbons and centrelines), lots (outlines) and buildings (envelope volumes and footprint curves). */
+/**
+ * Streets (ribbons and centrelines), lots (outlines), buildings (envelope volumes and footprint curves) and levels
+ * above the ground (deck streets, deck outlines, elevated roads, ramps, skybridges, air lanes as curves).
+ */
 Parts toGeometry(const Layout& l, const Ground& ground);
 
 /** The layout a settlement modifier shows, rebuilt from its inputs, ground, walkable mesh and edits. */

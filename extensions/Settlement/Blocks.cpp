@@ -621,6 +621,14 @@ std::vector<Polygon> cutBlock(const Block& b, const Layout& l, const Options& o,
     std::erase_if(lots, [](const Polygon& x) { return !usable(x); });
     if (b.method != LotMethod::Whole)
         joinLandlocked(lots, minArea, warnings, b.key);
+    // A lot reaching past its block would overlap the next block's: it is left out, and said so.
+    const size_t before = lots.size();
+    std::erase_if(lots, [&](const Polygon& x) {
+        return std::ranges::any_of(x.pts, [&](Vec2 q) { return !contains(b.outline.pts, q) && boundaryDistance(b.outline.pts, q) > 10.0; });
+    });
+    if (lots.size() < before && warnings)
+        warnings->push_back("block " + std::to_string(b.key) + ": " + std::to_string(before - lots.size()) + " " + lotMethodName(b.method) +
+                            " lot(s) reached past the block and were left open");
     return lots;
 }
 

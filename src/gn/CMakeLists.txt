@@ -24,6 +24,9 @@ lila_module(lila_gn Scene
     NodesUtility.cpp
     NodesMeshOps.cpp
     NodesTopology.cpp
+    NodesTopology2.cpp
+    NodesSelection.cpp
+    NodesRemesh.cpp
     NodesAnalysis.cpp
     NodesField.cpp
     NodesPatterns.cpp
@@ -33,10 +36,23 @@ lila_module(lila_gn Scene
     NodesData.cpp
     NodesProcedural.cpp
     NodesVolume.cpp
+    NodesGrid.cpp
+    NodesTool.cpp
+    Tool.cpp
     NodesWrangle.cpp
     NodesZones.cpp
     NodesMatrix.cpp
     NodesBundle.cpp
+    NodesBuild.cpp
+    NodesDeform2.cpp
+    NodesCurve2.cpp
+    NodesCurveSurface.cpp
+    NodesCurveBoolean.cpp
+    NodesInstances2.cpp
+    NodesFieldStats.cpp
+    NodesRotation2.cpp
+    NodesStrings2.cpp
+    NodesSceneInfo.cpp
     Zones.cpp
     GeometryIO.cpp
     Bake.cpp

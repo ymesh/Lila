@@ -634,7 +634,16 @@ BooleanResult meshBoolean(std::span<const BooleanOperand> operands, const glm::d
         onSeam[m.edgePoint(e, 0)] = onSeam[m.edgePoint(e, 1)] = 1;
 
     if (opts.filletWidth > 0.0 && !seam.empty())
-        geo::bevelEdges(m, seam, {.offset = opts.filletWidth, .segments = std::max(opts.filletSegments, 1), .smoothingAngle = opts.hardAngle});
+    {
+        const std::vector<Index> strip =
+            geo::bevelEdges(m, seam, {.offset = opts.filletWidth, .segments = std::max(opts.filletSegments, 1), .smoothingAngle = opts.hardAngle});
+        if (opts.markFillet)
+        {
+            auto fillet = m.faceAttrs().getOrAdd<int32_t>(kFilletFaceAttr);
+            for (Index f : strip)
+                fillet[f] = 1;
+        }
+    }
 
     // Everything the cut made: faces and edges touching the seam or a point no operand had.
     auto origin = m.pointAttrs().get<int32_t>(kOriginAttr);

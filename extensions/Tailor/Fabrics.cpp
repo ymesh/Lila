@@ -57,6 +57,11 @@ const std::vector<Fabric>& fabricPresets()
         makeFabricPreset("Fleece", 2000.f, 1500.f, 180.f, 6e-5f, 5e-5f, 4e-5f, 0.20f, 0.28f, 0.0030f, 0.60f, 0.030f),
         makeFabricPreset("Plush", 1500.f, 900.f, 120.f, 1.2e-4f, 1e-4f, 9e-5f, 0.25f, 0.35f, 0.0040f, 0.70f, 0.040f),
         makeFabricPreset("Banner", 7000.f, 6000.f, 400.f, 3e-5f, 3e-5f, 2e-5f, 0.05f, 0.20f, 0.0006f, 0.30f, 0.005f),
+        // Stretch knits: soft enough to stretch over the body from a pattern cut smaller than it.
+        makeFabricPreset("Spandex", 700.f, 550.f, 60.f, 6e-6f, 6e-6f, 5e-6f, 0.60f, 0.20f, 0.0008f, 0.45f, 0.020f),
+        makeFabricPreset("Neoprene", 1600.f, 1500.f, 300.f, 5e-4f, 5e-4f, 4e-4f, 0.40f, 0.55f, 0.0030f, 0.70f, 0.030f),
+        makeFabricPreset("Nylon", 9000.f, 8000.f, 350.f, 1e-5f, 1e-5f, 8e-6f, 0.04f, 0.09f, 0.0004f, 0.20f, 0.008f),
+        makeFabricPreset("Twill", 10000.f, 8000.f, 600.f, 1e-4f, 9e-5f, 7e-5f, 0.05f, 0.30f, 0.0011f, 0.40f, 0.015f),
     };
     return presets;
 }

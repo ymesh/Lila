@@ -908,7 +908,7 @@ void ViewportWidget::frameSelection(bool all)
                     }
                 continue;
             }
-            const scene::MeshPtr& mesh = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+            const scene::MeshPtr mesh = n->type().isA("mesh") ? scene::modifiers::cage(g, id) : nullptr;
             if (!mesh)
                 continue;
             glm::dmat4 world = shownWorld(*n);

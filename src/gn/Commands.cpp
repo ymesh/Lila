@@ -3,6 +3,7 @@
 #include "gn/CommandArgs.h"
 #include "gn/Exec.h"
 #include "gn/Gn.h"
+#include "gn/Tool.h"
 #include "gn/Routing.h"
 #include "gn/Zones.h"
 
@@ -271,6 +272,7 @@ void registerCommands()
     detail::registerGroupCommands();
     registerBakeCommands();
     registerSpreadsheetCommand();
+    registerToolCommands();
 
     ops::registerCommand({
         .name = "gnCreateGroup",

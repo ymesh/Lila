@@ -372,20 +372,84 @@ void projectCS(uint3 id: SV_DispatchThreadID)
     hit.triangle = 0;
     hit.bary = float2(0.0);
     hit.front = true;
-    if (present && traceClosest(s.origin, s.direction, s.rayLength, cullBack, hit))
+    float3 o = s.origin, d = s.direction;
+    bool found = present && traceClosest(o, d, s.rayLength, cullBack, hit);
+    float3 hn = found ? hitNormal(hit.high, hit.triangle, hit.bary) : float3(0.0);
+    // A surface facing away from the low face is the far side of a thin part, reached by a ray tilted off the face
+    // (smooth cage normals across a hard edge): aim along the face normal instead.
+    bool reaimed = false, rejected = false;
+    if (found && hit.front && dot(hn, s.normal) < 0.0)
     {
-        float3 p = s.origin + s.direction * hit.t;
+        reaimed = true;
+        o = s.position + s.normal * max(length(s.origin - s.position), 1e-4);
+        d = -s.normal;
+        found = traceClosest(o, d, s.rayLength, cullBack, hit);
+        hn = found ? hitNormal(hit.high, hit.triangle, hit.bary) : float3(0.0);
+        rejected = found && hit.front && dot(hn, s.normal) < 0.0;
+        found = found && !rejected;
+    }
+    float3 heightDir = -d;
+    bool probed = false;
+    if (present && !found)
+    {
+        // Where a thin part's high pulls back past the low's rim the ray passes it by: widen a cone of probes around
+        // the ray ring by ring and take the first ring's nearest high facing the low's way, so the texel lands where
+        // its neighbours' rays do.
+        float3 axis = normalize(d);
+        float3 t, b;
+        basis(axis, t, b);
+        float bestT = 3.4e38;
+        TraceHit bestHit = hit;
+        float3 bestD = d, bestN = hn;
+        for (uint k = 0; k < kProbeRings && bestT >= 3.4e38; ++k)
+            for (uint j = 0; j < kProbePerRing; ++j)
+            {
+                float3 pd = probeDirection(k, j, axis, t, b);
+                TraceHit ph;
+                ph.t = 0.0;
+                ph.high = 0;
+                ph.triangle = 0;
+                ph.bary = float2(0.0);
+                ph.front = true;
+                if (traceClosest(o, pd, s.rayLength, cullBack, ph) && ph.front && ph.t < bestT)
+                {
+                    float3 pn = hitNormal(ph.high, ph.triangle, ph.bary);
+                    if (dot(pn, s.normal) > 0.0)
+                    {
+                        bestT = ph.t;
+                        bestHit = ph;
+                        bestD = pd;
+                        bestN = pn;
+                    }
+                }
+            }
+        if (bestT < 3.4e38)
+        {
+            probed = true;
+            found = true;
+            hit = bestHit;
+            hn = bestN;
+            d = bestD;
+        }
+    }
+    if (found)
+    {
+        float3 p = o + d * hit.t;
         r.position = p;
-        r.normal = hitNormal(hit.high, hit.triangle, hit.bary);
+        r.normal = hn;
         r.high = hit.high;
         r.triangle = hit.triangle;
         r.bary = hit.bary;
         r.distance = hit.t;
-        r.height = dot(p - s.position, -s.direction);
+        r.height = dot(p - s.position, heightDir);
         r.flags = kHitValid | (hit.front ? 0u : kHitBackface);
     }
-    else if (present && cullBack && traceAny(s.origin, s.direction, s.rayLength))
+    else if (present && !rejected && cullBack && traceAny(o, d, s.rayLength))
         r.flags = kHitBackface;
+    if (reaimed)
+        r.flags |= kHitReaimed;
+    if (probed)
+        r.flags |= kHitProbed;
     pc.hits[i] = r;
     if ((pc.flags & kFlagResident) != 0 && present)
     {
@@ -394,5 +458,9 @@ void projectCS(uint3 id: SV_DispatchThreadID)
             InterlockedAdd(pc.stats[1], 1u);
         if ((r.flags & kHitBackface) != 0)
             InterlockedAdd(pc.stats[2], 1u);
+        if ((r.flags & kHitReaimed) != 0)
+            InterlockedAdd(pc.stats[3], 1u);
+        if ((r.flags & kHitProbed) != 0)
+            InterlockedAdd(pc.stats[4], 1u);
     }
 }

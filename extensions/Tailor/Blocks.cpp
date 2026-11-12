@@ -1,4 +1,5 @@
 #include "Blocks.h"
+#include "Pattern.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1306,6 +1307,265 @@ Garment onesie(const Body& body, const OnesieParams& p)
     return g;
 }
 
+namespace
+{
+/** Leftmost and rightmost x of a closed outline along the horizontal line at y. */
+std::pair<float, float> spanAt(const std::vector<Vec2>& o, float y)
+{
+    float lo = 1e30f, hi = -1e30f;
+    for (size_t i = 0; i < o.size(); ++i)
+    {
+        const Vec2& a = o[i];
+        const Vec2& b = o[(i + 1) % o.size()];
+        if ((a[1] - y) * (b[1] - y) > 0.f || a[1] == b[1])
+            continue;
+        const float x = a[0] + (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]);
+        lo = std::min(lo, x), hi = std::max(hi, x);
+    }
+    return {lo, hi};
+}
+
+float spanWidth(const std::vector<Vec2>& o, float y)
+{
+    const auto [lo, hi] = spanAt(o, y);
+    return hi > lo ? hi - lo : 0.f;
+}
+
+Vec3 chainPoint3(const Garment& g, const std::vector<SeamSide>& chain, float s)
+{
+    for (const SeamSide& side : chain)
+    {
+        const auto& o = g.panels[size_t(side.panel)].outline;
+        const int n = int(o.size());
+        for (int v = side.from; v != side.to; v = (v + 1) % n)
+        {
+            const Vec2 &a = o[size_t(v)], &b = o[size_t((v + 1) % n)];
+            const float l = dist2d(a, b);
+            if (s <= l && l > 0.f)
+                return placePatternPoint(g.panels[size_t(side.panel)], {a[0] + (b[0] - a[0]) * s / l, a[1] + (b[1] - a[1]) * s / l});
+            s -= l;
+        }
+    }
+    const SeamSide& last = chain.back();
+    return placePatternPoint(g.panels[size_t(last.panel)], g.panels[size_t(last.panel)].outline[size_t(last.to)]);
+}
+
+/** Sews a to b, the way round that puts their quarter points nearest each other. */
+Seam sewFacing(const Garment& g, std::vector<SeamSide> a, std::vector<SeamSide> b)
+{
+    const float la = chainLength(g, a), lb = chainLength(g, b);
+    const Vec3 a1 = chainPoint3(g, a, 0.25f * la), b1 = chainPoint3(g, b, 0.25f * lb), b3 = chainPoint3(g, b, 0.75f * lb);
+    auto dist = [](const Vec3& x, const Vec3& y) { return std::hypot(x[0] - y[0], x[1] - y[1], x[2] - y[2]); };
+    const bool rev = dist(a1, b3) < dist(a1, b1);
+    return seam(std::move(a), std::move(b), rev);
+}
+
+/** A band round a leg hem hanging below it, its side seam at the chain's start (the outer side seam). */
+void addAnkleCuff(Garment& g, const std::vector<SeamSide>& hem, float cx, float hemY, float height, float band, float inward, const char* side)
+{
+    const float r = band / (2.f * std::numbers::pi_v<float>);
+    const int tp = int(g.panels.size());
+    Panel t = makePanel(std::string("Ankle Cuff") + side, {{-0.5f * band, 0.f}, {0.5f * band, 0.f}, {0.5f * band, height}, {-0.5f * band, height}});
+    t.particleDistance = std::min(t.particleDistance, 0.3f * height);
+    // Pattern x = 0 on the inside of the leg, so both ends meet on the outside.
+    const Vec3 nrm{inward, 0.f, 0.f};
+    place(t, {cx + inward * r, hemY, 0.f}, {0.f, -1.f, 0.f}, nrm, r);
+    g.panels.push_back(std::move(t));
+    g.seams.push_back(sewFacing(g, {{tp, 0, 1}}, hem));
+    g.seams.push_back(seam({{tp, 1, 2}}, {{tp, 3, 0}}));
+}
+
+/** Knee patches on the two trouser fronts, at knee height. */
+void addKneePatches(Garment& g, const Body& body, int fl, int fr)
+{
+    for (int panel : {fl, fr})
+    {
+        const Panel& p = g.panels[size_t(panel)];
+        const float y = 0.285f * body.torso() - p.origin[1];
+        const auto [lo, hi] = spanAt(p.outline, y);
+        if (hi - lo < 0.08f)
+            continue;
+        addPatch(g, panel, {0.5f * (lo + hi), y}, std::min(0.15f, 0.6f * (hi - lo)), 0.17f * body.torso() / 1.8f, "Knee");
+    }
+}
+} // namespace
+
+Garment suit(const Body& body, const SuitParams& p)
+{
+    const float s = body.torso() / 1.8f;
+    TopParams tp;
+    tp.length = body.shoulderY() - body.waistY();
+    tp.ease = std::max(p.ease, 0.f);
+    tp.sleeveLength = p.sleeveLength;
+    tp.sleeveEase = p.sleeveEase;
+    tp.sleeveStyle = p.sleeveStyle;
+    tp.neckDepth = 0.06f * s;
+    tp.openFront = true;
+    tp.overlap = 0.f;
+    TopRuns tr;
+    Garment g = draftTop(body, tp, &tr);
+    // Centre front first, so the zip goes in seam 0.
+    g.seams.insert(g.seams.begin(), seam({tr.centreL}, {tr.centreR}));
+
+    const float ankle = 0.06f * s;
+    const float cuffH = p.ankleCuffs ? std::clamp(p.cuffHeight, 0.02f, 0.15f) : 0.f;
+    TrousersParams tq;
+    tq.ease = std::max(p.legEase, 0.f);
+    tq.hemCircumference = p.legOpening;
+    tq.backRise = 0.f;
+    tq.waist = chainLength(g, tr.hemFront) + chainLength(g, {tr.hemBack});
+    tq.length = body.waistY() - ankle - cuffH;
+    const int t0 = appendGarment(g, trousers(body, tq), 0);
+    const int fl = t0, bl = t0 + 1, fr = t0 + 2, br = t0 + 3;
+    const int nf = int(g.panels[size_t(fl)].outline.size()), nb = int(g.panels[size_t(br)].outline.size());
+    g.seams.push_back(seam(tr.hemFront, {{fl, 4, 5}, {fr, nf - 5, nf - 4}}));
+    g.seams.push_back(seam({tr.hemBack}, {{br, 4, 5}, {bl, nb - 5, nb - 4}}));
+    g = cutFrom(std::move(g), p.fabric);
+
+    const CollarStyle collar = CollarStyle(std::clamp(p.collar, 0, int(CollarStyle::Count) - 1));
+    if (collar != CollarStyle::None && !tr.neck.empty())
+    {
+        const int c = addCollar(g, tr.neck, std::clamp(p.collarHeight, 0.015f, 0.15f), collar == CollarStyle::Shirt);
+        // A shirt collar's points stay apart at the front; a stand closes with the zip.
+        const Seam& last = g.seams.back();
+        if (collar == CollarStyle::Shirt && c >= 0 && last.a.size() == 1 && last.a[0].panel == c && last.a[0].from == 1)
+            g.seams.pop_back();
+    }
+
+    if (p.ankleCuffs)
+    {
+        const std::vector<SeamSide> hemL{{bl, nb - 1, 0}, {fl, 0, 1}}, hemR{{br, 0, 1}, {fr, nf - 1, 0}};
+        const float hemY = g.panels[size_t(fl)].origin[1];
+        for (const auto& [hem, panel, inward, side] : {std::tuple{hemL, fl, -1.f, " L"}, std::tuple{hemR, fr, 1.f, " R"}})
+        {
+            // Gathered a little into the band, as an elastic ankle is.
+            const float band = std::max(0.85f * chainLength(g, hem), 0.24f * s);
+            addAnkleCuff(g, hem, g.panels[size_t(panel)].origin[0], hemY, cuffH, band, inward, side);
+        }
+    }
+
+    if (p.chestPockets)
+    {
+        // Front L runs from the centre (x = 0) out to +x, Front R mirrors it.
+        const float wc = g.panels[0].outline.size() > 1 ? spanWidth(g.panels[0].outline, 0.02f) : 0.2f;
+        const float w = std::min(0.13f * s, 0.42f * wc), h = 0.14f * s;
+        const float y = body.chestY() - body.waistY() - 0.5f * h + 0.01f;
+        addPocket(g, 0, {0.5f * wc - 0.5f * w, y}, w, h, true);
+        addPocket(g, 1, {-0.5f * wc - 0.5f * w, y}, w, h, true);
+    }
+
+    if (p.legPockets)
+    {
+        for (const auto& [panel, outward] : {std::pair{fl, 1.f}, std::pair{fr, -1.f}})
+        {
+            const Panel& leg = g.panels[size_t(panel)];
+            const float h = 0.17f * s;
+            const float top = body.crotchY() - leg.origin[1] - 0.1f * s, bottom = top - h;
+            if (bottom < 0.05f)
+                continue;
+            const auto [lo, hi] = spanAt(leg.outline, 0.5f * (top + bottom));
+            const float span = std::min({hi - lo, spanWidth(leg.outline, top), spanWidth(leg.outline, bottom)});
+            const float w = std::min(0.15f * s, 0.45f * span);
+            const float cx = 0.5f * (lo + hi) + outward * 0.2f * span;
+            addPocket(g, panel, {cx - 0.5f * w, bottom}, w, h, true);
+        }
+    }
+
+    if (p.kneePatches)
+        addKneePatches(g, body, fl, fr);
+
+    if (p.elbowPatches)
+    {
+        for (size_t k = 0; k < g.panels.size(); ++k)
+        {
+            const Panel& sl = g.panels[k];
+            if (sl.name != "Sleeve L" && sl.name != "Sleeve R")
+                continue;
+            // The elbow faces back: pattern -x on the left sleeve, +x on the right.
+            const float back = sl.name == "Sleeve L" ? -1.f : 1.f;
+            const float y = 0.4f * body.armLength;
+            float maxY = 0.f;
+            for (const Vec2& q : sl.outline)
+                maxY = std::max(maxY, q[1]);
+            const float h = 0.13f * s;
+            if (maxY < y + 0.5f * h + 0.01f)
+                continue;
+            const auto [lo, hi] = spanAt(sl.outline, y);
+            const float w = std::min(0.11f * s, 0.4f * (hi - lo));
+            addPatch(g, int(k), {0.5f * (lo + hi) + back * 0.25f * (hi - lo), y}, w, h, "Elbow");
+        }
+    }
+    return g;
+}
+
+Garment overalls(const Body& body, const OverallsParams& p, std::vector<BlockAnchor>* anchors)
+{
+    const float s = body.torso() / 1.8f;
+    const float ease = std::max(p.ease, 0.f);
+    TrousersParams tq;
+    tq.ease = ease;
+    tq.hemCircumference = p.legOpening;
+    tq.length = p.length > 0.f ? p.length : body.waistY() - 0.03f * s;
+    Garment g = trousers(body, tq);
+    const int fl = 0, bl = 1, fr = 2, br = 3;
+    const int nf = int(g.panels[size_t(fl)].outline.size()), nb = int(g.panels[size_t(br)].outline.size());
+
+    const float waistY = body.waistY();
+    const float yS = body.shoulderY() - waistY;
+    const float sw = std::clamp(p.strapWidth, 0.02f, 0.1f);
+    const float z0 = body.chestRadius() * (1.f + ease) + kGap;
+    struct Piece { int panel; Symmetric shape; int outerTop, innerTop, bibTop; };
+    // Bib or back: bottom as wide as the trousers' waist, sides curving in to the top, straps rising from its corners.
+    auto piece = [&](const char* name, float halfBottom, float height, bool front) {
+        const float top = std::clamp(height, 0.06f, yS - 0.08f);
+        const float bw = std::clamp(0.5f * p.bibWidth, sw + 0.03f, halfBottom);
+        std::vector<Vec2> half{{halfBottom, 0.f}};
+        for (const Vec2& q : bezier({halfBottom, 0.f}, {bw, 0.45f * top}, {bw, top}))
+            half.push_back(q);
+        Piece out{int(g.panels.size()), {}, 0, 0, 0};
+        out.bibTop = int(half.size());
+        half.push_back({bw, top});
+        out.outerTop = int(half.size());
+        half.push_back({bw, yS});
+        out.innerTop = int(half.size());
+        half.push_back({bw - sw, yS});
+        half.push_back({bw - sw, top});
+        out.shape = symmetric(half, top, bw - sw, 0.f);
+        Panel pn = makePanel(name, out.shape.outline);
+        pn.particleDistance = std::min(pn.particleDistance, sw / 3.f);
+        placeAround(pn, waistY, z0, halfBottom, front);
+        g.panels.push_back(std::move(pn));
+        return out;
+    };
+    const Piece bib = piece("Bib", runLength(g.panels[size_t(fl)].outline, 4, 5), p.bibHeight, true);
+    const Piece back = piece("Back Bib", runLength(g.panels[size_t(br)].outline, 4, 5), p.backHeight, false);
+
+    g.seams.push_back(seam({{bib.panel, 0, 1}}, {{fl, 4, 5}, {fr, nf - 5, nf - 4}}));
+    g.seams.push_back(seam({{back.panel, 0, 1}}, {{br, 4, 5}, {bl, nb - 5, nb - 4}}));
+    // The back faces -Z, so its +x straps lie on the wearer's right.
+    g.seams.push_back(seam({bib.shape.plusRun(bib.panel, bib.outerTop, bib.innerTop)}, {back.shape.minusRun(back.panel, back.outerTop, back.innerTop)}));
+    g.seams.push_back(seam({bib.shape.minusRun(bib.panel, bib.outerTop, bib.innerTop)}, {back.shape.plusRun(back.panel, back.outerTop, back.innerTop)}));
+    g = cutFrom(std::move(g), "Denim");
+
+    const Panel& bp = g.panels[size_t(bib.panel)];
+    const Vec2 corner = bp.outline[size_t(bib.shape.plus[size_t(bib.bibTop)])];
+    if (anchors)
+        for (const auto& [name, x] : {std::pair{"buckle L", 1.f}, std::pair{"buckle R", -1.f}})
+        {
+            const Vec2 at{x * (corner[0] - 0.5f * sw), corner[1]};
+            anchors->push_back({name, bib.panel, at, placePatternPoint(bp, at)});
+        }
+    if (p.bibPocket)
+    {
+        const float w = std::min(0.16f * s, 2.f * corner[0] - 0.06f), h = std::min(0.14f * s, 0.5f * corner[1]);
+        if (w > 0.04f)
+            addPocket(g, bib.panel, {-0.5f * w, corner[1] - h - 0.03f * s}, w, h, false);
+    }
+    if (p.kneePatches)
+        addKneePatches(g, body, fl, fr);
+    return g;
+}
+
 // Registry
 
 namespace
@@ -1495,6 +1755,38 @@ std::vector<Block> makeBlocks()
                                            {"tailGirth", &OnesieParams::tailGirth, 0.15f, 1.2f},
                                            {"tailStiffness", &OnesieParams::tailStiffness, 0.f, 3.f}},
                                           plain(&onesie)));
+    auto suitBlock = [&]<class P>(const char* id, const char* label, P*) {
+        out.push_back(makeBlock<P>(id, label,
+                                   {{"ease", &P::ease, 0.f, 1.f},
+                                    {"sleeveLength", &P::sleeveLength, 0.f, 0.75f},
+                                    {"sleeveEase", &P::sleeveEase, 0.f, 1.5f},
+                                    {"sleeveStyle", &P::sleeveStyle, 0, int(SleeveStyle::Count) - 1},
+                                    {"legEase", &P::legEase, 0.f, 0.8f},
+                                    {"legOpening", &P::legOpening, 0.2f, 1.f},
+                                    {"collar", &P::collar, 0, int(CollarStyle::Count) - 1},
+                                    {"collarHeight", &P::collarHeight, 0.015f, 0.15f},
+                                    {"ankleCuffs", &P::ankleCuffs},
+                                    {"cuffHeight", &P::cuffHeight, 0.02f, 0.15f},
+                                    {"chestPockets", &P::chestPockets},
+                                    {"legPockets", &P::legPockets},
+                                    {"kneePatches", &P::kneePatches},
+                                    {"elbowPatches", &P::elbowPatches}},
+                                   [](const Body& b, const P& p, std::vector<BlockAnchor>*) { return suit(b, p); }));
+    };
+    suitBlock("jumpsuit", "Jumpsuit", static_cast<JumpsuitParams*>(nullptr));
+    suitBlock("flightSuit", "Flight Suit", static_cast<FlightSuitParams*>(nullptr));
+    suitBlock("coverall", "Coverall", static_cast<CoverallParams*>(nullptr));
+    out.push_back(makeBlock<OverallsParams>("overalls", "Overalls",
+                                            {{"ease", &OverallsParams::ease, 0.f, 0.8f},
+                                             {"legOpening", &OverallsParams::legOpening, 0.25f, 1.2f},
+                                             {"length", &OverallsParams::length, 0.f, 1.3f},
+                                             {"bibHeight", &OverallsParams::bibHeight, 0.06f, 0.4f},
+                                             {"bibWidth", &OverallsParams::bibWidth, 0.12f, 0.5f},
+                                             {"backHeight", &OverallsParams::backHeight, 0.06f, 0.35f},
+                                             {"strapWidth", &OverallsParams::strapWidth, 0.02f, 0.1f},
+                                             {"bibPocket", &OverallsParams::bibPocket},
+                                             {"kneePatches", &OverallsParams::kneePatches}},
+                                            Generator<OverallsParams>(&overalls)));
     out.push_back(makeBlock<BootieParams>("booties", "Booties",
                                           {{"length", &BootieParams::length, 0.15f, 0.6f},
                                            {"height", &BootieParams::height, 0.1f, 0.6f},

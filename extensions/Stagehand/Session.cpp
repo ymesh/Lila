@@ -118,6 +118,41 @@ void Session::wiggle(const glm::dvec3& center, double radius, double speed)
     }
 }
 
+void Session::sweep(const glm::dvec3& center, const glm::dvec3& motion, double radius, double speed, bool gather)
+{
+    physics::RigidScene& s = mWorld->scene();
+    const glm::dvec3 gravity = s.settings().gravity;
+    const glm::dvec3 up = glm::length(gravity) > 1e-9 ? -glm::normalize(gravity) : glm::dvec3(0, 1, 0);
+    auto flat = [&](const glm::dvec3& v) { return v - up * glm::dot(v, up); };
+    const glm::dvec3 along = flat(motion);
+    if (!gather && glm::length(along) < 1e-9)
+        return;
+    for (size_t i = 0; i < mWorld->movers(); ++i)
+    {
+        if (mPinned[i] || int(i) == mHeld)
+            continue;
+        const glm::dvec3 c = s.centerOfMass(int(i));
+        const glm::dvec3 off = flat(center - c);
+        const double d = glm::length(off);
+        if (d > radius)
+            continue;
+        glm::dvec3 want;
+        if (gather)
+        {
+            // Slows to a stop at the centre instead of overshooting it.
+            if (d < 1e-6)
+                continue;
+            want = off / d * speed * std::min(1.0, 2.0 * d / std::max(radius, 1e-6));
+        }
+        else
+            want = glm::normalize(along) * speed;
+        const double fall = 1.0 - 0.5 * d / std::max(radius, 1e-6);
+        // Takes on the broom's sideways velocity (half of it at the rim), so what it catches travels with it; falling
+        // and toppling stay with the simulation.
+        s.kick(int(i), (want - flat(s.velocity(int(i)))) * fall);
+    }
+}
+
 void Session::drop()
 {
     for (size_t i = 0; i < mWorld->movers(); ++i)

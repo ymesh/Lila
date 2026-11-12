@@ -42,7 +42,7 @@ namespace
 {
 const TCHAR* TerrainFunctionName = TEXT("MF_LilaTerrainLayer");
 const TCHAR* TerrainVersionTag = TEXT("Lila Terrain Layer v");
-constexpr int32 TerrainFunctionVersion = 2;
+constexpr int32 TerrainFunctionVersion = 3;
 const TCHAR* TerrainFolder = TEXT("/Game/LilaLink/Landscapes");
 
 struct FTerrainLayer
@@ -80,7 +80,17 @@ struct FLilaHex
 	}
 };
 FLilaHex L;
+// The normal the weights read (terrain::cliffs::projectionNormal): the shading normal, giving way to the triangle's own,
+// from the derivatives of the world tile coordinates, where they part by 10 to 25 degrees. Across a one-cell landscape
+// step the shading normal leans halfway between plateau and face.
 float3 n = normalize(Normal);
+float3 f = cross(ddx(WorldTile), ddy(WorldTile));
+if (dot(f, f) > 1e-20)
+{
+	f = normalize(f);
+	f = dot(f, n) < 0.0 ? -f : f;
+	n = normalize(lerp(n, f, 1.0 - smoothstep(0.9063078, 0.9848078, dot(f, n))));
+}
 float slope = degrees(acos(saturate(abs(n.z))));
 float side = smoothstep(SlopeStart, SlopeStart + max(SlopeBlend, 0.001), slope);
 float2 sw = float2(n.x * n.x, n.y * n.y);
@@ -97,7 +107,17 @@ return Accum + Tint.rgb * c * Weight;
 
 // Mobile (ES3.1, forward or deferred): biplanar, the top and the dominant side only, no hex tiling.
 const TCHAR* TerrainColorMobileCode = TEXT(R"(
+// The normal the weights read (terrain::cliffs::projectionNormal): the shading normal, giving way to the triangle's own,
+// from the derivatives of the world tile coordinates, where they part by 10 to 25 degrees. Across a one-cell landscape
+// step the shading normal leans halfway between plateau and face.
 float3 n = normalize(Normal);
+float3 f = cross(ddx(WorldTile), ddy(WorldTile));
+if (dot(f, f) > 1e-20)
+{
+	f = normalize(f);
+	f = dot(f, n) < 0.0 ? -f : f;
+	n = normalize(lerp(n, f, 1.0 - smoothstep(0.9063078, 0.9848078, dot(f, n))));
+}
 float slope = degrees(acos(saturate(abs(n.z))));
 float side = smoothstep(SlopeStart, SlopeStart + max(SlopeBlend, 0.001), slope);
 float3 c = Texture2DSample(Texture, TextureSampler, WorldTile.xy).rgb * (1.0 - side);

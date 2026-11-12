@@ -253,6 +253,113 @@ void unfreeze(Graph& g, NodeId id, const glm::dmat3& rotation, const glm::dvec3&
 }
 
 json vecJson(const glm::dvec3& v) { return json::array({v.x, v.y, v.z}); }
+
+/** Curve points: each pick is its own piece; a single one aims along its tangent, up along its normal. */
+std::vector<Piece> providedPieces(Graph& g, NodeId id, const components::PointProvider& pp, const std::vector<Pick>& picks)
+{
+    std::unordered_map<uint32_t, glm::dvec3> at;
+    for (const auto& [k, pos] : pp.points(g, id))
+        at[k] = pos;
+    components::Ids ids;
+    for (const Pick& k : picks)
+        ids.push_back(k.id);
+    const std::vector<glm::dmat3> frames = pp.frames ? pp.frames(g, id, ids) : std::vector<glm::dmat3>{};
+    std::vector<Piece> out;
+    for (size_t i = 0; i < picks.size(); ++i)
+    {
+        auto it = at.find(picks[i].id);
+        if (it == at.end())
+            continue;
+        Piece pc;
+        pc.rank = picks[i].rank;
+        pc.centre = pc.pointSum = it->second;
+        pc.pointCount = 1;
+        if (i < frames.size())
+        {
+            pc.aim = unitOrZero(frames[i][0]);
+            pc.normal = unitOrZero(frames[i][2]);
+            pc.up = pc.normal != glm::dvec3(0.0) ? pc.normal : unitOrZero(frames[i][1]);
+            pc.upIsNormal = pc.normal != glm::dvec3(0.0);
+        }
+        out.push_back(pc);
+    }
+    std::stable_sort(out.begin(), out.end(), [](const Piece& x, const Piece& y) { return x.rank < y.rank; });
+    return out;
+}
+
+/**
+ * The objects that turn: each picked node, or the selected group it was reached through when only the group is
+ * selected, so picking a child's components orients the group.
+ */
+std::vector<NodeId> selectedOwners(Graph& g, const std::vector<NodeId>& owners)
+{
+    const std::vector<NodeId>& sel = g.selection();
+    auto selected = [&](NodeId id) { return std::find(sel.begin(), sel.end(), id) != sel.end(); };
+    std::vector<NodeId> out;
+    for (NodeId id : owners)
+    {
+        NodeId target = id;
+        if (!selected(id))
+            for (NodeId up = g.parent(id); up != kNoNode; up = g.parent(up))
+                if (selected(up))
+                {
+                    target = up;
+                    break;
+                }
+        if (std::find(out.begin(), out.end(), target) == out.end())
+            out.push_back(target);
+    }
+    return out;
+}
+
+/** Object mode: the other objects take the first one's pivot axes (and, for position='first', its pivot position). */
+json fromFirstObject(const std::vector<std::string>& names, const std::string& mode, const std::string& position)
+{
+    LILA_ZONE();
+
+    Graph& g = Graph::current();
+    std::vector<NodeId> ids;
+    for (const std::string& name : names)
+        if (Node* n = g.find(name); n && n->type().isA("transform"))
+            ids.push_back(n->id());
+    if (ids.size() < 2)
+        throw CommandError("orientPivot: pick components, or select the object to take the pivot from, then the ones to change");
+    if (mode == "manipulator")
+        throw CommandError("orientPivot: mode='manipulator' needs a component selection");
+    if (mode != "pivot" && mode != "transform")
+        throw CommandError("orientPivot: mode must be pivot, transform or manipulator");
+    if (position != "first" && position != "center" && position != "keep")
+        throw CommandError("orientPivot: position must be first, center or keep");
+
+    g.evaluate();
+    const NodeId source = ids.front();
+    ids.erase(ids.begin());
+    const glm::dmat3 axes = xformops::pivotFrame(g, source);
+    std::optional<glm::dvec3> place;
+    if (position == "first")
+        place = xformops::worldPivot(g, source);
+    else if (position == "center")
+    {
+        glm::dvec3 sum = xformops::worldPivot(g, source);
+        for (NodeId id : ids)
+            sum += xformops::worldPivot(g, id);
+        place = sum / double(ids.size() + 1);
+    }
+
+    if (mode == "pivot")
+        for (NodeId id : ids)
+        {
+            if (place)
+                xformops::setWorldPivot(g, id, *place);
+            xformops::setWorldPivotFrame(g, id, axes);
+        }
+    else
+        for (NodeId id : xformops::topLevel(g, ids))
+            unfreeze(g, id, axes, place ? *place : xformops::worldPivot(g, id));
+
+    const glm::dvec3 at = place ? *place : xformops::worldPivot(g, ids.front());
+    return {{"position", vecJson(at)}, {"x", vecJson(axes[0])}, {"y", vecJson(axes[1])}, {"z", vecJson(axes[2])}};
+}
 } // namespace
 
 std::vector<Piece> pieces(const geo::Mesh& m, ComponentMode kind, const std::vector<Pick>& picks, bool split)
@@ -407,7 +514,9 @@ void registerCommand()
                "centre to the last's. One piece aims along itself: a face or face region along its normal (up from the first "
                "face's longest edge), an edge from its first point to its second (up from its faces' normal), a closed loop "
                "through its plane (up toward its first picked point), an open chain from the end nearer the first pick to "
-               "the other, a vertex along its normal (up along its longest edge).",
+               "the other, a vertex along its normal (up along its longest edge).\n\n"
+               "A curve point aims along the curve, up along its normal. Picks on a mesh reached through a selected group turn the "
+               "group. In object mode the other selected objects take the first one's pivot axes and position.",
         .flags = {
             {"aim", "", T::String, "x", "Pivot axis that points along the aim.", axes},
             {"up", "", T::String, "y", "Pivot axis that points toward the up reference.", axes},
@@ -431,10 +540,10 @@ void registerCommand()
             LILA_ZONE();
 
             const ComponentMode kind = components::mode();
-            if (kind == ComponentMode::Object)
-                throw CommandError("orientPivot: select vertices, edges or faces");
             const std::string mode = a.get<std::string>("mode", "transform");
             const std::string position = a.get<std::string>("position", "first");
+            if (kind == ComponentMode::Object)
+                return fromFirstObject(a.objects(), mode, position);
             const std::string upRef = a.get<std::string>("upReference", "component");
             Axis aimAxis, upAxis;
             try
@@ -462,20 +571,27 @@ void registerCommand()
                 byNode[node].push_back({id, i});
             }
             std::vector<Piece> all;
-            std::vector<NodeId> targets;
+            std::vector<NodeId> owners;
             for (NodeId node : nodes)
             {
                 Node* n = g.node(node);
-                MeshPtr cage = n && n->type().isA("mesh") ? modifiers::cage(g, node) : nullptr;
-                if (!cage)
+                if (!n)
+                    continue;
+                std::vector<Piece> found;
+                if (MeshPtr cage = n->type().isA("mesh") ? modifiers::cage(g, node) : nullptr)
+                    found = pieces(*cage, kind, byNode[node], ordered.size() == 2);
+                else if (const components::PointProvider* pp = components::pointProvider(*n); pp && kind == ComponentMode::Vertex)
+                    found = providedPieces(g, node, *pp, byNode[node]);
+                if (found.empty())
                     continue;
                 const glm::dmat4 world = n->as<glm::dmat4>(Transform::kWorldMatrix);
-                for (const Piece& p : pieces(*cage, kind, byNode[node], ordered.size() == 2))
+                for (const Piece& p : found)
                     all.push_back(toWorld(p, world));
-                targets.push_back(node);
+                owners.push_back(node);
             }
             if (all.empty())
-                throw CommandError("orientPivot: select mesh vertices, edges or faces");
+                throw CommandError("orientPivot: select mesh vertices, edges or faces, or curve points");
+            const std::vector<NodeId> targets = selectedOwners(g, owners);
             std::stable_sort(all.begin(), all.end(), [](const Piece& x, const Piece& y) { return x.rank < y.rank; });
 
             Aim aim;

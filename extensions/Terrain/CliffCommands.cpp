@@ -9,6 +9,7 @@
 #include "TerrainEdit.h"
 #include "Volume.h"
 
+#include <lila/Bake.h>
 #include <lila/Command.h>
 #include <lila/Curves.h>
 #include <lila/Deformer.h>
@@ -27,6 +28,7 @@
 #include <lila/TextureGraph.h>
 #include <lila/Transform.h>
 #include <lila/UnrealLink.h>
+#include <lila/Uv.h>
 
 #include <algorithm>
 #include <cmath>
@@ -438,10 +440,20 @@ json makeLowPoly(Graph& g, Node* high, Node* parent, double ratio, int resolutio
     const scene::MeshPtr m = meshOf(g, high);
     if (!m)
         return nullptr;
+    // The cliff's uv0 tiles in world units with a seam at every layer: kept, its seams would stall the reduction and the
+    // bake would skip every triangle outside 0-1. The low poly gets a unique layout of its own instead.
+    geo::Mesh src = *m;
+    src.cornerAttrs().remove(geo::attr::uvName(0));
     geo::ReduceOptions ro;
     ro.ratio = std::clamp(ratio, 0.001, 1.0);
     ro.keepBorders = true;
-    geo::Mesh low = geo::reduceMesh(*m, ro).mesh;
+    ro.keepHardEdges = false;
+    geo::Mesh low = geo::reduceMesh(src, ro).mesh;
+    // Seams at 45 degrees: at the default 60 a wavy cliff's islands come out with triangles squashed flat in uv, which smear
+    // in the bake.
+    uv::AutoUvOptions uo;
+    uo.seams.hardAngle = 45.0;
+    uv::autoUv(low, {}, geo::attr::uvName(0), uo);
     const std::string name = high->name() + "_low";
     Node* n = putMesh(g, name, parent, std::move(low));
     json out = {{"mesh", n->path()}, {"triangles", int64_t(geo::triangulate(*meshOf(g, n)).faces.size())}};
@@ -451,7 +463,13 @@ json makeLowPoly(Graph& g, Node* high, Node* parent, double ratio, int resolutio
         ops::execute("createBakeProject", {{"name", project}});
         ops::execute("bakeGroup", {{"args", {identifier(high->name()) + "_group"}}, {"project", project}, {"lows", {n->path()}}, {"highs", {high->path()}}});
         ops::execute("setBakeOutput", {{"project", project}, {"resolution", resolution}});
-        out["bake"] = ops::execute("bake", {{"project", project}, {"maps", {"normal", "ao"}}});
+        json bakeArgs = {{"project", project}, {"maps", {"normal", "ao"}}};
+        const std::vector<std::string> backends = bake::backendNames();
+        if (std::ranges::find(backends, "gpu") != backends.end())
+            bakeArgs["backend"] = "gpu";
+        else
+            out["backendNote"] = "no GPU bake backend in this session (batch, or the renderer hasn't started): baked on the CPU";
+        out["bake"] = ops::execute("bake", bakeArgs);
     }
     catch (const std::exception& e)
     {
@@ -1052,6 +1070,8 @@ json runSendCliffs(const Args& a)
     for (const json& o : a.flags.value("only", json::array()))
         only.insert(o.get<std::string>());
     std::vector<std::pair<std::string, Node*>> meshes;
+    // Extra meshes (contact skirts, strips) keep their own material slots, which LilaLink maps to its masters.
+    std::set<const Node*> extras;
     json kits = json::array();
     for (const json& e : state.cliffs)
     {
@@ -1072,6 +1092,7 @@ json runSendCliffs(const Args& a)
         if (!n || !n->type().isA("mesh"))
             throw CommandError(cmd + ": extra " + x.get<std::string>() + " is not a mesh");
         meshes.push_back({identifier(n->name()), n});
+        extras.insert(n);
     }
     if (meshes.empty() && kits.empty())
         throw CommandError(cmd + ": nothing to send: the terrain has no cliffs (terrainCliffMesh, terrainCliffExtrude, terrainCliffKit) and no extra= meshes");
@@ -1093,6 +1114,8 @@ json runSendCliffs(const Args& a)
     {
         std::string key, name;
         Tile tile;
+        bool cliffMaterial = true;
+        json materials;
     };
     std::vector<Planned> planned;
     json perMesh = json::array();
@@ -1110,7 +1133,8 @@ json runSendCliffs(const Args& a)
             tris += tile.triangles;
             nanite += tile.nanite;
             const std::string suffix = std::format("x{}_y{}", tile.cell.first, tile.cell.second);
-            planned.push_back({id + "/cliffs/" + name + "/" + suffix, "SM_" + label + "_" + identifier(name) + "_" + suffix, std::move(tile)});
+            planned.push_back({id + "/cliffs/" + name + "/" + suffix, "SM_" + label + "_" + identifier(name) + "_" + suffix, std::move(tile), !extras.count(n),
+                               extras.count(n) ? link::materialParams(g, {n->id()}) : json()});
         }
         perMesh.push_back({{"name", name}, {"mesh", n->path()}, {"tiles", tiles.size()}, {"triangles", tris}, {"naniteTiles", nanite}});
     }
@@ -1172,12 +1196,14 @@ json runSendCliffs(const Args& a)
         const Planned& p = planned[i];
         link::TileItem it;
         it.key = p.key;
-        it.hash = p.tile.hash ^ link::hashBytes(hlod.data(), hlod.size());
+        const std::string mats = p.materials.is_null() ? std::string() : p.materials.dump();
+        it.hash = p.tile.hash ^ link::hashBytes(hlod.data(), hlod.size()) ^ (mats.empty() ? 0 : link::hashBytes(mats.data(), mats.size()));
         it.group = p.key;
         json options = {{"nanite", p.tile.nanite}, {"collision", "complexAsSimple"}, {"existing", "replace"}, {"reapplyOptions", true}};
         // Without Nanite the collision comes from the last LOD: simplified, and its borders still meet the neighbours'.
         options["lodForCollision"] = !p.tile.nanite && p.tile.lods.size() > 1 ? int64_t(p.tile.lods.size() - 1) : int64_t(0);
         it.mapping = options;
+        it.materials = p.materials;
         it.mapping["contentPath"] = content + "/" + p.name;
         it.mapping["kind"] = "static";
         it.write = [&p, &folder]() {
@@ -1189,7 +1215,7 @@ json runSendCliffs(const Args& a)
         it.after = [&call, &p, c, hlod, i, &assets, material, &label, &materialResult](const std::string& asset) {
             assets[i] = asset;
             // Per tile, so a long send never loads every tile at the end to give them their material.
-            if (material)
+            if (material && p.cliffMaterial)
                 materialResult = call("setCliffMaterial", {{"label", label}, {"meshes", json::array({asset})}});
             const math::Vector u = math::toUnreal(math::Vector(c.x, c.y, c.z));
             json params = {{"group", p.key},
@@ -1441,7 +1467,7 @@ void registerCliffCommands(ext::Context& ctx)
                   {"only", "on", T::List, json::array(), "Send only these cliffs, by name."},
                   {"kitAs", "ka", T::String, "assembly", "Kits: assembly (a Nanite Assembly) or hism.", {"assembly", "hism"}},
                   {"contentFolder", "cf", T::String, nullptr, "Where the tile assets go in Unreal; defaults to /Game/LilaLink/Landscapes/<terrain>/Cliffs."},
-                  {"material", "mat", T::Bool, true, "Give the tiles MI_<terrain>_Cliffs."},
+                  {"material", "mat", T::Bool, true, "Give the cliff tiles MI_<terrain>_Cliffs; extra= meshes keep their own material slots."},
                   {"force", "fc", T::Bool, false, "Send every tile, changed or not."},
                   {"collectEvery", "ce", T::Int, int64_t(8), "Ask Unreal to collect garbage after this many tiles.", {}, {}, 0.0},
                   {"stopAfter", "sa", T::Int, int64_t(-1), "Stop after this many tiles (a resumable partial send); -1 sends all.", {}, {}, -1.0},

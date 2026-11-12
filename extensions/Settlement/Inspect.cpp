@@ -119,6 +119,8 @@ template <class T> std::vector<std::string> reasonsOf(const T& x)
 const char* useLabel(Use u) { return useName(u); }
 } // namespace
 
+bool polygonsShareArea(const Polygon& a, const Polygon& b, double tol) { return shareArea(a, b, tol); }
+
 json streetscapeLaneChecks(const Layout& l, const Ground& ground)
 {
     const json r = checkLanes(l, ground);

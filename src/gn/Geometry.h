@@ -117,8 +117,10 @@ struct LILA_SCENE_API Geometry
     std::shared_ptr<const Instances> instances;
     /** Terrain heights on a grid. It reaches the modifier stack, and anything that only takes meshes, as a mesh. */
     std::shared_ptr<const geo::Heightfield> heightfield;
-    /** A density or signed-distance grid (gn/Volume.h). Never reaches the modifier stack; Volume to Mesh makes it a mesh. */
+    /** A density, signed-distance or vector grid (gn/Volume.h). Never reaches the modifier stack; Volume to Mesh makes it a mesh. */
     std::shared_ptr<const Volume> volume;
+    /** A label for the whole geometry (Set Geometry Name); joins keep the first named part's. */
+    std::string name;
 
     bool empty() const;
 };
@@ -132,7 +134,7 @@ LILA_SCENE_API GeometryPtr heightfieldGeometry(geo::Heightfield h);
 /**
  * Every component transformed. Instances transform their own matrices only. A heightfield stays one under translation
  * and scale with equal X and Z; any other transform turns it into a mesh. A volume keeps its values and moves its grid;
- * signed distances are scaled by the transform's average scale.
+ * signed distances are scaled by the transform's average scale and vectors turned by its linear part.
  */
 LILA_SCENE_API Geometry transformed(const Geometry& g, const glm::dmat4& xf);
 LILA_SCENE_API void transformMesh(geo::Mesh& m, const glm::dmat4& xf);
@@ -141,7 +143,7 @@ LILA_SCENE_API void transformCurves(CurveSet& c, const glm::dmat4& xf);
 /**
  * Component-wise union. Meshes are appended, instances concatenated. The first heightfield stays one; later ones become
  * meshes. The first volume is kept; later volumes of the same kind on the same grid merge into it (signed distances by
- * union, densities summed) and others are dropped.
+ * union, densities and vectors summed) and others are dropped.
  */
 LILA_SCENE_API Geometry join(std::span<const GeometryPtr> parts);
 

@@ -70,3 +70,11 @@ CREATE TABLE IF NOT EXISTS published (
   body TEXT NOT NULL,
   updated TEXT NOT NULL
 );
+
+-- Roadmap votes: voter is sha256(IP | VOTE_SALT), never the address itself.
+CREATE TABLE IF NOT EXISTS roadmap_votes (
+  card TEXT NOT NULL,
+  voter TEXT NOT NULL,
+  at TEXT NOT NULL,
+  PRIMARY KEY (card, voter)
+);

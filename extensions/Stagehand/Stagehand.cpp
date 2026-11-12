@@ -13,6 +13,7 @@ LILA_EXTENSION_EXPORT int lilaExtensionInit(lila::ext::Context& ctx)
     stagehand::registerCommands(ctx);
     stagehand::registerLibraryCommands(ctx);
     stagehand::registerArrangeCommands(ctx);
+    stagehand::registerPresetCommands(ctx);
     stagehand::registerKitCommands(ctx);
     stagehand::registerRealizeCommands(ctx);
     stagehand::registerUnrealExport(ctx);

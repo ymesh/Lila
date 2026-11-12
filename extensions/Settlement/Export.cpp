@@ -1,6 +1,7 @@
 // Settlement export data: World Partition cells, live-sync manifests, and the GeoJSON, USD, DXF and engine JSON files.
 
 #include "Export.h"
+#include "Generators.h"
 #include "Parcels.h"
 
 #include <lila/Profile.h>
@@ -639,6 +640,17 @@ std::vector<SyncItem> syncItems(const Layout& l, const RoadNetwork& net, const s
         return h;
     };
 
+    uint64_t levelHash = 0;
+    if (l.gen)
+        for (const LevelLine& line : levelLines(l, Ground::plane()))
+        {
+            levelHash = hash64(levelHash ^ hashText(line.kind) ^ uint64_t(line.layer) * 131 ^ uint64_t(line.cls));
+            for (const glm::dvec3& q : line.pts)
+                levelHash = hash64(levelHash ^ hashText(std::format("{},{},{}", q.x, q.y, q.z)));
+        }
+    if (levelHash && o.roads != "none")
+        make(o.key + "/levels", "levels", {}, levelHash);
+
     if (o.roads == "meshes")
         for (const auto& [cell, mesh] : roadMeshes)
         {
@@ -701,7 +713,7 @@ std::vector<SyncItem> syncItems(const Layout& l, const RoadNetwork& net, const s
     {
         std::vector<std::string> ids = roadIds;
         ids.insert(ids.end(), junctionIds.begin(), junctionIds.end());
-        make(o.key + "/zoneGraph", "zoneGraph", std::move(ids), net.parking.size());
+        make(o.key + "/zoneGraph", "zoneGraph", std::move(ids), hash64(net.parking.size() ^ levelHash));
     }
     return items;
 }
@@ -791,6 +803,7 @@ json toGeoJson(const Layout& l, const RoadNetwork& net, const std::string& name)
                                     {"control", controlName(j.control)},
                                     {"approaches", j.ends.size()},
                                     {"phases", j.phases},
+                                    {"walks", j.walks},
                                     {"radius", j.radius},
                                     {"height", j.p.y}}));
     for (const Block& b : l.blocks)
@@ -1043,7 +1056,7 @@ json toEngineJson(const Layout& l, const Ground& ground, const RoadNetwork& net,
     }
     json junctions = json::array();
     for (const Junction& j : net.junctions)
-        junctions.push_back({{"key", junctionKey(j)}, {"control", controlName(j.control)}, {"approaches", int(j.ends.size())}, {"position", es.vec(j.p)}});
+        junctions.push_back({{"key", junctionKey(j)}, {"control", controlName(j.control)}, {"approaches", int(j.ends.size())}, {"position", es.vec(j.p)}, {"phases", j.phases}, {"walks", j.walks}});
     json blocks = json::array();
     for (const Block& b : l.blocks)
         blocks.push_back({{"id", b.id}, {"use", useName(b.use)}, {"area", b.area / kM2}, {"outline", es.flatPoints(flat(b.outline, lowestGround(ground, b.outline)))}});

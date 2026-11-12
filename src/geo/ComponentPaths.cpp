@@ -224,8 +224,11 @@ std::vector<Index> edgePathBetween(const Mesh& m, Index a, Index b)
     std::optional<std::vector<Index>> best;
     std::vector<Index> loop = edgeLoop(m, a);
     consider(best, loop, loopClosed(m, loop), a, b);
-    std::vector<Index> ring = edgeRing(m, a);
-    consider(best, ring, ringClosed(m, ring), a, b);
+    if (!best)
+    {
+        std::vector<Index> ring = edgeRing(m, a);
+        consider(best, ring, ringClosed(m, ring), a, b);
+    }
     if (best)
         return *best;
     Index from[] = {m.edgePoint(a, 0), m.edgePoint(a, 1)}, to[] = {m.edgePoint(b, 0), m.edgePoint(b, 1)};

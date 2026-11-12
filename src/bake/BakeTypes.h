@@ -210,6 +210,10 @@ enum HitFlags : uint32_t
     kHitValid = 1,
     /** The nearest surface along the ray faced away (counted as a miss when backfaces are ignored). */
     kHitBackface = 2,
+    /** The ray met the far side of a thin part (a surface facing away from the low) and was re-aimed along the face normal. */
+    kHitReaimed = 4,
+    /** No ray along the normal found the high; the nearest one facing the low's way, found by probes, was used. */
+    kHitProbed = 8,
 };
 
 /** One stratified sample on a low's UVs, with the low's interpolated surface there. World (bake) space. */

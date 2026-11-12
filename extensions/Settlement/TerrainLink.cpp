@@ -18,6 +18,7 @@
 #include <format>
 #include <limits>
 #include <map>
+#include <queue>
 #include <set>
 
 using namespace lila;
@@ -367,6 +368,121 @@ double lineDistance(std::span<const glm::dvec3> pts, Vec2 q)
     return best;
 }
 
+std::string nodeKey(Vec2 p) { return std::format("{},{}", std::llround(p.x), std::llround(p.y)); }
+
+double lineLength(const StreetLine& line)
+{
+    double length = 0.0;
+    for (size_t k = 0; k + 1 < line.pts.size(); ++k)
+        length += glm::length(Vec2(line.pts[k + 1].x - line.pts[k].x, line.pts[k + 1].z - line.pts[k].z));
+    return length;
+}
+
+/** The point at arc length d along the line from its start (or from its end), on the plan. */
+Vec2 alongLine(const StreetLine& line, double d, bool fromEnd)
+{
+    const size_t n = line.pts.size();
+    auto at = [&](size_t i) { const glm::dvec3& q = line.pts[fromEnd ? n - 1 - i : i]; return Vec2(q.x, q.z); };
+    for (size_t i = 0; i + 1 < n; ++i)
+    {
+        const double seg = glm::length(at(i + 1) - at(i));
+        if (d <= seg)
+            return at(i) + (at(i + 1) - at(i)) * (seg > 0.0 ? d / seg : 0.0);
+        d -= seg;
+    }
+    return at(n - 1);
+}
+
+/**
+ * How far each junction is held level along the streets meeting there: past the widest one's kerb with room to spare,
+ * so a street joining another meets its surface at the junction's height whatever the other's grade or bank.
+ */
+std::map<int, double> junctionPlateaus(const std::vector<StreetLine>& lines, const Layout& l)
+{
+    std::map<int, double> out;
+    for (const StreetLine& line : lines)
+        if (!line.surface && line.startNode >= 0 && line.endNode >= 0)
+            for (int n : {line.startNode, line.endNode})
+                if (l.graph.degree(n) >= 3)
+                    out[n] = std::max(out[n], 0.5 * line.width + 400.0);
+    return out;
+}
+
+/** The plateau each end of a line keeps level, or none at either end when the line is too short for both. */
+std::pair<double, double> linePlateaus(const StreetLine& line, const std::map<int, double>& plateaus)
+{
+    auto of = [&](int n) { auto it = plateaus.find(n); return it != plateaus.end() ? it->second : 0.0; };
+    const double a = of(line.startNode), b = of(line.endNode);
+    if (lineLength(line) < a + b + 300.0)
+        return {0.0, 0.0};
+    return {a, b};
+}
+
+/**
+ * Heights for every street line's ends, so that no line has to climb faster than its class's grade between its two
+ * ends. Each node starts at its height from the last grade (kept, so re-grading sends the same keys) or the ground,
+ * then the result is the mean of the highest grade-limited heights at or below those and the lowest at or above them:
+ * both meet every line's limit, so their mean does too, and a network that already meets them is left as it is.
+ */
+std::map<int, double> junctionHeights(const std::vector<StreetLine>& lines, const Layout& l, const Ground& ground, const json& kept,
+                                      const std::map<int, double>& plateaus)
+{
+    std::map<int, double> base;
+    std::map<int, std::vector<std::pair<int, double>>> links;
+    for (const StreetLine& line : lines)
+    {
+        if (line.surface || line.startNode < 0 || line.endNode < 0 || line.pts.size() < 2)
+            continue;
+        // Only the part between the level junction ends climbs, and a short street between two junctions stays level.
+        const auto [pa, pb] = linePlateaus(line, plateaus);
+        const bool shortBetween = pa == 0.0 && plateaus.contains(line.startNode) && plateaus.contains(line.endNode);
+        const double climb = shortBetween ? 0.0 : std::max(0.0, lineLength(line) - pa - pb);
+        // A margin under the limit: the road solver measures along its own stations and rounds its vertical curves.
+        const double rise = 0.7 * classMaxGrade(l.profile, line.cls) * climb;
+        for (int n : {line.startNode, line.endNode})
+            if (!base.contains(n))
+            {
+                const Vec2 p = l.graph.nodes[size_t(n)].p;
+                const json& h = kept.contains(nodeKey(p)) ? kept[nodeKey(p)] : json();
+                base[n] = h.is_number() ? h.get<double>() : ground.surfaceHeight(p);
+            }
+        if (line.startNode != line.endNode)
+        {
+            links[line.startNode].push_back({line.endNode, rise});
+            links[line.endNode].push_back({line.startNode, rise});
+        }
+    }
+    auto envelope = [&](double sign) {
+        // sign 1: the highest heights no line limit is broken by, at or below the base; -1: the lowest at or above it.
+        std::map<int, double> h;
+        std::priority_queue<std::pair<double, int>, std::vector<std::pair<double, int>>, std::greater<>> open;
+        for (const auto& [n, v] : base)
+        {
+            h[n] = sign * v;
+            open.push({sign * v, n});
+        }
+        while (!open.empty())
+        {
+            const auto [v, n] = open.top();
+            open.pop();
+            if (v > h[n])
+                continue;
+            for (const auto& [m, rise] : links[n])
+                if (v + rise < h[m])
+                {
+                    h[m] = v + rise;
+                    open.push({h[m], m});
+                }
+        }
+        return h;
+    };
+    const std::map<int, double> below = envelope(1.0), above = envelope(-1.0);
+    std::map<int, double> out;
+    for (const auto& [n, v] : below)
+        out[n] = 0.5 * (v - above.at(n));
+    return out;
+}
+
 /** One terrain call the grade makes: kept by id and the hash of what it sends, so an unchanged part is not sent again. */
 struct Send
 {
@@ -399,6 +515,7 @@ json grade(Graph& g, const std::string& name, const Args& a, const std::string& 
     const std::string padMode = a.get<std::string>("padMode", "flatten");
     const json graded = edits.value("terrain", json::object()).value("graded", json::object());
     json errors = json::array();
+    json keys = edits.value("terrain", json::object()).value("keys", json::object());
     std::vector<Send> roads, rings, stamps, rivers;
     std::map<std::string, std::vector<std::string>> ringRoads;
 
@@ -418,7 +535,14 @@ json grade(Graph& g, const std::string& name, const Args& a, const std::string& 
         }
         std::map<std::string, int> taken;
         std::map<uint64_t, std::string> idOfStreet;
-        for (const StreetLine& line : streetLines(r.layout, r.ground))
+        const std::vector<StreetLine> lines = streetLines(r.layout, r.ground);
+        const std::map<int, double> plateaus = junctionPlateaus(lines, r.layout);
+        const std::map<int, double> heights =
+            junctionHeights(lines, r.layout, r.ground, edits.value("terrain", json::object()).value("keys", json::object()), plateaus);
+        keys = json::object();
+        for (const auto& [n, h] : heights)
+            keys[nodeKey(r.layout.graph.nodes[size_t(n)].p)] = h;
+        for (const StreetLine& line : lines)
         {
             if (line.surface || line.pts.size() < 2)
                 continue;
@@ -446,6 +570,21 @@ json grade(Graph& g, const std::string& name, const Args& a, const std::string& 
                       {"bridgeHeight", bridge ? 150.0 : 0.0},
                       {"tunnelDepth", tunnel ? 300.0 : 0.0},
                       {"masks", json::array({"paved", "cityFootprint"})}};
+            json ends = json::array();
+            const auto [pa, pb] = linePlateaus(line, plateaus);
+            for (int n : {line.startNode, line.endNode})
+                if (auto it = heights.find(n); it != heights.end())
+                {
+                    const Vec2 p = r.layout.graph.nodes[size_t(n)].p;
+                    ends.push_back(json::array({p.x, it->second, p.y}));
+                    if (const double d = n == line.startNode ? pa : pb; d > 0.0)
+                    {
+                        const Vec2 q = alongLine(line, d, n != line.startNode);
+                        ends.push_back(json::array({q.x, it->second, q.y}));
+                    }
+                }
+            if (!ends.empty())
+                c["keys"] = ends;
             if (rp.lanes > 0 && line.cls != StreetClass::Path)
             {
                 const double sides = 2.0 * (rp.sidewalk + rp.verge + rp.parking);
@@ -685,8 +824,27 @@ json grade(Graph& g, const std::string& name, const Args& a, const std::string& 
     if (!staleRivers.empty() && ops::find("terrainWaterRemove"))
         terrainCall("terrainWaterRemove", terrain, {{"ids", staleRivers}}, cmd);
 
+    // Every street the terrain could not lay within its grade is reported with the road solver's reason.
+    json overGrade = json::array();
+    if (a.get<bool>("streets", true))
+        for (const json& road : terrainCall("terrainRoads", terrain, json::object(), cmd).value("layers", json::object()).value(roadLayer, json::array()))
+        {
+            const std::string id = road.value("id", std::string());
+            const double limit = road.value("design", json::object()).value("maxGrade", 0.0), grade = road.value("maxGrade", 0.0);
+            if (!id.starts_with(key + "/street/") || limit <= 0.0 || grade <= limit * 1.01 + 0.05)
+                continue;
+            std::string why;
+            for (const json& w : road.value("warnings", json::array()))
+                why += (why.empty() ? "" : "; ") + w.get<std::string>();
+            if (why.empty())
+                why = "the ground under it is steeper than the limit over a stretch the road cannot lengthen";
+            log::warn("{}: {} climbs {:.1f}% over its {:.1f}%: {}", cmd, id, grade, limit, why);
+            overGrade.push_back({{"id", id}, {"length", road.value("length", 0.0)}, {"grade", grade}, {"maxGrade", limit}, {"why", why}});
+        }
+    out["overGrade"] = overGrade;
+
     const std::string rev = revisionOf(terrain, cmd);
-    edits["terrain"] = {{"terrain", terrain}, {"revision", rev}, {"graded", made}, {"rivers", riverIds}};
+    edits["terrain"] ={{"terrain", terrain}, {"revision", rev}, {"graded", made}, {"rivers", riverIds}, {"keys", keys}};
     // The plan is pinned at the graded terrain, so the grading itself never counts as a change to re-plan for.
     if (edits.contains("plan") && !edits["plan"].is_null() && r.layout.plan == "pinned")
     {

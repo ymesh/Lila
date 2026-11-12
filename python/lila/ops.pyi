@@ -4021,6 +4021,22 @@ def gnRenameInput(*objects: Any, output: bool | None = None) -> Any:
         output: Rename a group output instead. Default False.
     """
 
+def gnRunTool(*objects: Any, targets: Sequence[Any] | None = None, mouse: Sequence[Any] | None = None, region: Sequence[Any] | None = None, rayOrigin: Sequence[float] | None = None, rayDirection: Sequence[float] | None = None, view: Sequence[Any] | None = None, projection: Sequence[Any] | None = None, orthographic: bool | None = None, values: Any | None = None) -> Any:
+    """Run a tool group on meshes (the selected ones by default), replacing each base mesh with what the group makes. In a component mode the selection reaches the group's Selection node and Set Selection writes it back; the pointer and view flags feed Mouse Position and Viewport Transform. Returns the meshes edited.
+
+    Args:
+        objects: group.
+        targets: Mesh names; the selected meshes when left out.
+        mouse: [x, y] pointer position in viewport pixels from the top-left.
+        region: [width, height] of the viewport in pixels.
+        rayOrigin: World-space start of the pointer's ray.
+        rayDirection: World-space direction of the pointer's ray.
+        view: World-to-camera matrix, 16 numbers column by column.
+        projection: Camera-to-clip matrix, 16 numbers column by column.
+        orthographic: The view is orthographic. Default False.
+        values: Group input values by name, as a modifier attr holds them (angles in degrees).
+    """
+
 def gnSaveGroup(*objects: Any, scope: str | None = None) -> Any:
     """Save a group to the user library (prefs folder) or the workspace's .lila/geometryNodes. Returns the file path.
 
@@ -4110,6 +4126,14 @@ def gnSetTies(*objects: Any) -> Any:
 
     Args:
         objects: group ties.
+    """
+
+def gnSetTool(*objects: Any, tool: bool | None = None) -> Any:
+    """Flag a geometry-nodes group as a tool, so it runs on the selected meshes from the Mesh Tools menu and search, or clear the flag.
+
+    Args:
+        objects: group.
+        tool: On makes it a tool; off makes it a modifier group only. Default True.
     """
 
 def gnSetValue(*objects: Any) -> Any:
@@ -5878,6 +5902,8 @@ def orientPivot(aim: str | None = None, up: str | None = None, upReference: str 
     """Aim the pivot from the first picked component to the second, or along a single one.
 
     The component selection splits into connected pieces (two edge loops are two pieces); with exactly two components picked, each is its own piece. With several pieces the aim runs from the first picked piece's centre to the last's. One piece aims along itself: a face or face region along its normal (up from the first face's longest edge), an edge from its first point to its second (up from its faces' normal), a closed loop through its plane (up toward its first picked point), an open chain from the end nearer the first pick to the other, a vertex along its normal (up along its longest edge).
+
+    A curve point aims along the curve, up along its normal. Picks on a mesh reached through a selected group turn the group. In object mode the other selected objects take the first one's pivot axes and position.
 
     Args:
         aim: Pivot axis that points along the aim. One of 'x', '-x', 'y', '-y', 'z', '-z'. Default 'x'.
@@ -8497,7 +8523,7 @@ def selectMode(*objects: Any) -> Any:
     """
 
 def selectPathBetween(*objects: Any, kind: str | None = None, to: int | None = None, replace: bool | None = None, deselect: bool | None = None, symmetric: bool | None = None, **flags: Any) -> Any:
-    """Select the components between two of a mesh's vertices, edges or faces: the shorter way along a loop or ring they share, else the shortest path across the surface. Neighbours (vertices on one edge, edges along a loop or across a quad, faces sharing an edge) select the whole loop or ring through both instead, unless deselecting. Adds to the selection unless replace or deselect. Returns the ids in order.
+    """Select the components between two of a mesh's vertices, edges or faces: the shorter way along a loop or ring they share, else the shortest path across the surface. Neighbours (vertices on one edge, edges along a loop or across a quad on no loop they share, faces sharing an edge) select the whole loop or ring through both instead, unless deselecting. Adds to the selection unless replace or deselect. Returns the ids in order.
 
     Args:
         objects: mesh.
@@ -11562,11 +11588,12 @@ def xform(*objects: Any, query: bool | None = None, worldSpace: bool | None = No
         pos = xform("cube1", query=True, worldSpace=True, translation=True)
     """
 
-def zeroPivot(*objects: Any) -> Any:
-    """Move the pivots to the world origin, keeping the object where it is.
+def zeroPivot(*objects: Any, axes: str | None = None, a: str | None = None) -> Any:
+    """Move the pivots to the world origin, keeping the object where it is. axes zeroes only those world axes, so axes="y" drops the pivot to the ground plane.
 
     Args:
         objects: objects.
+        axes: World axes to zero: any of x, y and z. Short form a. Default 'xyz'.
     """
 
 def zeroPivotRotation(*objects: Any, space: str | None = None) -> Any:

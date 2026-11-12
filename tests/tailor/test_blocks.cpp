@@ -106,7 +106,7 @@ void checkGarment(const Garment& g, const std::string& name)
         bool gathered = false;
         for (const auto* sides : {&s.a, &s.b})
             for (const SeamSide& side : *sides)
-                for (const char* piece : {"Sleeve", "Cuff", "Band", "Puff", "Tier", "Flounce"})
+                for (const char* piece : {"Sleeve", "Cuff", "Ankle Cuff", "Band", "Puff", "Tier", "Flounce"})
                     gathered |= g.panels[side.panel].name.rfind(piece, 0) == 0;
         if (!gathered)
             CHECK(std::abs(la - lb) <= 0.05f * std::max(la, lb));
@@ -611,6 +611,182 @@ TEST_CASE("onesie tail drapes out of the back")
     CHECK(tailBack < -0.45f);
     CHECK(tailLow > 0.5f);
     CHECK(tailGap < 0.02f);
+}
+
+namespace
+{
+int countPanels(const Garment& g, const std::string& prefix, const std::string& contains = {})
+{
+    int n = 0;
+    for (const Panel& p : g.panels)
+        n += p.name.rfind(prefix, 0) == 0 && p.name.find(contains) != std::string::npos;
+    return n;
+}
+
+/** Drapes g on the default mannequin; returns the solver for the caller to inspect. */
+struct Draped
+{
+    ClothMesh cm;
+    ClothSolver solver;
+    float maxSeamGap = 0.f;
+    int inside = 0, finite = 0;
+};
+
+void drapeOn(Garment& g, const Body& body, int frames, Draped& out)
+{
+    std::vector<Vec3> pts;
+    std::vector<std::array<int, 3>> tris;
+    mannequin(body, pts, tris);
+    const Sdf sdf = sdfFromMesh(pts, tris, 0.01f, 0.05f);
+    for (Panel& p : g.panels)
+        p.particleDistance = std::max(p.particleDistance, 0.02f);
+    out.cm = buildClothMesh(g);
+    SolverSettings s;
+    s.floorY = 0.f;
+    out.solver.reset(out.cm, g, s);
+    out.solver.setColliders({&sdf});
+    for (int frame = 0; frame < frames; ++frame)
+        out.solver.step();
+    for (const Vec3& p : out.solver.positions())
+    {
+        out.finite += std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]);
+        out.inside += sdf.sample(p) < -0.005f;
+    }
+    for (const auto& pr : out.cm.seamPairs)
+    {
+        const Vec3 &a = out.solver.positions()[pr[0]], &b = out.solver.positions()[pr[1]];
+        out.maxSeamGap = std::max(out.maxSeamGap, std::hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]));
+    }
+}
+} // namespace
+
+TEST_CASE("suits and overalls: pieces, fabric, seams walk their sides the same way")
+{
+    struct Case
+    {
+        const char* id;
+        BlockParamValues values;
+        const char* fabric;
+    };
+    const std::vector<Case> cases = {
+        {"jumpsuit", {}, "Spandex"},
+        {"jumpsuit", {{"collar", 0.f}, {"kneePatches", 1.f}, {"elbowPatches", 1.f}, {"ankleCuffs", 1.f}}, "Spandex"},
+        {"jumpsuit", {{"sleeveStyle", float(SleeveStyle::Raglan)}, {"collar", 2.f}}, "Spandex"},
+        {"flightSuit", {}, "Nylon"},
+        {"flightSuit", {{"sleeveLength", 0.2f}, {"elbowPatches", 1.f}}, "Nylon"},
+        {"coverall", {}, "Twill"},
+        {"overalls", {}, "Denim"},
+        {"overalls", {{"bibPocket", 0.f}, {"kneePatches", 1.f}}, "Denim"},
+        {"overalls", {{"length", 0.5f}, {"bibWidth", 0.4f}}, "Denim"},
+    };
+    Body child;
+    child.height = 1.2f, child.chest = 0.64f, child.waist = 0.58f, child.hip = 0.66f, child.shoulderWidth = 0.3f;
+    child.armLength = 0.42f, child.inseam = 0.52f, child.neck = 0.29f, child.head = 0.52f;
+    for (const Body& body : {Body{}, child})
+        for (const Case& c : cases)
+        {
+            CAPTURE(std::string(c.id));
+            CAPTURE(c.values.size());
+            Garment g;
+            std::vector<BlockAnchor> anchors;
+            REQUIRE(buildBlock(c.id, g, nullptr, body, c.values, &anchors));
+            checkGarment(g, c.id);
+            REQUIRE(g.fabrics.size() == 1);
+            CHECK(g.fabrics[0].name == c.fabric);
+            for (size_t si = 0; si < g.seams.size(); ++si)
+            {
+                CAPTURE(si);
+                CHECK(seamGap(g, g.seams[si], false) < seamGap(g, g.seams[si], true));
+            }
+            CHECK(buildClothMesh(g).tris.size() > 500);
+            auto value = [&](const char* name, float def) { return c.values.count(name) ? c.values.at(name) : def; };
+            const Block* blk = findBlock(c.id);
+            auto def = [&](const char* name) {
+                for (const BlockParam& p : blk->params)
+                    if (p.name == name)
+                        return p.defaultValue;
+                return 0.f;
+            };
+            if (std::string(c.id) == "overalls")
+            {
+                CHECK(countPanels(g, "Bib") - countPanels(g, "Bib Pocket") == 1);
+                CHECK(countPanels(g, "Back Bib") == 1);
+                CHECK(countPanels(g, "Bib Pocket") == (value("bibPocket", 1.f) > 0.5f ? 1 : 0));
+                CHECK(countPanels(g, "Front", "Knee") == (value("kneePatches", 0.f) > 0.5f ? 2 : 0));
+                REQUIRE(anchors.size() == 2);
+                // Buckle L on the wearer's left, both at the bib's top, in front.
+                CHECK(anchors[0].position[0] > 0.f);
+                CHECK(anchors[1].position[0] < 0.f);
+                CHECK(anchors[0].position[2] > 0.f);
+                continue;
+            }
+            // Seam 0 is the centre front, one run each side, for the zip.
+            CHECK(g.seams[0].a.size() == 1);
+            CHECK(g.seams[0].b.size() == 1);
+            CHECK(countPanels(g, "Collar") == (value("collar", def("collar")) > 0.5f ? 1 : 0));
+            CHECK(countPanels(g, "Ankle Cuff") == (value("ankleCuffs", def("ankleCuffs")) > 0.5f ? 2 : 0));
+            CHECK(countPanels(g, "Front", "Pocket") ==
+                  (value("chestPockets", def("chestPockets")) > 0.5f ? 2 : 0) + (value("legPockets", def("legPockets")) > 0.5f ? 2 : 0));
+            CHECK(countPanels(g, "Front", "Knee") == (value("kneePatches", def("kneePatches")) > 0.5f ? 2 : 0));
+            const bool longSleeves = value("sleeveLength", def("sleeveLength")) > 0.4f;
+            CHECK(countPanels(g, "Sleeve", "Elbow") == (value("elbowPatches", def("elbowPatches")) > 0.5f && longSleeves ? 2 : 0));
+        }
+}
+
+TEST_CASE("jumpsuit drapes close to the body, seams closed")
+{
+    const Body body;
+    Garment g;
+    REQUIRE(buildBlock("jumpsuit", g, nullptr, body, {{"kneePatches", 1.f}, {"ankleCuffs", 1.f}}));
+    Draped d;
+    drapeOn(g, body, 400, d);
+    MESSAGE("seam gap " << d.maxSeamGap << ", inside " << d.inside << " of " << d.solver.positions().size());
+    CHECK(d.finite == int(d.solver.positions().size()));
+    CHECK(d.inside < int(d.solver.positions().size()) / 50);
+    CHECK(d.maxSeamGap < 0.02f);
+    // Fitted: the torso cloth at chest height stays within a few cm of the body.
+    std::vector<Vec3> pts;
+    std::vector<std::array<int, 3>> tris;
+    mannequin(body, pts, tris);
+    const Sdf sdf = sdfFromMesh(pts, tris, 0.01f, 0.05f);
+    float far = 0.f;
+    int n = 0;
+    for (size_t v = 0; v < d.solver.positions().size(); ++v)
+    {
+        const Vec3& q = d.solver.positions()[v];
+        if (g.panels[d.cm.vertPanel[v]].name.rfind("Front", 0) == 0 && std::abs(q[1] - body.chestY()) < 0.03f && std::abs(q[0]) < 0.08f)
+            far += sdf.sample(q), ++n;
+    }
+    REQUIRE(n > 0);
+    MESSAGE("chest standoff " << far / float(n));
+    CHECK(far / float(n) < 0.03f);
+}
+
+TEST_CASE("overalls drape: straps over the shoulders, bib up on the chest")
+{
+    const Body body;
+    Garment g;
+    REQUIRE(buildBlock("overalls", g, nullptr, body));
+    Draped d;
+    drapeOn(g, body, 400, d);
+    MESSAGE("seam gap " << d.maxSeamGap << ", inside " << d.inside);
+    CHECK(d.finite == int(d.solver.positions().size()));
+    CHECK(d.inside < int(d.solver.positions().size()) / 50);
+    CHECK(d.maxSeamGap < 0.02f);
+    float bibTop = 0.f, strapTop = 0.f;
+    for (size_t v = 0; v < d.solver.positions().size(); ++v)
+    {
+        const std::string& name = g.panels[d.cm.vertPanel[v]].name;
+        const Vec3& q = d.solver.positions()[v];
+        if (name == "Bib")
+            bibTop = std::max(bibTop, q[1]);
+        if (name == "Bib" || name == "Back Bib")
+            strapTop = std::max(strapTop, q[1]);
+    }
+    MESSAGE("strap top " << strapTop << ", shoulder " << body.shoulderY());
+    // Hung from the shoulders rather than slid down to the hips.
+    CHECK(strapTop > body.shoulderY() - 0.04f);
+    CHECK(bibTop > body.waistY() + 0.15f);
 }
 
 TEST_CASE("booties: two closed feet, open at the top")

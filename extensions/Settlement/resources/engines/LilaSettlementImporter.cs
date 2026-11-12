@@ -1,6 +1,8 @@
 // Builds a Lila settlement in the open Unity scene from settlementExport(format='unity'). Put this file in an Editor folder
 // of your project, then Tools > Lila > Import Settlement and pick the export's .json. Headless:
 //   Unity -batchmode -quit -projectPath <project> -executeMethod LilaSettlementImporter.ImportFromCommandLine -lilaSettlement <file.json>
+// [-lilaScene Assets/Town.unity]: the settlement goes into that scene (made when missing) and is saved; without it, into
+// a new scene saved as Assets/LilaSettlement/<name>.unity.
 // Streets and massing come in as the FBX models beside the JSON (copied into Assets/LilaSettlement/<name> when the export
 // lies outside Assets). Each placement instantiates the prefab or model whose Assets/ path or name matches its asset, or
 // an empty placeholder when none does. Lots, envelopes and junctions become empty objects named by their key and use.
@@ -87,13 +89,35 @@ public static class LilaSettlementImporter
     public static void ImportFromCommandLine()
     {
         string[] args = Environment.GetCommandLineArgs();
+        string json = null, scene = null;
         for (int i = 0; i + 1 < args.Length; ++i)
+        {
             if (args[i] == "-lilaSettlement")
-            {
-                Import(args[i + 1]);
-                return;
-            }
-        Debug.LogError("LilaSettlementImporter: pass -lilaSettlement <export .json>");
+                json = args[i + 1];
+            else if (args[i] == "-lilaScene")
+                scene = args[i + 1];
+        }
+        if (json == null)
+        {
+            Debug.LogError("LilaSettlementImporter: pass -lilaSettlement <export .json>");
+            EditorApplication.Exit(1);
+            return;
+        }
+        if (scene != null && File.Exists(scene))
+            UnityEditor.SceneManagement.EditorSceneManager.OpenScene(scene);
+        else
+            UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene);
+        GameObject root = Import(json);
+        // Batch mode keeps nothing it doesn't save.
+        string target = scene ?? "Assets/LilaSettlement/" + root.name + ".unity";
+        Directory.CreateDirectory(Path.GetDirectoryName(target));
+        if (!UnityEditor.SceneManagement.EditorSceneManager.SaveScene(root.scene, target))
+        {
+            Debug.LogError("LilaSettlementImporter: could not save " + target);
+            EditorApplication.Exit(1);
+            return;
+        }
+        Debug.Log("Lila: saved " + target);
     }
 
     /// <summary>Builds the settlement under a new root object and returns it.</summary>

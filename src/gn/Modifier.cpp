@@ -3,6 +3,7 @@
 #include "gn/InstanceView.h"
 #include "gn/NodesCommon.h"
 #include "gn/Stateful.h"
+#include "gn/Tool.h"
 #include "gn/Viewer.h"
 
 #include "core/Log.h"
@@ -15,7 +16,9 @@
 #include "scene/Transform.h"
 #include "scene/ViewState.h"
 
+#include <algorithm>
 #include <atomic>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <set>
@@ -48,9 +51,27 @@ struct TypeLayout
         int matrixAttr;
         int curveAttr;
     };
+    struct Bone
+    {
+        std::string node;
+        int worldAttr;
+        int parentAttr;
+    };
+    /** A Collection Info input: arrays with one element per member object, its parent's matrix and the members' names. */
+    struct Collection
+    {
+        std::string node;
+        int meshesAttr;
+        int curvesAttr;
+        int matricesAttr;
+        int parentAttr;
+        int namesAttr;
+    };
     int defAttr = 2;
     std::vector<Param> params;
     std::vector<Object> objects;
+    std::vector<Bone> bones;
+    std::vector<Collection> collections;
     int ownerAttr = -1;
 };
 
@@ -114,6 +135,9 @@ void touchViewModifiers()
 std::string objectMeshAttr(const std::string& node) { return "obj_" + node + "_mesh"; }
 std::string objectMatrixAttr(const std::string& node) { return "obj_" + node + "_matrix"; }
 std::string objectCurveAttr(const std::string& node) { return "obj_" + node + "_curve"; }
+std::string boneWorldAttr(const std::string& node) { return "bone_" + node + "_world"; }
+std::string boneParentAttr(const std::string& node) { return "bone_" + node + "_parent"; }
+std::string collectionAttr(const std::string& node, const char* part) { return "col_" + node + "_" + part; }
 
 /** A curve object's splines as a geometry curve component; null when the value holds none. */
 std::shared_ptr<const CurveSet> curvesOf(const scene::PlugValue& v)
@@ -144,6 +168,7 @@ public:
             noteViewModifier(id(), false);
             clearInstanceView(id());
             setOutputGeometry(id(), nullptr);
+            setModifierGizmos(id(), nullptr);
             setOutput(outAttr, in);
             return;
         }
@@ -174,6 +199,7 @@ public:
         {
             clearInstanceView(id());
             setOutputGeometry(id(), nullptr);
+            setModifierGizmos(id(), nullptr);
             setOutput(outAttr, in);
             return;
         }
@@ -202,6 +228,10 @@ public:
             }
             for (const TypeLayout::Object& o : mLayout->objects)
                 env.objects[o.node] = {as<scene::MeshPtr>(o.meshAttr), curvesOf(value(o.curveAttr)), as<glm::dmat4>(o.matrixAttr)};
+            for (const TypeLayout::Bone& b : mLayout->bones)
+                env.objects[b.node] = {nullptr, nullptr, as<glm::dmat4>(b.worldAttr), as<glm::dmat4>(b.parentAttr)};
+            for (const TypeLayout::Collection& col : mLayout->collections)
+                env.collections[col.node] = collectionInput(col);
             if (mLayout->ownerAttr >= 0)
                 env.ownerMatrix = as<glm::dmat4>(mLayout->ownerAttr);
             prepareCache(env.input);
@@ -215,7 +245,11 @@ public:
             ViewerSink sink;
             if (mPlan->viewerStep >= 0)
                 env.viewer = &sink;
+            auto gizmos = std::make_shared<GizmoList>();
+            if (!mPlan->gizmoSteps.empty())
+                env.gizmos = gizmos.get();
             GeometryPtr result = execute(*mPlan, env);
+            setModifierGizmos(id(), std::move(gizmos));
             setOutputGeometry(id(), result);
             scene::MeshPtr out = std::make_shared<geo::Mesh>(toOutputMesh(*result));
             if (InstanceViewPtr view = makeInstanceView(*result, out))
@@ -235,6 +269,7 @@ public:
             clearViewerData(id());
             clearInstanceView(id());
             setOutputGeometry(id(), nullptr);
+            setModifierGizmos(id(), nullptr);
         }
     }
 
@@ -274,6 +309,7 @@ public:
         noteViewModifier(id(), false);
         clearInstanceView(id());
         setOutputGeometry(id(), nullptr);
+        setModifierGizmos(id(), nullptr);
     }
 
 private:
@@ -306,6 +342,25 @@ private:
             object.curves = curvesOf(value(o.curveAttr));
             key = hashGeometry(object, key);
             key = scene::sim::hashBytes(&as<glm::dmat4>(o.matrixAttr), sizeof(glm::dmat4), key);
+        }
+        for (const TypeLayout::Bone& b : mLayout->bones)
+        {
+            key = scene::sim::hashBytes(&as<glm::dmat4>(b.worldAttr), sizeof(glm::dmat4), key);
+            key = scene::sim::hashBytes(&as<glm::dmat4>(b.parentAttr), sizeof(glm::dmat4), key);
+        }
+        for (const TypeLayout::Collection& col : mLayout->collections)
+        {
+            CollectionInput collection = collectionInput(col);
+            key = scene::sim::hashBytes(&collection.parent, sizeof(glm::dmat4), key);
+            for (size_t k = 0; k < collection.members.size(); ++k)
+            {
+                Geometry object;
+                object.mesh = collection.members[k].mesh;
+                object.curves = collection.members[k].curves;
+                key = hashGeometry(object, key);
+                key = scene::sim::hashBytes(&collection.members[k].matrix, sizeof(glm::dmat4), key);
+                key = scene::sim::hashBytes(collection.names[k].data(), collection.names[k].size(), key);
+            }
         }
         if (mCache.plan != mPlan.get() || mCache.key != key)
         {
@@ -439,6 +494,26 @@ private:
         setViewerData(id(), std::move(d));
     }
 
+    CollectionInput collectionInput(const TypeLayout::Collection& col) const
+    {
+        CollectionInput in;
+        in.parent = as<glm::dmat4>(col.parentAttr);
+        json names = json::parse(as<std::string>(col.namesAttr), nullptr, false);
+        for (const auto& [k, v] : elements(col.matricesAttr))
+        {
+            ObjectInput o;
+            o.matrix = std::get<glm::dmat4>(v);
+            if (const scene::PlugValue* m = element(col.meshesAttr, k))
+                o.mesh = std::get<scene::MeshPtr>(*m);
+            if (const scene::PlugValue* cv = element(col.curvesAttr, k))
+                o.curves = curvesOf(*cv);
+            in.members.push_back(std::move(o));
+            const bool named = names.is_array() && size_t(k) < names.size() && names[size_t(k)].is_string();
+            in.names.push_back(named ? names[size_t(k)].get<std::string>() : std::string());
+        }
+        return in;
+    }
+
     std::shared_ptr<const TypeLayout> mLayout;
     std::string mCachedDef;
     PlanPtr mPlan;
@@ -456,6 +531,8 @@ struct Interface
 {
     std::vector<GInput> inputs;
     std::vector<std::string> objects;
+    std::vector<std::string> bones;
+    std::vector<std::string> collections;
     bool usesTime = false;
 
     std::string signature() const
@@ -464,7 +541,7 @@ struct Interface
         for (const GInput& in : inputs)
             j.push_back(std::string(socketTypeName(in.type)) + ":" + in.name + (in.subtype == "angle" ? ":angle" : ""));
         json o = objects;
-        return json{{"in", j}, {"obj", o}, {"time", usesTime}}.dump();
+        return json{{"in", j}, {"obj", o}, {"bones", bones}, {"cols", collections}, {"time", usesTime}}.dump();
     }
 };
 
@@ -475,6 +552,10 @@ Interface interfaceOf(const Group& g)
     for (const GNode& n : g.nodes)
         if (n.type == "ObjectInfo")
             i.objects.push_back(n.name);
+        else if (n.type == "BoneInfo")
+            i.bones.push_back(n.name);
+        else if (n.type == "CollectionInfo")
+            i.collections.push_back(n.name);
     i.usesTime = usesSceneTime(g) || hasStateful(g);
     return i;
 }
@@ -662,7 +743,31 @@ const scene::NodeType& ensureType(const Group& g)
                               .flags = scene::AttrInput | scene::AttrHidden, .doc = "Object Info curve."});
         layout->objects.push_back({obj, meshAttr, meshAttr + 1, meshAttr + 2});
     }
-    if (!iface.objects.empty())
+    for (const std::string& b : iface.bones)
+    {
+        int world = int(t.ownAttrs.size());
+        t.ownAttrs.push_back({.name = boneWorldAttr(b), .type = PlugType::Matrix, .defaultValue = glm::dmat4(1.0),
+                              .flags = scene::AttrInput | scene::AttrHidden, .doc = "Bone Info world matrix."});
+        t.ownAttrs.push_back({.name = boneParentAttr(b), .type = PlugType::Matrix, .defaultValue = glm::dmat4(1.0),
+                              .flags = scene::AttrInput | scene::AttrHidden, .doc = "Bone Info parent world matrix."});
+        layout->bones.push_back({b, world, world + 1});
+    }
+    for (const std::string& col : iface.collections)
+    {
+        int first = int(t.ownAttrs.size());
+        t.ownAttrs.push_back({.name = collectionAttr(col, "meshes"), .type = PlugType::Mesh, .defaultValue = scene::MeshPtr(),
+                              .flags = scene::AttrInput | scene::AttrHidden | scene::AttrArray, .doc = "Collection Info member meshes."});
+        t.ownAttrs.push_back({.name = collectionAttr(col, "curves"), .type = PlugType::Data, .defaultValue = scene::DataPtr(),
+                              .flags = scene::AttrInput | scene::AttrHidden | scene::AttrArray, .doc = "Collection Info member curves."});
+        t.ownAttrs.push_back({.name = collectionAttr(col, "matrices"), .type = PlugType::Matrix, .defaultValue = glm::dmat4(1.0),
+                              .flags = scene::AttrInput | scene::AttrHidden | scene::AttrArray, .doc = "Collection Info member world matrices."});
+        t.ownAttrs.push_back({.name = collectionAttr(col, "parent"), .type = PlugType::Matrix, .defaultValue = glm::dmat4(1.0),
+                              .flags = scene::AttrInput | scene::AttrHidden, .doc = "Collection Info parent world matrix."});
+        t.ownAttrs.push_back({.name = collectionAttr(col, "names"), .type = PlugType::String, .defaultValue = std::string(),
+                              .flags = scene::AttrInput | scene::AttrStorable | scene::AttrHidden, .doc = "Collection Info member names, JSON."});
+        layout->collections.push_back({col, first, first + 1, first + 2, first + 3, first + 4});
+    }
+    if (!iface.objects.empty() || !iface.bones.empty() || !iface.collections.empty())
     {
         layout->ownerAttr = int(t.ownAttrs.size());
         t.ownAttrs.push_back({.name = "ownerMatrix", .type = PlugType::Matrix, .defaultValue = glm::dmat4(1.0),
@@ -720,6 +825,104 @@ void pruneLinks(Group& grp)
     });
 }
 
+/** Points a Bone Info input at the world and parent matrices of the joint (or any transform) its node names. */
+void connectBone(Graph& g, Node& mod, const GNode& n)
+{
+    int worldAttr = mod.type().attrIndex(boneWorldAttr(n.name)), parentAttr = mod.type().attrIndex(boneParentAttr(n.name));
+    if (worldAttr < 0 || parentAttr < 0)
+        return;
+    std::string joint = findDecl("BoneInfo")->propValue(n, "joint");
+    Node* j = joint.empty() ? nullptr : g.find(joint);
+    if (j && !j->type().isA("transform"))
+        throw std::invalid_argument(joint + " is not a joint");
+    PlugRef worldDst{mod.id(), worldAttr, -1}, parentDst{mod.id(), parentAttr, -1};
+    PlugRef worldSrc = j ? PlugRef{j->id(), scene::Transform::kWorldMatrix, -1} : PlugRef{};
+    PlugRef parentSrc = j ? PlugRef{j->id(), scene::Transform::kParentMatrix, -1} : PlugRef{};
+    if (j && g.source(worldDst) == worldSrc && g.source(parentDst) == parentSrc)
+        return;
+    g.disconnect(worldDst);
+    g.disconnect(parentDst);
+    if (!j)
+        return;
+    try
+    {
+        g.connect(worldSrc, worldDst);
+        g.connect(parentSrc, parentDst);
+    }
+    catch (const std::exception&)
+    {
+        throw std::invalid_argument("Bone Info " + n.name + ": " + joint + " depends on " + mod.path() + " (that would be a cycle)");
+    }
+}
+
+/**
+ * Points a Collection Info input at every mesh and curve object under the transform its node names, depth first in
+ * outliner order, leaving out the mesh the modifier is on.
+ */
+void connectCollection(Graph& g, Node& mod, const GNode& n)
+{
+    const scene::NodeType& type = mod.type();
+    int meshes = type.attrIndex(collectionAttr(n.name, "meshes")), curves = type.attrIndex(collectionAttr(n.name, "curves"));
+    int matrices = type.attrIndex(collectionAttr(n.name, "matrices")), parent = type.attrIndex(collectionAttr(n.name, "parent"));
+    int names = type.attrIndex(collectionAttr(n.name, "names"));
+    if (meshes < 0 || curves < 0 || matrices < 0 || parent < 0 || names < 0)
+        return;
+    std::string parentName = findDecl("CollectionInfo")->propValue(n, "parent");
+    Node* top = parentName.empty() ? nullptr : g.find(parentName);
+    if (top && !top->type().isA("transform"))
+        throw std::invalid_argument(parentName + " is not a transform");
+    const NodeId self = scene::modifiers::meshOf(g, mod.id());
+    std::vector<std::pair<PlugRef, PlugRef>> want; // source, destination
+    json memberNames = json::array();
+    if (top)
+    {
+        want.push_back({{top->id(), scene::Transform::kWorldMatrix, -1}, {mod.id(), parent, -1}});
+        std::function<void(NodeId)> visit = [&](NodeId id) {
+            for (NodeId c : g.children(id))
+            {
+                Node* child = g.node(c);
+                if (!child)
+                    continue;
+                const bool isCurve = child->type().isA("curve");
+                if (c != self && (isCurve || child->type().isA("mesh")))
+                {
+                    int k = int(memberNames.size());
+                    PlugRef shape = isCurve ? PlugRef{c, child->type().attrIndex("local"), -1} : PlugRef{c, scene::MeshNode::kOutMesh, -1};
+                    want.push_back({shape, {.node = mod.id(), .attr = isCurve ? curves : meshes, .element = k}});
+                    want.push_back({{c, scene::Transform::kWorldMatrix, -1}, {.node = mod.id(), .attr = matrices, .element = k}});
+                    memberNames.push_back(child->name());
+                }
+                visit(c);
+            }
+        };
+        visit(top->id());
+    }
+    std::vector<std::pair<PlugRef, PlugRef>> have;
+    for (const auto& [dst, src] : g.connections())
+        if (dst.node == mod.id() && (dst.attr == meshes || dst.attr == curves || dst.attr == matrices || dst.attr == parent))
+            have.push_back({src, dst});
+    std::sort(want.begin(), want.end());
+    std::sort(have.begin(), have.end());
+    if (want != have)
+    {
+        for (const auto& [src, dst] : have)
+            g.disconnect(dst);
+        try
+        {
+            for (const auto& [src, dst] : want)
+                g.connect(src, dst);
+        }
+        catch (const std::exception&)
+        {
+            throw std::invalid_argument("Collection Info " + n.name + ": something under " + parentName + " depends on " + mod.path() +
+                                        " (that would be a cycle)");
+        }
+    }
+    std::string list = memberNames.dump();
+    if (mod.as<std::string>(names) != list)
+        g.setValue({mod.id(), names, -1}, list);
+}
+
 /**
  * Points each Object Info input of a modifier at the object its node names, and takes the owner mesh's world matrix for
  * the ones relative to it. Throws on cycles or non-meshes.
@@ -735,6 +938,10 @@ void connectObjects(Graph& g, Node& mod, const Group& grp)
         }
     for (const GNode& n : grp.nodes)
     {
+        if (n.type == "BoneInfo")
+            connectBone(g, mod, n);
+        if (n.type == "CollectionInfo")
+            connectCollection(g, mod, n);
         if (n.type != "ObjectInfo")
             continue;
         int meshAttr = mod.type().attrIndex(objectMeshAttr(n.name));

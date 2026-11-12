@@ -378,7 +378,7 @@ void pump()
         hideCard();
         return;
     }
-    if (modal->elapsed < kShowAfter)
+    if (modal->elapsed < kShowAfter && !modal->immediate)
         return;
     showCard(*modal);
     refreshIndicator(roots);

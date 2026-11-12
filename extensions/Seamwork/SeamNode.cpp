@@ -5,6 +5,8 @@
 #include <lila/Command.h>
 #include <lila/Curves.h>
 #include <lila/Extension.h>
+#include <lila/GeometryNodes.h>
+#include <lila/Deformer.h>
 #include <lila/Log.h>
 #include <lila/Profile.h>
 
@@ -156,6 +158,37 @@ MeshPtr pointsOut(const std::vector<SeamPoint>& pts)
     return m;
 }
 
+/**
+ * The full-resolution heightfield behind the terrain mesh: the last geometry-node modifier of its stack, when that
+ * heightfield covers what the mesh shows. Past about 4M samples the mesh is a stepped preview of it.
+ */
+std::shared_ptr<const Heightfield> stackHeightfield(const Node& seam, int terrainAttr, const Mesh& shown)
+{
+    Graph* g = const_cast<Graph*>(seam.graph());
+    if (!g)
+        return nullptr;
+    const auto src = g->source({seam.id(), terrainAttr, -1});
+    if (!src)
+        return nullptr;
+    const std::vector<NodeId> stack = scene::modifiers::stack(*g, src->node);
+    for (auto it = stack.rbegin(); it != stack.rend(); ++it)
+    {
+        const Node* m = g->node(*it);
+        if (!m || !gn::isGnModifier(*m))
+            continue;
+        auto h = gn::modifierHeightfield(*it);
+        if (!h || h->empty())
+            return nullptr;
+        const geo::Bounds b = shown.bounds();
+        const glm::dvec2 lo = h->origin, hi = h->origin + h->extent();
+        const double tol = h->cell * 0.01;
+        if (std::abs(b.min.x - lo.x) > tol || std::abs(b.min.z - lo.y) > tol || std::abs(b.max.x - hi.x) > tol || std::abs(b.max.z - hi.y) > tol)
+            return nullptr;
+        return h;
+    }
+    return nullptr;
+}
+
 class SeamNode final : public Node
 {
 public:
@@ -216,7 +249,10 @@ private:
         if (terrain && terrain->numPoints() > 0)
         {
             std::string why;
-            if (auto hf = heightfieldFromMesh(*terrain, &why))
+            auto hf = stackHeightfield(*this, at(*this, "terrain"), *terrain);
+            if (!hf)
+                hf = heightfieldFromMesh(*terrain, &why);
+            if (hf)
             {
                 auto g = std::make_shared<Ground>();
                 g->field = std::move(hf);

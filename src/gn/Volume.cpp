@@ -58,6 +58,38 @@ double Volume::sampleNearest(const glm::dvec3& world) const
     return at(int(p.x), int(p.y), int(p.z));
 }
 
+void Volume::setVectors(std::vector<glm::vec3> v)
+{
+    kind = Kind::Vector;
+    background = 0.0f;
+    vectors = std::move(v);
+    values.resize(vectors.size());
+    for (size_t n = 0; n < vectors.size(); ++n)
+        values[n] = glm::length(vectors[n]);
+}
+
+glm::dvec3 Volume::sampleVector(const glm::dvec3& world) const
+{
+    if (vectors.empty())
+        return glm::dvec3(0.0);
+    glm::dvec3 p = voxelOf(world);
+    glm::dvec3 f = glm::floor(p);
+    glm::dvec3 t = p - f;
+    int i = int(f.x), j = int(f.y), k = int(f.z);
+    auto at3 = [&](int a, int b, int c) { return glm::dvec3(vectorAt(a, b, c)); };
+    glm::dvec3 c00 = glm::mix(at3(i, j, k), at3(i + 1, j, k), t.x);
+    glm::dvec3 c10 = glm::mix(at3(i, j + 1, k), at3(i + 1, j + 1, k), t.x);
+    glm::dvec3 c01 = glm::mix(at3(i, j, k + 1), at3(i + 1, j, k + 1), t.x);
+    glm::dvec3 c11 = glm::mix(at3(i, j + 1, k + 1), at3(i + 1, j + 1, k + 1), t.x);
+    return glm::mix(glm::mix(c00, c10, t.y), glm::mix(c01, c11, t.y), t.z);
+}
+
+glm::dvec3 Volume::sampleVectorNearest(const glm::dvec3& world) const
+{
+    glm::dvec3 p = glm::round(voxelOf(world));
+    return glm::dvec3(vectorAt(int(p.x), int(p.y), int(p.z)));
+}
+
 double Volume::voxelSize() const { return std::cbrt(std::abs(glm::determinant(glm::dmat3(indexToWorld)))); }
 
 geo::Bounds Volume::bounds() const
@@ -77,6 +109,17 @@ std::vector<float> Volume::resampled(const Volume& target) const
         for (int j = 0; j < target.dims.y; ++j)
             for (int i = 0; i < target.dims.x; ++i)
                 out[target.index(i, j, k)] = float(sample(target.worldOf({i, j, k})));
+    });
+    return out;
+}
+
+std::vector<glm::vec3> Volume::resampledVectors(const Volume& target) const
+{
+    std::vector<glm::vec3> out(target.size(), glm::vec3(0.0f));
+    tbb::parallel_for(0, target.dims.z, [&](int k) {
+        for (int j = 0; j < target.dims.y; ++j)
+            for (int i = 0; i < target.dims.x; ++i)
+                out[target.index(i, j, k)] = glm::vec3(sampleVector(target.worldOf({i, j, k})));
     });
     return out;
 }
@@ -206,5 +249,20 @@ geo::Mesh volumeToMesh(const Volume& v, double threshold)
             std::swap(quads[q + 1], quads[q + 3]);
     std::vector<geo::Index> sizes(quads.size() / 4, 4);
     return geo::Mesh::fromPolygons(pts, sizes, quads);
+}
+
+Volume sdfToFog(const Volume& sdf, double density, double interiorBand, bool fill)
+{
+    Volume v = sdf;
+    v.kind = Volume::Kind::Density;
+    v.name = "density";
+    v.background = 0.0f;
+    v.vectors.clear();
+    const float d = float(density), band = float(std::max(interiorBand, 0.0));
+    tbb::parallel_for(size_t(0), v.values.size(), [&](size_t n) {
+        const float x = sdf.values[n];
+        v.values[n] = x < 0.0f && (fill || -x <= band) ? d : 0.0f;
+    });
+    return v;
 }
 } // namespace lila::gn

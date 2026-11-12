@@ -13,7 +13,7 @@ namespace lila::geo
 LILA_SCENE_API std::vector<Index> faceLoop(const Mesh& mesh, Index e);
 
 /**
- * The components from a to b inclusive, in order: the shorter way along a loop (or ring, for edges) the two share,
+ * The components from a to b inclusive, in order: the shorter way along a loop the two share (for edges, else a ring),
  * else the shortest path across the surface (by length for points and edges, by centroid distance for faces). Empty
  * when they are not connected.
  */

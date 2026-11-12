@@ -473,7 +473,7 @@ TEST_CASE("settlement lots: massing gives tiers and roofs, by route and district
         CHECK(pl.asset == "/Game/Town/SM_House");
         CHECK(pl.id.rfind("building/", 0) == 0);
         CHECK(glm::length(pl.rotation) == doctest::Approx(1.0));
-        CHECK(pl.position.x > 5000.0);
+        CHECK(pl.position.x > 5000.0 - 500.0); // a building stands on its lot's frontage, a little off the lot's centre
     }
     CHECK(build(picked, Ground::plane(), lotsProfile("medievalTown", 1)).placements.front().id == withPicks.placements.front().id);
     const MeshParts parts = toMeshes(l, Ground::plane());

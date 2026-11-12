@@ -167,7 +167,7 @@ Table tableOf(const Geometry& g, const std::string& component, const std::string
             active += x != v.background;
         }
         t.column("name", "String", [&](size_t) { return v.name; });
-        t.column("kind", "String", [&](size_t) { return v.isSdf() ? "signed distance" : "density"; });
+        t.column("kind", "String", [&](size_t) { return v.isSdf() ? "signed distance" : v.isVector() ? "vector" : "density"; });
         t.column("resolution", "Int3", [&](size_t) { return json{v.dims.x, v.dims.y, v.dims.z}; });
         t.column("voxelSize", "Float", [&](size_t) { return number(v.voxelSize()); });
         t.column("min", "Float", [&](size_t) { return number(lo); });

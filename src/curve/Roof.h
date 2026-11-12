@@ -60,6 +60,9 @@ LILA_SCENE_API SkeletonCurvesResult insetCurves(const Splines& curves, double di
 /** The region's centre lines: the straight skeleton's arcs between interior nodes, as open poly curves. */
 LILA_SCENE_API SkeletonCurvesResult centerLines(const Splines& curves, const glm::dvec3& normal, double tolerance);
 
+/** Every arc of the region's straight skeleton as a two-point poly curve, each end raised along the normal by its offset time times rise. */
+LILA_SCENE_API SkeletonCurvesResult skeletonArcs(const Splines& curves, double rise, const glm::dvec3& normal, double tolerance);
+
 struct RegionInsetOptions
 {
     /** Inward distance in the faces' plane, cm. */

@@ -34,6 +34,8 @@ struct Plan
     int outputStep = -1;
     /** The active Viewer node's step, run after the output's; -1 when no Viewer is active. */
     int viewerStep = -1;
+    /** Gizmo nodes' steps (gn/Tool.h), run when the evaluation collects gizmos; a broken one only loses its handle. */
+    std::vector<int> gizmoSteps;
     /** Set when the group can't run (a cycle, unknown nodes); evaluation then passes the input through. */
     std::string error;
     bool usesTime = false;

@@ -227,6 +227,21 @@ float3 hfProjectionWeights(float3 n)
     return float3(w.x, 1.0 - side, w.y);
 }
 
+/**
+ * The normal the weights read (terrain::cliffs::projectionNormal): the filtered normal, giving way to the surface's own
+ * slope from the pixel's derivatives where they part by 10 to 25 degrees, as across a one-cell step.
+ */
+float3 hfProjectionNormal(float3 n, float2 planarDx, float2 planarDy, float heightDx, float heightDy)
+{
+    // planar runs along +X and -Z.
+    float3 f = cross(float3(planarDx.x, heightDx, -planarDx.y), float3(planarDy.x, heightDy, -planarDy.y));
+    if (dot(f, f) <= 1e-20)
+        return n;
+    f = normalize(f);
+    f = dot(f, n) < 0.0 ? -f : f;
+    return normalize(lerp(n, f, 1.0 - smoothstep(0.9063078, 0.9848078, dot(f, n))));
+}
+
 /** One projection of a layer's maps: colour times the base map, and the map's normal in heightfield space. */
 float3 hfLayerSample(HfLayer l, float2 uv, float2 dx, float2 dy, float3 t, float3 b, float3 n, inout float3 normal, float w)
 {
@@ -249,6 +264,7 @@ void hfLayers(float2 s, float3 n, float2 planar, float2 planarDx, float2 planarD
     float3 color = float3(0.0);
     float rough = 0.0, total = 0.0, normalWeight = 0.0;
     float3 normal = float3(0.0);
+    const float3 pw = hfProjectionWeights(hfProjectionNormal(n, planarDx, planarDy, heightDx, heightDy));
     for (uint k = 0; k < count; ++k)
     {
         HfLayer l = p->layers[k];
@@ -256,7 +272,6 @@ void hfLayers(float2 s, float3 n, float2 planar, float2 planarDx, float2 planarD
         if (w <= 0.0)
             continue;
         const float k = l.tiling.x;
-        const float3 pw = hfProjectionWeights(n);
         float3 c = float3(0.0);
         float3 ln = float3(0.0);
         if (pw.y > 0.0)

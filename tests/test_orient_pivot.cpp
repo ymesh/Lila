@@ -311,6 +311,72 @@ TEST_CASE("orientPivot command: transform mode puts back the rotation a freeze r
     CHECK(near(meshOf(cyl).position(startPoint), glm::dvec3(placed * glm::dvec4(local.position(startPoint), 1.0)), 1e-6));
 }
 
+TEST_CASE("orientPivot command: in object mode the others take the first object's pivot")
+{
+    run("newScene");
+    std::string box = run("polyCube")[0];
+    run("rotate", {{"args", {box}}, {"by", {0, 90, 30}}});
+    run("move", {{"args", {box}}, {"by", {3, 4, 5}}});
+    std::string grp = run("group", {{"args", {box}}});
+    run("selectMode", {{"args", {"object"}}});
+    run("select", {{"args", {box, grp}}});
+
+    scene::Graph& g = scene::Graph::current();
+    const scene::NodeId boxId = node(box).id(), grpId = node(grp).id();
+    const glm::dmat4 boxBefore = worldOf(box);
+    const glm::dmat3 axes = scene::xformops::pivotFrame(g, boxId);
+    const glm::dvec3 at = scene::xformops::worldPivot(g, boxId);
+
+    run("orientPivot");
+    // Transform mode turns the group itself onto the box's axes and leaves the box where it was.
+    const glm::dmat4 grpWorld = worldOf(grp);
+    for (int c = 0; c < 3; ++c)
+        CHECK(near(glm::dvec3(grpWorld[c]), axes[c], 1e-6));
+    CHECK(near(glm::dvec3(grpWorld[3]), at, 1e-6));
+    const glm::dmat4 boxAfter = worldOf(box);
+    for (int c = 0; c < 4; ++c)
+        CHECK(near(glm::dvec3(boxAfter[c]), glm::dvec3(boxBefore[c]), 1e-6));
+
+    run("undo");
+    run("orientPivot", {{"mode", "pivot"}});
+    const glm::dmat3 pf = scene::xformops::pivotFrame(g, grpId);
+    for (int c = 0; c < 3; ++c)
+        CHECK(near(pf[c], axes[c], 1e-6));
+    CHECK(near(scene::xformops::worldPivot(g, grpId), at, 1e-6));
+
+    run("select", {{"args", {grp}}});
+    CHECK_THROWS_AS(run("orientPivot"), CommandError);
+}
+
+TEST_CASE("orientPivot command: components picked through a selected group turn the group")
+{
+    run("newScene");
+    std::string plane = run("polyPlane", {{"width", 4}, {"depth", 4}, {"subdivisionsX", 1}, {"subdivisionsZ", 1}})[0];
+    std::string grp = run("group", {{"args", {plane}}});
+    run("select", {{"args", {grp}}});
+    geo::Mesh m = meshOf(plane);
+    geo::Index a = geo::kInvalid, b = geo::kInvalid;
+    for (geo::Index p = 0; p < m.pointCapacity(); ++p)
+        if (m.pointValid(p) && near(m.position(p), {-2, 0, -2}))
+            a = p;
+        else if (m.pointValid(p) && near(m.position(p), {2, 0, -2}))
+            b = p;
+    REQUIRE(a != geo::kInvalid);
+    REQUIRE(b != geo::kInvalid);
+    run("selectComponents", {{"args", {plane}}, {"vertices", {b}}});
+    run("selectComponents", {{"args", {plane}}, {"vertices", {a}}, {"add", true}});
+    const std::vector<glm::dvec3> before = worldPoints(plane);
+
+    run("orientPivot", {{"upReference", "world"}});
+    const glm::dmat4 grpWorld = worldOf(grp);
+    CHECK(near(glm::dvec3(grpWorld[0]), {-1, 0, 0}));
+    CHECK(near(glm::dvec3(grpWorld[3]), {2, 0, -2}));
+    const std::vector<glm::dvec3> after = worldPoints(plane);
+    REQUIRE(after.size() == before.size());
+    for (size_t i = 0; i < after.size(); ++i)
+        CHECK(near(after[i], before[i], 1e-6));
+}
+
 TEST_CASE("pivot-edit rotate on a joint turns it once, keeps its child, and undoes")
 {
     using scene::Joint;

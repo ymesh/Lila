@@ -546,7 +546,8 @@ CageCoverage cageCoverage(const LowInput& low, uint32_t lowIndex, const CagePara
             uint64_t m = 0, bf = 0;
             std::vector<TexelSample> local;
             for (size_t i = 0; i < s.size(); ++i)
-                if (!(hits[i].flags & kHitValid))
+                // A probed hit is a miss for the cage: no ray along the normal reached the high.
+                if (!(hits[i].flags & kHitValid) || (hits[i].flags & kHitProbed))
                 {
                     ++m;
                     bf += (hits[i].flags & kHitBackface) ? 1 : 0;

@@ -58,6 +58,11 @@ public:
     void setStatus(std::string text);
     /** Whether a Cancel button is offered now (read on the root): only while cancelling would leave the scene as it was. */
     void setCancellable(bool on);
+    /**
+     * Shows the root's modal card now rather than after the usual short delay. For main-thread work known to block
+     * for a while before its next step, so the card paints before the wait instead of after it.
+     */
+    void showNow();
     /** True once the root this scope belongs to was cancelled. */
     bool cancelled() const;
     /** Throws Cancelled when cancelled. */
@@ -103,6 +108,8 @@ struct Snapshot
     bool silent = false;
     bool cancellable = false;
     bool cancelled = false;
+    /** Set by Scope::showNow: the card skips its delay. */
+    bool immediate = false;
     double elapsed = 0.0; // seconds
     bool mainThread = false;
 };

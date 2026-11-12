@@ -22,3 +22,9 @@ bucket_name = "lila-reports"
 name = "REPORT_LIMIT"
 namespace_id = "1001"
 simple = { limit = 3, period = 60 }
+
+# Roadmap votes. Secret: VOTE_SALT.
+[[ratelimits]]
+name = "VOTE_LIMIT"
+namespace_id = "1002"
+simple = { limit = 30, period = 60 }

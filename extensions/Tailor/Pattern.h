@@ -77,6 +77,9 @@ void placeOnPanel(const Panel& host, const Vec2& at, float lift, Panel& piece);
 /** A patch pocket on host with its lower left corner at `at` (host pattern, metres), tacked round all but its mouth;
  *  with flap, a flap tacked above it hanging over the mouth. Returns the pocket panel. */
 int addPocket(Garment& g, int host, const Vec2& at, float width, float height, bool flap);
+/** A rounded patch (a knee or elbow reinforcement) centred on host's pattern point, tacked all the way round.
+ *  Named after host plus `name`. Returns the patch panel. */
+int addPatch(Garment& g, int host, const Vec2& centre, float width, float height, const std::string& name = "Patch");
 /** count belt loops across host at pattern height y, each width wide spanning height, tacked at both ends. */
 std::vector<int> addBeltLoops(Garment& g, int host, float y, int count, float width, float height);
 /** The open edges round the top of the garment, opening upwards, chained through the seams between them: its neckline. */

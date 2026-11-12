@@ -60,6 +60,7 @@ void groupNode()
                 PlanPtr plan = cachedPlan(*def);
                 ExecEnv env;
                 env.time = c.env.time;
+                env.tool = c.env.tool;
                 env.input = c.geometry("geometry");
                 for (const GInput& in : plan->group.inputs)
                 {

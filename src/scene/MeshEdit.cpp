@@ -112,6 +112,16 @@ Ids remapIds(const Ids& ids, const std::vector<Index>& map)
     return out;
 }
 
+namespace
+{
+const Node* gEditNode = nullptr;
+}
+
+glm::dmat3 editSpace()
+{
+    return gEditNode ? glm::dmat3(gEditNode->as<glm::dmat4>(Transform::kWorldMatrix)) : glm::dmat3(1.0);
+}
+
 /**
  * Runs `fn` on every mesh with a component selection, converted to `kind`. Each mesh is edited on a copy, compacted,
  * written back to inMesh (undoable) and its component selection replaced by what the op returns.
@@ -163,7 +173,14 @@ json editSelected(const char* label, ComponentMode kind, const EditFn& fn, bool 
             drive = sym->majorityWedge(components::convert(mesh, kind, sel, ComponentMode::Vertex));
         }
         const Index firstNew = mesh.pointCapacity();
-        EditResult r = fn(mesh, sel, sym ? &*sym : nullptr);
+        EditResult r = [&] {
+            gEditNode = &n;
+            struct Reset
+            {
+                ~Reset() { gEditNode = nullptr; }
+            } reset;
+            return fn(mesh, sel, sym ? &*sym : nullptr);
+        }();
         geo::clearSymmetryKeys(mesh, firstNew);
         if (sym)
             maintainSymmetry(n, mesh, before, drive);

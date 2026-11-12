@@ -63,7 +63,7 @@ ModelingToolkit::ModelingToolkit(QWidget* parent) : QWidget(parent)
 
     QToolButton* boolean = nullptr;
     if (actions::find("mesh.booleanUnion"))
-        boolean = track(controls::split("mesh.booleanUnion", {"mesh.booleanUnion", "mesh.booleanDifference", "mesh.booleanIntersection"}, body, "Boolean"),
+        boolean = track(controls::splitRow("mesh.booleanUnion", {"mesh.booleanUnion", "mesh.booleanDifference", "mesh.booleanIntersection"}, "layers-subtract", body, "Boolean"),
                         "mesh.booleanUnion");
     add("Mesh", modelingGroup({push("mesh.combine", "Combine", body), push("mesh.separate", "Separate", body), push("mesh.extract", "Extract", body),
                                push("mesh.mirror", "Mirror", body), push("mesh.subdivide", "Subdivide", body), boolean},
@@ -80,7 +80,7 @@ ModelingToolkit::ModelingToolkit(QWidget* parent) : QWidget(parent)
     QToolButton* convert = nullptr;
     if (actions::find("select.toVertices"))
     {
-        convert = controls::split("select.toVertices", {"select.toVertices", "select.toEdges", "select.toFaces", "select.containedFaces"}, body, "Convert To");
+        convert = controls::splitRow("select.toVertices", {"select.toVertices", "select.toEdges", "select.toFaces", "select.containedFaces"}, "transform", body, "Convert To");
         convert->setPopupMode(QToolButton::InstantPopup);
         convert->setToolTip("Convert To: turn the selection into vertices, edges or faces");
     }
@@ -150,12 +150,12 @@ QToolButton* ModelingToolkit::track(QToolButton* b, const std::string& id)
 
 QToolButton* ModelingToolkit::tile(const std::string& id, const char* iconName, const QString& label, QWidget* parent)
 {
-    return actions::find(id) ? track(controls::tile(id, iconName, parent, label), id) : nullptr;
+    return actions::find(id) ? track(controls::row(id, iconName, parent, label), id) : nullptr;
 }
 
 QToolButton* ModelingToolkit::push(const std::string& id, const QString& label, QWidget* parent)
 {
-    return actions::find(id) ? track(controls::push(id, parent, label), id) : nullptr;
+    return actions::find(id) ? track(controls::row(id, nullptr, parent, label), id) : nullptr;
 }
 
 void ModelingToolkit::showEvent(QShowEvent* e)

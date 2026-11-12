@@ -284,7 +284,13 @@ CurveSet CurveSet::evaluated(const curve::TessOptions& o) const
         size_t p0 = offsets[c], n = curveSize(c);
         if (!curve::isValid(sp) || n == 0)
             continue;
-        curve::Polyline pl = sp.kind == curve::Kind::Poly ? curve::polylineFrom(sp.points, sp.closed) : curve::tessellate(sp, o);
+        curve::TessOptions co = o;
+        if (auto res = curveAttrs.get<int32_t>("resolution"); !res.empty() && res[c] > 0)
+        {
+            co.mode = curve::TessMode::Fixed;
+            co.perSpan = res[c];
+        }
+        curve::Polyline pl = sp.kind == curve::Kind::Poly ? curve::polylineFrom(sp.points, sp.closed) : curve::tessellate(sp, co);
         size_t q0 = out.positions.size();
         out.addCurve(pl.points, sp.closed);
         out.curveAttrs.copyFrom(curveAttrs, out.numCurves() - 1, c);
@@ -432,6 +438,7 @@ Geometry transformed(const Geometry& g, const glm::dmat4& xf)
     LILA_ZONE();
 
     Geometry out;
+    out.name = g.name;
     if (g.mesh)
     {
         geo::Mesh m = *g.mesh;
@@ -485,6 +492,14 @@ Geometry transformed(const Geometry& g, const glm::dmat4& xf)
                 x *= s;
             v.background *= s;
         }
+        if (v.isVector())
+        {
+            const glm::mat3 linear{glm::dmat3(xf)};
+            std::vector<glm::vec3> turned(v.vectors.size());
+            for (size_t n = 0; n < turned.size(); ++n)
+                turned[n] = linear * v.vectors[n];
+            v.setVectors(std::move(turned));
+        }
         out.volume = std::make_shared<const Volume>(std::move(v));
     }
     return out;
@@ -509,6 +524,8 @@ Geometry join(std::span<const GeometryPtr> parts)
     {
         if (!g)
             continue;
+        if (out.name.empty())
+            out.name = g->name;
         if (g->volume)
         {
             if (!out.volume)
@@ -517,9 +534,19 @@ Geometry join(std::span<const GeometryPtr> parts)
             {
                 if (!merged)
                     merged = *out.volume;
-                const std::vector<float>& add = g->volume->values;
-                for (size_t k = 0; k < merged->values.size(); ++k)
-                    merged->values[k] = merged->isSdf() ? std::min(merged->values[k], add[k]) : merged->values[k] + add[k];
+                if (merged->isVector())
+                {
+                    std::vector<glm::vec3> sum = merged->vectors;
+                    for (size_t k = 0; k < sum.size() && k < g->volume->vectors.size(); ++k)
+                        sum[k] += g->volume->vectors[k];
+                    merged->setVectors(std::move(sum));
+                }
+                else
+                {
+                    const std::vector<float>& add = g->volume->values;
+                    for (size_t k = 0; k < merged->values.size(); ++k)
+                        merged->values[k] = merged->isSdf() ? std::min(merged->values[k], add[k]) : merged->values[k] + add[k];
+                }
             }
         }
         if (g->mesh)
@@ -603,7 +630,11 @@ Geometry realize(const Geometry& g)
         return out;
     }
     if (joinable(g))
-        return realizeJoined(*g.instances);
+    {
+        Geometry out = realizeJoined(*g.instances);
+        out.name = g.name;
+        return out;
+    }
     const Instances& inst = *g.instances;
     // Each reference is realized once, then copied per instance.
     std::vector<Geometry> refs(inst.references.size());

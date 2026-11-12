@@ -593,7 +593,7 @@ bool Hotkeys::eventFilter(QObject* obj, QEvent* e)
             startRepeat(k, t.press);
         return true;
     }
-    if (t.hold.is_null() && !t.hasButtons())
+    if (hotkeys::isMomentary(t))
     {
         // Press/release pairs (hold D for pivot mode) are tracked apart so other keys can come and go meanwhile.
         mHeldKeys.push_back(Pending{*b, eventScancode(k), eventKey(k), hotkeys::HeldKey(t)});
@@ -612,9 +612,16 @@ bool Hotkeys::eventFilter(QObject* obj, QEvent* e)
 
 bool Hotkeys::onMousePress(QObject* obj, QMouseEvent* e)
 {
-    if (!mPending || !obj->isWidgetType() || MarkingMenu::active() || QApplication::activePopupWidget())
+    if (!obj->isWidgetType() || MarkingMenu::active() || QApplication::activePopupWidget())
         return false;
     int index = buttonIndex(e->button());
+    if (!mPending)
+    {
+        for (auto it = mHeldKeys.rbegin(); it != mHeldKeys.rend(); ++it)
+            if (index >= 0 && index < 3 && !it->binding.targets.buttons[index].is_null())
+                return fireButton(it->binding.targets.buttons[index], e);
+        return false;
+    }
     switch (mPending->state.mouseDown(index))
     {
     case hotkeys::HeldKey::Mouse::Pass: return false;
@@ -626,7 +633,11 @@ bool Hotkeys::onMousePress(QObject* obj, QMouseEvent* e)
     case hotkeys::HeldKey::Mouse::Fire: break;
     }
     mHoldTimer.stop();
-    const json& target = mPending->binding.targets.buttons[index];
+    return fireButton(mPending->binding.targets.buttons[index], e);
+}
+
+bool Hotkeys::fireButton(const json& target, QMouseEvent* e)
+{
     if (target.is_object() && target.contains("markingMenu"))
     {
         std::string name = target["markingMenu"].get<std::string>();

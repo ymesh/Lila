@@ -180,7 +180,7 @@ void LevelToolkit::rebuild()
             else if (!item.shelf.empty())
                 tiles.push_back(tile(item.action, item.icon, label, box));
             else if (pushes.size() < 6)
-                pushes.push_back(push(item.action, label, box));
+                pushes.push_back(tile(item.action, item.icon, label, box));
             else
                 more.push_back(item.action);
         }
@@ -244,7 +244,7 @@ QToolButton* LevelToolkit::tile(const std::string& id, const std::string& iconNa
 {
     if (!actions::find(id))
         return nullptr;
-    QToolButton* b = controls::tile(id, iconName.empty() ? nullptr : iconName.c_str(), parent, label);
+    QToolButton* b = controls::row(id, iconName.empty() ? nullptr : iconName.c_str(), parent, label);
     b->setProperty("lilaAction", QString::fromStdString(id));
     connect(b, &QToolButton::clicked, this, [this] { mRefresh->start(); });
     mButtons.push_back(b);
@@ -255,7 +255,7 @@ QToolButton* LevelToolkit::push(const std::string& id, const QString& label, QWi
 {
     if (!actions::find(id))
         return nullptr;
-    QToolButton* b = controls::push(id, parent, label);
+    QToolButton* b = controls::row(id, nullptr, parent, label);
     b->setProperty("lilaAction", QString::fromStdString(id));
     connect(b, &QToolButton::clicked, this, [this] { mRefresh->start(); });
     mButtons.push_back(b);

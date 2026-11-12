@@ -283,6 +283,8 @@ json Group::toJson() const
     }
     if (!description.empty())
         out["description"] = description;
+    if (tool)
+        out["tool"] = true;
     if (!subgroups.empty())
         out["subgroups"] = subgroups;
     return out;
@@ -298,6 +300,7 @@ Group Group::fromJson(const json& j)
         g.name = j.at("name").get<std::string>();
         g.typeVersion = j.value("typeVersion", 1);
         g.description = j.value("description", std::string());
+        g.tool = j.value("tool", false);
         for (const json& in : j.value("inputs", json::array()))
         {
             GInput gi;

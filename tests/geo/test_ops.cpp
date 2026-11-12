@@ -130,6 +130,27 @@ TEST_CASE("ops: extrude")
     CHECK(r.sides.size() == 8);
 }
 
+TEST_CASE("ops: extrude distances are world distances under a scaled object")
+{
+    for (const double mirror : {1.0, -1.0})
+    {
+        Mesh cube = makeCube();
+        const Index top = faceFacing(cube, {0, 1, 0});
+        ExtrudeOptions eo;
+        eo.offset = 10.0;
+        eo.inset = 10.0;
+        eo.space = glm::dmat3(glm::scale(glm::dmat4(1.0), glm::dvec3(2.0 * mirror, 4.0, 0.5)));
+        ExtrudeResult r = extrudeFaces(cube, std::vector<Index>{top}, eo);
+        checkClosed(cube);
+        REQUIRE(r.faces.size() == 1);
+        Bounds b;
+        cube.forEachFaceCorner(r.faces[0], [&](Index c) { b.extend(cube.position(cube.cornerPoint(c))); });
+        CHECK(b.max.x == doctest::Approx(45.0));
+        CHECK(b.max.z == doctest::Approx(30.0));
+        CHECK(b.min.y == doctest::Approx(52.5));
+    }
+}
+
 TEST_CASE("ops: extrude copy")
 {
     const Mesh cube = makeCube();

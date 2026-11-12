@@ -93,6 +93,41 @@ TEST_CASE("settlement: generated streets keep their ids through unrelated edits 
     CHECK(c.staleOverrides[0] == kStreetIdBit + 12345);
 }
 
+TEST_CASE("settlement: organic streets keep their ids through an edit in one corner")
+{
+    for (const std::string name : {"medievalTown", "hamlet"})
+    {
+        CAPTURE(name);
+        Options o;
+        REQUIRE(builtinProfile(name, &o.profile));
+        Site site{.size = 60000.0};
+        const Layout a = build(site, Ground::plane(), o);
+        const std::set<uint64_t> before = streetIds(a);
+        REQUIRE(before.size() > 10);
+
+        auto kept = [&](const Layout& b) {
+            const std::set<uint64_t> after = streetIds(b);
+            size_t n = 0;
+            for (uint64_t id : before)
+                n += after.contains(id);
+            return double(n) / double(before.size());
+        };
+        // A street drawn in one corner, then an exclusion in another: most of the town is laid as it was.
+        Site drawn = site;
+        SitePath path;
+        path.id = 1;
+        path.pts = {{-20000.0, 0.0, -26000.0}, {-28000.0, 0.0, -18000.0}};
+        drawn.paths.push_back(path);
+        const double withStreet = kept(build(drawn, Ground::plane(), o));
+        Site excluded = site;
+        excluded.exclusions.push_back({1, "", "", {{21000, 21000}, {29000, 21000}, {29000, 29000}, {21000, 29000}}, 0.0});
+        const double withExclusion = kept(build(excluded, Ground::plane(), o));
+        MESSAGE(name << " ids kept: street " << withStreet << ", exclusion " << withExclusion);
+        CHECK(withStreet > 0.9);
+        CHECK(withExclusion > 0.9);
+    }
+}
+
 TEST_CASE("settlement: road profiles go to shape grammar slots and come back")
 {
     RoadProfile avenue;

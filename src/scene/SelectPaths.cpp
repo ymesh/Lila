@@ -9,6 +9,7 @@
 #include "scene/Isolation.h"
 #include "scene/Modifiers.h"
 
+#include <algorithm>
 #include <string>
 
 namespace lila::scene::components
@@ -78,6 +79,9 @@ Ids neighbourLoop(const geo::Mesh& m, const isolation::Visibility& vis, Componen
         for (int i = 0; i < 2; ++i)
             if (geo::edgeLoopNext(m, a, m.edgePoint(a, i)) == b)
                 return isolation::clipLoop(m, vis, geo::edgeLoop(m, a), a, ComponentMode::Edge, false);
+        // Facing edges that also share a loop, like the corners of an inset rim, follow the loop instead.
+        if (std::vector<geo::Index> loop = geo::edgeLoop(m, a); std::find(loop.begin(), loop.end(), b) != loop.end())
+            return {};
         bool facing = false;
         m.forEachEdgeCorner(a, [&](geo::Index c) { facing = facing || geo::quadOppositeEdge(m, a, m.cornerFace(c)) == b; });
         return facing ? isolation::clipLoop(m, vis, geo::edgeRing(m, a), a, ComponentMode::Edge, true) : Ids{};
@@ -197,7 +201,7 @@ void registerPathCommands()
         .name = "selectPathBetween",
         .doc = "Select the components between two of a mesh's vertices, edges or faces: the shorter way along a loop or ring "
                "they share, else the shortest path across the surface. Neighbours (vertices on one edge, edges along a loop or across "
-               "a quad, faces sharing an edge) select the whole loop or ring through both instead, unless deselecting. Adds to the selection unless replace or deselect. Returns the ids in order.",
+               "a quad on no loop they share, faces sharing an edge) select the whole loop or ring through both instead, unless deselecting. Adds to the selection unless replace or deselect. Returns the ids in order.",
         .positionalDoc = "mesh",
         .flags = {
             {"kind", "", T::String, "edge", "vertex | edge | face", {"vertex", "edge", "face"}},

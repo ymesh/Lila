@@ -502,6 +502,88 @@ struct OnesieParams
     float tailStiffness = 1.f;     // 1 holds it out with the tip drooping, 0 lets it hang limp
 };
 
+enum class CollarStyle : int
+{
+    None,
+    Stand, // a band standing up round the neck, closed by the zip
+    Shirt, // a stand with a fall folded down over it, the points open at the front
+    Count
+};
+
+/**
+ * Fitted one-piece suit: an open-front top joined at the waist to trousers, the fronts sewn down the centre (seam 0, ready
+ * for tailorAddZip), with an optional collar, cuffs at the ankles, patch pockets and knee and elbow patches.
+ */
+struct SuitParams
+{
+    float ease = 0.04f;
+    float sleeveLength = 0.62f;
+    float sleeveEase = 0.12f;
+    int sleeveStyle = int(SleeveStyle::SetIn);
+    float legEase = 0.02f;
+    float legOpening = 0.3f;       // leg hem circumference
+    int collar = int(CollarStyle::Stand);
+    float collarHeight = 0.04f;
+    bool ankleCuffs = false;
+    float cuffHeight = 0.05f;
+    bool chestPockets = false;
+    bool legPockets = false;       // flapped pockets on the thighs
+    bool kneePatches = false;
+    bool elbowPatches = false;
+    const char* fabric = "Spandex";
+};
+
+struct JumpsuitParams : SuitParams {};
+
+struct FlightSuitParams : SuitParams
+{
+    FlightSuitParams()
+    {
+        ease = 0.16f;
+        sleeveEase = 0.3f;
+        sleeveStyle = int(SleeveStyle::Cuffed);
+        legEase = 0.1f;
+        legOpening = 0.4f;
+        collar = int(CollarStyle::Shirt);
+        collarHeight = 0.07f;
+        ankleCuffs = true;
+        chestPockets = true;
+        legPockets = true;
+        fabric = "Nylon";
+    }
+};
+
+struct CoverallParams : SuitParams
+{
+    CoverallParams()
+    {
+        ease = 0.22f;
+        sleeveEase = 0.35f;
+        sleeveStyle = int(SleeveStyle::Cuffed);
+        legEase = 0.16f;
+        legOpening = 0.5f;
+        collar = int(CollarStyle::Shirt);
+        collarHeight = 0.08f;
+        chestPockets = true;
+        kneePatches = true;
+        fabric = "Twill";
+    }
+};
+
+/** Bib-and-brace overalls: trousers with a bib at the front, a lower bib at the back, and straps sewn over the shoulders. */
+struct OverallsParams
+{
+    float ease = 0.14f;
+    float legOpening = 0.5f;
+    float length = 0.f;            // waist to hem; 0 = to just above the floor
+    float bibHeight = 0.22f;       // above the waist
+    float bibWidth = 0.28f;
+    float backHeight = 0.12f;
+    float strapWidth = 0.045f;
+    bool bibPocket = true;
+    bool kneePatches = false;
+};
+
 Garment tee(const Body& body, const TeeParams& p = {});
 Garment tunic(const Body& body, const TunicParams& p = {});
 Garment robe(const Body& body, const RobeParams& p = {});
@@ -522,6 +604,10 @@ Garment banner(const Body& body, const BannerParams& p = {});
 Garment tent(const Body& body, const TentParams& p = {});
 Garment booties(const Body& body, const BootieParams& p = {});
 Garment onesie(const Body& body, const OnesieParams& p = {});
+/** Jumpsuit, flight suit and coverall all draft through it. */
+Garment suit(const Body& body, const SuitParams& p);
+/** Reports "buckle L" and "buckle R" anchors where the straps meet the bib. */
+Garment overalls(const Body& body, const OverallsParams& p = {}, std::vector<BlockAnchor>* anchors = nullptr);
 Garment cloakTunicBelt(const Body& body, const OutfitParams& p = {}, std::vector<BlockAnchor>* anchors = nullptr);
 
 /** Appends `src` to `dst`, offsetting panel, seam and fabric indices; returns the first new panel index. */

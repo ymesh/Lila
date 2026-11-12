@@ -1070,7 +1070,7 @@ void ViewportHeader::fillSnapMenu(QMenu* m)
         QString unit;
         std::vector<double> steps;
     };
-    const Inc incs[] = {{Tool::Move, "Move", "cm", {0.1, 0.5, 1, 5, 10, 50, 100, 500, 1000}},
+    const Inc incs[] = {{Tool::Move, "Move", "cm", {0.001, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 50, 100, 500, 1000}},
                         {Tool::Rotate, "Rotate", QString(QChar(0x00B0)), {}},
                         {Tool::Scale, "Scale", QString(QChar(0x00D7)), {0.0625, 0.1, 0.125, 0.25, 0.5, 1}}};
     for (const Inc& inc : incs)

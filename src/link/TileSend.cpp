@@ -181,7 +181,7 @@ TileSendResult sendTiles(RpcClient& client, const std::vector<TileItem>& items, 
         try
         {
             const fs::path file = item.write();
-            RpcResult imp = client.call("importAsset", importParams(file, item.mapping), importCallOptions());
+            RpcResult imp = client.call("importAsset", importParams(file, item.mapping, item.materials), importCallOptions());
             if (opts.deleteFiles)
             {
                 std::error_code ec;

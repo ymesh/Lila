@@ -225,6 +225,28 @@ void shadeCS(uint3 id: SV_DispatchThreadID)
     }
 }
 
+float3 aoDirection(uint k, uint rays, float r1, float r2, float3 t, float3 b, float3 n)
+{
+    float u = fmod((float(k) + 0.5) / float(rays) + r1, 1.0);
+    float v = fmod(radicalInverse(k) + r2, 1.0);
+    float r = sqrt(u), phi = 6.28318530718 * v;
+    return unitOr(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(0.0, 1.0 - u)), float3(0, 0, 1));
+}
+
+// The surface met along n is a back face of a high that also closes behind the point (along -n): an open lid doesn't.
+// exit is where the point leaves that high on the nearer side, just outside it.
+bool aoBuried(float3 o, float3 n, out float3 exit)
+{
+    TraceHit up, down;
+    up.front = true;
+    down.front = true;
+    exit = o;
+    if (!(traceClosest(o, n, pc.boundsMin.w, false, up) && !up.front && traceClosestHigh(o, -n, pc.boundsMin.w, up.high, down) && !down.front))
+        return false;
+    exit = up.t <= down.t ? o + n * (up.t + pc.boundsExt.w) : o - n * (down.t + pc.boundsExt.w);
+    return true;
+}
+
 // Cosine-weighted occlusion from the hit, the same ray sequence as the CPU kernel. rays per sample in pc.rays.
 [shader("compute")]
 [numthreads(64, 1, 1)]
@@ -241,7 +263,7 @@ void aoCS(uint3 id: SV_DispatchThreadID)
     HitRecord h = pc.hits[i];
     if ((h.flags & kHitValid) == 0)
     {
-        writeOut(i, float4(1.0), true);
+        writeOut(i, float4(0.0), false);
         return;
     }
     float3 n = h.normal;
@@ -252,15 +274,31 @@ void aoCS(uint3 id: SV_DispatchThreadID)
     float r1 = float(seed & 0xffff) / 65536.0, r2 = float(seed >> 16) / 65536.0;
     uint rays = pc.rays;
     bool self = (pc.flags & kFlagScopeSelf) != 0;
-    uint blocked = 0;
+    uint blocked = 0, backs = 0;
+    TraceHit th;
     for (uint k = 0; k < rays; ++k)
     {
-        float u = fmod((float(k) + 0.5) / float(rays) + r1, 1.0);
-        float v = fmod(radicalInverse(k) + r2, 1.0);
-        float r = sqrt(u), phi = 6.28318530718 * v;
-        float3 d = unitOr(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(0.0, 1.0 - u)), float3(0, 0, 1));
-        if (self ? traceAnyHigh(o, d, pc.boundsMin.w, h.high) : traceAny(o, d, pc.boundsMin.w))
+        float3 d = aoDirection(k, rays, r1, r2, t, b, n);
+        if (self)
+        {
+            if (traceAnyHigh(o, d, pc.boundsMin.w, h.high))
+                ++blocked;
+        }
+        else if (traceClosest(o, d, pc.boundsMin.w, false, th))
+        {
             ++blocked;
+            if (!th.front)
+                ++backs;
+        }
+    }
+    // Buried inside another high (where parts meet): seen from where it leaves that high; only front faces occlude.
+    float3 exit;
+    if (backs * 4 >= rays * 3 && aoBuried(o, n, exit))
+    {
+        blocked = 0;
+        for (uint k = 0; k < rays; ++k)
+            if (traceClosest(exit, aoDirection(k, rays, r1, r2, t, b, n), pc.boundsMin.w, true, th))
+                ++blocked;
     }
     float ao = 1.0 - float(blocked) / float(rays);
     writeOut(i, float4(ao, ao, ao, 1.0), true);

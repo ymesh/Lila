@@ -290,7 +290,7 @@ json OutputFile::toJson() const
 json GroupStats::toJson() const
 {
     return {{"group", group},         {"samples", samples},         {"hits", hits},
-            {"misses", misses},       {"backfaces", backfaces},     {"highTriangles", highTriangles},
+            {"misses", misses},       {"backfaces", backfaces},     {"reaimed", reaimed},     {"probed", probed},     {"highTriangles", highTriangles},
             {"lowTriangles", lowTriangles}, {"frontal", frontal},       {"rear", rear},
             {"frontalAuto", frontalAuto}, {"rearAuto", rearAuto},       {"measured", measured}};
 }
@@ -301,7 +301,7 @@ json BakeResult::toJson() const
     for (const OutputFile& o : outputs)
         outs.push_back(o.toJson());
     json gs = json::array();
-    uint64_t samples = 0, hits = 0, misses = 0, backfaces = 0;
+    uint64_t samples = 0, hits = 0, misses = 0, backfaces = 0, reaimed = 0, probed = 0;
     for (const GroupStats& g : groups)
     {
         gs.push_back(g.toJson());
@@ -309,9 +309,11 @@ json BakeResult::toJson() const
         hits += g.hits;
         misses += g.misses;
         backfaces += g.backfaces;
+        reaimed += g.reaimed;
+        probed += g.probed;
     }
     return {{"outputs", outs},
-            {"stats", {{"samples", samples}, {"hits", hits}, {"misses", misses}, {"backfaces", backfaces}, {"groups", gs}}},
+            {"stats", {{"samples", samples}, {"hits", hits}, {"misses", misses}, {"backfaces", backfaces}, {"reaimed", reaimed}, {"probed", probed}, {"groups", gs}}},
             {"warnings", warnings},
             {"manifest", manifest.empty() ? json() : json(paths::toUtf8(manifest))},
             {"dryRun", dryRun},
@@ -392,6 +394,8 @@ BakeResult runMaterialPasses(const BakeInputs& in, const ProjectSettings& ps, co
             it->hits += gs.hits;
             it->misses += gs.misses;
             it->backfaces += gs.backfaces;
+            it->reaimed += gs.reaimed;
+            it->probed += gs.probed;
         }
         for (const auto& [k, v] : r.timings.items())
             if (v.is_number())
@@ -789,7 +793,7 @@ BakeResult runBake(const BakeInputs& in, const ProjectSettings& ps, const BakeOp
         std::vector<std::vector<uint8_t>> counted(lowJobs.size());
         for (size_t k = 0; k < lowJobs.size(); ++k)
             counted[k].assign(lookup[k].size(), 0);
-        auto countTile = [&](size_t k, size_t u, uint64_t samples, uint64_t hits, uint64_t backfaces) {
+        auto countTile = [&](size_t k, size_t u, uint64_t samples, uint64_t hits, uint64_t backfaces, uint64_t reaimed, uint64_t probed) {
             if (counted[k][u])
                 return;
             counted[k][u] = 1;
@@ -798,6 +802,8 @@ BakeResult runBake(const BakeInputs& in, const ProjectSettings& ps, const BakeOp
             s.hits += hits;
             s.misses += samples - hits;
             s.backfaces += backfaces;
+            s.reaimed += reaimed;
+            s.probed += probed;
         };
 
         auto bakeBatch = [&](const std::vector<uint8_t>& inBatch) {
@@ -832,7 +838,7 @@ BakeResult runBake(const BakeInputs& in, const ProjectSettings& ps, const BakeOp
                         };
                         tile.cancelled = [&scope] { return scope.cancelled(); };
                         const ResidentStats r = resident->bakeTile(tile);
-                        countTile(k, u, r.samples, r.hits, r.backfaces);
+                        countTile(k, u, r.samples, r.hits, r.backfaces, r.reaimed, r.probed);
                     }
                 }
                 gpuSeconds += since(t0);
@@ -851,7 +857,7 @@ BakeResult runBake(const BakeInputs& in, const ProjectSettings& ps, const BakeOp
                     const auto texOf = batchLookup(inBatch, k, u);
                     if (!tileWork(texOf, false))
                         continue;
-                    std::atomic<uint64_t> nSamples{0}, nHits{0}, nBack{0};
+                    std::atomic<uint64_t> nSamples{0}, nHits{0}, nBack{0}, nReaimed{0}, nProbed{0};
                     auto bakeBand = [&](size_t band) {
                         progress::Adopt adopt(parent);
                         scope.checkCancel();
@@ -870,15 +876,19 @@ BakeResult runBake(const BakeInputs& in, const ProjectSettings& ps, const BakeOp
                         t0 = Clock::now();
                         backend.traceProjection(j.group, samples, hits);
                         tTrace.add(t0);
-                        uint64_t h = 0, b = 0;
+                        uint64_t h = 0, b = 0, ra = 0, pr = 0;
                         for (const HitRecord& r : hits)
                         {
                             h += (r.flags & kHitValid) ? 1 : 0;
                             b += (r.flags & kHitBackface) ? 1 : 0;
+                            ra += (r.flags & kHitReaimed) ? 1 : 0;
+                            pr += (r.flags & kHitProbed) ? 1 : 0;
                         }
                         nSamples += samples.size();
                         nHits += h;
                         nBack += b;
+                        nReaimed += ra;
+                        nProbed += pr;
 
                         std::vector<uint32_t> order;
                         std::vector<glm::vec4> out(samples.size());
@@ -935,7 +945,7 @@ BakeResult runBake(const BakeInputs& in, const ProjectSettings& ps, const BakeOp
                     // not pick up another band: that one could take the same lock on the same thread, or the same band slot.
                     tbb::parallel_for(size_t(0), j.raster->bandCount(), [&](size_t band) { tbb::this_task_arena::isolate([&] { bakeBand(band); }); });
                     if (!resident)
-                        countTile(k, u, nSamples, nHits, nBack);
+                        countTile(k, u, nSamples, nHits, nBack, nReaimed, nProbed);
                 }
             }
             if (bandMaps)
@@ -1261,13 +1271,16 @@ void completeBake(scene::NodeId project, const std::string& name, const BakeResu
     addOutputs(written);
     json j = r.toJson();
     lastResults()[project] = j;
-    uint64_t misses = 0, samples = 0;
+    uint64_t misses = 0, samples = 0, reaimed = 0, probed = 0;
     for (const GroupStats& s : r.groups)
     {
         misses += s.misses;
         samples += s.samples;
+        reaimed += s.reaimed;
+        probed += s.probed;
     }
-    log::info("Baked {} texture(s) for {} in {:.2f} s on {} ({} of {} samples missed)", r.outputs.size(), name, r.seconds, r.backendMode, misses, samples);
+    log::info("Baked {} texture(s) for {} in {:.2f} s on {} ({} of {} samples missed, {} re-aimed along the face normal past the far side of a thin part, {} taken from the nearest high where no ray along the normal reached it)",
+              r.outputs.size(), name, r.seconds, r.backendMode, misses, samples, reaimed, probed);
     notify({BakeEvent::Kind::Finished, project, std::move(j)});
 }
 

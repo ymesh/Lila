@@ -701,6 +701,9 @@ TriMesh fromMesh(const geo::Mesh& mesh)
     const geo::Triangulation tris = geo::triangulate(mesh);
     const auto uv = mesh.cornerAttrs().get<glm::vec2>(geo::attr::uvName(0));
     const auto nrm = mesh.cornerAttrs().get<glm::vec3>(geo::attr::kNormal);
+    const std::vector<std::string> sets = geo::colors::sets(mesh);
+    const std::span<const glm::vec4> col = sets.empty() ? std::span<const glm::vec4>{} : geo::colors::values(mesh, sets.front());
+    const auto mat = mesh.faceAttrs().get<int32_t>(geo::attr::kMaterial);
     if (!uv.empty())
     {
         out.cornerNames = {"u0", "v0"};
@@ -711,6 +714,18 @@ TriMesh fromMesh(const geo::Mesh& mesh)
         out.cornerNames.insert(out.cornerNames.end(), {"nx", "ny", "nz"});
         out.cornerStride += 3;
     }
+    if (!col.empty())
+    {
+        out.colorSet = sets.front();
+        out.cornerNames.insert(out.cornerNames.end(), {"cr", "cg", "cb", "ca"});
+        out.cornerStride += 4;
+    }
+    if (!mat.empty())
+    {
+        out.cornerNames.push_back("mat");
+        out.cornerStride += 1;
+    }
+    out.materials = mesh.materialNames();
     for (size_t t = 0; t < tris.faces.size(); ++t)
     {
         glm::uvec3 tri;
@@ -726,6 +741,11 @@ TriMesh fromMesh(const geo::Mesh& mesh)
             if (!nrm.empty())
                 for (int k = 0; k < 3; ++k)
                     out.ca.push_back(nrm[corner][k]);
+            if (!col.empty())
+                for (int k = 0; k < 4; ++k)
+                    out.ca.push_back(col[corner][k]);
+            if (!mat.empty())
+                out.ca.push_back(float(mat[tris.faces[t]]));
         }
         out.t.push_back(tri);
     }
@@ -764,15 +784,19 @@ geo::Mesh toMesh(const TriMesh& m)
                 dst[v] = m.vattr(v)[i];
         }
     }
-    const int u = m.cornerIndex("u0"), nx = m.cornerIndex("nx");
-    if (u >= 0 || nx >= 0)
+    const int u = m.cornerIndex("u0"), nx = m.cornerIndex("nx"), cr = m.cornerIndex("cr"), mi = m.cornerIndex("mat");
+    if (u >= 0 || nx >= 0 || cr >= 0 || mi >= 0)
     {
         std::span<glm::vec2> uv = u >= 0 ? out.cornerAttrs().getOrAdd<glm::vec2>(geo::attr::uvName(0)) : std::span<glm::vec2>{};
         std::span<glm::vec3> nrm = nx >= 0 ? out.cornerAttrs().getOrAdd<glm::vec3>(geo::attr::kNormal) : std::span<glm::vec3>{};
+        std::span<glm::vec4> col = cr >= 0 ? geo::colors::add(out, m.colorSet.empty() ? "Col" : m.colorSet) : std::span<glm::vec4>{};
+        std::span<int32_t> mat = mi >= 0 ? out.faceAttrs().getOrAdd<int32_t>(geo::attr::kMaterial) : std::span<int32_t>{};
         for (size_t t = 0; t < m.t.size(); ++t)
         {
             if (faces[t] == geo::kInvalid)
                 continue;
+            if (mi >= 0)
+                mat[faces[t]] = int32_t(std::lround(m.cattr(t, 0)[mi]));
             for (geo::Index c : out.faceCorners(faces[t]))
             {
                 const geo::Index pt = out.cornerPoint(c);
@@ -782,9 +806,12 @@ geo::Mesh toMesh(const TriMesh& m)
                     uv[c] = {a[u], a[u + 1]};
                 if (nx >= 0)
                     nrm[c] = {a[nx], a[nx + 1], a[nx + 2]};
+                if (cr >= 0)
+                    col[c] = {a[cr], a[cr + 1], a[cr + 2], a[cr + 3]};
             }
         }
     }
+    out.materialNames() = m.materials;
     return out;
 }
 
@@ -1919,6 +1946,8 @@ std::map<std::pair<int, int>, TriMesh> splitCells(const TriMesh& m, glm::dvec2 o
             o.cornerStride = m.cornerStride;
             o.vertexNames = m.vertexNames;
             o.cornerNames = m.cornerNames;
+            o.colorSet = m.colorSet;
+            o.materials = m.materials;
         }
         glm::uvec3 nt;
         for (int k = 0; k < 3; ++k)
@@ -1970,6 +1999,9 @@ std::vector<Tile> cutTiles(const TriMesh& mesh, const TileParams& p)
         mix(tm.p.data(), tm.p.size() * sizeof(glm::dvec3));
         mix(tm.t.data(), tm.t.size() * sizeof(glm::uvec3));
         mix(tm.va.data(), tm.va.size() * sizeof(float));
+        mix(tm.ca.data(), tm.ca.size() * sizeof(float));
+        for (const std::string& name : tm.materials)
+            mix(name.data(), name.size() + 1);
         mix(&tile.centre, sizeof(tile.centre));
         const double params[] = {double(p.lods), p.lodRatio, p.collisionRatio, tile.nanite ? 1.0 : 0.0};
         mix(params, sizeof(params));
@@ -2078,13 +2110,29 @@ glm::dvec3 projectionWeights(const glm::dvec3& nIn, double slopeStart, double bl
     return {side * wx / s, 1.0 - side, side * wz / s};
 }
 
-double texelDensity(const glm::dvec3& a, const glm::dvec3& b, const glm::dvec3& c, double tile, double slopeStart, double blend, bool biplanar)
+glm::dvec3 projectionNormal(const glm::dvec3& shading, const glm::dvec3& face)
+{
+    const double ls = glm::length(shading), lf = glm::length(face);
+    if (lf <= 1e-12)
+        return shading;
+    if (ls <= 1e-12)
+        return face / lf;
+    const glm::dvec3 n = shading / ls;
+    glm::dvec3 f = face / lf;
+    if (glm::dot(f, n) < 0.0)
+        f = -f;
+    const double k = 1.0 - smooth01(std::cos(kProjectionFace * kDeg), std::cos(kProjectionTrust * kDeg), glm::dot(f, n));
+    return glm::normalize(n + (f - n) * k);
+}
+
+double texelDensity(const glm::dvec3& a, const glm::dvec3& b, const glm::dvec3& c, double tile, double slopeStart, double blend, bool biplanar,
+                    const glm::dvec3* shading)
 {
     const glm::dvec3 nrm = glm::cross(b - a, c - a);
     const double area = 0.5 * glm::length(nrm);
     if (area <= 0.0)
         return 0.0;
-    const glm::dvec3 w = projectionWeights(nrm, slopeStart, blend, biplanar);
+    const glm::dvec3 w = projectionWeights(shading ? projectionNormal(*shading, nrm) : nrm, slopeStart, blend, biplanar);
     // Each projection maps the face onto its plane; the face's texels per cm is sqrt(projected area / area) / tile.
     auto projected = [&](int axis) {
         const glm::dvec3 n = glm::abs(nrm) * 0.5;

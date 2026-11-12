@@ -5,6 +5,7 @@
 #include <lila/Profile.h>
 
 #include <algorithm>
+#include <numeric>
 #include <cmath>
 #include <limits>
 
@@ -375,25 +376,31 @@ std::vector<int> StreetGraph::addPolyline(std::span<const Vec2> pts, const Stree
     return made;
 }
 
-std::vector<Face> planarFaces(const StreetGraph& g)
+std::vector<Face> planarFaces(const StreetGraph& g) { return planarFaces(g, nullptr); }
+
+std::vector<Face> planarFaces(const StreetGraph& g, const std::vector<int>* fromEdges)
 {
     LILA_ZONE();
 
     const size_t ne = g.edges.size();
-    std::vector<std::vector<int>> out(g.nodes.size()); // half-edges leaving each node, sorted by angle
     auto from = [&](int h) { return h & 1 ? g.edges[size_t(h >> 1)].b : g.edges[size_t(h >> 1)].a; };
     auto to = [&](int h) { return h & 1 ? g.edges[size_t(h >> 1)].a : g.edges[size_t(h >> 1)].b; };
+    // Half-edges leaving each node sorted by angle, made the first time a walk reaches the node.
+    std::vector<std::vector<int>> out(g.nodes.size());
+    std::vector<char> sorted(g.nodes.size(), 0);
+    std::vector<int> slot(2 * ne, -1);
     for (size_t e = 0; e < ne; ++e)
         if (g.edges[e].alive)
         {
             out[size_t(g.edges[e].a)].push_back(int(2 * e));
             out[size_t(g.edges[e].b)].push_back(int(2 * e + 1));
         }
-    std::vector<int> slot(2 * ne, -1);
-    for (size_t n = 0; n < out.size(); ++n)
-    {
-        auto& hs = out[n];
-        const Vec2 p = g.nodes[n].p;
+    auto leaving = [&](int n) -> const std::vector<int>& {
+        std::vector<int>& hs = out[size_t(n)];
+        if (sorted[size_t(n)])
+            return hs;
+        sorted[size_t(n)] = 1;
+        const Vec2 p = g.nodes[size_t(n)].p;
         std::sort(hs.begin(), hs.end(), [&](int x, int y) {
             const Vec2 dx = g.nodes[size_t(to(x))].p - p, dy = g.nodes[size_t(to(y))].p - p;
             const double ax = std::atan2(dx.y, dx.x), ay = std::atan2(dy.y, dy.x);
@@ -401,19 +408,28 @@ std::vector<Face> planarFaces(const StreetGraph& g)
         });
         for (size_t i = 0; i < hs.size(); ++i)
             slot[size_t(hs[i])] = int(i);
-    }
+        return hs;
+    };
     auto next = [&](int h) {
         const int twin = h ^ 1;
-        const auto& hs = out[size_t(to(h))];
+        leaving(from(twin));
+        const auto& hs = leaving(to(h));
         const int n = int(hs.size());
         return hs[size_t((slot[size_t(twin)] - 1 + n) % n)];
     };
 
     std::vector<Face> faces;
     std::vector<char> seen(2 * ne, 0);
-    for (size_t e = 0; e < ne; ++e)
+    std::vector<int> all;
+    if (!fromEdges)
     {
-        if (!g.edges[e].alive)
+        all.resize(ne);
+        std::iota(all.begin(), all.end(), 0);
+    }
+    for (int ei : fromEdges ? *fromEdges : all)
+    {
+        const size_t e = size_t(ei);
+        if (e >= ne || !g.edges[e].alive)
             continue;
         for (int start : {int(2 * e), int(2 * e + 1)})
         {

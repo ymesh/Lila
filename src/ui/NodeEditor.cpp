@@ -14,6 +14,7 @@
 #include "scene/Graph.h"
 #include "scene/MeshNodes.h"
 #include "ui/Actions.h"
+#include "ui/Menus.h"
 #include "ui/Deletion.h"
 #include "ui/AnimatedSend.h"
 #include "ui/CodeEdit.h"
@@ -609,7 +610,7 @@ void NodeEditor::buildToolbar()
     {
         auto* more = new QToolButton(mBar);
         more->setIcon(icon("dots"));
-        more->setToolTip("More\nExport and import node groups");
+        more->setToolTip(b.id() == kGeometryNodesBackend ? "More\nExport and import node groups, use as a node tool" : "More\nExport and import node groups");
         more->setPopupMode(QToolButton::InstantPopup);
         controls::setRole(more, "overflow");
         auto* menu = new QMenu(more);
@@ -628,6 +629,11 @@ void NodeEditor::buildToolbar()
                         importGroups(files);
                 })
                 ->setToolTip("Import node groups from a ." + suffix + " file; you can also drop the file on the canvas");
+        if (b.id() == kGeometryNodesBackend)
+        {
+            menu->addSeparator();
+            menus::addActionRow(menu, "nodeEditor.toggleNodeTool");
+        }
         more->setMenu(menu);
         bar->addWidget(more);
     }

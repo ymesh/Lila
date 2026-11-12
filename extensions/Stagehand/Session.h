@@ -68,6 +68,11 @@ public:
     void push(int body, const glm::dvec3& at, const glm::dvec3& velocity);
     /** Small random pushes to every mover within radius of a point, strongest at the centre. */
     void wiggle(const glm::dvec3& center, double radius, double speed);
+    /**
+     * A broom over every mover within radius of a point: each is steered along the stroke's motion at speed (cm/s), or
+     * with gather toward the point, strongest at the centre. Call it every frame the brush is down.
+     */
+    void sweep(const glm::dvec3& center, const glm::dvec3& motion, double radius, double speed, bool gather);
     /** Wakes every mover so it falls under gravity from where it is. */
     void drop();
     /** Moves a collider or mover by an offset and back over `seconds`, shaking what rests on it. */

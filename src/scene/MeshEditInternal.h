@@ -39,6 +39,8 @@ using EditFn = std::function<EditResult(geo::Mesh&, const Ids& selection, const 
 
 json editSelected(const char* label, ComponentMode kind, const EditFn& fn, bool allowWhole = false,
                   const std::function<bool(const Node&)>& handledWhole = nullptr);
+/** Inside an editSelected fn: the linear part of the edited mesh's world matrix, for ops that take world distances. */
+glm::dmat3 editSpace();
 
 inline EditResult faces(Ids ids) { return {ComponentMode::Face, std::move(ids)}; }
 inline EditResult edges(Ids ids) { return {ComponentMode::Edge, std::move(ids)}; }

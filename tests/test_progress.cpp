@@ -118,6 +118,18 @@ TEST_CASE("progress: cancelling a root reaches every nested scope")
     CHECK_FALSE(find(progress::snapshot(), "Converting x.mb...")->cancellable);
 }
 
+TEST_CASE("progress: showNow from a nested scope marks the root and pumps at once")
+{
+    TestPump pump;
+    progress::Scope root("Preparing bake inputs", 1.0);
+    progress::Scope inner("Smoothing", 1.0);
+    CHECK_FALSE(find(progress::snapshot(), "Preparing bake inputs")->immediate);
+    const int before = pump.calls;
+    inner.showNow();
+    CHECK(find(progress::snapshot(), "Preparing bake inputs")->immediate);
+    CHECK(pump.calls > before);
+}
+
 TEST_CASE("progress: the reporter is throttled and told when the last root closes")
 {
     std::atomic<int> calls{0};

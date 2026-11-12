@@ -1,4 +1,4 @@
-// The Push tool (live physics in the viewport: grab, push, wiggle, drop, shake, pin), its Level menu entries and the Level Toolkit's Stagehand sections.
+// The Push tool (live physics in the viewport: grab, push, wiggle, drop, shake, sweep, pin; slow motion, auto keep at rest), its Level menu entries and the Level Toolkit's Stagehand sections.
 
 #include "Session.h"
 #include "Stagehand.h"
@@ -9,6 +9,7 @@
 #include <lila/LevelToolkit.h>
 #include <lila/Log.h>
 #include <lila/Menus.h>
+#include <lila/Prefs.h>
 #include <lila/Undo.h>
 #include <lila/ViewportTool.h>
 
@@ -31,6 +32,12 @@ namespace
 constexpr const char* kPushTool = "stagehand.push";
 /** How much push the wiggle brush gives per second held, cm/s, spread over the frames. */
 constexpr double kWiggleSpeedPerSecond = 400.0;
+/** The sweep brush carries things at the cursor's speed up to this, and gathers at kGatherSpeed, cm/s. */
+constexpr double kSweepSpeedMax = 600.0;
+constexpr double kGatherSpeed = 80.0;
+/** With auto keep on, the result is kept once everything has rested this long after a drag, seconds. */
+constexpr double kKeepAfterRest = 0.3;
+constexpr double kSlowMotion = 0.25;
 
 enum class Mode : int
 {
@@ -39,6 +46,7 @@ enum class Mode : int
     Wiggle,
     Drop,
     Shake,
+    Sweep,
     Count
 };
 
@@ -56,6 +64,8 @@ const char* modeName(Mode m)
         return "Drop";
     case Mode::Shake:
         return "Shake";
+    case Mode::Sweep:
+        return "Sweep";
     default:
         return "";
     }
@@ -79,6 +89,10 @@ QString addModeHint(Mode m, ToolStatus& s)
         return "click to let everything fall";
     case Mode::Shake:
         return "click a shelf or table to shake it";
+    case Mode::Sweep:
+        s.keys.push_back({"Shift", "gather"});
+        s.keys.push_back({"[ ]", "size"});
+        return "drag to sweep along the stroke";
     default:
         return {};
     }
@@ -99,6 +113,7 @@ public:
     void activate() override
     {
         mMode = gStartMode;
+        mAutoKeep = PrefStore::get().value<bool>("stagehand", "/push/autoKeep", true);
         mTimer = new QTimer();
         mTimer->setInterval(16);
         QObject::connect(mTimer, &QTimer::timeout, [this] { tick(); });
@@ -127,6 +142,8 @@ public:
         view.ray(e->position(), o, d);
         mPress = e->position();
         mPressed = true;
+        mTouched = true;
+        mRestFor = 0.0;
         const int body = mSession->pick(o, d, &at);
         if (e->modifiers() & Qt::ControlModifier)
         {
@@ -155,6 +172,11 @@ public:
         case Mode::Wiggle:
             mWiggling = true;
             break;
+        case Mode::Sweep:
+            mSweeping = true;
+            mGather = e->modifiers() & Qt::ShiftModifier;
+            mSweepLast.reset();
+            break;
         case Mode::Shake:
         {
             const auto hit = mSession->world().scene().raycast(o, d, 1e7);
@@ -178,6 +200,7 @@ public:
     {
         mCursor = e->position();
         mView = view;
+        mGather = e->modifiers() & Qt::ShiftModifier;
         if (!mSession || !mPressed)
         {
             viewportTools::requestRedraw();
@@ -213,6 +236,7 @@ public:
             return false;
         mPressed = false;
         mWiggling = false;
+        mSweeping = false;
         if (!mSession)
             return true;
         if (mMode == Mode::Push && mPushBody >= 0)
@@ -273,19 +297,21 @@ public:
             viewportTools::requestRedraw();
             return true;
         default:
-            return false;
+            return toggleKey(e->key(), e->modifiers());
         }
     }
 
     bool hotkey(const QKeyEvent& e, std::string_view action) override
     {
-        // 1 to 5 pick the mode while the tool is up, over their usual smooth preview.
+        // 1 to 6 pick the mode while the tool is up, over their usual smooth preview.
         if (e.key() >= Qt::Key_1 && e.key() < Qt::Key_1 + int(Mode::Count) && e.modifiers() == Qt::NoModifier)
         {
             mMode = Mode(e.key() - Qt::Key_1);
             viewportTools::requestRedraw();
             return true;
         }
+        if (toggleKey(e.key(), e.modifiers()))
+            return true;
         if (action == "edit.undo" && mSession)
         {
             mSession->revert(scene::Graph::current());
@@ -307,14 +333,15 @@ public:
         }
         else
         {
-            status.flags = {{"paused", mSession->paused()}};
-            status.keys = {{"1-5", "mode"}};
+            status.flags = {{"paused", mSession->paused()}, {"slow", mSlow}, {"auto keep", mAutoKeep}};
+            status.keys = {{"1-6", "mode"}};
             status.prompt = addModeHint(mMode, status);
-            for (const KeyHint& k : {KeyHint{"Ctrl-click", "pin"}, KeyHint{"P", "pause"}, KeyHint{"Enter", "keep"}, KeyHint{"Esc", "revert"}})
+            for (const KeyHint& k : {KeyHint{"Ctrl-click", "pin"}, KeyHint{"P", "pause"}, KeyHint{"L", "slow"}, KeyHint{"K", "auto keep"},
+                                     KeyHint{"Enter", "keep"}, KeyHint{"Esc", "revert"}})
                 status.keys.push_back(k);
         }
         drawToolStatus(p, view, status);
-        if (mMode == Mode::Wiggle)
+        if (mMode == Mode::Wiggle || mMode == Mode::Sweep)
             drawBrush(p, view);
         if (mSession && mSession->held() >= 0)
         {
@@ -352,8 +379,48 @@ private:
             log::write(LogLevel::Warning, std::string("Push tool: ") + e.what());
             return false;
         }
+        mSession->setTimeScale(mSlow ? kSlowMotion : 1.0);
         mClock.restart();
         return true;
+    }
+
+    /** K toggles auto keep, L slow motion; both stay as set for the next session. */
+    bool toggleKey(int key, Qt::KeyboardModifiers mods)
+    {
+        if (mods != Qt::NoModifier)
+            return false;
+        if (key == Qt::Key_K)
+        {
+            mAutoKeep = !mAutoKeep;
+            PrefStore::get().set("stagehand", "/push/autoKeep", mAutoKeep);
+        }
+        else if (key == Qt::Key_L)
+        {
+            mSlow = !mSlow;
+            if (mSession)
+                mSession->setTimeScale(mSlow ? kSlowMotion : 1.0);
+        }
+        else
+            return false;
+        viewportTools::requestRedraw();
+        return true;
+    }
+
+    /** Keeps the result once everything rests after the hand lets go, so each drag is its own undo step. */
+    void keepAtRest(double dt)
+    {
+        const bool idle = !mPressed && !mWiggling && !mSweeping && mSession->held() < 0 && !mSession->paused();
+        if (!mAutoKeep || !mTouched || !idle)
+        {
+            mRestFor = 0.0;
+            return;
+        }
+        mRestFor = mSession->world().scene().atRest() ? mRestFor + dt : 0.0;
+        if (mRestFor >= kKeepAfterRest)
+        {
+            keep();
+            mTouched = false;
+        }
     }
 
     void tick()
@@ -368,8 +435,21 @@ private:
             if (const auto hit = mSession->world().scene().raycast(o, d, 1e7))
                 mSession->wiggle(hit->point, mRadius, kWiggleSpeedPerSecond * dt);
         }
+        if (mSweeping)
+        {
+            glm::dvec3 o, d;
+            mView.ray(mCursor, o, d);
+            if (const auto hit = mSession->world().scene().raycast(o, d, 1e7))
+            {
+                const glm::dvec3 motion = mSweepLast ? hit->point - *mSweepLast : glm::dvec3(0.0);
+                const double speed = mGather ? kGatherSpeed : std::min(glm::length(motion) / std::max(dt, 1e-3), kSweepSpeedMax);
+                mSession->sweep(hit->point, motion, mRadius, speed, mGather);
+                mSweepLast = hit->point;
+            }
+        }
         mSession->advance(dt);
         mSession->show(scene::Graph::current());
+        keepAtRest(dt);
         viewportTools::requestRedraw();
     }
 
@@ -404,7 +484,10 @@ private:
     ViewInfo mView;
     Mode mMode = Mode::Grab;
     QPointF mPress, mCursor;
-    bool mPressed = false, mLift = false, mWiggling = false;
+    bool mPressed = false, mLift = false, mWiggling = false, mSweeping = false, mGather = false;
+    bool mAutoKeep = true, mSlow = false, mTouched = false;
+    double mRestFor = 0.0;
+    std::optional<glm::dvec3> mSweepLast;
     glm::dvec3 mPlanePoint{0.0}, mPlaneNormal{0, 0, 1};
     int mPushBody = -1;
     glm::dvec3 mPushAt{0.0};
@@ -459,6 +542,7 @@ void registerUi(ext::Context& ctx)
         {"stagehand.tool.wiggle", "stagehand.menu.wiggle", "Wiggle Brush", Mode::Wiggle, "Hold over things to jostle them into a natural, slightly messy rest."},
         {"stagehand.tool.drop", "stagehand.menu.drop", "Drop Tool", Mode::Drop, "Lift things and let them fall where they would land."},
         {"stagehand.tool.shake", "stagehand.menu.shake", "Shake Tool", Mode::Shake, "Click a shelf or table to shake what rests on it."},
+        {"stagehand.tool.sweep", "stagehand.menu.sweep", "Sweep Brush", Mode::Sweep, "Drag to broom things along the stroke; hold Shift to gather them under the brush."},
     };
     for (const ToolAction& t : tools)
     {
@@ -497,6 +581,10 @@ void registerUi(ext::Context& ctx)
         {"stagehand.pileProps", "Pile Props", "pileProps", "Heap items up in a footprint and settle them.",
          "pileProps(items=['Debris/Brick'], at=[0, 0, 0], count=40)"},
         {"stagehand.stackProps", "Stack Props", "stackProps", "Stack items one on another.", "stackProps(items=['Kitchen/Plate'], at=[0, 90, 0])"},
+        {"stagehand.pathProps", "Props Along Curve", "pathProps", "Place items along the selected curves.", "pathProps('Kerb', items=['Debris/Rebar'], spacing=60)"},
+        {"stagehand.debrisProps", "Debris Around", "debrisProps", "Strew chips around the selected broken objects, sized from their pieces.", "debrisProps('Wall_fractured')"},
+        {"stagehand.arrangePreset", "Arrangement Preset", "arrangePreset", "Dress a place from a preset: storeroom, rubble corner, library shelf, messy desk.",
+         "arrangePreset('Storeroom', slots={'floor': 'Floor'})"},
     };
     menus::addItem(ctx, {.id = "stagehand.menu.arrange", .menu = levelToolkit::kMenu, .kind = menus::Kind::Submenu, .label = "Arrange",
                          .before = levelToolkit::kAssetsSection});
@@ -524,7 +612,7 @@ void registerUi(ext::Context& ctx)
                             .items = {{"window.propLibrary", "books", "Library", "Library"}, {},
                                       {"stagehand.tool.grab", "hand-grab", "Grab", "Grab"}, {"stagehand.tool.push", "hand-finger", "Push"},
                                       {"stagehand.tool.wiggle", "wave-sine", "Wiggle"}, {"stagehand.tool.drop", "arrow-bar-to-down", "Drop"},
-                                      {"stagehand.tool.shake", "activity", "Shake"}, {},
+                                      {"stagehand.tool.shake", "activity", "Shake"}, {"stagehand.tool.sweep", "brush", "Sweep"}, {},
                                       {"stagehand.settle", "anchor", "Settle", "Settle"}, {"stagehand.drop", "arrow-down", "Drop"}, {"stagehand.wiggle", "dice", "Wiggle"},
                                       {"stagehand.shake", "activity", "Shake"}, {"stagehand.check", "checklist", "Check"}, {},
                                       {"stagehand.body.dynamic", "", "Dynamic"}, {"stagehand.body.static", "", "Static"}, {"stagehand.body.off", "", "Ignore"},
@@ -533,7 +621,8 @@ void registerUi(ext::Context& ctx)
     levelToolkit::add(ctx, {.id = "stagehand.arrange",
                             .title = "Arrange",
                             .items = {{"stagehand.fillShelf", "books", "Fill Shelf"}, {"stagehand.scatterProps", "grain", "Scatter", "Scatter"},
-                                      {"stagehand.pileProps", "stack-2", "Pile"}, {"stagehand.stackProps", "stack", "Stack"}},
+                                      {"stagehand.pileProps", "stack-2", "Pile"}, {"stagehand.stackProps", "stack", "Stack"}, {"stagehand.pathProps", "route", "Along Curve"},
+                                      {"stagehand.debrisProps", "wall", "Debris"}, {"stagehand.arrangePreset", "template", "Preset"}},
                             .order = 41, .docs = "stagehand"});
     levelToolkit::add(ctx, {.id = "stagehand.kit",
                             .title = "Level Kit",

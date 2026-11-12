@@ -357,12 +357,12 @@ QToolButton* TopologyToolkit::track(QToolButton* b, const std::string& id)
 
 QToolButton* TopologyToolkit::tile(const std::string& id, const char* iconName, const QString& label, QWidget* parent)
 {
-    return actions::find(id) ? track(controls::tile(id, iconName, parent, label), id) : nullptr;
+    return actions::find(id) ? track(controls::row(id, iconName, parent, label), id) : nullptr;
 }
 
 QToolButton* TopologyToolkit::push(const std::string& id, const QString& label, QWidget* parent)
 {
-    return actions::find(id) ? track(controls::push(id, parent, label), id) : nullptr;
+    return actions::find(id) ? track(controls::row(id, nullptr, parent, label), id) : nullptr;
 }
 
 QDoubleSpinBox* TopologyToolkit::prefField(const char* key, double def, double lo, double hi, int decimals, const QString& unit, bool slider,

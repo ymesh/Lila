@@ -386,7 +386,7 @@ QString appStyleSheet(const themes::Theme& t)
         {"hover", QString::fromStdString(hex("hover"))},
         {"pressed", QString::fromStdString(hex("pressed"))},
         {"sel", QString::fromStdString(hex("checked"))},
-        {"selText", QString::fromStdString(hex("highlightText"))},
+        {"selText", QString::fromStdString(hex("checkedText"))},
         {"rule", QString::fromStdString(hex("rule"))},
         {"dim", QString::fromStdString(hex("dimText"))},
         {"text", QString::fromStdString(hex("text"))},
@@ -485,6 +485,7 @@ QString appStyleSheet(const themes::Theme& t)
         QScrollBar::add-page, QScrollBar::sub-page { background: none; }
 
         QWidget[role="section"] { border-top: 1px solid $rule; }
+        QWidget[role="section"][plain="true"] { border-top: none; }
         QLabel[role="hint"], QLabel[role="dim"] { color: $dim; }
         QToolButton[role="sectionHeader"] { background: transparent; color: $text; font-weight: 600; text-align: left; padding: 5px 2px; }
         QToolButton[role="sectionHeader"]:checked { background: transparent; color: $bright; }
@@ -493,13 +494,20 @@ QString appStyleSheet(const themes::Theme& t)
         QToolButton[role="tile"]:hover { background: $hover; }
         QToolButton[role="tile"]:pressed { background: $pressed; }
         QToolButton[role="tile"]:checked { background: $sel; color: $selText; }
+        QToolButton[role="row"] { background: transparent; border: 1px solid transparent; border-radius: 6px; }
+        QToolButton[role="row"]:hover { background: $hover; }
+        QToolButton[role="row"]:pressed { background: $pressed; }
+        QToolButton[role="row"]:checked { background: $sel; border-color: $focus; }
+        QToolButton[role="row"][popupMode="1"] { padding-right: 18px; }
+        QToolButton[role="row"]::menu-button { border: none; width: 18px; }
+        QToolButton[role="row"]::menu-indicator { subcontrol-position: right center; right: 6px; }
         QToolButton[role="push"] { background: $raised; padding: 4px 10px; text-align: left; }
         QToolButton[role="push"]:hover { background: $hover; }
         QToolButton[role="push"]:pressed { background: $pressed; }
         QToolButton[role="push"]:checked { background: $sel; color: $selText; }
         QToolButton[role="push"]:disabled { color: $disabled; }
         QToolButton[role="push"][popupMode="1"] { padding-right: 24px; }
-        QToolButton[role="overflow"] { background: transparent; color: $dim; text-align: left; padding: 4px 6px; }
+        QToolButton[role="overflow"] { background: transparent; color: $dim; text-align: left; padding: 4px 10px; border-radius: 6px; }
         QToolButton[role="overflow"]:hover { background: $hover; color: $text; }
         QToolButton[role="overflow"]::menu-indicator { image: none; width: 0; }
         QWidget[role="segmented"] { background: $chrome; border-radius: 5px; }

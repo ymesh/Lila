@@ -313,6 +313,9 @@ TEST_CASE("material transfer: constants, textures, the high's normal map and ORM
     const std::string p = project(dir, 16, 1, "png", "{group}_{map}");
     group(p, "a", lowA, {hiA});
     group(p, "b", lowB, {hiB});
+    const json plain = ops::execute("bake", {{"project", p}, {"groups", {"b"}}, {"maps", {"normal"}}});
+    CHECK(angleDeg(glm::vec3(texel(readImage(outputFor(plain, "normal")), 8, 8)) * 2.0f - 1.0f, glm::vec3(0, 0, 1)) < 0.5f);
+    setMap(p, "normal", {{"highNormalMap", true}});
     const json r = ops::execute("bake", {{"project", p}, {"maps", {"baseColor", "roughness", "metallic", "emissive", "materialOpacity", "orm", "normal"}}});
 
     auto file = [&](const std::string& map, const std::string& grp) {
@@ -545,6 +548,110 @@ TEST_CASE("links: a self high projects only onto its own low; unlinked meshes st
     ops::execute("bakeGroup", {{"args", {"g"}}, {"unlinks", json::array({json{{"lows", {f2}}, {"meshes", {roof}}}})}});
     CHECK(ops::execute("bakeGroup", {{"args", {"g"}}})["unlinks"].size() == 1);
     CHECK(ao() == doctest::Approx(1.0f).epsilon(0.01));
+}
+
+TEST_CASE("AO: a point buried inside another high isn't black")
+{
+    newScene();
+    const fs::path dir = tempDir("lila_bakemaps_buried");
+    // The floor's middle runs through a closed 30 cm box, like a strand entering a scalp.
+    const std::string floor = addMesh("floor", plane(1));
+    const std::string box = addMesh("box", geo::makeCube({.width = 30.0, .height = 30.0, .depth = 30.0}));
+    const std::string p = project(dir, 16, 1, "exr");
+    ops::execute("bakeGroup", {{"args", {"g"}}, {"project", p}, {"lows", {floor}}, {"self", true}, {"addHigh", {box}}, {"frontal", 2.0}, {"rear", 2.0}});
+    setMap(p, "ao", {{"rays", 64}, {"distance", 100.0}});
+    const json out = ops::execute("bake", {{"project", p}, {"maps", {"ao"}}, {"backend", "cpu"}});
+    const image::Image img = readImage(outputFor(out, "ao"));
+    CHECK(texel(img, 8, 8).r > 0.9f);
+    // Beside the box the floor still darkens toward it.
+    CHECK(texel(img, 5, 8).r < 0.9f);
+}
+
+TEST_CASE("projection: a ray tilted off a hard edge that meets a surface facing away is re-aimed along the face normal")
+{
+    newScene();
+    const fs::path dir = tempDir("lila_bakemaps_reaim");
+    // Rays near the cube's top rim follow the smooth cage normal, 45 degrees off the face, into a wall that faces away
+    // from the top: the far side of a thin part as such a ray sees it.
+    const std::string low = addMesh("cube", geo::makeCube({.width = 20.0, .height = 20.0, .depth = 20.0, .subdivX = 8, .subdivY = 8, .subdivZ = 8}));
+    geo::Mesh wall = plane(1, {0.0f, 0.0f}, {1.0f, 1.0f}, 8.0);
+    const double a = glm::radians(-108.0);
+    for (geo::Index q = 0; q < wall.pointCapacity(); ++q)
+    {
+        const glm::dvec3 v = wall.position(q);
+        wall.setPosition(q, glm::dvec3(v.x * std::cos(a) - v.y * std::sin(a) + 8.0, v.x * std::sin(a) + v.y * std::cos(a) + 8.0, v.z * 2.5));
+    }
+    const std::string high = addMesh("wall", std::move(wall));
+    const std::string p = project(dir, 64);
+    ops::execute("bakeGroup", {{"args", {"g"}}, {"project", p}, {"lows", {low}}, {"highs", {high}}, {"frontal", 0.5}, {"rear", 10.0}});
+    const json r = ops::execute("bake", {{"project", p}, {"maps", {"normal", "alpha"}}, {"backend", "cpu"}});
+    CHECK(r["stats"]["reaimed"].get<uint64_t>() > 0);
+    const image::Image nrm = readImage(outputFor(r, "normal")), cover = readImage(outputFor(r, "alpha"));
+    int inward = 0;
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x)
+            if (texel(cover, x, y).r >= 1.0f && texel(nrm, x, y).b * 2.0f - 1.0f < -0.02f)
+                ++inward;
+    CHECK(inward == 0);
+}
+
+TEST_CASE("projection: where a thin slab's smoothed high pulls back past the rim, samples take the nearest high")
+{
+    newScene();
+    const fs::path dir = tempDir("lila_bakemaps_probe");
+    // Smoothing a 1 cm slab onto itself rounds its rim far inside the low's side faces: rays along them pass it by.
+    const std::string low = addMesh("slab", geo::makeCube({.width = 40.0, .height = 1.0, .depth = 40.0, .subdivX = 10, .subdivZ = 10}));
+    const std::string p = project(dir, 64);
+    ops::execute("bakeGroup", {{"args", {"g"}}, {"project", p}, {"lows", {low}}, {"self", true}, {"preset", "Smooth x4"}, {"frontal", 0.5}, {"rear", 20.0}});
+    const json r = ops::execute("bake", {{"project", p}, {"maps", {"normal", "alpha"}}, {"backend", "cpu"}});
+    const json& st = r["stats"];
+    CHECK(st["probed"].get<uint64_t>() > 0);
+    CHECK(st["misses"].get<uint64_t>() * 100 < st["samples"].get<uint64_t>());
+    const image::Image nrm = readImage(outputFor(r, "normal")), cover = readImage(outputFor(r, "alpha"));
+    int inward = 0;
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x)
+            if (texel(cover, x, y).r >= 1.0f && texel(nrm, x, y).b * 2.0f - 1.0f < -0.02f)
+                ++inward;
+    CHECK(inward == 0);
+}
+
+TEST_CASE("AO: a texel whose rays miss the high takes its neighbours' occlusion, not open sky")
+{
+    newScene();
+    const fs::path dir = tempDir("lila_bakemaps_aomiss");
+    // The high covers only the floor's middle, under a 5 cm roof; the floor's rim finds no high.
+    const std::string floor = addMesh("floor", plane(1));
+    const std::string middle = addMesh("middle", plane(1, {0.0f, 0.0f}, {1.0f, 1.0f}, 60.0));
+    const std::string roof = addMesh("roof", lifted(plane(1, {0.0f, 0.0f}, {1.0f, 1.0f}, 100.0), 5.0));
+    const std::string p = project(dir, 16, 1, "exr");
+    ops::execute("bakeGroup", {{"args", {"g"}}, {"project", p}, {"lows", {floor}}, {"highs", {middle, roof}}, {"frontal", 2.0}, {"rear", 2.0}});
+    setMap(p, "ao", {{"rays", 64}, {"distance", 100.0}});
+    const json out = ops::execute("bake", {{"project", p}, {"maps", {"ao"}}, {"backend", "cpu"}});
+    const image::Image img = readImage(outputFor(out, "ao"));
+    CHECK(texel(img, 8, 8).r < 0.5f);
+    CHECK(texel(img, 1, 8).r < 0.5f);
+}
+
+TEST_CASE("a self high ignores its low's normal map, so rebaking doesn't compound the last bake")
+{
+    newScene();
+    const fs::path dir = tempDir("lila_bakemaps_selfnormal");
+    const glm::vec3 tilt(std::sin(glm::radians(30.0f)), 0.0f, std::cos(glm::radians(30.0f)));
+    image::Image nm{2, 2, {}};
+    for (int i = 0; i < 4; ++i)
+        nm.rgba.insert(nm.rgba.end(), {tilt.x * 0.5f + 0.5f, 0.5f, tilt.z * 0.5f + 0.5f, 1.0f});
+    image::write(dir / "n.png", nm, 16);
+    ops::execute("createMaterial", {{"args", {"M_Baked"}}, {"normalMap", (dir / "n.png").generic_string()}});
+    geo::Mesh flat = plane(4);
+    scene::materials::assign(flat, "M_Baked", {});
+    const std::string low = addMesh("low", std::move(flat));
+    const std::string p = project(dir, 16, 1, "png", "{group}_{map}");
+    ops::execute("bakeGroup", {{"args", {"g"}}, {"project", p}, {"lows", {low}}, {"self", true}, {"frontal", 1.0}, {"rear", 1.0}});
+    setMap(p, "normal", {{"highNormalMap", true}});
+    const json r = ops::execute("bake", {{"project", p}, {"maps", {"normal"}}, {"backend", "cpu"}});
+    const glm::vec3 n = glm::vec3(texel(readImage(outputFor(r, "normal")), 8, 8)) * 2.0f - 1.0f;
+    CHECK(angleDeg(n, glm::vec3(0, 0, 1)) < 0.5f);
 }
 
 TEST_CASE("material slots of one low with overlapping UVs each fill their own texture")

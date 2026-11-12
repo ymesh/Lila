@@ -91,7 +91,8 @@ void clothSphere(float radius, int rings, int segments, std::vector<Vec3>& point
 
 TEST_CASE("fabric presets")
 {
-    CHECK(fabricPresets().size() == 15);
+    CHECK(fabricPresets().size() == 19);
+    CHECK(findFabric("Spandex")->stretchWarp < findFabric("Cotton")->stretchWarp);
     CHECK(findFabric("plush")->thickness > findFabric("Cotton")->thickness);
     REQUIRE(findFabric("denim") != nullptr);
     CHECK(findFabric("Denim")->name == "Denim");

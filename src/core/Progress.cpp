@@ -29,6 +29,7 @@ struct Node : std::enable_shared_from_this<Node>
     Node* root = nullptr;
     std::vector<Node*> children; // guarded by gMutex
     std::atomic<bool> cancelled{false}; // read on the root
+    std::atomic<bool> immediate{false}; // read on the root
     Clock::time_point start = Clock::now();
 };
 
@@ -104,6 +105,7 @@ Snapshot snapshotOf(const Node& r)
     s.silent = r.flags & Silent;
     s.cancellable = r.flags & Cancellable;
     s.cancelled = r.cancelled.load(std::memory_order_relaxed);
+    s.immediate = r.immediate.load(std::memory_order_relaxed);
     s.elapsed = std::chrono::duration<double>(Clock::now() - r.start).count();
     s.mainThread = r.main;
     return s;
@@ -241,6 +243,13 @@ void Scope::setCancellable(bool on)
         mNode->flags = on ? (mNode->flags | Cancellable) : (mNode->flags & ~uint32_t(Cancellable));
     }
     notify();
+}
+
+void Scope::showNow()
+{
+    if (mNode->root->immediate.exchange(true, std::memory_order_relaxed))
+        return;
+    notify(true);
 }
 
 bool Scope::cancelled() const

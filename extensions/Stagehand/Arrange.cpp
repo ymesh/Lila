@@ -387,6 +387,82 @@ std::vector<Placed> scatter(const Mesh& m, std::span<const Item> items, const Sc
     return out;
 }
 
+std::vector<Placed> path(std::span<const glm::dvec3> line, std::span<const Item> items, const PathOptions& o)
+{
+    LILA_ZONE();
+
+    std::vector<Placed> out;
+    if (line.size() < 2 || items.empty() || o.spacing <= 0.0)
+        return out;
+    const Polyline pl(line);
+    Rng rng(o.seed);
+    for (double s = 0.0; s <= pl.length() + 1e-9;)
+    {
+        glm::dvec3 p, t;
+        pl.sample(s, p, t);
+        const int k = rng.pick(items.size());
+        const Item& it = items[size_t(k)];
+        const double scale = rng.range(o.scaleMin, o.scaleMax);
+        const double side = o.offset + rng.signedUnit() * o.spread;
+        const double turn = o.along ? rng.signedUnit() * o.turn : rng.range(-180.0, 180.0);
+        // Bottom centre on the line, then out to the side.
+        const glm::dvec3 c = (it.lo + it.hi) * 0.5;
+        const glm::dvec3 bottom(c.x, it.lo.y, c.z);
+        const glm::dmat4 xf = frameAt(p, t) * glm::translate(glm::dmat4(1.0), glm::dvec3(0.0, 0.0, side)) * glm::dmat4(rotY(turn)) *
+                              glm::scale(glm::dmat4(1.0), glm::dvec3(scale)) * glm::translate(glm::dmat4(1.0), -bottom);
+        out.push_back({xf, k, Pose::Upright, float(rng.u())});
+        s += o.spacing * (1.0 + rng.signedUnit() * std::clamp(o.spacingJitter, 0.0, 0.95));
+    }
+    return out;
+}
+
+std::vector<Placed> debris(std::span<const std::pair<glm::dvec3, glm::dvec3>> pieces, std::span<const Item> items, const DebrisOptions& o)
+{
+    LILA_ZONE();
+
+    std::vector<Placed> out;
+    if (pieces.empty() || items.empty() || o.amount <= 0.0)
+        return out;
+    std::vector<double> sizes;
+    for (const auto& [lo, hi] : pieces)
+        sizes.push_back(std::cbrt(std::max((hi.x - lo.x) * (hi.y - lo.y) * (hi.z - lo.z), 1e-6)));
+    std::vector<double> sorted = sizes;
+    std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2, sorted.end());
+    const double median = std::max(sorted[sorted.size() / 2], 1e-6);
+    Rng rng(o.seed);
+    for (size_t p = 0; p < pieces.size(); ++p)
+    {
+        const auto& [lo, hi] = pieces[p];
+        const double want = o.amount * sizes[p] / median;
+        int count = int(want);
+        if (rng.u() < want - double(count))
+            ++count;
+        const glm::dvec3 centre = (lo + hi) * 0.5;
+        const double radius = 0.5 * std::max(hi.x - lo.x, hi.z - lo.z);
+        const double chip = std::clamp(o.size * sizes[p], o.minSize, o.maxSize);
+        // Each chip starts a layer above the last, so none start inside another.
+        double height = lo.y + chip;
+        for (int c = 0; c < count; ++c)
+        {
+            const int k = rng.pick(items.size());
+            const Item& it = items[size_t(k)];
+            const double target = chip * rng.range(0.6, 1.4);
+            const double scale = target / std::max({it.size().x, it.size().y, it.size().z, 1e-6});
+            const double angle = rng.range(0.0, 2.0 * kPi);
+            const double dist = radius + (0.15 + o.spread * std::sqrt(rng.u())) * std::max(radius, chip);
+            const glm::dvec3 at(centre.x + std::cos(angle) * dist, height, centre.z + std::sin(angle) * dist);
+            const glm::dquat q(rng.signedUnit(), rng.signedUnit(), rng.signedUnit(), rng.signedUnit());
+            const glm::dquat turn = glm::length(q) > 1e-6 ? glm::normalize(q) : glm::dquat(1, 0, 0, 0);
+            const glm::dvec3 c0 = (it.lo + it.hi) * 0.5;
+            out.push_back({glm::translate(glm::dmat4(1.0), at) * glm::mat4_cast(turn) * glm::scale(glm::dmat4(1.0), glm::dvec3(scale)) *
+                               glm::translate(glm::dmat4(1.0), -c0),
+                           k, Pose::Lying, float(rng.u())});
+            height += target * 1.8;
+        }
+    }
+    return out;
+}
+
 Settled settle(std::span<const glm::dmat4> transforms, std::span<const int> items, std::span<const Mesh* const> itemMeshes,
                std::span<const Mesh* const> colliders, const SettleOptions& o)
 {

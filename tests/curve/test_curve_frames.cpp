@@ -6,6 +6,8 @@
 #include "ops/Command.h"
 #include "scene/Components.h"
 #include "scene/Graph.h"
+#include "scene/Transform.h"
+#include "scene/TransformOps.h"
 
 using namespace lila;
 using json = nlohmann::json;
@@ -147,4 +149,29 @@ TEST_CASE("curve points move along their own frames, and undo")
     CHECK(positionOf(c, a) == anchor);
     run("undo");
     CHECK(run("curveData", {{"args", {c}}}) == start);
+}
+
+TEST_CASE("orientPivot on curve points: two aim first to second, one along its tangent")
+{
+    run("newScene");
+    std::string c = run("curve", {{"type", "poly"}, {"points", pts({D3(0), D3(10, 0, 0), D3(10, 20, -4)})}});
+    scene::Graph& g = scene::Graph::current();
+    const scene::NodeId id = idOf(c);
+    const uint32_t p0 = curve::componentId(0, 0, PointRole::Point), p1 = curve::componentId(0, 1, PointRole::Point),
+                   p2 = curve::componentId(0, 2, PointRole::Point);
+
+    run("selectComponents", {{"args", {c}}, {"vertices", json::array({p1})}});
+    run("selectComponents", {{"args", {c}}, {"vertices", json::array({p0})}, {"add", true}});
+    run("orientPivot", {{"mode", "pivot"}});
+    CHECK(glm::length(scene::xformops::pivotFrame(g, id)[0] - D3(-1, 0, 0)) < 1e-9);
+    CHECK(glm::length(scene::xformops::worldPivot(g, id) - D3(10, 0, 0)) < 1e-9);
+
+    run("selectComponents", {{"args", {c}}, {"vertices", json::array({p2})}});
+    const glm::dmat3 f2 = curve::componentFrames(splines(c), {p2})[0];
+    const D3 world2 = D3(g.node(id)->as<glm::dmat4>(scene::Transform::kWorldMatrix) * glm::dvec4(positionOf(c, p2), 1.0));
+    run("orientPivot");
+    const glm::dmat4 w = g.node(id)->as<glm::dmat4>(scene::Transform::kWorldMatrix);
+    CHECK(glm::length(D3(w[0]) - glm::normalize(f2[0])) < 1e-6);
+    CHECK(glm::length(D3(w[3]) - world2) < 1e-6);
+    CHECK(glm::length(D3(w * glm::dvec4(positionOf(c, p2), 1.0)) - world2) < 1e-6);
 }

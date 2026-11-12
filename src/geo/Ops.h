@@ -44,6 +44,8 @@ struct ExtrudeOptions
     double inset = 0.0;
     /** A region bordered only by open edges, like a whole open shell, keeps a reversed copy of its faces at the base. */
     bool keepBack = true;
+    /** The object's linear transform to world: offset and inset are world distances, so a scaled object's border stays even. */
+    glm::dmat3 space{1.0};
 };
 
 struct ExtrudeResult
@@ -98,6 +100,8 @@ struct InsetOptions
      * thickness the inner border closes on the medial line: its points weld and the inner face goes.
      */
     bool clamp = true;
+    /** The object's linear transform to world: thickness and depth are world distances. */
+    glm::dmat3 space{1.0};
 };
 
 /** Returns the inner faces (the input ids, less any a clamp closed) and the new rim faces as sides. */

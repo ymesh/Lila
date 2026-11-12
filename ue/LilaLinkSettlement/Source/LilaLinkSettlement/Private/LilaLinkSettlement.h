@@ -14,12 +14,13 @@
  * Radius) and ParkingSpots (a point per space, bounds the space), each with its fields as attributes. Replies {asset,
  * lots, envelopes, roads, intersections, parking}.
  *
- * setZoneGraph {id, label, profiles: {name: {lanes: [{width, direction, tags}]}}, roads: [{points, profile, tags}],
- * junctions: [{center, points: [{position, forward, profile}], tags, control, phases, crosswalks}], parking} makes the
- * lane profiles (Lila_<name>) and tags in the ZoneGraph settings, then an actor holding a spline zone shape per road and a
- * polygon zone shape per junction, and asks ZoneGraph to rebuild. When the project has MassTraffic, the tags its settings
- * name for vehicle, pedestrian, intersection, crosswalk and parking lanes go on the matching shapes too. Replies {actor,
- * shapes, profiles, massTraffic, warnings}.
+ * setZoneGraph {id, label, folder, profiles: {name: {lanes: [{width, direction, tags}]}} (lanes right to left),
+ * roads: [{points, profile, tags}], junctions: [{center, points: [{position, forward, profile, vehicle, reverse}], tags,
+ * control, phases, crosswalks}], parking, parkingType} makes the lane profiles (Lila_<name>) and tags in the ZoneGraph
+ * settings, then an actor holding a spline zone shape per road and a polygon zone shape per junction, and asks ZoneGraph to
+ * rebuild. When the project has MassTraffic, its empty lane filters get Lila's tags, the tags it already names for
+ * vehicle, intersection, crosswalk and trunk lanes go on the matching shapes too, and folder gets its traffic light and
+ * parking data (see LilaLinkSettlementTraffic.h). Replies {actor, shapes, profiles, massTraffic, warnings}.
  *
  * removeSettlement {id} deletes the ZoneGraph actor made for id. Replies {removed}.
  *

@@ -32,10 +32,25 @@ void registerNodeLibrary()
     nodes::registerDataNodes();
     nodes::registerProceduralNodes();
     nodes::registerVolumeNodes();
+    nodes::registerGridNodes();
+    nodes::registerToolNodes();
     nodes::registerWrangleNode();
     nodes::registerZoneNodes();
     nodes::registerMatrixNodes();
     nodes::registerBundleNodes();
+    nodes::registerBuildNodes();
+    nodes::registerDeform2Nodes();
+    nodes::registerCurveNodes2();
+    nodes::registerCurveSurfaceNodes();
+    nodes::registerCurveBooleanNodes();
+    nodes::registerInstanceNodes2();
+    nodes::registerFieldStatsNodes();
+    nodes::registerRotationNodes2();
+    nodes::registerStringNodes2();
+    nodes::registerSceneInfoNodes();
+    nodes::registerTopology2Nodes();
+    nodes::registerSelectionNodes();
+    nodes::registerRemeshNodes();
     registerBakeNode();
 }
 } // namespace lila::gn

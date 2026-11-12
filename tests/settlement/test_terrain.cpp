@@ -265,6 +265,35 @@ TEST_CASE("settlement terrain: main roads route over the Terrain and grading sen
     CHECK_THROWS(run("settlementGrade", {{"args", {mesh}}, {"terrain", "NoSuchTerrain"}}));
 }
 
+TEST_CASE("settlement terrain: on rough ground every graded street keeps its grade or says why")
+{
+    terrainLoadPackages();
+    run("newScene");
+    const std::string t = terrainMesh(80000.0, 129, 4000.0, 5);
+    const json made = run("settlementCreate", {{"profile", "medievalTown"}, {"size", 40000.0}, {"seed", 3}, {"ground", t}});
+    const std::string mesh = made["mesh"].get<std::string>();
+    const json graded = run("settlementGrade", {{"args", {mesh}}, {"lots", false}, {"plazas", false}});
+    CAPTURE(graded.dump());
+    CHECK(graded["errors"].empty());
+    REQUIRE(graded["streets"].get<int>() > 20);
+    // Only pieces whose junction heights leave no way within the grade remain: curve rounding never adds any.
+    for (const json& o : graded["overGrade"])
+        CHECK(o["why"].get<std::string>().find("the height keys need grades over maxGrade") != std::string::npos);
+    MESSAGE("over grade: " << graded["overGrade"].size() << " of " << graded["streets"].get<int>());
+    CHECK(graded["overGrade"].size() * 50 <= graded["streets"].get<size_t>());
+    // Every terrain road steeper than its limit is in the report.
+    std::set<std::string> reported;
+    for (const json& o : graded["overGrade"])
+        reported.insert(o["id"].get<std::string>());
+    for (const json& r : run("terrainRoads", {{"args", {t}}})["layers"]["CityRoads"])
+        if (r["maxGrade"].get<double>() > r["design"]["maxGrade"].get<double>() * 1.01 + 0.05)
+            CHECK(reported.contains(r["id"].get<std::string>()));
+
+    // The junction heights are kept, so grading again sends nothing.
+    const json again = run("settlementGrade", {{"args", {mesh}}, {"lots", false}, {"plazas", false}});
+    CHECK(again["streetsSent"].get<int>() == 0);
+}
+
 TEST_CASE("settlement terrain: re-planning keeps untouched blocks byte for byte")
 {
     // Two grounds that differ only in a bump: blocks away from it keep their hash, blocks on it are laid again.

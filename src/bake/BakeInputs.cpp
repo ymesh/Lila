@@ -515,9 +515,13 @@ BakeInputs buildInputs(scene::Graph& g, scene::NodeId project, const std::vector
                     const uint32_t before = cached ? cached->sourceTriangles : m ? uint32_t(geo::triangulate(*m).faces.size()) : 0u;
                     if (m && !stack.empty() && !cached)
                     {
+                        // The stack runs here without a step, often for seconds on a dense high.
+                        scope.setStatus("Applying bake modifiers: " + names[k]);
+                        scope.showNow();
                         const auto t0 = std::chrono::steady_clock::now();
                         m = std::make_shared<geo::Mesh>(stack.apply(*m));
                         modifierSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+                        scope.setStatus({});
                     }
                     Job j{m, sources[k].second, names[k], gIndex, false, gi.highs.size()};
                     j.sourceTriangles = before;

@@ -36,6 +36,7 @@
 #include "LevelInstance/LevelInstanceInterface.h"
 #include "LevelInstance/LevelInstanceTypes.h"
 #include "Misc/PackageName.h"
+#include "ObjectTools.h"
 #include "PackedLevelActor/PackedLevelActor.h"
 #include "PackedLevelActor/PackedLevelActorBuilder.h"
 #include "PhysicalMaterials/PhysicalMaterial.h"
@@ -385,9 +386,10 @@ void PlaceActors(UWorld* World, const FString& Group, const FString& Label, USta
 		Actor->GetStaticMeshComponent()->SetStaticMesh(Mesh);
 		SetCollides(Actor->GetStaticMeshComponent(), bCollide);
 		const TArray<float> Custom = CustomDataOf(*P);
+		// The defaults are what the level saves; SetCustomPrimitiveDataFloat only writes the transient runtime copy.
 		for (int32 K = 0; K < Custom.Num(); ++K)
 		{
-			Actor->GetStaticMeshComponent()->SetCustomPrimitiveDataFloat(K, Custom[K]);
+			Actor->GetStaticMeshComponent()->SetDefaultCustomPrimitiveDataFloat(K, Custom[K]);
 		}
 		if (const TOptional<FLightingChannels> Channels = ChannelsOf(*P))
 		{
@@ -977,8 +979,60 @@ TSharedPtr<FJsonValue> RemovePlacements(const TSharedPtr<FJsonObject>& Params, F
 			}
 		}
 	}
+	// deleteMeshes: the static meshes the removed actors showed go too, when they lie under meshFolder and nothing left in the level shows them.
+	bool bDeleteMeshes = false;
+	Params->TryGetBoolField(TEXT("deleteMeshes"), bDeleteMeshes);
+	FString MeshFolder;
+	Params->TryGetStringField(TEXT("meshFolder"), MeshFolder);
+	if (bDeleteMeshes && MeshFolder.IsEmpty())
+	{
+		OutError = TEXT("removePlacements: deleteMeshes needs meshFolder, the folder the meshes may be deleted from");
+		return nullptr;
+	}
+	TSet<UStaticMesh*> Meshes;
+	if (bDeleteMeshes)
+	{
+		const FString Prefix = MeshFolder.EndsWith(TEXT("/")) ? MeshFolder : MeshFolder + TEXT("/");
+		for (AActor* Actor : Doomed)
+		{
+			TArray<UStaticMeshComponent*> Components;
+			Actor->GetComponents(Components);
+			for (UStaticMeshComponent* C : Components)
+			{
+				UStaticMesh* Mesh = C ? C->GetStaticMesh() : nullptr;
+				if (Mesh && Mesh->GetPathName().StartsWith(Prefix))
+				{
+					Meshes.Add(Mesh);
+				}
+			}
+		}
+	}
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetNumberField(TEXT("removed"), DestroyActors(World, Doomed));
+	if (bDeleteMeshes)
+	{
+		for (TActorIterator<AActor> It(World); It && !Meshes.IsEmpty(); ++It)
+		{
+			TArray<UStaticMeshComponent*> Components;
+			It->GetComponents(Components);
+			for (UStaticMeshComponent* C : Components)
+			{
+				if (C && C->GetStaticMesh())
+				{
+					Meshes.Remove(C->GetStaticMesh());
+				}
+			}
+		}
+		TArray<UObject*> Assets;
+		TArray<TSharedPtr<FJsonValue>> Deleted;
+		for (UStaticMesh* Mesh : Meshes)
+		{
+			Assets.Add(Mesh);
+			Deleted.Add(MakeShared<FJsonValueString>(Mesh->GetOutermost()->GetName()));
+		}
+		Out->SetNumberField(TEXT("meshesDeleted"), Assets.IsEmpty() ? 0 : ObjectTools::ForceDeleteObjects(Assets, false));
+		Out->SetArrayField(TEXT("meshes"), Deleted);
+	}
 	return Obj(Out);
 }
 

@@ -225,10 +225,10 @@ void registerUi(lila::ext::Context& ctx)
 
     // Find is the daily tile; the covers next, then check and ship; the toggle and tags go to the overflow past six.
     std::vector<levelToolkit::Item> items = {{"seamwork.find", "layers-intersect", "Find", "Contacts"}, {}};
-    const levelToolkit::Item buttons[] = {{"seamwork.scatter", "", "Scatter"}, {"seamwork.decal", "", "Strips"},     {"seamwork.skirt", "", "Skirt"},
-                                          {"seamwork.check", "", "Check"},     {"seamwork.send", "", "To Unreal"},   {"seamwork.export", "", "Export"},
-                                          {"seamwork.update", "", "Update"},   {"seamwork.overlay", "", "Overlay"}, {"seamwork.tagIgnore", "", "Ignore"},
-                                          {"seamwork.tagGround", "", "Ground"}};
+    const levelToolkit::Item buttons[] = {{"seamwork.scatter", "grain", "Scatter"}, {"seamwork.decal", "line-dashed", "Strips"},     {"seamwork.skirt", "wave-saw-tool", "Skirt"},
+                                          {"seamwork.check", "checklist", "Check"},     {"seamwork.send", "send", "To Unreal"},   {"seamwork.export", "file-export", "Export"},
+                                          {"seamwork.update", "refresh", "Update"},   {"seamwork.overlay", "eye", "Overlay"}, {"seamwork.tagIgnore", "eye-off", "Ignore"},
+                                          {"seamwork.tagGround", "map", "Ground"}};
     for (const auto& b : buttons)
         items.push_back(b);
     levelToolkit::add(ctx, {.id = "seamwork.contacts", .title = "Contacts", .items = items, .order = 43, .docs = "seamwork"});

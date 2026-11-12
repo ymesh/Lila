@@ -22,6 +22,8 @@
 #include <QScrollBar>
 #include <QSpinBox>
 #include <QStyle>
+#include <QStyleOptionToolButton>
+#include <QStylePainter>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 
@@ -40,9 +42,52 @@ QString labelFor(const std::string& actionId, const QString& label)
     return a ? QString::fromStdString(actions::displayLabel(actionId)) : QString::fromStdString(actionId);
 }
 
-QToolButton* actionButton(const std::string& actionId, QWidget* parent, const QString& label)
+constexpr int kRowHeight = 30;
+constexpr int kRowIcon = 18;
+constexpr int kRowPad = 10;
+constexpr int kRowGap = 10;
+constexpr int kRowArrow = 18;
+
+/** One step up from the UI font, so a 9 pt UI gives the 13 px rows and headers the toolkits are drawn at. */
+QFont stepUp(QFont f, QFont::Weight weight)
 {
-    auto* b = new QToolButton(parent);
+    f.setPointSizeF(f.pointSizeF() * 13.0 / 12.0);
+    f.setWeight(weight);
+    return f;
+}
+
+/** Icon and label packed against the left edge; the label column lines up across rows whether or not an icon is set. */
+class RowButton : public QToolButton
+{
+public:
+    using QToolButton::QToolButton;
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QStylePainter p(this);
+        QStyleOptionToolButton opt;
+        initStyleOption(&opt);
+        QStyleOptionToolButton panel = opt;
+        panel.text.clear();
+        panel.icon = QIcon();
+        p.drawComplexControl(QStyle::CC_ToolButton, panel);
+
+        const QRect iconRect(kRowPad, (height() - kRowIcon) / 2, kRowIcon, kRowIcon);
+        const QIcon::Mode mode = !isEnabled() ? QIcon::Disabled : underMouse() ? QIcon::Active : QIcon::Normal;
+        icon().paint(&p, iconRect, Qt::AlignCenter, mode, isChecked() ? QIcon::On : QIcon::Off);
+
+        const int left = iconRect.right() + 1 + kRowGap;
+        const int right = width() - (popupMode() != DelayedPopup && menu() ? kRowArrow : kRowPad);
+        p.setPen(!isEnabled() ? themeColor("disabled") : isChecked() ? themeColor("checkedText") : themeColor("text"));
+        p.drawText(QRect(left, 0, std::max(0, right - left), height()), Qt::AlignLeft | Qt::AlignVCenter,
+                   fontMetrics().elidedText(text(), Qt::ElideRight, std::max(0, right - left)));
+    }
+};
+
+/** Makes `b` run the action: label, tooltip, checked state and option box. */
+QToolButton* bindAction(QToolButton* b, const std::string& actionId, const QString& label)
+{
     b->setText(labelFor(actionId, label));
     b->setToolTip(QString::fromStdString(actions::tooltip(actionId)));
     b->setAccessibleName(b->text());
@@ -57,8 +102,46 @@ QToolButton* actionButton(const std::string& actionId, QWidget* parent, const QS
                 b->setChecked(act->checked());
         });
     }
-    optionBox::withOptionBox(b, actionId, parent);
+    optionBox::withOptionBox(b, actionId, b->parentWidget());
     return b;
+}
+
+QToolButton* actionButton(const std::string& actionId, QWidget* parent, const QString& label)
+{
+    return bindAction(new QToolButton(parent), actionId, label);
+}
+
+void styleRow(QToolButton* b, const QString& iconName)
+{
+    b->setIcon(icon(iconName));
+    b->setIconSize(QSize(kRowIcon, kRowIcon));
+    b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    b->setFont(stepUp(b->font(), QFont::Medium));
+    b->setFixedHeight(kRowHeight);
+    b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    setRole(b, "row");
+}
+
+QToolButton* rowButton(const std::string& actionId, const char* iconName, QWidget* parent, const QString& label)
+{
+    QToolButton* b = bindAction(new RowButton(parent), actionId, label);
+    styleRow(b, iconName ? QString(iconName) : QString::fromStdString(actions::iconFor(actionId)));
+    return b;
+}
+
+void addVariants(QToolButton* b, const std::vector<std::string>& variants)
+{
+    b->setPopupMode(QToolButton::MenuButtonPopup);
+    auto* menu = new QMenu(b);
+    for (const std::string& id : variants)
+    {
+        QAction* a = menu->addAction(labelFor(id, {}), [id] { actions::run(nlohmann::json(id)); });
+        a->setToolTip(QString::fromStdString(actions::tooltip(id)));
+        a->setData(QString::fromStdString(id));
+    }
+    menu->setToolTipsVisible(true);
+    optionBox::decorateMenu(menu);
+    b->setMenu(menu);
 }
 } // namespace
 
@@ -73,12 +156,14 @@ QWidget* section(const QString& title, QWidget* content, QWidget* parent, const 
 {
     auto* box = new QWidget(parent);
     box->setAttribute(Qt::WA_StyledBackground);
+    box->setProperty("plain", true);
     setRole(box, "section");
     auto* v = new QVBoxLayout(box);
-    v->setContentsMargins(0, 4, 0, 6);
+    v->setContentsMargins(0, 6, 0, 4);
     v->setSpacing(2);
     auto* header = new QToolButton(box);
     header->setText(title);
+    header->setFont(stepUp(header->font(), QFont::DemiBold));
     header->setCheckable(true);
     header->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     header->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -125,20 +210,33 @@ QToolButton* push(const std::string& actionId, QWidget* parent, const QString& l
     return b;
 }
 
+QToolButton* row(const std::string& actionId, const char* iconName, QWidget* parent, const QString& label)
+{
+    return rowButton(actionId, iconName, parent, label);
+}
+
+QToolButton* plainRow(const QString& label, const char* iconName, const QString& tip, QWidget* parent)
+{
+    auto* b = new RowButton(parent);
+    b->setText(label);
+    b->setToolTip(tip);
+    b->setAccessibleName(label);
+    styleRow(b, iconName);
+    return b;
+}
+
 QToolButton* split(const std::string& actionId, const std::vector<std::string>& variants, QWidget* parent, const QString& label)
 {
     QToolButton* b = push(actionId, parent, label);
-    b->setPopupMode(QToolButton::MenuButtonPopup);
-    auto* menu = new QMenu(b);
-    for (const std::string& id : variants)
-    {
-        QAction* a = menu->addAction(labelFor(id, {}), [id] { actions::run(nlohmann::json(id)); });
-        a->setToolTip(QString::fromStdString(actions::tooltip(id)));
-        a->setData(QString::fromStdString(id));
-    }
-    menu->setToolTipsVisible(true);
-    optionBox::decorateMenu(menu);
-    b->setMenu(menu);
+    addVariants(b, variants);
+    return b;
+}
+
+QToolButton* splitRow(const std::string& actionId, const std::vector<std::string>& variants, const char* iconName, QWidget* parent,
+                      const QString& label)
+{
+    QToolButton* b = rowButton(actionId, iconName, parent, label);
+    addVariants(b, variants);
     return b;
 }
 
@@ -151,6 +249,7 @@ QToolButton* overflow(const std::vector<std::string>& actionIds, QWidget* parent
     b->setPopupMode(QToolButton::InstantPopup);
     b->setToolTip("More commands; every one is also in the menus and Ctrl+T search");
     b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    b->setFixedHeight(kRowHeight);
     setRole(b, "overflow");
     auto* menu = new QMenu(b);
     menu->setToolTipsVisible(true);

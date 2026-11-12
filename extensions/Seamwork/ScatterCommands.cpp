@@ -23,6 +23,58 @@ namespace seamwork
 {
 using T = ArgType;
 
+namespace
+{
+std::string protoName(const std::string& asset)
+{
+    std::string s = asset.substr(asset.find_last_of('/') + 1);
+    for (char& c : s)
+        if (!std::isalnum(static_cast<unsigned char>(c)))
+            c = '_';
+    return s + "Proto";
+}
+
+/**
+ * A Stagehand library asset as one hidden mesh under parent: placed once as a copy at the origin, every mesh of it baked
+ * into one with its placed transform, and the placement deleted again.
+ */
+NodeId libraryPrototype(Graph& g, const std::string& asset, NodeId parent, const std::string& cmd)
+{
+    const json placed = ops::execute("place", {{"args", {asset}}, {"at", {0.0, 0.0, 0.0}}, {"snap", false}, {"mode", "copy"}});
+    const json first = placed.is_array() && !placed.empty() ? placed[0] : placed;
+    const NodeId root = g.find(first.value("node", "")) ? g.find(first.value("node", ""))->id() : kNoNode;
+    g.evaluate();
+    geo::Mesh merged;
+    for (const json& path : first.value("meshes", json::array()))
+    {
+        Node* n = g.find(path.get<std::string>());
+        const MeshPtr m = n ? n->as<MeshPtr>(MeshNode::kOutMesh) : nullptr;
+        if (!m || m->numFaces() == 0)
+            continue;
+        geo::Mesh part = *m;
+        const glm::dmat4 xf = n->as<glm::dmat4>(Transform::kWorldMatrix);
+        for (glm::dvec3& p : part.positions())
+            p = glm::dvec3(xf * glm::dvec4(p, 1.0));
+        const glm::mat3 nm = glm::mat3(glm::transpose(glm::inverse(glm::dmat3(xf))));
+        for (glm::vec3& nrm : part.cornerAttrs().get<glm::vec3>(geo::attr::kNormal))
+            nrm = glm::normalize(nm * nrm);
+        if (glm::determinant(glm::dmat3(xf)) < 0.0)
+            for (geo::Index f = 0; f < part.faceCapacity(); ++f)
+                if (part.faceValid(f))
+                    part.flipFace(f);
+        merged.append(part);
+    }
+    if (root != kNoNode)
+        ops::execute("delete", {{"args", {g.node(root)->path()}}});
+    if (merged.numFaces() == 0)
+        throw CommandError(cmd + ": library asset '" + asset + "' placed no mesh");
+    Node* m = g.createNode(*types::find("mesh"), protoName(asset), parent);
+    g.setValue({m->id(), MeshNode::kInMesh, -1}, MeshPtr(std::make_shared<geo::Mesh>(std::move(merged))));
+    g.setValue({m->id(), m->type().attrIndex("visibility"), -1}, false);
+    return m->id();
+}
+} // namespace
+
 bool raySurface(const SeamData& d, const glm::dvec3& from, const glm::dvec3& dir, glm::dvec3& hit, glm::dvec3& normal, double range)
 {
     double best = range;
@@ -443,20 +495,9 @@ void registerScatterCommands(ext::Context& ctx)
                     }
                     if (!ops::find("place"))
                         throw CommandError(cmd + ": '" + name + "' is not a mesh, and library assets need Stagehand");
-                    // A library asset: placed once, hidden, as the prototype.
-                    const json placed = ops::execute("place", {{"args", {name}}, {"at", {0.0, -1.0e6, 0.0}}, {"snap", false}, {"mode", "copy"}});
-                    std::vector<std::string> meshes;
-                    const json first = placed.is_array() && !placed.empty() ? placed[0] : placed;
-                    if (first.contains("meshes"))
-                        for (const json& m : first["meshes"])
-                            meshes.push_back(m.get<std::string>());
-                    if (meshes.empty())
-                        throw CommandError(cmd + ": library asset '" + name + "' placed no mesh");
-                    Node* m = g.find(meshes.front());
-                    setWorld(g, m->id(), glm::dmat4(1.0));
-                    g.setValue({m->id(), m->type().attrIndex("visibility"), -1}, false);
-                    tagOutput(g, m->id(), "seamworkOutput", true, PlugType::Bool);
-                    addProto(m->id());
+                    const NodeId proto = libraryPrototype(g, name, group->id(), cmd);
+                    tagOutput(g, proto, "seamworkOutput", true, PlugType::Bool);
+                    addProto(proto);
                     used.push_back(name);
                 }
             }

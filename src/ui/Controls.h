@@ -19,8 +19,9 @@ class QScrollArea;
  * The control vocabulary every panel is built from. Each control carries a "role" property the app style sheet styles
  * (Theme.cpp), so the look lives in one place:
  *
- *   section header   text with a chevron, no filled bar; sections are split by a hairline rule
- *   tool tile        icon over label, no fill at rest, for a toolkit's daily actions
+ *   section header   text with a chevron, no filled bar and no rule; spacing splits sections
+ *   action row       icon beside label, no fill at rest, the active one edged in the accent; a toolkit's actions
+ *   tool tile        icon over label, no fill at rest, for grids where the picture is the content (brushes, alphas)
  *   push button      label on the raised fill, for weekly actions
  *   split button     a push button whose arrow picks a variant to run
  *   overflow         "... N more", a menu of the rare actions
@@ -44,8 +45,18 @@ LILA_UI_API QToolButton* tile(const std::string& actionId, const char* iconName,
 /** A labelled button running the action. */
 LILA_UI_API QToolButton* push(const std::string& actionId, QWidget* parent, const QString& label = {});
 
+/** An action row running the action: icon beside label. A null icon uses the action's own (actions::iconFor). */
+LILA_UI_API QToolButton* row(const std::string& actionId, const char* iconName, QWidget* parent, const QString& label = {});
+
+/** An action row the panel wires itself, for actions it runs with its own arguments. */
+LILA_UI_API QToolButton* plainRow(const QString& label, const char* iconName, const QString& tip, QWidget* parent);
+
 /** A button running `actionId`, whose arrow lists `variants` (action ids) to run instead. */
 LILA_UI_API QToolButton* split(const std::string& actionId, const std::vector<std::string>& variants, QWidget* parent, const QString& label = {});
+
+/** split() drawn as an action row. */
+LILA_UI_API QToolButton* splitRow(const std::string& actionId, const std::vector<std::string>& variants, const char* iconName, QWidget* parent,
+                                  const QString& label = {});
 
 /** "... N more": a menu of the actions, with their option boxes. Hidden when the list is empty. */
 LILA_UI_API QToolButton* overflow(const std::vector<std::string>& actionIds, QWidget* parent);

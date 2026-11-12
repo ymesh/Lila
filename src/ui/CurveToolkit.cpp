@@ -132,8 +132,10 @@ CurveToolkit::CurveToolkit(QWidget* parent) : QWidget(parent)
     // Options the draw tools share.
     auto* drawBox = new QWidget(body);
     QFormLayout* draw = curveForm(drawBox);
-    mOnSurface = push("curve.drawOnSurfaces", "On Surfaces", drawBox);
-    mKeepOnSurface = push("curve.keepDrawnOnSurface", "Keep On", drawBox);
+    // Toggles inside a form row stay label-only buttons, so they fit beside the field label.
+    mOnSurface = actions::find("curve.drawOnSurfaces") ? track(controls::push("curve.drawOnSurfaces", drawBox, "On Surfaces"), "curve.drawOnSurfaces") : nullptr;
+    mKeepOnSurface =
+        actions::find("curve.keepDrawnOnSurface") ? track(controls::push("curve.keepDrawnOnSurface", drawBox, "Keep On"), "curve.keepDrawnOnSurface") : nullptr;
     draw->addRow("Surface", curveGroup({mOnSurface, mKeepOnSurface}, {}, 2, drawBox));
     mOffset = controls::valueField(0.0, 10000.0, 2, "cm", drawBox);
     mOffset->setToolTip("Offset: how far drawn curves sit off the surface they are drawn on (Ctrl+scroll in a draw tool)");
@@ -198,8 +200,8 @@ CurveToolkit::CurveToolkit(QWidget* parent) : QWidget(parent)
         false);
     QToolButton* planarBoolean = nullptr;
     if (actions::find("curve.booleanUnion"))
-        planarBoolean = track(controls::split("curve.booleanUnion", {"curve.booleanUnion", "curve.booleanSubtract", "curve.booleanIntersect", "curve.booleanXor"},
-                                              body, "Boolean"),
+        planarBoolean = track(controls::splitRow("curve.booleanUnion", {"curve.booleanUnion", "curve.booleanSubtract", "curve.booleanIntersect", "curve.booleanXor"},
+                                                 "layers-subtract", body, "Boolean"),
                               "curve.booleanUnion");
     add("Planar",
         curveGroup({push("curve.text", "Text", body), push("curve.textMesh", "Text Mesh", body), push("curve.bevelPlus", "Bevel+", body), planarBoolean,
@@ -260,12 +262,12 @@ QToolButton* CurveToolkit::track(QToolButton* b, const std::string& id)
 
 QToolButton* CurveToolkit::tile(const std::string& id, const char* iconName, const QString& label, QWidget* parent)
 {
-    return actions::find(id) ? track(controls::tile(id, iconName, parent, label), id) : nullptr;
+    return actions::find(id) ? track(controls::row(id, iconName, parent, label), id) : nullptr;
 }
 
 QToolButton* CurveToolkit::push(const std::string& id, const QString& label, QWidget* parent)
 {
-    return actions::find(id) ? track(controls::push(id, parent, label), id) : nullptr;
+    return actions::find(id) ? track(controls::row(id, nullptr, parent, label), id) : nullptr;
 }
 
 void CurveToolkit::showEvent(QShowEvent* e)

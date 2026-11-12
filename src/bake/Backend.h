@@ -99,6 +99,8 @@ struct ResidentStats
     uint64_t samples = 0;
     uint64_t hits = 0;
     uint64_t backfaces = 0;
+    uint64_t reaimed = 0;
+    uint64_t probed = 0;
     /** Texel tiles (ResidentTile::maskTile square) that had triangles to rasterise. */
     uint64_t tiles = 0;
 };

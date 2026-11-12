@@ -143,7 +143,8 @@ void rayNeeds(const GroupInputs& gi, size_t group, const Backend& backend, float
     std::vector<HitRecord> hits(samples.size());
     backend.traceProjection(group, samples, hits);
     backend.endBand(samples);
-    auto valid = [](const HitRecord& h) { return h.high != kNoHit && (h.flags & kHitValid); };
+    // A probed hit is a miss here: the distances are what rays along the normal reach.
+    auto valid = [](const HitRecord& h) { return h.high != kNoHit && (h.flags & kHitValid) && !(h.flags & kHitProbed); };
     for (size_t i = 0; i < pts.size(); ++i)
     {
         const HitRecord* h = &hits[i * perPoint];

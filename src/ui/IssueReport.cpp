@@ -422,7 +422,7 @@ QString crashWhen(const fs::path& dir)
 void sentMessage(QWidget* parent, const json& sent)
 {
     QMessageBox box(parent);
-    box.setWindowTitle("Report Issue");
+    box.setWindowTitle("Report Sent");
     QString text = QString("Sent as #%1. Replies show in Help > My Reports.").arg(sent.value("number", 0));
     if (sent.value("dropped", false))
         text += "\n\nThe attachments weren't kept: today's upload limit was reached.";
@@ -448,7 +448,6 @@ class ReportDialog : public QDialog
 public:
     explicit ReportDialog(QMainWindow* window) : QDialog(window), mWindow(window)
     {
-        setWindowTitle("Report Issue");
         setAttribute(Qt::WA_DeleteOnClose);
         auto* layout = new QVBoxLayout(this);
         mForm = new QFormLayout;
@@ -564,7 +563,10 @@ public:
         connect(mUnpick, &QPushButton::clicked, this, [this] { setFile({}); });
         connect(mSend, &QPushButton::clicked, this, [this] { send(); });
         connect(clearButton, &QPushButton::clicked, this, [this] { clear(); });
-        connect(mKind, &QComboBox::currentIndexChanged, this, [this] { syncKind(!mLoading); });
+        connect(mKind, &QComboBox::currentIndexChanged, this, [this] {
+            syncKind(!mLoading);
+            syncTitle();
+        });
         connect(mBundle, &QCheckBox::toggled, this, [this] { mScene->setEnabled(mSceneAllowed && mBundle->isChecked()); });
         for (QLineEdit* e : {mTitle, mGithub})
             connect(e, &QLineEdit::textChanged, this, [this] { changed(); });
@@ -587,6 +589,7 @@ public:
         if (!loadDraft())
             applyKindDefaults();
         syncKind(false);
+        syncTitle();
         mScene->setEnabled(mSceneAllowed && mBundle->isChecked());
         saveDraft(true);
         resize(600, sizeHint().height());
@@ -597,6 +600,19 @@ public:
     {
         if (!mClosedByUser)
             saveDraft(true);
+    }
+
+    /** Switches to `kind` unless the report already has a title, so an open draft keeps its type. */
+    void startAs(const QString& kind)
+    {
+        if (mTitle->text().trimmed().isEmpty())
+            mKind->setCurrentIndex(mKind->findData(kind));
+    }
+
+    void syncTitle()
+    {
+        const QString kind = mKind->currentData().toString();
+        setWindowTitle(kind == "Request" ? "Request a Feature" : kind == "Question" ? "Ask a Question" : "Report a Bug");
     }
 
     /** Switches to a Crash report about `dir`. */
@@ -1008,6 +1024,16 @@ void showDialog(QMainWindow* window)
     openReport(window);
 }
 
+void showBug(QMainWindow* window)
+{
+    openReport(window)->startAs("Bug");
+}
+
+void showRequest(QMainWindow* window)
+{
+    openReport(window)->startAs("Request");
+}
+
 void showCrash(QMainWindow* window, const fs::path& crashDir)
 {
     QPointer<QMainWindow> win(window);
@@ -1045,7 +1071,7 @@ void showMyReports(QWidget* parent)
     auto* thread = new QTextBrowser(&dlg);
     thread->setOpenExternalLinks(true);
     thread->setPlaceholderText("No replies");
-    auto* empty = new QLabel("No reports sent from this machine. Help > Report Issue sends one.", &dlg);
+    auto* empty = new QLabel("No reports sent from this machine. Help > Report a Bug or Request a Feature sends one.", &dlg);
     empty->setStyleSheet("color: #9a9a9a;");
     layout->addWidget(empty);
     layout->addWidget(list, 2);
@@ -1110,7 +1136,7 @@ void showMyReports(QWidget* parent)
         pick->setEnabled(!closed && !*sending);
         unpick->setEnabled(!*sending);
         send->setEnabled(!closed && !*sending && !edit->toPlainText().trimmed().isEmpty());
-        edit->setPlaceholderText(closed ? "Closed. Help > Report Issue sends a new report." : "Reply");
+        edit->setPlaceholderText(closed ? "Closed. Help > Report a Bug or Request a Feature sends a new one." : "Reply");
     };
 
     auto fill = [=] {

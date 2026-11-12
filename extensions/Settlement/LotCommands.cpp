@@ -5,6 +5,7 @@
 
 #include "Parcels.h"
 #include "Settlement.h"
+#include "SettlementTerrain.h"
 
 #include <lila/Command.h>
 #include <lila/Extension.h>
@@ -272,13 +273,50 @@ json buildMasonry(const Rebuilt& r, const std::vector<const Envelope*>& envs, st
     return {{"built", built}};
 }
 
+/** The meshes at or under each object: placed library assets are transforms over their meshes. */
+json meshesUnder(const std::vector<std::string>& objects)
+{
+    scene::Graph& g = scene::Graph::current();
+    json out = json::array();
+    std::vector<scene::NodeId> todo;
+    for (const std::string& o : objects)
+        if (scene::Node* n = g.find(o))
+            todo.push_back(n->id());
+    while (!todo.empty())
+    {
+        const scene::NodeId id = todo.back();
+        todo.pop_back();
+        scene::Node* n = g.node(id);
+        if (!n)
+            continue;
+        if (n->type().isA("mesh"))
+            out.push_back(n->path());
+        for (scene::NodeId c : g.children(id))
+            todo.push_back(c);
+    }
+    return out;
+}
+
 /** Contact skirts, grime strips or scatter where the buildings meet the ground, through Seamwork. */
 json contactsFor(const Rebuilt& r, const std::vector<std::string>& objects, const json& kinds, const char* cmd)
 {
     lotNeedCommand("seamFind", "Seamwork", cmd);
-    json findArgs = {{"args", objects}};
-    if (const std::string ground = r.values.value("ground", std::string()); !ground.empty())
+    const json meshes = meshesUnder(objects);
+    if (meshes.empty())
+        throw CommandError(std::string(cmd) + ": the placed buildings have no meshes to give contacts");
+    // Only where the buildings meet the ground: joins between them and the streets or each other get no skirt.
+    json findArgs = {{"args", meshes}, {"findMesh", false}};
+    const std::string ground = r.values.value("ground", std::string());
+    if (ground.empty())
+        throw CommandError(std::string(cmd) + ": contacts need the ground the buildings stand on: give the settlement a ground mesh or Terrain");
+    // A Terrain takes the contact mask; any other ground mesh only acts as the ground.
+    if (isTerrainGround(ground))
         findArgs["terrain"] = ground;
+    else
+    {
+        findArgs["ground"] = json::array({ground});
+        findArgs["terrainMask"] = false;
+    }
     const json found = ops::execute("seamFind", findArgs);
     const std::string seam = found.value("seam", std::string());
     if (seam.empty())
@@ -684,7 +722,11 @@ void registerLotCommands(ext::Context& ctx)
             if (build && route == BuildingRoute::Masonry)
                 lotNeedCommand("masonryBuilding", "Masonry", cmd);
             if (build && a.get<bool>("contacts", false) && (route == BuildingRoute::Library || route == BuildingRoute::Masonry))
+            {
                 lotNeedCommand("seamFind", "Seamwork", cmd);
+                if (r.values.value("ground", std::string()).empty())
+                    throw CommandError(std::string(cmd) + ": contacts need the ground the buildings stand on: give the settlement a ground mesh or Terrain");
+            }
             json edits = lotEditsOf(r, cmd);
             if (!edits.contains("buildingRoutes"))
                 edits["buildingRoutes"] = json::array();
@@ -753,6 +795,9 @@ void registerLotCommands(ext::Context& ctx)
                 }
                 else
                     out["masonry"] = buildMasonry(after, envs, made, cmd);
+                // Contacts first: grouping renames the placed objects' paths.
+                if (a.get<bool>("contacts", false) && !made.empty())
+                    out["contacts"] = contactsFor(after, made, a.flags.value("contactKinds", json::array({"skirt"})), cmd);
                 if (!made.empty())
                 {
                     json args = json::array();
@@ -760,8 +805,6 @@ void registerLotCommands(ext::Context& ctx)
                         args.push_back(m);
                     out["group"] = ops::execute("group", {{"args", args}, {"name", groupName}});
                 }
-                if (a.get<bool>("contacts", false) && !made.empty())
-                    out["contacts"] = contactsFor(after, made, a.flags.value("contactKinds", json::array({"skirt"})), cmd);
             }
             else if (route == BuildingRoute::Unreal)
             {

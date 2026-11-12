@@ -84,7 +84,7 @@ GpuResident::Kernel GpuResident::makeKernel(size_t m, size_t g)
     k.layout = b.mLayoutSw;
     k.rate = &b.mShadeRate;
     auto normalMaps = [&] {
-        if (!option(o, "highNormalMap", true))
+        if (!option(o, "highNormalMap", false))
             return;
         if (const uint64_t t = normalMapTable(g))
         {
@@ -256,8 +256,8 @@ void GpuResident::reserveBand(size_t slots, size_t items, size_t blocks)
     }
     if (!mStats.buffer)
     {
-        mStats = makeBuffer(mVk, 16, 0, Host::None);
-        mStatsRead = makeBuffer(mVk, 16, 0, Host::Read);
+        mStats = makeBuffer(mVk, 32, 0, Host::None);
+        mStatsRead = makeBuffer(mVk, 32, 0, Host::Read);
     }
 }
 
@@ -402,7 +402,7 @@ bake::ResidentStats GpuResident::bakeTile(const bake::ResidentTile& tile)
         std::vector<GpuStep> steps;
         steps.push_back({1, 0.0, nullptr, [&](VkCommandBuffer cmd, uint32_t, uint32_t) {
                              vkCmdFillBuffer(cmd, mClaim.buffer, 0, slots * sizeof(uint32_t), 0xffffffffu);
-                             vkCmdFillBuffer(cmd, mStats.buffer, 0, 16, 0);
+                             vkCmdFillBuffer(cmd, mStats.buffer, 0, 32, 0);
                          },
                          "raster"});
         steps.push_back({itemCount, double(S) * 64.0, &b.mRasterRate, [&](VkCommandBuffer cmd, uint32_t first, uint32_t n) {
@@ -489,13 +489,15 @@ bake::ResidentStats GpuResident::bakeTile(const bake::ResidentTile& tile)
                              },
                              "accumulate"});
         }
-        steps.push_back({1, 0.0, nullptr, [&](VkCommandBuffer cmd, uint32_t, uint32_t) { copy(cmd, mStats, mStatsRead, 16); }});
+        steps.push_back({1, 0.0, nullptr, [&](VkCommandBuffer cmd, uint32_t, uint32_t) { copy(cmd, mStats, mStatsRead, 32); }});
         b.runSteps(steps, tile.cancelled);
         vmaInvalidateAllocation(mVk.allocator, mStatsRead.alloc, 0, VK_WHOLE_SIZE);
         const uint32_t* counts = static_cast<const uint32_t*>(mStatsRead.mapped);
         stats.samples += counts[0];
         stats.hits += counts[1];
         stats.backfaces += counts[2];
+        stats.reaimed += counts[3];
+        stats.probed += counts[4];
         if (tile.onBand)
             tile.onBand(y1 - y0);
     }

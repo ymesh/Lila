@@ -121,6 +121,8 @@ TEST_CASE("built-in themes keep text readable (WCAG AA)")
         }
         CHECK(themes::contrast(t.color("tooltipText"), t.color("tooltip")) >= 4.5);
         CHECK(themes::contrast(t.color("highlightText"), t.color("highlight")) >= 4.5);
+        CHECK(themes::contrast(t.color("checkedText"), t.color("checked")) >= 4.5);
+        CHECK(themes::contrast(t.color("text"), t.color("hover")) >= 4.5);
         // Secondary text: WCAG's 3:1 for large or incidental text.
         CHECK(themes::contrast(t.color("dimText"), t.color("window")) >= 3.0);
         CHECK(themes::contrast(t.color("dimText"), t.color("base")) >= 3.0);
@@ -150,12 +152,24 @@ TEST_CASE("the Monotone pref greys a hued theme except where Monotone keeps hue"
     CHECK(hi.r == hi.g);
     CHECK(hi.g == hi.b);
     CHECK(t->color("axisX") == themes::builtIn("Colour")->color("axisX"));
+    themes::Rgba sock = t->color("socketVector");
+    CHECK(sock.r == sock.g);
+    CHECK(sock.g == sock.b);
 
     PrefStore::get().set("general", themes::kMonotonePref, false);
     themes::invalidate();
     CHECK(themes::current()->color("highlight") == themes::builtIn("Colour")->color("highlight"));
     PrefStore::get().remove("general", themes::kMonotonePref);
     clearSaved();
+}
+
+TEST_CASE("Monotone tells socket types and node families apart")
+{
+    const themes::Theme& mono = *themes::builtIn("Monotone");
+    CHECK(mono.color("socketFloat") != mono.color("socketInt"));
+    CHECK(mono.color("socketVector") != mono.color("socketRotation"));
+    CHECK(mono.color("nodeInput") != mono.color("nodeGeometry"));
+    CHECK(mono.color("nodeMesh") == mono.color("nodeGeometry"));
 }
 
 TEST_CASE("theme commands save, switch, rename and delete")

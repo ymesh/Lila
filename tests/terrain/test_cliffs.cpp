@@ -7,6 +7,7 @@
 #include <doctest/doctest.h>
 
 #include <cmath>
+#include <filesystem>
 #include <set>
 
 using namespace lila;
@@ -183,6 +184,39 @@ TEST_CASE("cliffs: the slope-aware projection keeps flat and vertical texel dens
     CHECK(wallTop < 0.01 / 400.0);
 }
 
+TEST_CASE("cliffs: a one-cell landscape step keeps its texel density, the lip included")
+{
+    // A 1500 cm step across one 100 cm cell, shaded with per-vertex normals from central differences as a landscape is.
+    const int n = 8;
+    const double cell = 100.0;
+    auto height = [&](int x) { return x >= n / 2 ? 1500.0 : 0.0; };
+    auto vertexNormal = [&](int x) {
+        const double dh = (height(std::min(x + 1, n - 1)) - height(std::max(x - 1, 0))) / (2.0 * cell);
+        return glm::normalize(glm::dvec3(-dh, 1.0, 0.0));
+    };
+    double lo = 1e300, hi = 0.0;
+    bool leaning = false;
+    for (int x = 0; x + 1 < n; ++x)
+    {
+        const glm::dvec3 p0(x * cell, height(x), 0.0), p1((x + 1) * cell, height(x + 1), 0.0);
+        const glm::dvec3 q0 = p0 + glm::dvec3(0, 0, cell), q1 = p1 + glm::dvec3(0, 0, cell);
+        const glm::dvec3 shading = glm::normalize(vertexNormal(x) + vertexNormal(x + 1));
+        for (const auto& [a, b, c] : {std::array{p0, q0, p1}, std::array{p1, q0, q1}})
+        {
+            const glm::dvec3 face = glm::normalize(glm::cross(b - a, c - a));
+            leaning = leaning || glm::degrees(std::acos(std::clamp(std::abs(glm::dot(face, shading)), 0.0, 1.0))) > kProjectionFace;
+            const double d = texelDensity(a, b, c, 400.0, kSlopeStart, kSlopeBlend, false, &shading);
+            lo = std::min(lo, d);
+            hi = std::max(hi, d);
+        }
+    }
+    CHECK(leaning);
+    CHECK(hi / lo < 1.5);
+    // Gently curved ground keeps the smooth shading normal.
+    const glm::dvec3 smooth = glm::normalize(glm::dvec3(0.3, 1.0, 0.0)), facet = glm::normalize(glm::dvec3(0.35, 1.0, 0.0));
+    CHECK(glm::length(projectionNormal(smooth, facet) - smooth) < 1e-9);
+}
+
 TEST_CASE("cliffs: tiles cut on the World Partition grid weld exactly and stay inside their cells")
 {
     const geo::Heightfield h = escarpment(65);
@@ -259,6 +293,35 @@ TEST_CASE("cliffs: slicing splits shared edges once and keeps corner attributes"
     for (size_t v = 0; v < m.p.size(); ++v)
         if (border[v])
             CHECK((std::abs(std::abs(m.p[v].x) - 500.0) < 1e-6 || std::abs(std::abs(m.p[v].z) - 500.0) < 1e-6));
+}
+
+TEST_CASE("cliffs: tiles keep the source's colour set and material slots, so contact skirts tile with their blend")
+{
+    geo::Mesh src = toMesh(plate(1000.0, 4));
+    auto col = geo::colors::add(src, "Col", glm::vec4(1.0f));
+    for (geo::Index c = 0; c < src.cornerCapacity(); ++c)
+        if (src.cornerValid(c))
+            col[c] = glm::vec4(0.25f, 0.5f, 0.75f, float(src.position(src.cornerPoint(c)).x > 0.0 ? 1.0 : 0.0));
+    src.materialNames() = {"LilaSkirtBlend"};
+    TileParams tp;
+    tp.cell = 300.0;
+    tp.lods = 2;
+    const std::vector<Tile> tiles = cutTiles(fromMesh(src), tp);
+    REQUIRE(tiles.size() > 1);
+    for (const Tile& t : tiles)
+        for (const geo::Mesh& lod : t.lods)
+        {
+            CHECK(lod.materialNames() == std::vector<std::string>{"LilaSkirtBlend"});
+            REQUIRE(geo::colors::sets(lod) == std::vector<std::string>{"Col"});
+            const auto v = geo::colors::values(lod, "Col");
+            for (geo::Index c = 0; c < lod.cornerCapacity(); ++c)
+                if (lod.cornerValid(c))
+                {
+                    CHECK(v[c].g == doctest::Approx(0.5f));
+                    CHECK(v[c].a >= 0.0f);
+                    CHECK(v[c].a <= 1.0f);
+                }
+        }
 }
 
 TEST_CASE("cliffs: tiered scatter seeds per cell, so an edit only reshuffles the cells it touches")
@@ -439,6 +502,40 @@ TEST_CASE("cliffs: terrainCliffs, terrainCliffMesh, terrainCheck and terrainSend
     json list = run("terrainCliffs", {{"args", {t["mesh"]}}, {"list", true}});
     CHECK(list["cliffs"].size() == 1);
     CHECK(list["regions"].contains("cliff_1"));
+}
+
+TEST_CASE("cliffs: lowPoly makes a reduced cliff with normal and AO maps baked from the full one")
+{
+    loadTerrain();
+    run("newScene");
+    json t = run("terrainCreate", {{"size", {20000.0, 20000.0}}, {"resolution", 129}, {"amplitude", 6000.0}, {"featureSize", 6000.0}, {"seed", 3},
+                                   {"name", "LowCrag"}});
+    json c = run("terrainCliffs", {{"args", {t["mesh"]}}, {"slope", 40.0}, {"minHeight", 300.0}, {"minArea", 10.0}});
+    REQUIRE(c["count"].get<int>() > 0);
+    // An unsaved scene bakes into the working folder.
+    const std::filesystem::path before = std::filesystem::current_path(), dir = std::filesystem::temp_directory_path() / "lila_cliff_lowpoly";
+    std::filesystem::create_directories(dir);
+    std::filesystem::current_path(dir);
+    json m = run("terrainCliffMesh", {{"args", {t["mesh"]}}, {"region", "cliff_1"}, {"detail", 1.0}, {"lowPoly", true}, {"lowPolyRatio", 0.1},
+                                      {"bakeResolution", 1024}});
+    std::filesystem::current_path(before);
+    REQUIRE(m["cliffs"].size() == 1);
+    const json& low = m["cliffs"][0]["lowPoly"];
+    REQUIRE(low.is_object());
+    CHECK_FALSE(low.contains("warning"));
+    const int high = m["cliffs"][0]["stats"]["triangles"].get<int>();
+    CHECK(low["triangles"].get<int>() > 0);
+    CHECK(low["triangles"].get<int>() < high / 5);
+    REQUIRE(low.contains("bake"));
+    // At 1024 the lint sees uv-collapsed triangles a squashed layout would leave.
+    CHECK(low["bake"]["lint"]["issues"].empty());
+    // Headless there's no GPU backend, and the result says so.
+    CHECK(low.value("backendNote", std::string()).find("CPU") != std::string::npos);
+    std::set<std::string> maps;
+    for (const json& o : low["bake"]["outputs"])
+        if (std::filesystem::exists(o["file"].get<std::string>()))
+            maps.insert(o["map"].get<std::string>());
+    CHECK(maps == std::set<std::string>{"ao", "normal"});
 }
 
 TEST_CASE("cliffs: a terrain spec's cliffs entry finds and meshes the cliffs")
