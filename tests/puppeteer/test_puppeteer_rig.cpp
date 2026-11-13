@@ -82,10 +82,21 @@ TEST_CASE("puppeteer: modes, gizmo and selection handlers come and go with the e
     // Space's tap opens the Curve Overlay; its hold (the hotbox) is left alone.
     CHECK(animate->hotkeys["viewport"]["Space"] == json{{"press", "puppeteer.curveOverlay"}});
     CHECK(ui::actions::find("puppeteer.curveOverlay"));
+    // The Strings modes on Alt and the left hand's rows, with U + right drag for their marking menu.
+    for (const auto& [key, mode] : {std::pair{"Alt+Q", "default"}, {"Alt+A", "forward"}, {"Alt+Shift+A", "forwardAll"}, {"Alt+S", "backward"},
+                                    {"Alt+Shift+S", "backwardAll"}, {"Alt+D", "bidirectional"}, {"Alt+Shift+Q", "all"}, {"Alt+W", "ik"},
+                                    {"Alt+Shift+W", "fullBody"}, {"Alt+E", "free"}})
+    {
+        CAPTURE(key);
+        CHECK(animate->hotkeys["viewport"][key] == json{{"press", std::string("puppeteer.strings.") + mode}});
+        CHECK(ui::actions::find(std::string("puppeteer.strings.") + mode));
+    }
+    CHECK(animate->hotkeys["viewport"]["U"]["RMB"]["markingMenu"] == "puppeteerStringsModes");
     CHECK_FALSE(animate->hotkeys["viewport"]["Space"].contains("hold"));
     CHECK(ui::gizmos::find("puppeteer.spinner"));
     CHECK(ui::selectionHandlers::find("puppeteer.animate"));
-    CHECK(ui::layouts::contributed().find("Animate"));
+    CHECK(ui::layouts::contributed().find("Puppeteer"));
+    CHECK(ui::layouts::contributed().find("Puppeteer Rig"));
     CHECK(ui::actions::find("mode.puppeteerAnimate"));
     CHECK(ui::actions::find("puppeteer.spinner.inheritRotate"));
 

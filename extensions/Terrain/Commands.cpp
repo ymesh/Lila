@@ -14,6 +14,7 @@
 #include "MaterialNodes.h"
 #include "Stamps.h"
 #include "Terrain.h"
+#include "TerrainEdit.h"
 #include "Water.h"
 #include "Volume.h"
 
@@ -106,26 +107,34 @@ Found findTerrain(Graph& g, const std::string& name, const std::string& cmd)
     Node* n = g.find(name);
     if (!n)
         throw CommandError(cmd + ": no node named '" + name + "'");
-    g.evaluate();
     Found f;
-    if (gn::isGnModifier(*n))
+    for (bool evaluated = !edit::EditBatch::active(); ; evaluated = true)
     {
-        f.modifier = n;
-        f.local = gn::modifierHeightfield(n->id());
-        const scene::NodeId meshId = scene::modifiers::meshOf(g, n->id());
-        f.mesh = meshId != scene::kNoNode ? g.node(meshId) : nullptr;
-    }
-    else
-    {
-        f.mesh = n;
-        const std::vector<scene::NodeId> stack = scene::modifiers::stack(g, n->id());
-        for (auto it = stack.rbegin(); it != stack.rend() && !f.local; ++it)
-            if (Node* m = g.node(*it); m && gn::isGnModifier(*m))
-                if (auto h = gn::modifierHeightfield(m->id()))
-                {
-                    f.modifier = m;
-                    f.local = std::move(h);
-                }
+        if (evaluated)
+            g.evaluate();
+        f = {};
+        if (gn::isGnModifier(*n))
+        {
+            f.modifier = n;
+            f.local = gn::modifierHeightfield(n->id());
+            const scene::NodeId meshId = scene::modifiers::meshOf(g, n->id());
+            f.mesh = meshId != scene::kNoNode ? g.node(meshId) : nullptr;
+        }
+        else
+        {
+            f.mesh = n;
+            const std::vector<scene::NodeId> stack = scene::modifiers::stack(g, n->id());
+            for (auto it = stack.rbegin(); it != stack.rend() && !f.local; ++it)
+                if (Node* m = g.node(*it); m && gn::isGnModifier(*m))
+                    if (auto h = gn::modifierHeightfield(m->id()))
+                    {
+                        f.modifier = m;
+                        f.local = std::move(h);
+                    }
+        }
+        // In a batch the heightfield from the last evaluation does; a terrain never evaluated yet is evaluated now.
+        if (evaluated || (f.local && !f.local->empty()))
+            break;
     }
     if (!f.local || f.local->empty())
         throw CommandError(cmd + ": " + n->path() + " makes no heightfield (make a terrain with terrainCreate)");
@@ -359,7 +368,10 @@ TerrainGroup terrainGroup(Graph& g, const Found& f, const std::string& cmd)
         throw CommandError(cmd + ": " + (f.modifier ? f.modifier->path() : std::string("the terrain")) + " has no group");
     try
     {
-        return {node, gn::readGroup(*node)};
+        TerrainGroup t{node, {}};
+        if (!edit::batchedGroup(*node, t.group))
+            t.group = gn::readGroup(*node);
+        return t;
     }
     catch (const std::exception& e)
     {
@@ -369,6 +381,8 @@ TerrainGroup terrainGroup(Graph& g, const Found& f, const std::string& cmd)
 
 void commitTerrainGroup(TerrainGroup& t, const std::string& cmd)
 {
+    if (edit::batchGroup(*t.node, t.group))
+        return;
     try
     {
         gn::commitGroup(Graph::current(), *t.node, std::move(t.group));
@@ -675,7 +689,8 @@ json runStamp(const Args& a, bool region, const std::string& cmd, const std::str
     }
 
     TerrainGroup t = terrainGroup(g, f, cmd);
-    json list = listOf(ensureLayer(t.group, "TerrainStamps", layer, {}, cmd), "stamps");
+    edit::ListEdit stamps(*t.node, ensureLayer(t.group, "TerrainStamps", layer, {}, cmd), "stamps");
+    json& list = stamps.list();
     std::string id = a.get<std::string>("id", "");
     if (id.empty())
         for (int k = 1; id.empty(); ++k)
@@ -736,9 +751,13 @@ json runStamp(const Args& a, bool region, const std::string& cmd, const std::str
         }
     if (!replaced)
         list.push_back(s.toJson());
-    setList(*nodeNamed(t.group, layer), "stamps", list);
-    dropUnusedSources(t.group);
+    stamps.store(*nodeNamed(t.group, layer));
+    // A batch leaves unused sources for the next edit to drop: its lists are only written back when it commits.
+    if (!edit::EditBatch::active())
+        dropUnusedSources(t.group);
     commitTerrainGroup(t, cmd);
+    if (edit::EditBatch::active())
+        return {{"id", id}, {"layer", layer}, {"replaced", replaced}, {"batched", true}};
 
     const Found after = findTerrain(g, pathOf(f, names[0]), cmd);
     const auto results = stampResults(after.modifier->id(), layer);
@@ -1308,6 +1327,54 @@ Found oneTerrain(const Args& a, const std::string& cmd)
 
 void registerContractCommands(ext::Context& ctx)
 {
+    ctx.registerCommand({
+        .name = "terrainBatch",
+        .doc = "Run many stamp and road edits as one: calls is a list of {command, flags} for terrainStampPad, terrainStampRegion, "
+               "terrainStampQuay, terrainAddFeature, terrainAddRoad and terrainAddRoundabout, each with its flags as that command "
+               "takes them (args included). The terrain's group is written once at the end and evaluated once on the next read, "
+               "so hundreds of edits cost about one. Each call returns its id and layer only; read the results afterwards with "
+               "terrainStamps or terrainRoads. Returns ran, results (null for a call that failed) and errors ({index, command, "
+               "error}); the calls that worked still apply.",
+        .flags = {{"calls", "c", T::List, json::array(), "[{command, flags}, ...]."}},
+        .run = [](const Args& a) -> json {
+            LILA_ZONE();
+
+            static const std::set<std::string> allowed = {"terrainStampPad", "terrainStampRegion", "terrainStampQuay",
+                                                          "terrainAddFeature", "terrainAddRoad", "terrainAddRoundabout"};
+            const json calls = a.flags.value("calls", json::array());
+            if (!calls.is_array())
+                throw CommandError("terrainBatch: calls is a list of {command, flags}");
+            for (size_t k = 0; k < calls.size(); ++k)
+                if (const json& c = calls[k]; !c.is_object() || !allowed.contains(c.value("command", std::string())))
+                    throw CommandError("terrainBatch: call " + std::to_string(k) + " is not one of terrainStampPad, terrainStampRegion, "
+                                       "terrainStampQuay, terrainAddFeature, terrainAddRoad or terrainAddRoundabout");
+            json results = json::array(), errors = json::array();
+            int ran = 0;
+            {
+                edit::EditBatch batch;
+                for (size_t k = 0; k < calls.size(); ++k)
+                {
+                    const json& c = calls[k];
+                    const std::string command = c.value("command", std::string());
+                    try
+                    {
+                        results.push_back(ops::execute(command, c.value("flags", json::object())));
+                        ++ran;
+                    }
+                    catch (const std::exception& e)
+                    {
+                        results.push_back(nullptr);
+                        errors.push_back({{"index", k}, {"command", command}, {"error", e.what()}});
+                    }
+                }
+                batch.commit("terrainBatch");
+            }
+            return {{"ran", ran}, {"results", results}, {"errors", errors}};
+        },
+        .examples = {"terrainBatch(calls=[{'command': 'terrainStampPad', 'flags': {'args': ['Terrain'], 'id': 'a', 'footprint': "
+                     "[[0, 0], [1000, 0], [1000, 1000], [0, 1000]]}}])['errors']"},
+    });
+
     ctx.registerCommand({
         .name = "terrainStampQuay",
         .doc = "Build a waterfront along a line: quay (a vertical bank, the land side levelled, the water side dredged by depth), "
@@ -2016,25 +2083,32 @@ void registerContractCommands(ext::Context& ctx)
                 return {{"known", false}, {"revision", now}, {"regions", json::array()}};
             const int tile = int(a.get<int64_t>("tile", 64));
             json regions = json::array();
+            std::vector<const std::vector<float>*> oldMasks;
+            for (const auto& [name, v] : h.masks)
+            {
+                const std::vector<float>* o = old->findMask(name);
+                oldMasks.push_back(o && o->size() == v.size() ? o : nullptr);
+            }
             for (int tz = 0; tz < h.nz; tz += tile)
                 for (int tx = 0; tx < h.nx; tx += tile)
                 {
-                    bool dirty = false;
-                    for (int z = tz; z < std::min(h.nz, tz + tile) && !dirty; ++z)
-                        for (int x = tx; x < std::min(h.nx, tx + tile) && !dirty; ++x)
+                    // The changed samples' own bounds in the tile, so a small edit on a coarse terrain stays small.
+                    int x0 = h.nx, z0 = h.nz, x1 = -1, z1 = -1;
+                    for (int z = tz; z < std::min(h.nz, tz + tile); ++z)
+                        for (int x = tx; x < std::min(h.nx, tx + tile); ++x)
                         {
                             const size_t i = h.index(x, z);
-                            dirty = h.heights[i] != old->heights[i];
-                            for (const auto& [name, v] : h.masks)
-                                if (!dirty)
-                                {
-                                    const std::vector<float>* o = old->findMask(name);
-                                    dirty = !o || o->size() != v.size() || (*o)[i] != v[i];
-                                }
+                            bool dirty = h.heights[i] != old->heights[i];
+                            size_t m = 0;
+                            for (auto it = h.masks.begin(); it != h.masks.end() && !dirty; ++it, ++m)
+                                dirty = !oldMasks[m] || (*oldMasks[m])[i] != it->second[i];
+                            if (dirty)
+                                x0 = std::min(x0, x), z0 = std::min(z0, z), x1 = std::max(x1, x), z1 = std::max(z1, z);
                         }
-                    if (!dirty)
+                    if (x1 < 0)
                         continue;
-                    const glm::dvec2 lo = h.samplePos(tx, tz), hi = h.samplePos(std::min(h.nx, tx + tile) - 1, std::min(h.nz, tz + tile) - 1);
+                    const glm::dvec2 lo = h.samplePos(std::max(0, x0 - 1), std::max(0, z0 - 1)),
+                                     hi = h.samplePos(std::min(h.nx - 1, x1 + 1), std::min(h.nz - 1, z1 + 1));
                     const glm::dvec3 a0 = f.frame.world(lo.x, 0.0, lo.y), a1 = f.frame.world(hi.x, 0.0, hi.y);
                     regions.push_back({{"min", vec2(glm::min(groundOf(a0), groundOf(a1)))}, {"max", vec2(glm::max(groundOf(a0), groundOf(a1)))}});
                 }

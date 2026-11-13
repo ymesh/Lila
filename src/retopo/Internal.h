@@ -286,6 +286,7 @@ LILA_SCENE_API std::vector<glm::dvec3> solvePositionField(const Surface& s, cons
                                                           glm::dvec2 shift = glm::dvec2(0.0));
 
 struct Extracted;
+struct ContinuousCharts;
 
 /**
  * The same, from one global seamless parametrization (mixed-integer quadrangulation, Bommes et al. 2009): the surface is
@@ -300,7 +301,20 @@ LILA_SCENE_API std::vector<glm::dvec3> solveSeamlessPositions(const Surface& s, 
                                                               const std::vector<double>& scale, std::string* error = nullptr,
                                                               std::vector<std::array<int, 2>>* edgeSteps = nullptr,
                                                               Extracted* grid = nullptr, int foldRetries = 0,
-                                                              Index* folds = nullptr);
+                                                              Index* folds = nullptr, ContinuousCharts* continuous = nullptr);
+
+/**
+ * The seamless parametrization before any rounding: per surface triangle the field direction its chart's u axis follows
+ * (combed, so neighbours differ by the solve's transitions) and its corners' (u, v) in lattice steps. folded counts the
+ * triangles whose chart is flipped or flat. Filled by solveSeamlessPositions when asked, which then stops after the first
+ * solve.
+ */
+struct ContinuousCharts
+{
+    std::vector<glm::dvec3> dir;
+    std::vector<std::array<glm::dvec2, 3>> chart;
+    Index folded = 0;
+};
 
 /**
  * A quad layout made patch by patch, so it can't fold: field lines traced from every pole and feature corner (a
@@ -311,7 +325,8 @@ LILA_SCENE_API std::vector<glm::dvec3> solveSeamlessPositions(const Surface& s, 
  * the patches' side counts rather than averaging out inside one patch.
  */
 LILA_SCENE_API Extracted layoutPatches(const Surface& s, const std::vector<glm::dvec3>& q, const std::vector<double>& scale,
-                                       double targetCells = 0.0, std::string* error = nullptr, const std::vector<glm::dvec3>& crosses = {});
+                                       double targetCells = 0.0, std::string* error = nullptr, const std::vector<glm::dvec3>& crosses = {},
+                                       bool seamless = false);
 
 /** Lattice points of i and j (returned and outJ) that coincide best near the two vertices. */
 LILA_SCENE_API glm::dvec3 compatLatticePair(const glm::dvec3& vi, const glm::dvec3& ni, const glm::dvec3& qi, const glm::dvec3& oi, double si,

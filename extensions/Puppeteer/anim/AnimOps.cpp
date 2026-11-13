@@ -1,4 +1,5 @@
 #include "AnimOps.h"
+#include "Tracks.h"
 
 #include "rig/Rig.h"
 
@@ -26,8 +27,8 @@ namespace sa = lila::scene::anim;
 bool isScalarCurve(const Node& n) { return sa::isCurve(n); }
 bool isRotCurve(const Node& n) { return sa::isRotationCurve(n); }
 
-/** Curves feeding plug, through layer blends (both inputs) down to the base animation. */
-void curvesDriving(Graph& g, const PlugRef& plug, std::set<NodeId>& seen, std::vector<NodeId>& out, int depth = 0)
+/** Curves feeding plug, through layer blends (both inputs, or only inputA of control tracks) down to the base animation. */
+void curvesDriving(Graph& g, const PlugRef& plug, std::set<NodeId>& seen, std::vector<NodeId>& out, bool withTracks, int depth = 0)
 {
     if (depth > 64)
         return;
@@ -46,12 +47,15 @@ void curvesDriving(Graph& g, const PlugRef& plug, std::set<NodeId>& seen, std::v
         else if (sa::isBlend(*n))
         {
             const bool vec = g.attr({n->id(), sa::BlendNode::kInputA, -1}).type == PlugType::Vec3;
+            const bool skipB = !withTracks && isTrack(g, sa::layerOf(g, n->id()));
             for (int input : {int(sa::BlendNode::kInputA), int(sa::BlendNode::kInputB)})
             {
-                curvesDriving(g, {n->id(), input, -1}, seen, out, depth + 1);
+                if (skipB && input == sa::BlendNode::kInputB)
+                    continue;
+                curvesDriving(g, {n->id(), input, -1}, seen, out, withTracks, depth + 1);
                 if (vec)
                     for (int c = 0; c < 3; ++c)
-                        curvesDriving(g, {n->id(), input, c}, seen, out, depth + 1);
+                        curvesDriving(g, {n->id(), input, c}, seen, out, withTracks, depth + 1);
             }
         }
     };
@@ -105,7 +109,7 @@ Character resolveCharacter(Graph& g, NodeId node)
     return ch;
 }
 
-std::vector<NodeId> characterCurves(Graph& g, const Character& ch)
+std::vector<NodeId> characterCurves(Graph& g, const Character& ch, bool withTracks)
 {
     std::set<NodeId> seen;
     std::vector<NodeId> out;
@@ -119,10 +123,10 @@ std::vector<NodeId> characterCurves(Graph& g, const Character& ch)
         {
             if (!(attrs[size_t(i)].flags & AttrKeyable))
                 continue;
-            curvesDriving(g, {id, i, -1}, seen, out);
+            curvesDriving(g, {id, i, -1}, seen, out, withTracks);
             if (attrs[size_t(i)].type == PlugType::Vec3)
                 for (int c = 0; c < 3; ++c)
-                    curvesDriving(g, {id, i, c}, seen, out);
+                    curvesDriving(g, {id, i, c}, seen, out, withTracks);
         }
     }
     return out;
@@ -273,6 +277,13 @@ void KeyWriter::scalar(const PlugRef& plug, double t, double v)
     }
     if (curve)
         return;
+    // A layered channel with nothing keyed on its layer yet: v is layer-local, so it keys that input itself.
+    if (const PlugRef in = sa::keyInput(g, plug); in.node != plug.node && !mMode.absolute)
+    {
+        sa::setKey(g, in, t, v);
+        ++mKeys;
+        return;
+    }
     try
     {
         sa::setKey(g, plug, t, v);

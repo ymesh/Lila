@@ -20,12 +20,12 @@ namespace lila::retopo::detail
 {
 namespace
 {
-constexpr double kQuarter = glm::half_pi<double>();
+constexpr double kSeamQuarter = glm::half_pi<double>();
 
-double wrapQuarter(double a) { return std::remainder(a, kQuarter); }
+double wrapQuarter(double a) { return std::remainder(a, kSeamQuarter); }
 
 /** Signed angle from a to b about n. */
-double angleAbout(const glm::dvec3& a, const glm::dvec3& b, const glm::dvec3& n)
+double seamAngleAbout(const glm::dvec3& a, const glm::dvec3& b, const glm::dvec3& n)
 {
     return std::atan2(glm::dot(n, glm::cross(a, b)), glm::dot(a, b));
 }
@@ -39,14 +39,14 @@ glm::dvec3 turn(glm::dvec3 b, const glm::dvec3& n, int k)
 }
 
 /** Coordinates turned by k quarter turns. */
-glm::dvec2 turn2(glm::dvec2 c, int k)
+glm::dvec2 seamTurn2(glm::dvec2 c, int k)
 {
     for (int i = 0; i < ((k % 4) + 4) % 4; ++i)
         c = {-c.y, c.x};
     return c;
 }
 
-int mod4(int k) { return ((k % 4) + 4) % 4; }
+int seamMod4(int k) { return ((k % 4) + 4) % 4; }
 
 /** The surface with one field direction per triangle, so singularities sit on vertices. */
 struct ParamMesh
@@ -84,7 +84,7 @@ std::unordered_map<Index, glm::dvec3> junctionDirections(const Surface& s)
 }
 
 /** Each triangle's corners in its own chart of the parametrization. */
-using Chart = std::array<glm::dvec2, 3>;
+using SeamChart = std::array<glm::dvec2, 3>;
 
 void buildEdges(ParamMesh& m);
 
@@ -105,7 +105,7 @@ ParamMesh buildParamMesh(const Surface& s, const std::vector<glm::dvec3>& q, con
             d = glm::normalize(d);
             if (glm::length(ref) == 0.0)
                 ref = d;
-            sum += turn(d, n, int(std::lround(angleAbout(d, ref, n) / kQuarter)));
+            sum += turn(d, n, int(std::lround(seamAngleAbout(d, ref, n) / kSeamQuarter)));
         }
         return glm::length(sum) > 1e-12 ? glm::normalize(sum) : anyTangent(n);
     };
@@ -170,9 +170,9 @@ void buildEdges(ParamMesh& m)
 int matching(const ParamMesh& m, Index e, Index t, Index other)
 {
     glm::dvec3 d = glm::normalize(m.pos[m.edges[e][1]] - m.pos[m.edges[e][0]]);
-    double a = angleAbout(d, m.dir[t], m.normal[t]);
-    double b = angleAbout(d, m.dir[other], m.normal[other]);
-    return mod4(int(std::lround((a - b) / kQuarter)));
+    double a = seamAngleAbout(d, m.dir[t], m.normal[t]);
+    double b = seamAngleAbout(d, m.dir[other], m.normal[other]);
+    return seamMod4(int(std::lround((a - b) / kSeamQuarter)));
 }
 
 /**
@@ -187,33 +187,33 @@ std::vector<uint8_t> singularVertices(const ParamMesh& m)
         {
             Index v = m.tris[t][k], next = m.tris[t][(k + 1) % 3], prev = m.tris[t][(k + 2) % 3];
             glm::dvec3 toNext = glm::normalize(m.pos[next] - m.pos[v]), toPrev = glm::normalize(m.pos[prev] - m.pos[v]);
-            double gamma = angleAbout(toNext, toPrev, m.normal[t]);
+            double gamma = seamAngleAbout(toNext, toPrev, m.normal[t]);
             turn[v] -= gamma;
             // Leaving t across edge v-prev into the triangle that has it as its first edge from v.
             Index e = m.triEdges[t][(k + 2) % 3];
             if (m.edgeTriCount[e] != 2)
                 continue;
             Index other = m.edgeTris[e][0] == Index(t) ? m.edgeTris[e][1] : m.edgeTris[e][0];
-            double leaving = angleAbout(toNext, m.dir[t], m.normal[t]) - gamma;
-            double entering = angleAbout(toPrev, m.dir[other], m.normal[other]);
+            double leaving = seamAngleAbout(toNext, m.dir[t], m.normal[t]) - gamma;
+            double entering = seamAngleAbout(toPrev, m.dir[other], m.normal[other]);
             turn[v] += wrapQuarter(entering - leaving);
         }
     std::vector<uint8_t> out(m.pos.size(), 0);
     for (size_t v = 0; v < m.pos.size(); ++v)
-        out[v] = !m.boundary[v] && std::lround(turn[v] / kQuarter) != 0;
+        out[v] = !m.boundary[v] && std::lround(turn[v] / kSeamQuarter) != 0;
     return out;
 }
 
 
-double cross2(const glm::dvec2& a, const glm::dvec2& b) { return a.x * b.y - a.y * b.x; }
+double seamCross2(const glm::dvec2& a, const glm::dvec2& b) { return a.x * b.y - a.y * b.x; }
 
 /** Barycentric coordinates of p in a chart triangle; they read the same way for a folded one. */
-glm::dvec3 barycentric(const Chart& c, const glm::dvec2& p)
+glm::dvec3 barycentric(const SeamChart& c, const glm::dvec2& p)
 {
-    const double area = cross2(c[1] - c[0], c[2] - c[0]);
+    const double area = seamCross2(c[1] - c[0], c[2] - c[0]);
     if (std::abs(area) < 1e-300)
         return glm::dvec3(-1.0);
-    return glm::dvec3(cross2(c[1] - p, c[2] - p), cross2(c[2] - p, c[0] - p), cross2(c[0] - p, c[1] - p)) / area;
+    return glm::dvec3(seamCross2(c[1] - p, c[2] - p), seamCross2(c[2] - p, c[0] - p), seamCross2(c[0] - p, c[1] - p)) / area;
 }
 
 /** From one triangle's chart to a neighbour's across an edge: a quarter-turn rotation then a whole translation. */
@@ -221,8 +221,8 @@ struct Transition
 {
     int turns = 0;
     glm::dvec2 shift{0.0};
-    glm::dvec2 point(const glm::dvec2& p) const { return turn2(p, turns) + shift; }
-    glm::dvec2 dir(const glm::dvec2& d) const { return turn2(d, turns); }
+    glm::dvec2 point(const glm::dvec2& p) const { return seamTurn2(p, turns) + shift; }
+    glm::dvec2 dir(const glm::dvec2& d) const { return seamTurn2(d, turns); }
 };
 
 /**
@@ -230,12 +230,12 @@ struct Transition
  * neighbours, read through the transitions round its fan, the way a Tutte embedding unfolds a disk. Vertices in fixed
  * keep their place, so the whole-number singularities, features and borders stay put.
  */
-void untangleCharts(const ParamMesh& m, std::vector<Chart>& chart, const std::vector<uint8_t>& fixed, int rings, int sweeps)
+void untangleCharts(const ParamMesh& m, std::vector<SeamChart>& chart, const std::vector<uint8_t>& fixed, int rings, int sweeps)
 {
     LILA_ZONE();
 
     const Index nt = Index(m.tris.size()), nv = Index(m.pos.size());
-    auto folded = [&](Index t) { return cross2(chart[t][1] - chart[t][0], chart[t][2] - chart[t][0]) <= 0.0; };
+    auto folded = [&](Index t) { return seamCross2(chart[t][1] - chart[t][0], chart[t][2] - chart[t][0]) <= 0.0; };
     std::vector<uint8_t> loose(nv, 0);
     for (Index t = 0; t < nt; ++t)
         if (folded(t))
@@ -292,11 +292,11 @@ void untangleCharts(const ParamMesh& m, std::vector<Chart>& chart, const std::ve
                         const glm::dvec2 qa = chart[tris[j]][cornerIn(tris[j], v)], qb = chart[tris[j]][cornerIn(tris[j], other)];
                         Transition step;
                         if (glm::length(pb - pa) > 1e-12 && glm::length(qb - qa) > 1e-12)
-                            step.turns = mod4(int(std::lround(std::atan2(cross2(pb - pa, qb - qa), glm::dot(pb - pa, qb - qa)) / kQuarter)));
-                        const glm::dvec2 sh = qa - turn2(pa, step.turns);
+                            step.turns = seamMod4(int(std::lround(std::atan2(seamCross2(pb - pa, qb - qa), glm::dot(pb - pa, qb - qa)) / kSeamQuarter)));
+                        const glm::dvec2 sh = qa - seamTurn2(pa, step.turns);
                         step.shift = glm::dvec2(std::round(sh.x), std::round(sh.y));
-                        tr[j].turns = mod4(tr[i].turns + step.turns);
-                        tr[j].shift = turn2(tr[i].shift, step.turns) + step.shift;
+                        tr[j].turns = seamMod4(tr[i].turns + step.turns);
+                        tr[j].shift = seamTurn2(tr[i].shift, step.turns) + step.shift;
                         have[j] = 1;
                         grew = true;
                     }
@@ -323,7 +323,7 @@ void untangleCharts(const ParamMesh& m, std::vector<Chart>& chart, const std::ve
                     if (m.tris[t][c] != v)
                     {
                         // Back from this triangle's chart into the first one's.
-                        sum += turn2(chart[t][c] - tr.shift, -tr.turns);
+                        sum += seamTurn2(chart[t][c] - tr.shift, -tr.turns);
                         ++count;
                     }
             }
@@ -338,7 +338,7 @@ void untangleCharts(const ParamMesh& m, std::vector<Chart>& chart, const std::ve
  * are the whole-number points of the charts, its edges trace the integer lines from point to point across triangles and
  * cuts, and its faces close round the grid cells. Pole for pole it is the parametrization's own layout.
  */
-Extracted extractIntegerGrid(const Surface& s, const ParamMesh& m, const std::vector<Chart>& chart)
+Extracted extractIntegerGrid(const Surface& s, const ParamMesh& m, const std::vector<SeamChart>& chart)
 {
     LILA_ZONE();
 
@@ -370,8 +370,8 @@ Extracted extractIntegerGrid(const Surface& s, const ParamMesh& m, const std::ve
         const glm::dvec2 qa = chart[o][cornerIn(o, a)], qb = chart[o][cornerIn(o, b)];
         Transition tr;
         if (ko >= 0 && glm::length(pb - pa) > 1e-12 && glm::length(qb - qa) > 1e-12)
-            tr.turns = mod4(int(std::lround(std::atan2(cross2(pb - pa, qb - qa), glm::dot(pb - pa, qb - qa)) / kQuarter)));
-        const glm::dvec2 sh = qa - turn2(pa, tr.turns);
+            tr.turns = seamMod4(int(std::lround(std::atan2(seamCross2(pb - pa, qb - qa), glm::dot(pb - pa, qb - qa)) / kSeamQuarter)));
+        const glm::dvec2 sh = qa - seamTurn2(pa, tr.turns);
         tr.shift = glm::dvec2(std::round(sh.x), std::round(sh.y));
         return tr;
     };
@@ -392,8 +392,8 @@ Extracted extractIntegerGrid(const Surface& s, const ParamMesh& m, const std::ve
     };
     for (Index t = 0; t < nt; ++t)
     {
-        const Chart& c = chart[t];
-        if (cross2(c[1] - c[0], c[2] - c[0]) <= 0.0)
+        const SeamChart& c = chart[t];
+        if (seamCross2(c[1] - c[0], c[2] - c[0]) <= 0.0)
             continue;
         const glm::dvec2 lo = glm::min(c[0], glm::min(c[1], c[2])), hi = glm::max(c[0], glm::max(c[1], c[2]));
         for (double i = std::ceil(lo.x - eps); i <= hi.x + eps; i += 1.0)
@@ -444,7 +444,7 @@ Extracted extractIntegerGrid(const Surface& s, const ParamMesh& m, const std::ve
     std::vector<Index> nextOcc(no, kInvalid); // the occurrence round the point that follows this one counter-clockwise
     for (Index o = 0; o < no; ++o)
     {
-        const Chart& c = chart[occ[o].tri];
+        const SeamChart& c = chart[occ[o].tri];
         const glm::dvec3& b = occ[o].bary;
         int zeros = 0, zero = -1, one = -1;
         for (int k = 0; k < 3; ++k)
@@ -481,7 +481,7 @@ Extracted extractIntegerGrid(const Surface& s, const ParamMesh& m, const std::ve
         const bool openEnd = endCorner >= 0 && across(occ[o].tri, (endCorner + 1) % 3) == kInvalid;
         for (int dir = 0; dir < 4; ++dir)
         {
-            double phi = std::fmod(dir * kQuarter - start, glm::two_pi<double>());
+            double phi = std::fmod(dir * kSeamQuarter - start, glm::two_pi<double>());
             if (phi < 0.0)
                 phi += glm::two_pi<double>();
             if (phi > glm::two_pi<double>() - 1e-9)
@@ -547,7 +547,7 @@ Extracted extractIntegerGrid(const Surface& s, const ParamMesh& m, const std::ve
                     k = e;
             if (k < 0)
                 break;
-            d = mod4(d + transition(t, k, tn).turns);
+            d = seamMod4(d + transition(t, k, tn).turns);
             cur = n;
         }
         return kInvalid;
@@ -559,7 +559,7 @@ Extracted extractIntegerGrid(const Surface& s, const ParamMesh& m, const std::ve
     {
         Index t = occ[slots[sIdx].occ].tri;
         glm::dvec2 at = occ[slots[sIdx].occ].p;
-        glm::dvec2 dir = turn2({1.0, 0.0}, slots[sIdx].dir);
+        glm::dvec2 dir = seamTurn2({1.0, 0.0}, slots[sIdx].dir);
         glm::dvec2 goal = at + dir;
         for (int step = 0; step < 256 && t != kInvalid; ++step)
         {
@@ -568,7 +568,7 @@ Extracted extractIntegerGrid(const Surface& s, const ParamMesh& m, const std::ve
             {
                 auto it = occOf.find(key(t, goal));
                 if (it != occOf.end())
-                    arrive[sIdx] = slotFor(it->second, mod4(int(std::lround(std::atan2(-dir.y, -dir.x) / kQuarter))));
+                    arrive[sIdx] = slotFor(it->second, seamMod4(int(std::lround(std::atan2(-dir.y, -dir.x) / kSeamQuarter))));
                 break;
             }
             const glm::dvec3 ba = barycentric(chart[t], at);
@@ -710,7 +710,7 @@ Extracted extractIntegerGrid(const Surface& s, const ParamMesh& m, const std::ve
 
 std::vector<glm::dvec3> solveSeamlessPositions(const Surface& s, const std::vector<glm::dvec3>& q, const std::vector<double>& scale,
                                                std::string* error, std::vector<std::array<int, 2>>* edgeSteps, Extracted* grid,
-                                               int foldRetries, Index* folds)
+                                               int foldRetries, Index* folds, ContinuousCharts* continuous)
 {
     LILA_ZONE();
 
@@ -720,6 +720,45 @@ std::vector<glm::dvec3> solveSeamlessPositions(const Surface& s, const std::vect
         return std::vector<glm::dvec3>{};
     };
     ParamMesh m = buildParamMesh(s, q, scale);
+    // For the continuous charts a triangle touching a cone takes its direction from its other corners, since the field at
+    // the cone itself points nowhere in particular.
+    if (continuous && m.tris.size() == s.tris.size())
+    {
+        const std::vector<uint8_t> cone = singularVertices(m);
+        for (size_t t = 0; t < m.tris.size(); ++t)
+        {
+            const auto& tri = m.tris[t];
+            if (!cone[tri[0]] && !cone[tri[1]] && !cone[tri[2]])
+                continue;
+            const glm::dvec3 n = m.normal[t];
+            glm::dvec3 ref(0.0), sum(0.0);
+            for (Index v : tri)
+            {
+                if (cone[v])
+                    continue;
+                glm::dvec3 d = q[v] - n * glm::dot(n, q[v]);
+                if (glm::length(d) < 1e-12)
+                    continue;
+                d = glm::normalize(d);
+                if (glm::length(ref) == 0.0)
+                    ref = d;
+                sum += turn(d, n, int(std::lround(seamAngleAbout(d, ref, n) / kSeamQuarter)));
+            }
+            if (glm::length(sum) > 1e-12)
+                m.dir[t] = glm::normalize(sum);
+        }
+        if (std::getenv("LILA_SEAMLESS_DEBUG"))
+        {
+            const std::vector<uint8_t> after = singularVertices(m);
+            int a = 0, b = 0;
+            for (size_t v = 0; v < cone.size(); ++v)
+            {
+                a += cone[v];
+                b += after[v];
+            }
+            std::fprintf(stderr, "seamless: cone fan directions from their other corners, cones %d -> %d\n", a, b);
+        }
+    }
     const Index nt = Index(m.tris.size()), nv = Index(m.pos.size()), ne = Index(m.edges.size());
 
     // Comb: turn each triangle's direction so it matches its parent in a spanning tree of the triangles, then the tree's
@@ -886,7 +925,7 @@ std::vector<glm::dvec3> solveSeamlessPositions(const Surface& s, const std::vect
             {
                 Index wa = wedgeOf[cornerOf(t, v)], wb = wedgeOf[cornerOf(o, v)];
                 // Rows of turn2(., -k) as a matrix: columns are its images of (1, 0) and (0, 1).
-                glm::dvec2 c0 = turn2({1.0, 0.0}, -k), c1 = turn2({0.0, 1.0}, -k);
+                glm::dvec2 c0 = seamTurn2({1.0, 0.0}, -k), c1 = seamTurn2({0.0, 1.0}, -k);
                 for (int r = 0; r < 2; ++r)
                 {
                     Row row;
@@ -1038,6 +1077,24 @@ std::vector<glm::dvec3> solveSeamlessPositions(const Surface& s, const std::vect
         std::fprintf(stderr, "seamless: %d tris, %zu field poles, %d singular verts, %d cut edges, %zu feature ints; continuous flips %d\n",
                      int(nt), fieldSingularities(s, q).size(), int(sing), int(nc), featureInts.size(), int(countFlipped()));
     }
+    if (continuous)
+    {
+        if (m.tris.size() != s.tris.size())
+            return fail("the parametrization's triangles don't match the surface's");
+        continuous->dir = m.dir;
+        continuous->chart.assign(nt, {});
+        for (Index t = 0; t < nt; ++t)
+            for (int k = 0; k < 3; ++k)
+            {
+                const Index w = wedgeOf[t * 3 + k];
+                continuous->chart[t][k] = glm::dvec2(x[2 * w], x[2 * w + 1]);
+            }
+        for (Index t = 0; t < nt; ++t)
+            continuous->folded += seamCross2(continuous->chart[t][1] - continuous->chart[t][0], continuous->chart[t][2] - continuous->chart[t][0]) <= 0.0;
+        if (debug)
+            std::fprintf(stderr, "  continuous charts: %d folded\n", int(continuous->folded));
+        return std::vector<glm::dvec3>(s.pos.begin(), s.pos.end());
+    }
     int retries = 0;
     for (const std::vector<Index>* stage : {&singularInts, &featureInts, &cutInts})
     {
@@ -1132,7 +1189,7 @@ std::vector<glm::dvec3> solveSeamlessPositions(const Surface& s, const std::vect
 
     if (grid)
     {
-        std::vector<Chart> chart(nt);
+        std::vector<SeamChart> chart(nt);
         for (Index t = 0; t < nt; ++t)
             for (int k = 0; k < 3; ++k)
             {
@@ -1147,7 +1204,7 @@ std::vector<glm::dvec3> solveSeamlessPositions(const Surface& s, const std::vect
         auto foldedCount = [&]() {
             int n = 0;
             for (Index t = 0; t < nt; ++t)
-                n += cross2(chart[t][1] - chart[t][0], chart[t][2] - chart[t][0]) <= 0.0;
+                n += seamCross2(chart[t][1] - chart[t][0], chart[t][2] - chart[t][0]) <= 0.0;
             return n;
         };
         const int foldedBefore = foldedCount();

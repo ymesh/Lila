@@ -59,6 +59,12 @@ struct Drive
     std::vector<PinDrive> pins;
     std::vector<glm::dmat4> colliders;
     std::vector<double> fieldMagnitudes;
+    struct ContactDrive
+    {
+        double weight = 0.0;
+        double stiffness = 0.0; // Hz
+    };
+    std::vector<ContactDrive> contacts;
     /** cm/s^2 every simulated body is accelerated by: the share of a carrier's acceleration it is carried along with. */
     glm::dvec3 carried{0.0};
     /** cm/s: pose match springs damp the bodies' velocity relative to this (a carrier's), not to the world. */

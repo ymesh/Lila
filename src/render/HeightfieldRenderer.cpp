@@ -2,6 +2,7 @@
 
 #include "core/Log.h"
 #include "core/Profile.h"
+#include "render/CameraRelative.h"
 #include "render/VulkanContext.h"
 
 #include <glm/gtc/matrix_access.hpp>
@@ -401,7 +402,8 @@ HeightfieldSelection selectHeightfieldPatches(const HeightfieldDraw& d, const He
     sel.levels = levels;
     if (levels == 0)
         return sel;
-    const glm::dmat4 world(d.world);
+    glm::dmat4 world(d.world);
+    world[3] -= glm::dvec4(view.origin * world[3].w, 0.0);
     const glm::dvec3 eye = glm::dvec3(glm::inverse(world) * glm::dvec4(view.eye, 1.0));
     // Local lengths: the patches' screen size doesn't depend on a uniform placement scale.
     const double scale = std::max(1e-9, std::sqrt(glm::length(glm::dvec3(world[0])) * glm::length(glm::dvec3(world[2]))));
@@ -570,6 +572,7 @@ void HeightfieldRenderer::prepare(VulkanContext& vk, VkCommandBuffer cmd, const 
     HeightfieldView view;
     view.viewProj = s.proj * s.view;
     view.eye = s.eye;
+    view.origin = s.renderOrigin;
     view.ortho = s.proj[3][3] == 1.0;
     const double py = std::abs(s.proj[1][1]);
     view.focalPx = py * double(std::max(heightPx, 1u)) * 0.5;
@@ -635,11 +638,11 @@ void HeightfieldRenderer::prepare(VulkanContext& vk, VkCommandBuffer cmd, const 
             log::error("render: heightfield {}x{} not drawn: {}", d.nx, d.nz, e.what());
             continue;
         }
-        p.instance.world = d.world;
+        p.instance.world = relativeTo(d.world, s.renderOrigin);
         p.instance.color = heightfieldShowsWire(d) ? heightfieldWireColor(s, d) : glm::vec4(0.0f);
         p.grid = glm::vec4(float(d.nx), float(d.nz), d.cell, std::max(d.wireWidth, 1.0f));
         p.origin = glm::vec4(d.origin, 1.0f / float(d.nx - 1), 1.0f / float(d.nz - 1));
-        p.eye = glm::vec4(glm::vec3(glm::inverse(glm::dmat4(d.world)) * glm::dvec4(s.eye, 1.0)), 0.0f);
+        p.eye = glm::vec4(glm::vec3(glm::inverse(d.world) * glm::dvec4(s.eye + s.renderOrigin, 1.0)), 0.0f);
         p.info.x = (heightfieldShowsWire(d) ? kHfFlagWire : 0u) | (d.flowArrows ? kHfFlagArrows : 0u);
         p.info.z = uint32_t(std::max(d.overlayRamp, 0));
         p.info.w = uint32_t(std::max(d.contourMajor, 1));

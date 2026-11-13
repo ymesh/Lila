@@ -433,8 +433,8 @@ void RetopoPolesTool::draw(render::FrameState& s, OverlayPainter& p, const ViewI
         solve(true);
     for (const auto& [a, b] : mPreviewEdges)
     {
-        s.lines.push_back({glm::vec3(a), kPreviewLinear});
-        s.lines.push_back({glm::vec3(b), kPreviewLinear});
+        s.lines.push_back({glm::dvec3(a), kPreviewLinear});
+        s.lines.push_back({glm::dvec3(b), kPreviewLinear});
     }
     for (size_t i = 0; i < mPoles.size(); ++i)
     {

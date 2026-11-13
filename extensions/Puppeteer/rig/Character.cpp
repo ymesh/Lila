@@ -223,6 +223,7 @@ void registerCharacterCommands(ext::Context& ctx)
             g.setValue(plugOf(*c, "templateId"), templ);
             g.setValue(plugOf(*c, "poseLibrary"), a.get<std::string>("poseLibrary", ""));
             adoptElements(g, id, root);
+            setupHands(g, id);
             g.select({id});
             return g.node(id)->path();
         },

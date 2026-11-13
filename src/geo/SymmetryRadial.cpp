@@ -558,6 +558,21 @@ int SymmetryMap::majorityWedge(std::span<const Index> points) const
     return int(std::max_element(count.begin(), count.end()) - count.begin());
 }
 
+std::vector<std::vector<Index>> SymmetryMap::wedgeGroups(std::span<const Index> points) const
+{
+    if (std::ranges::any_of(points, [&](Index p) { return fixed(p); }))
+        return {std::vector<Index>(points.begin(), points.end())};
+    std::vector<std::vector<Index>> groups(static_cast<size_t>(order()));
+    const int major = majorityWedge(points);
+    for (Index p : points)
+    {
+        const int w = wedge(p);
+        groups[size_t(w >= 0 ? w : major)].push_back(p);
+    }
+    std::erase_if(groups, [](const std::vector<Index>& g) { return g.empty(); });
+    return groups;
+}
+
 bool SymmetryMap::drives(Index p, int w) const
 {
     const Index q = orbitPoint(p, w);

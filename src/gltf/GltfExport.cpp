@@ -1,4 +1,5 @@
 #include "gltf/Gltf.h"
+#include "scene/Georef.h"
 
 #include "core/Paths.h"
 #include "core/Profile.h"
@@ -1113,6 +1114,9 @@ bool writeGltf(const ExportSnapshot& snap, const fs::path& path, const ExportOpt
 
     json& doc = w.doc;
     doc["asset"] = {{"version", "2.0"}, {"generator", "Lila"}};
+    // Geometry is relative to the scene origin; extras say where that is on the Earth.
+    if (json geo = scene::georef::exportJson(); !geo.is_null())
+        doc["asset"]["extras"] = {{"lilaGeoreference", std::move(geo)}};
     doc["meshes"] = json::array();
 
     Textures textures(w.bin, opts, w.outDir, warnings);

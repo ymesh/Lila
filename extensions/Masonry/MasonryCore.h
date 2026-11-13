@@ -199,6 +199,12 @@ bool overlaps(const Stone& a, const Stone& b, double tolerance = 0.01);
 /** Pairs of stones intersecting by more than tolerance (cm). What masonryInfo reports; 0 for a clean layout. */
 size_t countOverlaps(std::span<const Stone> stones, double tolerance = 0.01);
 
+/**
+ * Cuts each stone back along its length or depth where it comes within a joint of one of fixed, and drops the ones left
+ * too small. Returns how many were dropped.
+ */
+int fitAgainst(std::vector<Stone>& stones, std::span<const Stone> fixed, double joint);
+
 /** How detailed a stone mesh is. Every level fills the same solid, so they swap as LODs. */
 enum class Detail : uint8_t
 {
@@ -277,6 +283,12 @@ Built buildWalls(std::span<const Footprint> footprints, const BuildOptions& o);
 
 /** Shares meshes between stones of one shape, size and variant and makes them (and their LODs). Fills reference, variant, meshes, lods, heightFraction. */
 void makeMeshes(Built& b, const BuildOptions& o);
+
+/**
+ * Pairs of the given stones (indices into b.stones) interpenetrating by more than tolerance. Slab pieces lying in place
+ * are tested by their own outline rather than their box, and never against other pieces of the same slab.
+ */
+std::vector<std::pair<int, int>> overlappingPairs(const Built& b, std::span<const int> which, double tolerance);
 
 /** Material slots: every stone mesh is on the first, the core on the second. Unreal finds or makes materials by these names. */
 inline constexpr const char* kStoneSlot = "MasonryStone";

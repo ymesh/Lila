@@ -557,9 +557,9 @@ std::vector<std::string> names()
     for (const Theme& t : builtIns())
         out.push_back(t.name);
     std::vector<std::string> saved;
-    // items() is a view: before C++23 a range-for keeps only it alive, not savedDocs()'s temporary json.
+    // Range-for keeps only items()'s view alive, not the json it reads.
     const json docs = savedDocs();
-    for (auto& [name, doc] : docs.items())
+    for (const auto& [name, doc] : docs.items())
         if (!isBuiltIn(name))
             saved.push_back(name);
     std::sort(saved.begin(), saved.end());

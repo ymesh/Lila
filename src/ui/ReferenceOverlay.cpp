@@ -145,10 +145,11 @@ double holdDelayMs()
 }
 
 /** A reference's texture: the file, or the frame its video shows at the scene time. */
-render::TexturePtr textureOf(const std::string& file)
+render::TexturePtr textureOf(const refs::Image& img)
 {
+    const std::string file = refs::fileOf(img);
     if (media::isVideoFile(file))
-        return videoTextures::texture(file, videoTextures::referenceFrame(file, scene::Graph::current().time()));
+        return videoTextures::texture(file, refs::videoFrame(img, scene::Graph::current().time()));
     return textures::get(file, true);
 }
 
@@ -239,10 +240,10 @@ void redraw()
 // --- Drawing -------------------------------------------------------------------------------------------------------
 
 /** NDC corners of view-pixel corners. */
-void toNdc(const ViewInfo& view, const std::array<glm::dvec2, 4>& px, glm::vec3 (&out)[4])
+void toNdc(const ViewInfo& view, const std::array<glm::dvec2, 4>& px, glm::dvec3 (&out)[4])
 {
     for (int k = 0; k < 4; ++k)
-        out[k] = glm::vec3(px[size_t(k)].x / view.width * 2.0 - 1.0, px[size_t(k)].y / view.height * 2.0 - 1.0, 0.0);
+        out[k] = glm::dvec3(px[size_t(k)].x / view.width * 2.0 - 1.0, px[size_t(k)].y / view.height * 2.0 - 1.0, 0.0);
 }
 
 constexpr const char* kSnapOverlaysPref = "/references/snapOverlays";
@@ -581,7 +582,7 @@ void draw(render::FrameState& s, OverlayPainter& p, const ViewInfo& view)
         const refs::Image* img = set.image(o->image);
         if (!img)
             continue;
-        render::TexturePtr tex = textureOf(refs::fileOf(*img));
+        render::TexturePtr tex = textureOf(*img);
         if (!tex || tex->width <= 0 || tex->height <= 0)
             continue;
         const double fade = refs::boundFade(*o, forward);

@@ -9,6 +9,8 @@ void ViewportWidget::mousePressEvent(QMouseEvent* e)
     finishViewTurn();
     clearPreselect();
     mLastPos = e->position();
+    if (drone::mousePress(this, e))
+        return;
     setFocus();
     if (mFramePickArmed && !(e->modifiers() & Qt::AltModifier))
     {
@@ -226,6 +228,8 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* e)
 {
     QPointF d = e->position() - mLastPos;
     mLastPos = e->position();
+    if (drone::mouseMove(this, e))
+        return;
     if (viewportHooks::dragging())
     {
         viewportHooks::moveDrag(e, viewInfo());
@@ -365,6 +369,8 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* e)
 
 void ViewportWidget::mouseReleaseEvent(QMouseEvent* e)
 {
+    if (drone::mouseRelease(this, e))
+        return;
     // Runs after this release is handled, so it sees the new selection and hilite.
     if (e->buttons() == Qt::NoButton && !(e->modifiers() & Qt::AltModifier))
         queuePreselect(e->position());
@@ -601,6 +607,8 @@ bool ViewportWidget::selectLoopAt(QPointF at, Qt::KeyboardModifiers mods)
 void ViewportWidget::wheelEvent(QWheelEvent* e)
 {
     finishViewTurn();
+    if (drone::wheel(this, e))
+        return;
     if (viewportHooks::handleWheel(e, viewInfo()))
     {
         requestFrame();

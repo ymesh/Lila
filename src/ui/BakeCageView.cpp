@@ -493,8 +493,8 @@ void buildShell(Shell& sh, const geo::Mesh& m, const std::vector<glm::dvec3>& pt
     for (geo::Index e = 0; e < m.edgeCapacity(); ++e)
         if (m.edgeValid(e))
         {
-            sh.wire.push_back({glm::vec3(pts[m.edgePoint(e, 0)]), line});
-            sh.wire.push_back({glm::vec3(pts[m.edgePoint(e, 1)]), line});
+            sh.wire.push_back({glm::dvec3(pts[m.edgePoint(e, 0)]), line});
+            sh.wire.push_back({glm::dvec3(pts[m.edgePoint(e, 1)]), line});
         }
 }
 

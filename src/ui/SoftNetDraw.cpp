@@ -32,7 +32,7 @@ struct NetLines
     size_t points = 0;
 };
 
-std::shared_ptr<const NetLines> linesOf(const std::string& binding)
+std::shared_ptr<const NetLines> netLinesOf(const std::string& binding)
 {
     static std::mutex m;
     static std::map<size_t, std::shared_ptr<const NetLines>> cache;
@@ -99,7 +99,7 @@ void drawNet(drawOverrides::DrawContext& c)
     const Node* mesh = g.node(meshes.front());
     if (!d || !mesh)
         return;
-    const std::shared_ptr<const NetLines> net = linesOf(d->as<std::string>(d->type().attrIndex("binding")));
+    const std::shared_ptr<const NetLines> net = netLinesOf(d->as<std::string>(d->type().attrIndex("binding")));
     const MeshPtr out = mesh->as<MeshPtr>(MeshNode::kOutMesh);
     if (!out || out->pointCapacity() != net->points)
         return;

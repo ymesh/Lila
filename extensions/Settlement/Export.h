@@ -53,7 +53,7 @@ std::vector<std::pair<Cell, std::vector<glm::dvec3>>> cutByCells(std::span<const
 
 /** A lot's stable id: Lot::key, or its centroid to the metre for a lot without one. */
 std::string lotKey(const Lot& lot);
-/** A road line's stable id: its street's, or the edit path for surface paths. */
+/** A road line's stable id: its street's with its ends (a street runs on through junctions), or the edit path for surface paths. */
 std::string roadKey(const StreetLine& s);
 std::string junctionKey(const Junction& j);
 

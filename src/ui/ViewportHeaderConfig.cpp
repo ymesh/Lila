@@ -108,7 +108,7 @@ json defaultConfig()
              "viewport.togglePreselectComponents", kSeparator, "jointSize"}}}}},
         {"right",
          {"snap", "overlays", "camera", kSeparator, {{"action", "viewport.isolate"}}, {{"action", "viewport.toggleImagePlanes"}}, kSeparator,
-          {{"action", "view.presenter"}}, {{"action", "viewport.frameSelected"}},
+          {{"action", "view.drone"}}, {{"action", "view.presenter"}}, {{"action", "viewport.frameSelected"}},
           {{"action", "viewport.frameAll"}}, {{"action", "viewport.toggleQuad"}}, {{"action", "window.toggleMaximizePanel"}}}},
     };
 }

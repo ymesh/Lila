@@ -30,6 +30,8 @@ LILA_UI_API std::vector<Component> parse(const QString& markdown);
 LILA_UI_API QString noticesPath();
 /** The full license text shipped for a component (licenses/<id>.txt beside the executable); empty when none is. */
 LILA_UI_API QString licenseText(const Component& c);
+/** The licenses/<id>.txt name a component's text ships under: its vcpkg port, or the vendored file's name. */
+LILA_UI_API QString fileId(const QString& name);
 } // namespace licenses
 
 /** Help > Licenses: every third-party component with its license, searchable. One window, raised if already open. */

@@ -324,8 +324,8 @@ public:
             for (geo::Index e = 0; e < m.edgeCapacity(); ++e)
                 if (m.edgeValid(e))
                 {
-                    f.lines.push_back({glm::vec3(m.position(m.edgePoint(e, 0))), kPreview});
-                    f.lines.push_back({glm::vec3(m.position(m.edgePoint(e, 1))), kPreview});
+                    f.lines.push_back({glm::dvec3(m.position(m.edgePoint(e, 0))), kPreview});
+                    f.lines.push_back({glm::dvec3(m.position(m.edgePoint(e, 1))), kPreview});
                 }
             if (!r.warnings.empty())
                 drawToolMessage(p, view, QString::fromStdString("Pipe: " + r.warnings.front()));
@@ -335,8 +335,8 @@ public:
             for (const D3* h : {&mSpline.handleL[i], &mSpline.handleR[i]})
                 if (glm::distance(*h, mSpline.points[i]) > 1e-9)
                 {
-                    f.linesOnTop.push_back({glm::vec3(mSpline.points[i]), kGhost});
-                    f.linesOnTop.push_back({glm::vec3(*h), kGhost});
+                    f.linesOnTop.push_back({glm::dvec3(mSpline.points[i]), kGhost});
+                    f.linesOnTop.push_back({glm::dvec3(*h), kGhost});
                 }
             dot(p, view, mSpline.points[i]);
         }

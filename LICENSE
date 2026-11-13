@@ -15,7 +15,7 @@ This license is non-transferable, except that an organisation's license passes t
 You may not, except as expressly permitted in writing by the copyright holder:
 
 a. Redistribute, sell, rent, lease, sublicense or host the Software for others, in whole or in part, other than by pointing them to an official distribution. Copying, deploying and hosting the Software within your organisation, including on its servers and on machines used by its employees and by contractors working on its behalf, is permitted.
-b. Distribute modified versions, derivative works or forks of the Software. You may modify the Software for your own use or for internal use within your organisation, including its employees and contractors working on its behalf. Extensions built against the Extension SDK are not derivative works for the purpose of this clause.
+b. Distribute modified versions, derivative works or forks of the Software. You may modify the Software for your own use or for internal use within your organisation, including its employees and contractors working on its behalf. Extensions built against the Extension SDK are not derivative works for the purpose of this clause. A public fork kept on the platform hosting the official source repository, to show the copyright holder a change you are requesting, is permitted, provided no builds are published from it and it keeps this license; its changes are a contribution under section 3.
 c. Remove or alter any copyright, license or attribution notice in the Software.
 d. Use the name "Lila" or its logos to endorse or promote a product other than the Software.
 
@@ -25,7 +25,7 @@ Access to the source code, where provided, is for reference and for building and
 
 The copyright holder does not accept outside contributions of code or other copyrightable material unless a separate contributor agreement has been signed. Bug reports and feedback may be used freely without obligation.
 
-If you submit a contribution in any form, including a pull request, patch, issue attachment or code snippet, with or without a contributor agreement, you grant the copyright holder and its successors and assigns a perpetual, irrevocable, worldwide, royalty-free, non-exclusive, transferable and sublicensable license to use, reproduce, modify, distribute, sublicense and relicense the contribution under any terms, including proprietary terms, and you represent that you have the right to grant this license. You waive, to the extent permitted by law, any moral rights in the contribution against the copyright holder and its licensees.
+If you submit a contribution in any form, including a pull request, patch, fork or branch, issue attachment or code snippet, with or without a contributor agreement, you grant the copyright holder and its successors and assigns a perpetual, irrevocable, worldwide, royalty-free, non-exclusive, transferable and sublicensable license to use, reproduce, modify, distribute, sublicense and relicense the contribution under any terms, including proprietary terms, and you represent that you have the right to grant this license. You waive, to the extent permitted by law, any moral rights in the contribution against the copyright holder and its licensees. A contribution is treated as a request for a feature or fix: the copyright holder may write its own implementation and has no obligation to use, credit or merge it.
 
 4. Future versions
 
@@ -33,7 +33,7 @@ The copyright holder may release future versions of the Software under different
 
 5. No support
 
-The copyright holder has no obligation to provide support, maintenance, updates or fixes, or to respond to requests for features.
+The copyright holder has no obligation to provide support, maintenance, updates or fixes, or to respond to requests for features. Issue reports, crash reports and support are accepted only for official builds of the Software; reports from any other build may be refused or closed.
 
 6. Termination
 

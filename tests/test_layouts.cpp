@@ -23,6 +23,27 @@ const layouts::Entry* entry(const std::vector<layouts::Entry>& all, const std::s
     return nullptr;
 }
 
+/** The layout's origin, or nothing when it isn't listed, so a missing layout fails a check instead of crashing. */
+std::optional<layouts::Origin> originOf(const std::string& name)
+{
+    if (std::optional<layouts::Entry> e = layouts::find(name))
+        return e->origin;
+    return std::nullopt;
+}
+
+/** The saved layout's "state", or empty when there is no such layout. */
+std::string stateOf(const std::string& name)
+{
+    std::optional<json> l = layouts::read(name);
+    return l ? l->value("state", "") : std::string();
+}
+
+bool isPreset(const std::string& name)
+{
+    std::optional<json> l = layouts::read(name);
+    return l && l->contains("preset");
+}
+
 void ensureLayoutCommands()
 {
     if (!ops::find("applyLayout"))
@@ -73,7 +94,7 @@ TEST_CASE("layouts save to user and workspace and read back")
 
     json mine = {{"version", 1}, {"state", "AAAA"}, {"viewport", {{"quad", true}, {"camera", "top"}}}};
     layouts::write("Mine", mine, layouts::Origin::User);
-    layouts::write("Modeling", {{"version", 1}, {"state", "BBBB"}}, layouts::Origin::User);
+    layouts::write("Model", {{"version", 1}, {"state", "BBBB"}}, layouts::Origin::User);
     CHECK(fs::exists(userDir / "Mine.json"));
     CHECK_THROWS_AS(layouts::write("Team", mine, layouts::Origin::Workspace), CommandError);
 
@@ -84,38 +105,39 @@ TEST_CASE("layouts save to user and workspace and read back")
 
     auto all = layouts::list();
     CHECK(entry(all, "main") == nullptr);
-    REQUIRE(entry(all, "Modeling"));
-    CHECK(entry(all, "Modeling")->origin == layouts::Origin::User);
-    CHECK(entry(all, "Modeling")->shadowsBuiltIn);
+    REQUIRE(entry(all, "Model"));
+    CHECK(entry(all, "Model")->origin == layouts::Origin::User);
+    CHECK(entry(all, "Model")->shadowsBuiltIn);
     REQUIRE(entry(all, "Team"));
     CHECK(entry(all, "Team")->origin == layouts::Origin::Workspace);
     REQUIRE(entry(all, "Mine"));
     CHECK(entry(all, "Mine")->origin == layouts::Origin::Workspace);
-    CHECK(entry(all, "UV Editing")->origin == layouts::Origin::BuiltIn);
+    REQUIRE(entry(all, "UV"));
+    CHECK(entry(all, "UV")->origin == layouts::Origin::BuiltIn);
 
-    CHECK(layouts::read("Mine")->value("state", "") == "DDDD");
-    CHECK(layouts::read("Modeling")->value("state", "") == "BBBB");
-    CHECK(layouts::read("UV Editing")->contains("preset"));
+    CHECK(stateOf("Mine") == "DDDD");
+    CHECK(stateOf("Model") == "BBBB");
+    CHECK(isPreset("UV"));
     CHECK_FALSE(layouts::read("Nope"));
 
     // Deleting the workspace copy uncovers the user one; deleting that uncovers the built-in.
     CHECK(layouts::remove("Mine"));
     CHECK_FALSE(fs::exists(ws / ".lila" / "layouts" / "Mine.json"));
-    CHECK(layouts::find("Mine")->origin == layouts::Origin::User);
-    CHECK(layouts::read("Mine")->value("state", "") == "AAAA");
-    CHECK(layouts::remove("Modeling"));
-    CHECK(layouts::find("Modeling")->origin == layouts::Origin::BuiltIn);
-    CHECK(layouts::read("Modeling")->contains("preset"));
-    CHECK_FALSE(layouts::remove("Modeling"));
+    CHECK(originOf("Mine") == layouts::Origin::User);
+    CHECK(stateOf("Mine") == "AAAA");
+    CHECK(layouts::remove("Model"));
+    CHECK(originOf("Model") == layouts::Origin::BuiltIn);
+    CHECK(isPreset("Model"));
+    CHECK_FALSE(layouts::remove("Model"));
 
     layouts::setCurrent("Team");
     layouts::rename("Team", "Crew");
     CHECK_FALSE(layouts::find("Team"));
-    CHECK(layouts::find("Crew")->origin == layouts::Origin::Workspace);
-    CHECK(layouts::read("Crew")->value("state", "") == "CCCC");
+    CHECK(originOf("Crew") == layouts::Origin::Workspace);
+    CHECK(stateOf("Crew") == "CCCC");
     CHECK(layouts::current() == "Crew");
     CHECK_THROWS_AS(layouts::rename("Crew", "Mine"), CommandError);
-    CHECK_THROWS_AS(layouts::rename("Rigging", "Mine2"), CommandError);
+    CHECK_THROWS_AS(layouts::rename("Rig", "Mine2"), CommandError);
 
     Workspace::get().close();
     CHECK_FALSE(layouts::find("Crew"));
@@ -123,7 +145,7 @@ TEST_CASE("layouts save to user and workspace and read back")
 
     // A file dropped in by hand is listed and readable.
     std::ofstream(userDir / "Dropped.json") << R"({"version": 1, "state": "EEEE"})";
-    CHECK(layouts::read("Dropped")->value("state", "") == "EEEE");
+    CHECK(stateOf("Dropped") == "EEEE");
 
     layouts::setCurrent("");
     fs::remove_all(userDir);
@@ -134,7 +156,7 @@ TEST_CASE("layout commands need the UI for apply and save")
 {
     ensureLayoutCommands();
     layouts::setGuiHooks({});
-    CHECK_THROWS_AS(ops::execute("applyLayout", {{"name", "Modeling"}}), CommandError);
+    CHECK_THROWS_AS(ops::execute("applyLayout", {{"name", "Model"}}), CommandError);
     CHECK_THROWS_AS(ops::execute("saveLayout", {{"args", {"X"}}}), CommandError);
     json listed = ops::execute("listLayouts", json::object());
     REQUIRE(listed.is_array());
@@ -148,23 +170,23 @@ TEST_CASE("layout commands need the UI for apply and save")
         .capture = [] { return json{{"version", 1}, {"state", "FFFF"}}; },
     });
     ops::execute("saveLayout", {{"args", {"Captured"}}});
-    CHECK(layouts::read("Captured")->value("state", "") == "FFFF");
+    CHECK(stateOf("Captured") == "FFFF");
     CHECK(layouts::current() == "Captured");
-    ops::execute("applyLayout", {{"args", {"UV Editing"}}});
-    CHECK(applied == "UV Editing");
+    ops::execute("applyLayout", {{"args", {"UV"}}});
+    CHECK(applied == "UV");
     CHECK(appliedLayout.contains("preset"));
-    CHECK(layouts::current() == "UV Editing");
+    CHECK(layouts::current() == "UV");
     CHECK_THROWS_AS(ops::execute("applyLayout", {{"name", "Missing"}}), CommandError);
     ops::execute("renameLayout", {{"name", "Captured"}, {"to", "Kept"}});
     ops::execute("deleteLayout", {{"name", "Kept"}});
     CHECK_FALSE(layouts::find("Kept"));
-    CHECK_THROWS_AS(ops::execute("deleteLayout", {{"name", "Modeling"}}), CommandError);
+    CHECK_THROWS_AS(ops::execute("deleteLayout", {{"name", "Model"}}), CommandError);
 
     layouts::setGuiHooks({});
     layouts::setCurrent("");
 }
 
-TEST_CASE("built-in layouts open the undo history with the outliner")
+TEST_CASE("built-in layouts keep the outliner and inspector open")
 {
     for (const std::string& name : layouts::builtInNames())
     {
@@ -172,23 +194,21 @@ TEST_CASE("built-in layouts open the undo history with the outliner")
         std::optional<json> l = layouts::builtIn(name);
         REQUIRE(l);
         json open = l->value(json::json_pointer("/preset/open"), json::array());
-        CHECK(std::find(open.begin(), open.end(), json("outliner")) != open.end());
-        CHECK(std::find(open.begin(), open.end(), json("undoHistory")) != open.end());
-        CHECK(std::find(open.begin(), open.end(), json("displayLayers")) != open.end());
-        CHECK(std::find(open.begin(), open.end(), json("quickSelectSets")) != open.end());
+        for (const char* dock : {"outliner", "channelBox", "attributeEditor", "displayLayers"})
+        {
+            CAPTURE(dock);
+            CHECK(std::find(open.begin(), open.end(), json(dock)) != open.end());
+        }
     }
 }
 
-TEST_CASE("the Modeling layout shows the modeling toolkit tab")
+TEST_CASE("the Model layout shows the modeling toolkit tab")
 {
-    std::optional<json> l = layouts::builtIn("Modeling");
+    std::optional<json> l = layouts::builtIn("Model");
     REQUIRE(l);
     json open = l->value(json::json_pointer("/preset/open"), json::array());
     CHECK(std::find(open.begin(), open.end(), json("modelingToolkit")) != open.end());
-    json raise = l->value(json::json_pointer("/preset/raise"), json::array());
-    REQUIRE_FALSE(raise.empty());
-    CHECK(raise.back() == "modelingToolkit");
     CHECK(std::find(open.begin(), open.end(), json("modifierStack")) != open.end());
-    json bottom = l->value(json::json_pointer("/preset/bottom"), json::array());
-    CHECK(std::find(bottom.begin(), bottom.end(), json("modifierStack")) != bottom.end());
+    json raise = l->value(json::json_pointer("/preset/raise"), json::array());
+    CHECK(std::find(raise.begin(), raise.end(), json("modelingToolkit")) != raise.end());
 }

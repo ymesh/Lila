@@ -1470,6 +1470,9 @@ std::vector<FieldSingularity> polesOnSurface(const Work& w, const std::vector<Po
  * rest move at least two quads off the seam and out of saddles (crotch, armpit, finger webs), mirrored pole for pole.
  * Returns the field on the half's vertices; s's seam border loses the corners clipping made there.
  */
+/** Corners under 30 degrees plus crowded poles above which a patch layout is laid out again in the seamless charts. */
+constexpr Index kRescueCrowding = 40;
+
 /** Saddle amount (saddleAmount at the field's spacing) above which a pole counts as in a joint. */
 constexpr double kPoleSaddle = 0.15;
 
@@ -1685,6 +1688,8 @@ void dumpObj(const geo::Mesh& m, const std::string& path)
     std::fclose(f);
 }
 Index largeFaces(const geo::Mesh& m);
+Index sharpCorners(const geo::Mesh& m);
+Index clusteredPoles(const geo::Mesh& m);
 bool better(const QuadRemeshResult& a, int defectsA, const QuadRemeshResult& b, int defectsB);
 
 QuadRemeshResult quadRemeshOnce(const geo::Mesh& source, const QuadRemeshOptions& opts)
@@ -1979,6 +1984,35 @@ QuadRemeshResult quadRemeshOnce(const geo::Mesh& source, const QuadRemeshOptions
             best = record(buildFrom(std::move(ex), "patches"));
         else
             best.error = why;
+        // Where the field's lines drift (long limbs) the layout can fold or crowd its poles; the layout traced in the
+        // continuous seamless charts doesn't drift, and is kept when it is clearly cleaner. Its poles are the field's
+        // own, unmerged, so elsewhere the field layout stays. It carries a density handle's size more weakly, so not there.
+        if (opts.densityHandles.empty())
+        {
+            const int fieldFlaws = flawsOf(best);
+            const Index fieldCrowding = best.ok() ? sharpCorners(best.mesh) + clusteredPoles(best.mesh) : 0;
+            if (!best.ok() || fieldFlaws > 0 || fieldCrowding > kRescueCrowding)
+            {
+                std::string whySeamless;
+                Extracted seamlessEx = layoutPatches(s, qLayout, scale, patchFaces, &whySeamless, crosses, true);
+                if (seamlessEx.mesh.numFaces() > 0)
+                {
+                    QuadRemeshResult seamless = record(buildFrom(std::move(seamlessEx), "patches"));
+                    const int seamlessFlaws = flawsOf(seamless);
+                    const Index seamlessCrowding = seamless.ok() ? sharpCorners(seamless.mesh) + clusteredPoles(seamless.mesh) : 0;
+                    const bool take = seamless.ok() && (!best.ok() || seamlessFlaws < fieldFlaws ||
+                                                        (seamlessFlaws == fieldFlaws && double(seamlessCrowding) < 0.6 * double(fieldCrowding)));
+                    if (std::getenv("LILA_PATCH_DEBUG"))
+                        std::fprintf(stderr, "seamless patches: field %d flaws %d crowding, seamless %d flaws %d crowding, %s\n", fieldFlaws,
+                                     int(fieldCrowding), seamlessFlaws, int(seamlessCrowding), take ? "seamless kept" : "field kept");
+                    if (take)
+                    {
+                        result.notes.push_back("the patch layout traced along the flow came out folded or crowded, so it was traced in a seamless parametrization instead");
+                        best = std::move(seamless);
+                    }
+                }
+            }
+        }
         // Where the patches don't come out (a torus with no poles) or come out with flaws, the local field when it is
         // cleaner, said so. A few flaws stay when the field would pay for them in poles all over.
         const int patchFlaws = flawsOf(best);
@@ -2089,6 +2123,50 @@ Index largeFaces(const geo::Mesh& m)
     Index count = 0;
     for (Index f = 0; f < m.faceCapacity(); ++f)
         count += m.faceValid(f) && m.faceSize(f) > 5;
+    return count;
+}
+
+/** Face corners under 30 degrees: sheared quads that relaxing couldn't open. */
+Index sharpCorners(const geo::Mesh& m)
+{
+    const double limit = std::cos(glm::radians(30.0));
+    Index count = 0;
+    for (Index f = 0; f < m.faceCapacity(); ++f)
+    {
+        if (!m.faceValid(f))
+            continue;
+        const std::vector<Index> pts = m.facePoints(f);
+        const size_t n = pts.size();
+        for (size_t k = 0; k < n; ++k)
+        {
+            const glm::dvec3 p = m.position(pts[k]), a = m.position(pts[(k + n - 1) % n]) - p, b = m.position(pts[(k + 1) % n]) - p;
+            const double la = glm::length(a), lb = glm::length(b);
+            count += la > 0.0 && lb > 0.0 && glm::dot(a, b) / (la * lb) > limit;
+        }
+    }
+    return count;
+}
+
+/** Inner poles with another inner pole within two edges: crowded poles pinch the quads between them. */
+Index clusteredPoles(const geo::Mesh& m)
+{
+    auto pole = [&](Index p) { return m.pointValid(p) && !m.isBoundaryPoint(p) && m.pointValence(p) != 4; };
+    Index count = 0;
+    for (Index p = 0; p < m.pointCapacity(); ++p)
+    {
+        if (!pole(p))
+            continue;
+        bool near = false;
+        m.forEachPointEdge(p, [&](Index e) {
+            const Index a = m.edgeOtherPoint(e, p);
+            near = near || pole(a);
+            m.forEachPointEdge(a, [&](Index e2) {
+                const Index b = m.edgeOtherPoint(e2, a);
+                near = near || (b != p && pole(b));
+            });
+        });
+        count += near;
+    }
     return count;
 }
 

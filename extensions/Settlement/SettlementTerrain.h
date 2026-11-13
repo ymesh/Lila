@@ -2,6 +2,7 @@
 
 #include "SettlementCore.h"
 
+#include <map>
 #include <mutex>
 #include <span>
 #include <string>
@@ -166,6 +167,19 @@ void applyTerrainEdits(Site& site, const json& edits);
 // ---------------------------------------------------------------------------------------------------------------------
 // Checks and explanations
 
+/** A street as its terrain road was built: the steepest grade over all its parts and the road's limit, in percent. */
+struct GradedStreet
+{
+    std::string road; // the terrain road id
+    double grade = 0.0;
+    double limit = 0.0;
+    double length = 0.0;
+    std::string why; // the road solver's warnings
+};
+
+/** True when a graded street is over its limit, past the road solver's own tolerance. */
+inline bool gradedOverLimit(const GradedStreet& s) { return s.limit > 0.0 && s.grade > s.limit * 1.01 + 0.05; }
+
 /** A street edge carried over water: flagged as a bridge, or an arterial meeting water (the generator bridges those). */
 bool edgeIsBridge(const Layout& l, int edge);
 /** True when the edge crosses or runs in water. */
@@ -175,9 +189,10 @@ bool edgeInWater(const Layout& l, int edge);
  * The plan's verification checks: lots without frontage, overlapping lots, streets over their class's grade, streets
  * through water without a bridge, envelopes outside their lot's setbacks, foundations above the ground, the lane graph
  * not strongly connected per mode (vehicles, people), signal phases in conflict. Returns {ok, counts, issues: [{check,
- * severity, id, message, at}]}.
+ * severity, id, message, at}]}. A street in graded is judged by the grade its terrain road was built at, as
+ * settlementGrade's overGrade is, instead of by the ground between its junctions.
  */
-json checkLayout(const Layout& l, const Ground& ground, const Options& o);
+json checkLayout(const Layout& l, const Ground& ground, const Options& o, const std::map<uint64_t, GradedStreet>* graded = nullptr);
 /**
  * Issues from the lane graph's own validation, in checkLayout's issue form (check laneGraph), or null when that
  * validation is not built in (checkLayout then warns that lane checks are unavailable).

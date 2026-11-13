@@ -88,10 +88,12 @@ struct FImportRequest
 	/** Curves the skeleton marks as material curves, so a material parameter of the same name follows them. */
 	TArray<FName> MaterialCurves;
 	LilaLink::FMaterialRequest Materials;
-	/** Static: a pinned prop's socket, made on SocketMesh on SocketBone with no offset, so the prop attaches where Lila had it. */
+	/** Static: a prop's socket, made on SocketMesh on SocketBone at SocketLocation and SocketRotation, so the prop attaches where Lila had it. */
 	FString SocketMesh;
 	FName SocketName;
 	FName SocketBone;
+	FVector SocketLocation = FVector::ZeroVector;
+	FRotator SocketRotation = FRotator::ZeroRotator;
 	/** The object's attribute components; unset when Lila sent none, so the asset's are left as they are. */
 	TOptional<TArray<LilaLink::FLilaComponent>> Components;
 };
@@ -222,6 +224,25 @@ bool ParseRequest(const TSharedPtr<FJsonObject>& Params, FImportRequest& Out, FS
 		(*Socket)->TryGetStringField(TEXT("bone"), Bone);
 		Out.SocketName = FName(*Name);
 		Out.SocketBone = FName(*(Bone.IsEmpty() ? Name : Bone));
+		const TSharedPtr<FJsonObject>* Offset = nullptr;
+		if ((*Socket)->TryGetObjectField(TEXT("offset"), Offset) && Offset->IsValid())
+		{
+			auto VectorField = [&](const TCHAR* Field, FVector& V) {
+				const TArray<TSharedPtr<FJsonValue>>* A = nullptr;
+				if ((*Offset)->TryGetArrayField(Field, A) && A->Num() == 3)
+				{
+					V = FVector((*A)[0]->AsNumber(), (*A)[1]->AsNumber(), (*A)[2]->AsNumber());
+					return true;
+				}
+				return false;
+			};
+			FVector X = FVector::ForwardVector, Y = FVector::RightVector;
+			VectorField(TEXT("location"), Out.SocketLocation);
+			if (VectorField(TEXT("xAxis"), X) && VectorField(TEXT("yAxis"), Y))
+			{
+				Out.SocketRotation = FRotationMatrix::MakeFromXY(X, Y).Rotator();
+			}
+		}
 	}
 
 	FString Normals = TEXT("import");
@@ -799,14 +820,25 @@ void ApplyMaterialCurves(const FImportRequest& Request, FImportOutcome& Outcome)
 }
 
 /**
- * The socket a pinned prop attaches to, on its character's skeletal mesh: on the bone Lila baked where the prop sits,
- * with no offset, so attaching the prop's actor to it places the prop as in Lila.
+ * The socket a prop attaches to, on its character's skeletal mesh: on the bone Lila baked where the prop sits with no
+ * offset, or on an existing bone with the offset the prop is held at, so attaching the prop's actor to it places the
+ * prop as in Lila.
  */
 void ApplySocket(const FImportRequest& Request, FImportOutcome& Outcome)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkImport::ApplySocket);
 
-	USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, *Request.SocketMesh);
+	// A mesh imported earlier in the same sync is in memory but not saved yet, so find it by its full object path first.
+	FString ObjectPath = Request.SocketMesh;
+	if (!ObjectPath.Contains(TEXT(".")))
+	{
+		ObjectPath += TEXT(".") + FPackageName::GetShortName(ObjectPath);
+	}
+	USkeletalMesh* Mesh = FindObject<USkeletalMesh>(nullptr, *ObjectPath);
+	if (!Mesh)
+	{
+		Mesh = LoadObject<USkeletalMesh>(nullptr, *ObjectPath);
+	}
 	if (!Mesh)
 	{
 		Outcome.Warnings.Add(FString::Printf(TEXT("No skeletal mesh %s for socket %s yet; send the character, then this prop again"),
@@ -820,8 +852,8 @@ void ApplySocket(const FImportRequest& Request, FImportOutcome& Outcome)
 		return;
 	}
 	USkeletalMeshSocket* Socket = Mesh->FindSocket(Request.SocketName);
-	if (Socket && Socket->BoneName == Request.SocketBone && Socket->RelativeLocation.IsNearlyZero() && Socket->RelativeRotation.IsNearlyZero()
-		&& Socket->RelativeScale.Equals(FVector::OneVector))
+	if (Socket && Socket->BoneName == Request.SocketBone && Socket->RelativeLocation.Equals(Request.SocketLocation, 1e-3)
+		&& Socket->RelativeRotation.Equals(Request.SocketRotation, 1e-3) && Socket->RelativeScale.Equals(FVector::OneVector))
 	{
 		return;
 	}
@@ -834,8 +866,8 @@ void ApplySocket(const FImportRequest& Request, FImportOutcome& Outcome)
 	}
 	Socket->Modify();
 	Socket->BoneName = Request.SocketBone;
-	Socket->RelativeLocation = FVector::ZeroVector;
-	Socket->RelativeRotation = FRotator::ZeroRotator;
+	Socket->RelativeLocation = Request.SocketLocation;
+	Socket->RelativeRotation = Request.SocketRotation;
 	Socket->RelativeScale = FVector::OneVector;
 	Socket->GetOuter()->MarkPackageDirty();
 	Outcome.Assets.AddUnique(Socket->GetOuter()->GetPathName());

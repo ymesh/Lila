@@ -478,7 +478,8 @@ TEST_CASE("usd stage: the edit layer as a .usda file, and as one of the stage's 
     CHECK(stack[0]["wins"] == true);
     CHECK(stack[1]["role"] == "edits");
     CHECK(stack[1]["value"] == "(100, 8, 0)");
-    for (const json& p : run("usdStagePrim", {{"args", {"Referenced"}}})["properties"])
+    const json listed481 = run("usdStagePrim", {{"args", {"Referenced"}}});
+    for (const json& p : listed481["properties"])
         if (p["name"] == "xformOp:translate")
             CHECK(p.contains("losesTo"));
     setTranslate("FromSublayer", {0, 0, 9});

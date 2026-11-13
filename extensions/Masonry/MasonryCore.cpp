@@ -4,6 +4,7 @@
 
 #include "MasonryCore.h"
 #include "MasonryArch.h"
+#include "MasonryRuin.h"
 
 #include <lila/Boolean.h>
 
@@ -367,6 +368,8 @@ std::vector<Interval> layCourse(const Pattern& pat, double t0, double t1, double
     std::vector<Interval> fromStart, fromEnd, out;
     if (t1 - t0 < minLen)
         return out;
+    // On a span shorter than the drift, the middle could fall outside it and an end stone would run past the far end.
+    mid = std::clamp(mid, t0, t1);
     double pos = t0;
     for (size_t k = 0; k < (size_t(1) << 20); ++k)
     {
@@ -689,9 +692,63 @@ struct PlacedOpening
     double centre = 0.0; // centre line param
     int sillCourse = 0, springCourse = 0, topCourse = 0, lintelCourses = 0;
     ArchSpec arch;
+    double archTop = 0.0; // highest corner of the arch's stones above the springing
     double springY = 0.0;
     double bearing = 0.0, sillExtra = 0.0;
 };
+
+/**
+ * Course stones with nothing under them (every stone below a short rough one, or the void over an arch crown) grow down
+ * onto the highest stone beneath, a half joint above it, unless growing would meet another stone.
+ */
+void growOntoBeds(std::vector<Stone>& stones, size_t first, double pitch, double joint)
+{
+    std::vector<int> floating;
+    countFloating(stones, pitch * 0.1, &floating);
+    if (floating.empty())
+        return;
+    StoneGrid grid;
+    grid.cell = std::max(pitch * 2.0, 20.0);
+    grid.build(stones, 0.0);
+    std::stable_sort(floating.begin(), floating.end(), [&](int a, int b) { return stones[size_t(a)].center.y < stones[size_t(b)].center.y; });
+    for (int k : floating)
+    {
+        if (size_t(k) < first)
+            continue;
+        const Stone& s = stones[size_t(k)];
+        const double bottom = s.center.y - halfExtentAabb(s).y;
+        Stone below = s;
+        below.size.y = pitch * 3.0;
+        below.center = s.center - s.frame[1] * ((s.size.y + below.size.y) * 0.5);
+        double bed = -1e300;
+        for (int o : grid.around(below, 0.0))
+            if (o != k && overlaps(below, stones[size_t(o)], joint * 0.5))
+            {
+                const Stone& t = stones[size_t(o)];
+                const double top = t.center.y + halfExtentAabb(t).y;
+                if (top <= bottom + 1e-6)
+                    bed = std::max(bed, top);
+            }
+        const double up = std::max(s.frame[1].y, 0.5);
+        const double grow = (bottom - bed - joint * 0.5) / up;
+        if (bed < -1e299 || grow <= 0.0)
+            continue;
+        Stone grown = s;
+        grown.size.y += grow;
+        grown.center -= s.frame[1] * (grow * 0.5);
+        bool clear = true;
+        for (int o : grid.around(grown, 0.0))
+            if (o != k && overlaps(grown, stones[size_t(o)], 0.0))
+            {
+                clear = false;
+                break;
+            }
+        if (!clear)
+            continue;
+        stones[size_t(k)] = grown;
+        grid.build(stones, 0.0);
+    }
+}
 
 /** Stones of a wall, before trimming. Elements (arch, lintel, sill) come first and are never trimmed. */
 struct Laid
@@ -1060,6 +1117,9 @@ Layout layoutWall(const Footprint& footprint, const WallParams& p, int wall)
                 const double rise = archRise(po.arch);
                 po.springCourse = std::clamp(int(std::lround((wantTop - rise - K.base) / K.pitch)), po.sillCourse + 1, K.count);
                 po.topCourse = po.springCourse;
+                for (const ArchStone& a : archStones(po.arch))
+                    for (double side : {-0.5, 0.5})
+                        po.archTop = std::max(po.archTop, (a.center + a.axisX * (a.top * side) + a.axisY * (a.height * 0.5)).y);
             }
             po.springY = K.base + po.springCourse * K.pitch;
             openings.push_back(po);
@@ -1113,7 +1173,7 @@ Layout layoutWall(const Footprint& footprint, const WallParams& p, int wall)
                     else if (po.o->arch != ArchKind::Lintel && course >= po.springCourse)
                     {
                         const double ext = extradosHalfWidth(po.arch, y - po.springY);
-                        if (ext >= 0.0)
+                        if (ext >= 0.0 && y - po.springY < po.archTop)
                             half = ext + j;
                     }
                     else if (po.o->sill > 0.0 && po.o->sillStone && course == po.sillCourse - 1)
@@ -1418,7 +1478,244 @@ Layout layoutWall(const Footprint& footprint, const WallParams& p, int wall)
         s.center += s.frame * shift;
         s.frame = s.frame * tilt;
     }
+    growOntoBeds(out.stones, laid.elements.size(), K.pitch, j);
     return out;
+}
+
+namespace
+{
+/** A slab piece lying in place: a vertical prism over its top faces' outline, between y0 and y1. */
+struct SlabOutline
+{
+    std::vector<std::array<glm::dvec2, 2>> edges; // every top face's edges, so edges inside the outline come in pairs
+    double y0 = 0.0, y1 = 0.0;
+    glm::dvec2 lo{1e300}, hi{-1e300};
+};
+
+bool inPlaceSlab(const Built& b, const Stone& s)
+{
+    return s.role == Role::Slab && !s.loose && s.mesh >= 0 && size_t(s.mesh) < b.pieces.size() && s.frame[1].y > 0.9999;
+}
+
+SlabOutline outlineOf(const Built& b, const Stone& s)
+{
+    SlabOutline o;
+    const geo::Mesh& m = b.pieces[size_t(s.mesh)];
+    const geo::Bounds bb = m.bounds();
+    o.y0 = s.center.y + bb.min.y;
+    o.y1 = s.center.y + bb.max.y;
+    for (geo::Index f = 0; f < m.faceCapacity(); ++f)
+    {
+        if (!m.faceValid(f) || m.faceNormal(f).y < 0.5)
+            continue;
+        const std::vector<geo::Index> fp = m.facePoints(f);
+        for (size_t i = 0; i < fp.size(); ++i)
+        {
+            const glm::dvec3 a = s.center + m.position(fp[i]), c = s.center + m.position(fp[(i + 1) % fp.size()]);
+            o.edges.push_back({glm::dvec2(a.x, a.z), glm::dvec2(c.x, c.z)});
+            o.lo = glm::min(o.lo, glm::dvec2(a.x, a.z));
+            o.hi = glm::max(o.hi, glm::dvec2(a.x, a.z));
+        }
+    }
+    return o;
+}
+
+double cross2(const glm::dvec2& a, const glm::dvec2& b, const glm::dvec2& c) { return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x); }
+
+bool crosses(const glm::dvec2& a, const glm::dvec2& b, const glm::dvec2& c, const glm::dvec2& d)
+{
+    const double d1 = cross2(c, d, a), d2 = cross2(c, d, b), d3 = cross2(a, b, c), d4 = cross2(a, b, d);
+    return ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0)) && ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0));
+}
+
+bool insideOutline(const SlabOutline& o, const glm::dvec2& p)
+{
+    bool in = false;
+    for (const auto& [a, c] : o.edges)
+        if ((a.y > p.y) != (c.y > p.y) && p.x < (c.x - a.x) * (p.y - a.y) / (c.y - a.y) + a.x)
+            in = !in;
+    return in;
+}
+
+/** Convex hull of the part of s between heights y0 and y1, seen from above, shrunk toward its middle by shrink. */
+std::vector<glm::dvec2> sectionOf(const Stone& s, double y0, double y1, double shrink)
+{
+    const std::array<glm::dvec3, 8> c = stoneCorners(s);
+    std::vector<glm::dvec2> pts;
+    for (const glm::dvec3& q : c)
+        if (q.y >= y0 && q.y <= y1)
+            pts.push_back({q.x, q.z});
+    for (int i = 0; i < 8; ++i)
+        for (int bit : {1, 2, 4})
+        {
+            if (i & bit)
+                continue;
+            const glm::dvec3& a = c[size_t(i)];
+            const glm::dvec3& d = c[size_t(i | bit)];
+            for (double y : {y0, y1})
+                if ((a.y - y) * (d.y - y) < 0.0)
+                {
+                    const glm::dvec3 q = a + (d - a) * ((y - a.y) / (d.y - a.y));
+                    pts.push_back({q.x, q.z});
+                }
+        }
+    if (pts.size() < 3)
+        return {};
+    std::sort(pts.begin(), pts.end(), [](const glm::dvec2& a, const glm::dvec2& b) { return a.x < b.x || (a.x == b.x && a.y < b.y); });
+    std::vector<glm::dvec2> hull(pts.size() * 2);
+    size_t k = 0;
+    for (size_t i = 0; i < pts.size(); ++i)
+    {
+        while (k >= 2 && cross2(hull[k - 2], hull[k - 1], pts[i]) <= 0.0)
+            --k;
+        hull[k++] = pts[i];
+    }
+    for (size_t i = pts.size() - 1, t = k + 1; i-- > 0;)
+    {
+        while (k >= t && cross2(hull[k - 2], hull[k - 1], pts[i]) <= 0.0)
+            --k;
+        hull[k++] = pts[i];
+    }
+    hull.resize(k > 0 ? k - 1 : 0);
+    if (hull.size() < 3)
+        return {};
+    glm::dvec2 mid(0.0);
+    for (const glm::dvec2& q : hull)
+        mid += q / double(hull.size());
+    for (glm::dvec2& q : hull)
+    {
+        const double len = glm::length(q - mid);
+        if (len > 1e-12)
+            q -= (q - mid) / len * std::min(len * 0.99, shrink);
+    }
+    return hull;
+}
+
+bool insideConvex(const std::vector<glm::dvec2>& hull, const glm::dvec2& p)
+{
+    for (size_t i = 0; i < hull.size(); ++i)
+        if (cross2(hull[i], hull[(i + 1) % hull.size()], p) <= 0.0)
+            return false;
+    return true;
+}
+
+bool sectionMeets(const std::vector<glm::dvec2>& hull, const SlabOutline& o)
+{
+    if (hull.empty())
+        return false;
+    for (size_t i = 0; i < hull.size(); ++i)
+        for (const auto& [a, c] : o.edges)
+            if (crosses(hull[i], hull[(i + 1) % hull.size()], a, c))
+                return true;
+    if (insideOutline(o, hull[0]))
+        return true;
+    for (const auto& e : o.edges)
+        if (insideConvex(hull, e[0]))
+            return true;
+    return false;
+}
+
+bool outlinesMeet(const SlabOutline& a, const SlabOutline& b)
+{
+    for (const auto& [p, q] : a.edges)
+        for (const auto& [r, s] : b.edges)
+            if (crosses(p, q, r, s))
+                return true;
+    return (!a.edges.empty() && insideOutline(b, (a.edges[0][0] + a.edges[0][1]) * 0.5)) ||
+           (!b.edges.empty() && insideOutline(a, (b.edges[0][0] + b.edges[0][1]) * 0.5));
+}
+} // namespace
+
+std::vector<std::pair<int, int>> overlappingPairs(const Built& b, std::span<const int> which, double tolerance)
+{
+    std::vector<std::pair<int, int>> out;
+    std::vector<int> boxes, slabs;
+    for (int k : which)
+        (inPlaceSlab(b, b.stones[size_t(k)]) ? slabs : boxes).push_back(k);
+
+    double cell = 20.0;
+    for (int k : boxes)
+        cell = std::max(cell, std::max({b.stones[size_t(k)].size.x, b.stones[size_t(k)].size.y, b.stones[size_t(k)].size.z}));
+    Grid grid{cell, {}};
+    for (size_t i = 0; i < boxes.size(); ++i)
+    {
+        const Stone& s = b.stones[size_t(boxes[i])];
+        for (int other : grid.around(s, 0.0))
+            if (overlaps(s, b.stones[size_t(boxes[size_t(other)])], tolerance))
+                out.push_back({boxes[size_t(other)], boxes[i]});
+        grid.insert(s, int(i));
+    }
+
+    std::vector<SlabOutline> outlines;
+    for (int k : slabs)
+        outlines.push_back(outlineOf(b, b.stones[size_t(k)]));
+    const double h = tolerance * 0.5;
+    for (size_t i = 0; i < slabs.size(); ++i)
+    {
+        const SlabOutline& o = outlines[i];
+        for (int k : boxes)
+        {
+            const Stone& s = b.stones[size_t(k)];
+            const glm::dvec3 e = halfExtentAabb(s);
+            if (s.center.y + e.y <= o.y0 + h || s.center.y - e.y >= o.y1 - h || s.center.x + e.x <= o.lo.x || s.center.x - e.x >= o.hi.x ||
+                s.center.z + e.z <= o.lo.y || s.center.z - e.z >= o.hi.y)
+                continue;
+            if (sectionMeets(sectionOf(s, o.y0 + h, o.y1 - h, tolerance), o))
+                out.push_back({slabs[i], k});
+        }
+        // Pieces of one slab lying in place fit by construction.
+        for (size_t j = 0; j < i; ++j)
+        {
+            const SlabOutline& p = outlines[j];
+            const Stone& a = b.stones[size_t(slabs[i])];
+            const Stone& c = b.stones[size_t(slabs[j])];
+            if (a.region == c.region && std::abs(o.y0 - p.y0) < 1e-6 && std::abs(o.y1 - p.y1) < 1e-6)
+                continue;
+            if (std::min(o.y1, p.y1) - std::max(o.y0, p.y0) <= tolerance || o.hi.x <= p.lo.x || p.hi.x <= o.lo.x || o.hi.y <= p.lo.y || p.hi.y <= o.lo.y)
+                continue;
+            if (outlinesMeet(o, p))
+                out.push_back({slabs[j], slabs[i]});
+        }
+    }
+    return out;
+}
+
+int fitAgainst(std::vector<Stone>& stones, std::span<const Stone> fixed, double joint)
+{
+    double cell = 20.0;
+    for (const Stone& f : fixed)
+        cell = std::max(cell, std::max({f.size.x, f.size.y, f.size.z}));
+    Grid grid{cell, {}};
+    for (size_t k = 0; k < fixed.size(); ++k)
+        grid.insert(fixed[k], int(k));
+    const double j = std::max(0.0, joint);
+    int dropped = 0;
+    std::vector<Stone> out;
+    out.reserve(stones.size());
+    for (Stone s : stones)
+    {
+        const double minLen = std::max(1.0, s.size.x * 0.25), minDepth = std::max(1.0, s.size.z * 0.25);
+        bool alive = true;
+        for (int pass = 0; pass < 6 && alive; ++pass)
+        {
+            const Stone* hit = nullptr;
+            for (int other : grid.around(s, j))
+                if (overlaps(s, fixed[size_t(other)], -j))
+                {
+                    hit = &fixed[size_t(other)];
+                    break;
+                }
+            if (!hit)
+                break;
+            alive = s.shape == Shape::Box && pass < 5 && trimAgainst(s, *hit, j, minLen, minDepth);
+        }
+        if (alive)
+            out.push_back(s);
+        else
+            ++dropped;
+    }
+    stones = std::move(out);
+    return dropped;
 }
 
 size_t countOverlaps(std::span<const Stone> stones, double tolerance)

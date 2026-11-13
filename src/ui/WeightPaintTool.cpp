@@ -1655,9 +1655,10 @@ private:
         const glm::dmat4 world = meshWorld();
         auto cloudOf = [&](const std::vector<uint32_t>& pts) {
             auto c = std::make_shared<render::PointCloud>();
+            c->origin = glm::dvec3(world[3]);
             for (uint32_t p : pts)
                 if (p < m->pointCapacity() && m->pointValid(p))
-                    c->points.push_back({glm::vec3(world * glm::dvec4(m->position(p), 1.0)), render::PointDraw::Normal});
+                    c->points.push_back({glm::vec3(glm::dvec3(world * glm::dvec4(m->position(p), 1.0)) - c->origin), render::PointDraw::Normal});
             return c;
         };
         const glm::vec4 warn = themeLinear("issueWarning", {0.89f, 0.53f, 0.08f, 1.0f});

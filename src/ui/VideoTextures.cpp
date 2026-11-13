@@ -141,12 +141,12 @@ QImage image(const std::string& path, int64_t index)
     return e->qimage;
 }
 
-int64_t referenceFrame(const std::string& path, double sceneSeconds)
+int64_t referenceFrame(const std::string& path, double sceneSeconds, double fps, int64_t offset)
 {
     const media::VideoInfo* i = info(path);
     if (!i || i->frameCount <= 0)
         return 0;
-    const int64_t f = int64_t(std::floor(sceneSeconds * i->fps + 1e-6));
+    const int64_t f = int64_t(std::floor(sceneSeconds * (fps > 0.0 ? fps : i->fps) + 1e-6)) + offset;
     return ((f % i->frameCount) + i->frameCount) % i->frameCount;
 }
 

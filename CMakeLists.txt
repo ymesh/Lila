@@ -49,6 +49,14 @@ if(MSVC)
     # Lila's DLLs export classes holding STL members and deriving from Qt and std types. That is the SDK's ABI (same
     # compiler and runtime on both sides), so the warnings about it say nothing.
     add_compile_options(/wd4251 /wd4275)
+else()
+    # The static helper libraries (groom evaluator, ufbx...) link into Lila's shared libraries, and ELF needs PIC there.
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    # Unity batches share anonymous namespaces, so every class holding a file-local type trips subobject-linkage.
+    # free-nonheap-object misfires on inlined std::vector frees through UninitAllocator (GCC 13+).
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wno-subobject-linkage> $<$<COMPILE_LANGUAGE:CXX>:-Wno-free-nonheap-object>)
 endif()
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     # Unity builds put several sources' anonymous namespaces in one TU, so GCC flags every pimpl holding a
@@ -66,6 +74,11 @@ endif()
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 
 find_package(Python 3.14 EXACT REQUIRED COMPONENTS Interpreter Development.Module Development.Embed)
+# The interpreter's prefix: <home>/python.exe on Windows, <home>/bin/python3.x elsewhere.
+cmake_path(GET Python_EXECUTABLE PARENT_PATH LILA_PYTHON_HOME)
+if(NOT WIN32)
+    cmake_path(GET LILA_PYTHON_HOME PARENT_PATH LILA_PYTHON_HOME)
+endif()
 # Qt is vcpkg's, also in build folders whose cache still points at a Qt installed elsewhere.
 if(VCPKG_INSTALLED_DIR)
     get_cmake_property(_cache_vars CACHE_VARIABLES)
@@ -103,6 +116,7 @@ find_package(doctest CONFIG REQUIRED)
 find_package(Git QUIET)
 
 include(LilaDeps)
+include(LilaOnnxRuntime)
 include(LilaShaders)
 include(LilaExtension)
 include(LilaBuildSpeed)
@@ -138,7 +152,9 @@ endif()
 add_subdirectory(extensions/Lights)
 add_subdirectory(extensions/TrimSheets)
 add_subdirectory(extensions/GoZ)
+add_subdirectory(extensions/CadImport)
 add_subdirectory(extensions/Print)
+add_subdirectory(extensions/Crowds)
 if(LILA_VOLUMES)
     add_subdirectory(extensions/NanoVDB)
 endif()

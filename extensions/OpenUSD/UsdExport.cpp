@@ -4,6 +4,7 @@
 #include "UsdMaterials.h"
 
 #include <lila/Anim.h>
+#include <lila/Command.h>
 #include <lila/Deformer.h>
 #include <lila/LightingChannels.h>
 #include <lila/Lights.h>
@@ -13,6 +14,7 @@
 #include <lila/Rig.h>
 
 #include <pxr/base/gf/quatf.h>
+#include <pxr/base/gf/vec3d.h>
 #include <pxr/base/gf/vec2f.h>
 #include <pxr/base/gf/vec3f.h>
 #include <pxr/base/gf/vec4f.h>
@@ -55,6 +57,7 @@
 #include <cmath>
 #include <format>
 #include <map>
+#include <optional>
 #include <set>
 #include <span>
 #include <unordered_map>
@@ -69,6 +72,44 @@ using fbx::ExportNode;
 using fbx::ExportScene;
 using fbx::ExportTake;
 using geo::Index;
+
+/**
+ * The scene's place on the Earth: a CesiumGeoreferencePrim (Cesium for Omniverse's schema, read by Cesium's USD tools) at
+ * the WGS 84 origin, and the CRS and projected origin in the layer's customLayerData under lilaGeoreference.
+ */
+void writeGeoreference(const UsdStageRefPtr& stage, const SdfLayerRefPtr& rootLayer, const SdfLayerRefPtr& geoLayer)
+{
+    json geo;
+    try
+    {
+        geo = ops::execute("georeference", json::object());
+    }
+    catch (const std::exception&)
+    {
+        return;
+    }
+    if (!geo.is_object())
+        return;
+    VtDictionary d;
+    d["crs"] = VtValue(geo.value("authority", geo.value("crs", std::string())));
+    if (const json& o = geo["origin"]; o.is_array() && o.size() == 3)
+        d["origin"] = VtValue(GfVec3d(o[0].get<double>(), o[1].get<double>(), o[2].get<double>()));
+    d["unitToMetre"] = VtValue(geo.value("unitToMetre", 1.0));
+    d["zUp"] = VtValue(geo.value("zUp", false));
+    VtDictionary layerData = rootLayer->GetCustomLayerData();
+    layerData["lilaGeoreference"] = VtValue(d);
+    rootLayer->SetCustomLayerData(layerData);
+    if (!geo.contains("wgs84"))
+        return;
+    std::optional<UsdEditContext> ctx;
+    if (geoLayer)
+        ctx.emplace(stage, geoLayer);
+    UsdPrim p = stage->DefinePrim(SdfPath("/CesiumGeoreference"), TfToken("CesiumGeoreferencePrim"));
+    const json& w = geo["wgs84"];
+    p.CreateAttribute(TfToken("cesium:georeferenceOrigin:latitude"), SdfValueTypeNames->Double).Set(w["latitude"].get<double>());
+    p.CreateAttribute(TfToken("cesium:georeferenceOrigin:longitude"), SdfValueTypeNames->Double).Set(w["longitude"].get<double>());
+    p.CreateAttribute(TfToken("cesium:georeferenceOrigin:height"), SdfValueTypeNames->Double).Set(w["height"].get<double>());
+}
 
 template <class T> struct BitsHash
 {
@@ -1595,6 +1636,7 @@ bool Writer::run(const std::vector<scene::NodeId>& roots)
         UsdModelAPI(root).SetKind(TfToken("component"));
     });
     stage->SetDefaultPrim(stage->GetPrimAtPath(rootPath));
+    writeGeoreference(stage, rootLayer, geoLayer);
     if (opts.materials)
     {
         TextureMode mode = TextureMode::Relative;

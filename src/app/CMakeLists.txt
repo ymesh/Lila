@@ -38,8 +38,12 @@ if(WIN32)
     lila_deploy_qt(lila)
     lila_bundle_pyside(lila)
     # Help > Licenses reads the notices and license texts beside the exe; installers ship them from there.
+    include(FetchContent)
+    FetchContent_GetProperties(ufbx)
+    FetchContent_GetProperties(nanobind)
     add_custom_command(TARGET lila POST_BUILD
         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DSHARE_DIR=${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share
+            -DPYTHON_HOME=${LILA_PYTHON_HOME} -DUFBX_DIR=${ufbx_SOURCE_DIR} -DNANOBIND_DIR=${nanobind_SOURCE_DIR}
             -DOUT_DIR=$<TARGET_FILE_DIR:lila> -P ${CMAKE_SOURCE_DIR}/cmake/LilaLicenses.cmake
         COMMENT "Deploying third-party notices and license texts")
     # Help > Record Performance Trace runs it against Lila over 127.0.0.1.

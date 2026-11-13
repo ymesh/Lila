@@ -44,15 +44,15 @@ void drawGhosts(render::FrameState& s, OverlayPainter&, const ViewInfo&)
     if (ghosts.empty())
         return;
     const bool tinted = viewportDisplay::accentColors(viewportDisplay::kGhostColors);
-    const glm::vec3 grey(0.35f);
-    const glm::vec3 before = tinted ? prefColor(gh::kBeforeColor, gh::kDefaultBeforeColor) : grey;
-    const glm::vec3 after = tinted ? prefColor(gh::kAfterColor, gh::kDefaultAfterColor) : grey;
+    // Without accent colours, before and after still differ: the past darker, the future lighter.
+    const glm::vec3 before = tinted ? prefColor(gh::kBeforeColor, gh::kDefaultBeforeColor) : glm::vec3(0.18f);
+    const glm::vec3 after = tinted ? prefColor(gh::kAfterColor, gh::kDefaultAfterColor) : glm::vec3(0.55f);
     for (const gh::Ghost& g : ghosts)
     {
-        const int count = std::max(1, g.offset < 0 ? st.before : st.after);
-        // The nearest ghost is at full opacity, the farthest at half.
+        const int count = std::max(1, g.count);
+        // The nearest ghost is at full opacity, the farthest at half; across a range, the falloff fades them further.
         const float fade = 1.0f - 0.5f * float(std::abs(g.offset) - 1) / float(std::max(1, count - 1));
-        const float alpha = float(st.opacity) * fade;
+        const float alpha = float(st.opacity) * fade * float(0.35 + 0.65 * g.weight);
         const glm::vec3 color = g.offset < 0 ? before : after;
         const bool meshes = st.mesh && !g.frame->meshes.empty();
         if (meshes)
@@ -62,7 +62,7 @@ void drawGhosts(render::FrameState& s, OverlayPainter&, const ViewInfo&)
                 if (!rm)
                     continue;
                 render::MeshDraw d;
-                d.world = glm::mat4(m.world);
+                d.world = m.world;
                 uint32_t slotCount = 1;
                 for (const render::MeshSection& sec : rm->sections)
                     slotCount = std::max(slotCount, sec.material + 1);
@@ -80,8 +80,8 @@ void drawGhosts(render::FrameState& s, OverlayPainter&, const ViewInfo&)
         if (st.skeleton || !meshes)
             for (const auto& [from, to] : g.frame->bones)
             {
-                s.linesOnTop.push_back({glm::vec3(from), glm::vec4(color, std::min(1.0f, alpha * 2.0f))});
-                s.linesOnTop.push_back({glm::vec3(to), glm::vec4(color, std::min(1.0f, alpha * 2.0f))});
+                s.linesOnTop.push_back({glm::dvec3(from), glm::vec4(color, std::min(1.0f, alpha * 2.0f))});
+                s.linesOnTop.push_back({glm::dvec3(to), glm::vec4(color, std::min(1.0f, alpha * 2.0f))});
             }
     }
 }
@@ -96,6 +96,8 @@ std::optional<bool> ghostActionState(const std::string& id)
         return prefText(gh::kMode, "keys") == id.substr(15);
     if (id.starts_with("anim.ghostShow."))
         return prefText(gh::kShow, "mesh") == id.substr(15);
+    if (id == "anim.ghostRange")
+        return generalPref(gh::kRange, true);
     return std::nullopt;
 }
 
@@ -112,7 +114,7 @@ void addGhostingMenu(const std::string& menu)
         });
     });
     menus::addActions(menu + "/Ghosting", {"anim.toggleGhosts", "", "anim.ghostMode.keys", "anim.ghostMode.frames", "", "anim.ghostShow.mesh",
-                                           "anim.ghostShow.skeleton", "anim.ghostShow.both", "", "anim.refreshGhosts"});
+                                           "anim.ghostShow.skeleton", "anim.ghostShow.both", "", "anim.ghostRange", "anim.refreshGhosts"});
 }
 
 void registerGhostingUi()
@@ -135,6 +137,14 @@ void registerGhostingUi()
         "Ghosts show only the bones.", "ghosting(show=\"skeleton\")");
     add("anim.ghostShow.both", "Ghost Meshes and Skeletons", [] { runUi("ghosting", {{"show", "both"}, {"enable", true}}); },
         "Ghosts show meshes with their bones.", "ghosting(show=\"both\")");
+    actions::add({.id = "anim.ghostRange",
+                  .label = "Ghosts Across Range",
+                  .category = "Animation",
+                  .run = [] { runUi("ghosting", {{"range", !generalPref(gh::kRange, true)}, {"enable", true}}); },
+                  .doc = "While the time slider has a range selected, the ghosts spread across it and its falloff, fading with the falloff.",
+                  .python = "ghosting(range=True)",
+                  .checked = [] { return generalPref(gh::kRange, true); },
+                  .keywords = {"onion skin", "range", "ghost"}});
     add("anim.refreshGhosts", "Refresh Ghosts", [] { runUi("ghosting", {{"refresh", true}}); },
         "Recapture the ghosts, after edits that aren't keys (a static channel, say).", "ghosting(refresh=True)");
 }

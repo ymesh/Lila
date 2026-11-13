@@ -59,13 +59,13 @@ add_test(NAME lila_sdk_install
     COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --config $<CONFIG> --component sdk --prefix ${_sdk_prefix})
 add_test(NAME lila_sdk_build_examples
     COMMAND ${CMAKE_COMMAND} -DSDK=${_sdk_prefix} -DSOURCE=${_sdk_prefix}/examples -DBUILD=${_sdk_build} -DCONFIG=$<CONFIG>
-            -DCXX=${CMAKE_CXX_COMPILER} -DMAKE=${CMAKE_MAKE_PROGRAM} -P ${CMAKE_CURRENT_SOURCE_DIR}/SdkConsumer.cmake)
+            -DCXX=${CMAKE_CXX_COMPILER} -DMAKE=${CMAKE_MAKE_PROGRAM} -DDEPS=${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/SdkConsumer.cmake)
 add_test(NAME lila_sdk_load_examples
     COMMAND lila_extensions_tests "--test-case=scene extension points: an extension*")
 set_tests_properties(lila_sdk_install PROPERTIES FIXTURES_SETUP lila_sdk_installed)
-set_tests_properties(lila_sdk_build_examples PROPERTIES FIXTURES_REQUIRED lila_sdk_installed FIXTURES_SETUP lila_sdk_built
-    LABELS known_failing)
-set_tests_properties(lila_sdk_load_examples PROPERTIES FIXTURES_REQUIRED lila_sdk_built LABELS known_failing
+set_tests_properties(lila_sdk_build_examples PROPERTIES FIXTURES_REQUIRED lila_sdk_installed FIXTURES_SETUP lila_sdk_built)
+set_tests_properties(lila_sdk_load_examples PROPERTIES FIXTURES_REQUIRED lila_sdk_built
     ENVIRONMENT "LILA_TEST_SCENE_POINTS_PACKAGE=${_sdk_build}/$<CONFIG>/extensions/scenePoints.lilaext")
 
 # An extension registering through the overloads that take no context: everything must still go when it unloads.

@@ -10,6 +10,8 @@
 #include "media/Decode.h"
 #include "ops/Command.h"
 #include "ops/Undo.h"
+#include "scene/Graph.h"
+#include "ui/VideoTextures.h"
 
 #include <QByteArray>
 #include <QCoreApplication>
@@ -189,10 +191,26 @@ void applyImageFlags(Image& img, const Args& a)
         img.contrast = a.get<double>("contrast");
     if (a.has("window"))
         img.window = a.get<std::string>("window");
+    if (a.has("videoOffset"))
+        img.videoOffset = a.get<int>("videoOffset");
+    if (a.has("videoFps"))
+        img.videoFps = std::max(0.0, a.get<double>("videoFps"));
+    if (a.has("pausedFrame"))
+        img.pausedFrame = std::max<int64_t>(0, a.get<int64_t>("pausedFrame"));
+    if (a.has("paused"))
+    {
+        const bool on = a.get<bool>("paused");
+        // Pausing holds the frame showing now, unless the call names one.
+        if (on && !img.paused && !a.has("pausedFrame"))
+            img.pausedFrame = videoFrame(img, scene::Graph::current().time());
+        img.paused = on;
+    }
     if (a.has("embed"))
     {
         if (a.get<bool>("embed"))
         {
+            if (isVideo(img))
+                throw CommandError("videos stay linked to their file: embedding would copy the whole video into the set");
             if (!embed(img))
                 throw CommandError("can't read '" + img.path + "' to embed it");
         }
@@ -240,7 +258,12 @@ void registerCommands()
                   {.name = "brightness", .shortName = "b", .type = ArgType::Float, .doc = "Added in display space, -1 to 1.", .min = -1.0, .max = 1.0},
                   {.name = "contrast", .shortName = "ct", .type = ArgType::Float, .doc = "Around mid gray, 0 to 4.", .min = 0.0, .max = 4.0},
                   {.name = "embed", .shortName = "em", .type = ArgType::Bool,
-                   .doc = "Keep the file's bytes in the set, so it travels without the file; False links to the file again."}},
+                   .doc = "Keep the file's bytes in the set, so it travels without the file; False links to the file again. "
+                          "Videos always stay linked."},
+                  {.name = "videoOffset", .shortName = "vo", .type = ArgType::Int, .doc = "Video: frames added to the frame shown."},
+                  {.name = "videoFps", .shortName = "vf", .type = ArgType::Float, .doc = "Video: playback rate; 0 for the file's own.", .min = 0.0},
+                  {.name = "paused", .shortName = "pa", .type = ArgType::Bool, .doc = "Video: hold the frame showing now instead of following the time."},
+                  {.name = "pausedFrame", .shortName = "pf", .type = ArgType::Int, .doc = "Video: the frame a paused video holds."}},
         .run = [](const Args& a) -> json {
             Set next = current();
             if (a.get<bool>("query"))
@@ -447,6 +470,15 @@ nlohmann::json Set::toJson() const
             j["brightness"] = i.brightness;
         if (i.contrast != 1.0)
             j["contrast"] = i.contrast;
+        if (i.videoOffset)
+            j["videoOffset"] = i.videoOffset;
+        if (i.videoFps > 0.0)
+            j["videoFps"] = i.videoFps;
+        if (i.paused)
+        {
+            j["paused"] = true;
+            j["pausedFrame"] = i.pausedFrame;
+        }
         imageList.push_back(std::move(j));
     }
     json overlayList = json::array();
@@ -503,6 +535,10 @@ Set Set::fromJson(const nlohmann::json& j)
         img.quarterTurns = ((i.value("quarterTurns", 0) % 4) + 4) % 4;
         img.brightness = i.value("brightness", 0.0);
         img.contrast = i.value("contrast", 1.0);
+        img.videoOffset = i.value("videoOffset", 0);
+        img.videoFps = i.value("videoFps", 0.0);
+        img.paused = i.value("paused", false);
+        img.pausedFrame = i.value("pausedFrame", int64_t(0));
         if (img.id.empty() || (img.path.empty() && img.data.empty()) || s.image(img.id))
             continue;
         s.images.push_back(std::move(img));
@@ -738,10 +774,27 @@ std::string fileOf(const Image& img)
     return paths::toUtf8(file);
 }
 
+bool isVideo(const Image& img)
+{
+    return media::isVideoFile(img.data.empty() ? img.path : "x." + img.ext);
+}
+
+int64_t videoFrame(const Image& img, double sceneSeconds)
+{
+    if (img.paused)
+        return img.pausedFrame;
+    return videoTextures::referenceFrame(fileOf(img), sceneSeconds, img.videoFps, img.videoOffset);
+}
+
 bool embed(Image& img)
 {
     if (!img.data.empty())
         return true;
+    if (isVideo(img))
+    {
+        log::warn("reference image {}: videos stay linked to their file", img.id);
+        return false;
+    }
     const fs::path file = paths::resolvePath(img.path);
     try
     {

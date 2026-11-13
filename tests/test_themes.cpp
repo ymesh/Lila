@@ -129,11 +129,23 @@ TEST_CASE("built-in themes keep text readable (WCAG AA)")
     }
 }
 
-TEST_CASE("Monotone shades map greys to themselves")
+TEST_CASE("Monotone shades land on its ramp colours and stay grey between them")
 {
     const themes::Theme& mono = *themes::builtIn("Monotone");
+    for (const themes::TokenInfo& info : themes::tokens())
+    {
+        if (info.level < 0)
+            break;
+        CAPTURE(info.id);
+        themes::Rgba want = mono.color(info.id);
+        want.a = 77;
+        CHECK(themes::shade(mono, info.level, 77) == want);
+    }
     for (int v = 0; v <= 255; ++v)
-        CHECK(themes::shade(mono, v, 77) == themes::Rgba{uint8_t(v), uint8_t(v), uint8_t(v), 77});
+    {
+        const themes::Rgba c = themes::shade(mono, v, 77);
+        CHECK((c.r == c.g && c.g == c.b && c.a == 77));
+    }
     const themes::Theme& light = *themes::builtIn("Light");
     CHECK(themes::shade(light, 48) == light.color("window"));
     CHECK(themes::shade(light, 212) == light.color("text"));

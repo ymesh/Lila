@@ -308,7 +308,7 @@ bool prepare(const std::string& material, const Options& o, Job& job)
     if (target)
     {
         glm::dmat4 world = target->as<glm::dmat4>(scene::Transform::kWorldMatrix);
-        draw.world = glm::mat4(world);
+        draw.world = world;
         glm::dvec3 a(1e300), b(-1e300);
         for (int i = 0; i < 8; ++i)
         {

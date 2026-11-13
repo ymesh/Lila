@@ -32,6 +32,7 @@ struct Options
     bool showSelection = true;   // tint selected faces, edges and vertices
     bool label = true;           // view name in the corner (GUI only: text needs the font system)
     bool overlays = false;       // what the viewport draws over the scene: locators, net lines and knots, extension drawers (GUI only)
+    bool hud = false;            // the heads-up readouts the view shows, with the cursor at the centre, and the Drone Camera banner (GUI only)
     std::optional<bool> ambientOcclusion; // overrides the viewport's ambient occlusion pref
     int samples = 1; // jittered frames averaged into the image (temporal antialiasing), for supersampled stills
 };

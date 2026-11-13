@@ -1,3 +1,4 @@
+#include "ui/SceneSettingsPanel.h"
 #include "ui/ConnectPopover.h"
 #include "ui/MainWindowDetail.h"
 
@@ -158,6 +159,7 @@ void MainWindow::registerPanels()
     panels::add({.id = kDisplayLayersDock, .title = "Layers", .create = make([](QWidget* p) { return new DisplayLayersPanel(p); }),
                  .area = Qt::RightDockWidgetArea, .icon = "stack-2"});
     registerAnimLayersPanel();
+    registerSceneSettingsPanel();
     issues::registerUi();
     registerOffsetsPanel();
     registerRetargetUi();

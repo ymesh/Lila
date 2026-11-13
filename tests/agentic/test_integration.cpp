@@ -31,7 +31,10 @@ TEST_CASE("mergeMcpJson adds lila without touching other servers or writing the 
     json lila = merged["mcpServers"]["lila"];
     CHECK(lila["type"] == "http");
     CHECK(lila["url"] == "${LILA_MCP_URL:-http://127.0.0.1:8740/mcp}");
-    CHECK(lila["headers"]["Authorization"] == "Bearer ${LILA_MCP_TOKEN}");
+    CHECK_FALSE(lila.contains("headers"));
+    CHECK(lila["headersHelper"] == tokenHelperCommand());
+    CHECK(tokenHelperCommand().find("mcp.json") != std::string::npos);
+    CHECK(tokenHelperCommand().find("${") == std::string::npos);
     CHECK(json::parse(mergeMcpJson("", 9000))["mcpServers"]["lila"]["url"] == "${LILA_MCP_URL:-http://127.0.0.1:9000/mcp}");
     CHECK_THROWS(mergeMcpJson("[1, 2]", 8740));
 }
@@ -76,6 +79,32 @@ TEST_CASE("setUp writes .mcp.json, the instruction blocks and the skill")
     setUp(root, {});
     CHECK(slurp(root / "CLAUDE.md") == claude);
     std::filesystem::remove_all(root);
+}
+
+TEST_CASE("setupRoots writes to the game project around a workspace")
+{
+    namespace fs = std::filesystem;
+    auto base = fs::weakly_canonical(fs::temp_directory_path()) / "lila_agentic_roots";
+    fs::remove_all(base);
+
+    // The nearest .uproject or .git above the workspace.
+    fs::create_directories(base / "Repo" / ".git");
+    fs::create_directories(base / "Repo" / "Game" / "Lila");
+    std::ofstream(base / "Repo" / "Game" / "Game.uproject") << "{}";
+    CHECK(setupRoot(base / "Repo" / "Game" / "Lila") == base / "Repo" / "Game");
+    fs::create_directories(base / "Repo" / "Art");
+    CHECK(setupRoot(base / "Repo" / "Art") == base / "Repo");
+
+    // The workspace is the project.
+    fs::create_directories(base / "Loose");
+    std::ofstream(base / "Loose" / "Loose.uproject") << "{}";
+    CHECK(setupRoot(base / "Loose") == base / "Loose");
+
+    // Every shipped skill is installed.
+    setUp(base / "Loose", {});
+    for (const char* skill : {"lila-modeling", "lila-geometry-nodes", "lila-materials", "lila-terrain", "lila-set-dressing"})
+        CHECK(fs::exists(base / "Loose" / ".claude" / "skills" / skill / "SKILL.md"));
+    fs::remove_all(base);
 }
 
 TEST_CASE("shell variables point agents at the server")

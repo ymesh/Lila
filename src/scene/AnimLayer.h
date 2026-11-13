@@ -6,6 +6,7 @@
 #include "scene/Node.h"
 #include "scene/Transform.h"
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -144,6 +145,36 @@ LILA_SCENE_API NodeId insertConstraintBlend(Graph& g, const PlugRef& member, con
  */
 LILA_SCENE_API PlugRef keyInput(Graph& g, const PlugRef& plug);
 
+/** Where keys on one member go when a key router decides instead of the active layer. */
+struct KeyRoute
+{
+    /** The layer; kNoNode for the base animation. */
+    NodeId layer = kNoNode;
+    /** An unkeyed layer input takes the value as its static value instead of gaining a curve (an offset). */
+    bool staticValue = false;
+};
+/**
+ * Picks the layer for keys on member (a whole attribute), over the active layer: nullopt leaves it to the active layer.
+ * write is true when a key or value is about to land, so the router may create the layer; reads pass false. A read may
+ * answer staticValue with no layer: the write will make a layer whose input takes the value.
+ */
+using KeyRouter = std::function<std::optional<KeyRoute>(Graph& g, const PlugRef& member, bool write)>;
+/** One router (an extension's per-control tracks); an empty function removes it. */
+LILA_SCENE_API void setKeyRouter(KeyRouter router);
+/** The layer keys on member go to: the router's choice, else the active layer. kNoNode is the base animation. */
+LILA_SCENE_API NodeId keyLayer(Graph& g, const PlugRef& member);
+/** The layer a key about to be written on plug goes to, made first when the router makes layers. setKey calls it. */
+LILA_SCENE_API NodeId routeKey(Graph& g, const PlugRef& plug);
+/** True when an edit to plug sets its layer's static value rather than keying (the router said so, nothing keyed). */
+LILA_SCENE_API bool editSetsStatic(Graph& g, const PlugRef& plug);
+
+/** Called after auto key keyed plug at time, so a tool can key alongside it (a whole character). */
+using AutoKeyListener = std::function<void(Graph& g, const PlugRef& plug, double time)>;
+/** One listener; an empty function removes it. */
+LILA_SCENE_API void setAutoKeyListener(AutoKeyListener listener);
+/** Calls the listener, if any. */
+LILA_SCENE_API void notifyAutoKey(Graph& g, const PlugRef& plug, double time);
+
 struct KeyRedirect
 {
     PlugRef plug;
@@ -151,6 +182,8 @@ struct KeyRedirect
     /** The whole value the input takes (all three components of a Vec3), for rotation curve keys. */
     glm::dvec3 whole{0.0};
     std::string curveName;
+    /** Set the input's static value instead of keying it (an unkeyed input the router marks static). */
+    bool staticValue = false;
 };
 /**
  * Where a key on plug really goes, given the active layer: the layer's inputB (adding plug's attribute to the layer
@@ -158,6 +191,20 @@ struct KeyRedirect
  * plug is keyed directly. Throws std::invalid_argument when the active layer is locked.
  */
 LILA_SCENE_API std::optional<KeyRedirect> redirectKey(Graph& g, const PlugRef& plug, double value);
+
+/**
+ * Keys many channels at one time without evaluating between them: while one is alive, redirectKey reads the values below
+ * the layer as last evaluated (keys at the same time on the layer can't change them) and each member's value as the keys
+ * so far put it. Evaluate after changing the time, before keying there.
+ */
+class LILA_SCENE_API KeyBatch
+{
+public:
+    KeyBatch();
+    ~KeyBatch();
+    KeyBatch(const KeyBatch&) = delete;
+    KeyBatch& operator=(const KeyBatch&) = delete;
+};
 
 /**
  * Keys one component of a layered or constrained transform rotate whose target input takes rotation keys: one with a

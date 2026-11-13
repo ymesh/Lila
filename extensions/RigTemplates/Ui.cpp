@@ -90,8 +90,8 @@ void drawMarker(drawOverrides::DrawContext& c)
     const glm::dvec3 p(c.world[3]);
     const double r = std::max(0.05, n.as<double>(attrOf(n, "radius")));
     auto line = [&](const glm::dvec3& a, const glm::dvec3& b, const glm::vec4& col) {
-        c.frame.linesOnTop.push_back({glm::vec3(a), col});
-        c.frame.linesOnTop.push_back({glm::vec3(b), col});
+        c.frame.linesOnTop.push_back({glm::dvec3(a), col});
+        c.frame.linesOnTop.push_back({glm::dvec3(b), col});
     };
     const bool lit = c.highlight != drawOverrides::Highlight::None;
     const glm::vec4 col = lit ? c.color : glm::vec4(0.55f, 0.55f, 0.55f, 1.0f);

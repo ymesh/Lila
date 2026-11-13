@@ -1,3 +1,4 @@
+#include "scene/GeoSidecar.h"
 #include "scene/MeshNodes.h"
 
 #include "ops/Command.h"
@@ -779,8 +780,11 @@ void registerMeshCommands()
 
     ops::registerCommand({
         .name = "importObj",
-        .doc = "Import an OBJ file; one mesh per object. Returns the new mesh names.",
+        .doc = "Import an OBJ file; one mesh per object. Returns the new mesh names.\n\n"
+               "A georeferenced export (metadata.xml, _offset.xyz, .rcinfo or .prj beside it) sets the scene's georeference or is "
+               "moved into it; the log says which.",
         .positionalDoc = "path",
+        .flags = {{"georeference", "", ArgType::Bool, true, "Place it by the georeference files beside it."}},
         .run = [](const Args& a) -> json {
             if (a.positional.empty())
                 throw CommandError("importObj: path required");
@@ -793,6 +797,13 @@ void registerMeshCommands()
             }
             if (!r.ok())
                 throw CommandError("importObj: " + r.error);
+            if (a.get<bool>("georeference", true) && geoSidecar::find(path))
+            {
+                std::vector<geo::Mesh*> meshes;
+                for (geo::ObjObject& o : r.objects)
+                    meshes.push_back(&o.mesh);
+                geoSidecar::place(path, meshes);
+            }
             Graph& g = Graph::current();
             Graph::Batch batch(g);
             json names = json::array();

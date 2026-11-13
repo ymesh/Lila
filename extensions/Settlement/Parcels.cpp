@@ -804,6 +804,22 @@ bool getsEnvelope(Use u)
 }
 } // namespace
 
+void applyBuildingRoutes(Layout& l, const Site& site)
+{
+    std::map<int, BuildingRoute> byLot;
+    for (Lot& lot : l.lots)
+        byLot[lot.id] = lot.route = routeAt(site, centroid(lot.outline));
+    std::erase_if(l.placements, [](const Placement& p) { return p.id.starts_with("building/"); });
+    for (Envelope& env : l.envelopes)
+    {
+        if (auto it = byLot.find(env.lot); it != byLot.end())
+            env.route = it->second;
+        if (env.route == BuildingRoute::Library)
+            if (auto it = site.libraryPicks.find(env.key); it != site.libraryPicks.end())
+                l.placements.push_back(libraryPlacement(env, it->second));
+    }
+}
+
 std::vector<double> streetAccess(const StreetGraph& g)
 {
     LILA_ZONE();

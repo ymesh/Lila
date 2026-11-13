@@ -24,8 +24,7 @@
 #ifdef _WIN32
 #define LILA_EXTENSION_EXPORT extern "C" __declspec(dllexport)
 #else
-// used: GCC emits an inline function only where it's called, and lilaExtensionSdkVersion() is inline and only looked up
-// by name (dllexport forces it out on Windows).
+// used: GCC emits an inline function only where it is called, and the loader looks these up by name.
 #define LILA_EXTENSION_EXPORT extern "C" __attribute__((visibility("default"), used))
 #endif
 

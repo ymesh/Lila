@@ -12,7 +12,9 @@
 #include <lila/ViewportTool.h>
 
 #include <QHBoxLayout>
+#include <QCursor>
 #include <QLabel>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -39,6 +41,8 @@ enum class Layer
     Contacts,
     Limbs,
     Lines,
+    Isolate,
+    Modes,
     Test,
 };
 
@@ -106,6 +110,8 @@ public:
         setProperty("contactCount", mRules.is_object() ? int(mRules["contacts"].size()) : 0);
         setProperty("limbCount", mRules.is_object() ? int(mRules["chains"].size()) : 0);
         setProperty("lineCount", mRules.is_object() ? int(mRules["lines"].size()) : 0);
+        setProperty("isolateCount", mRules.is_object() ? int(mRules["isolate"].size()) : 0);
+        setProperty("modeCount", mRules.is_object() ? int(mRules["modes"].size()) : 0);
         publishJoints();
         update();
     }
@@ -143,10 +149,12 @@ protected:
         for (const auto& [name, ends] : rule("lines").items())
             if (ends.size() == 2)
                 drawLine(p, ends[0].get<std::string>(), ends[1].get<std::string>(), lines ? text : withAlpha(dim, 90), lines);
-        // Joints, contacts ringed.
-        std::vector<std::string> contacts;
+        // Joints, contacts ringed, isolated joints squared, a Default mode pick named beside its joint.
+        std::vector<std::string> contacts, isolated;
         for (const json& c : rule("contacts"))
             contacts.push_back(c.get<std::string>());
+        for (const json& c : rule("isolate"))
+            isolated.push_back(c.get<std::string>());
         for (size_t i = 0; i < mJoints.size(); ++i)
         {
             const bool contact = std::find(contacts.begin(), contacts.end(), mJoints[i].name) != contacts.end();
@@ -160,6 +168,18 @@ protected:
                 p.setPen(QPen(layer == Layer::Contacts ? text : dim, 2.0));
                 p.drawEllipse(pos(i), 8.0, 8.0);
             }
+            if (std::find(isolated.begin(), isolated.end(), mJoints[i].name) != isolated.end())
+            {
+                p.setBrush(Qt::NoBrush);
+                p.setPen(QPen(layer == Layer::Isolate ? text : dim, 1.5));
+                p.drawRect(QRectF(pos(i) - QPointF(6.0, 6.0), QSizeF(12.0, 12.0)));
+            }
+            if (layer == Layer::Modes && rule("modes").contains(mJoints[i].name))
+                if (const auto m = strings::modeFromName(rule("modes")[mJoints[i].name].get<std::string>()))
+                {
+                    p.setPen(text);
+                    p.drawText(pos(i) + QPointF(9.0, 4.0), QString::fromUtf8(stringsModeLabel(*m)));
+                }
         }
         // A drag between two joints shows the limb or line it would make.
         if (mPress >= 0 && mHover >= 0 && mHover != mPress && (limbs || lines))
@@ -386,6 +406,47 @@ private:
         Graph& g = Graph::current();
         const std::string character = g.node(mCharacter)->path();
         const std::string a = mJoints[size_t(from)].name, b = mJoints[size_t(to)].name;
+        if (layer == Layer::Isolate)
+        {
+            if (from != to)
+                return;
+            json isolate = json::array();
+            bool had = false;
+            for (const json& c : rule("isolate"))
+                if (c.get<std::string>() == a)
+                    had = true;
+                else if (const int i = indexOf(c.get<std::string>()); i >= 0)
+                    isolate.push_back(g.node(mJoints[size_t(i)].id)->path());
+            if (!had)
+                isolate.push_back(g.node(mJoints[size_t(from)].id)->path());
+            run({{"args", {character}}, {"isolate", isolate}});
+            return;
+        }
+        if (layer == Layer::Modes)
+        {
+            if (from != to)
+                return;
+            // The joint's Default pick from a menu of the modes; No Rule goes back to moves IK, turns Forward.
+            QMenu menu(this);
+            const std::string joint = g.node(mJoints[size_t(from)].id)->path();
+            const std::string current = rule("modes").contains(a) ? rule("modes")[a].get<std::string>() : std::string();
+            QAction* none = menu.addAction("No Rule", [this, character, joint] { run({{"args", {character}}, {"defaultMode", {joint, ""}}}); });
+            none->setCheckable(true);
+            none->setChecked(current.empty());
+            menu.addSeparator();
+            for (strings::Mode m : strings::kModes)
+            {
+                if (m == strings::Mode::Default)
+                    continue;
+                const std::string name = strings::modeName(m);
+                QAction* item = menu.addAction(QString::fromUtf8(stringsModeLabel(m)),
+                                               [this, character, joint, name] { run({{"args", {character}}, {"defaultMode", {joint, name}}}); });
+                item->setCheckable(true);
+                item->setChecked(current == name);
+            }
+            menu.exec(QCursor::pos());
+            return;
+        }
         if (layer == Layer::Contacts)
         {
             if (from != to)
@@ -500,7 +561,7 @@ private:
         const QPointF d = px - mPressAt;
         const glm::dvec3 by(d.x() / mScale, -d.y() / mScale, 0.0);
         // Forward has nothing that bends to put a joint somewhere: the test drags in IK there.
-        const strings::Mode mode = stringsMode() == strings::Mode::Forward ? strings::Mode::Ik : stringsMode();
+        const strings::Mode mode = strings::movesOrigin(stringsMode(), false) ? stringsMode() : strings::Mode::Ik;
         json result;
         const std::string error = quiet([&] {
             result = ops::execute("stringsPose", {{"args", {g.node(mJoints[size_t(mPress)].id)->path()}},
@@ -510,8 +571,7 @@ private:
                                   CallSource::Script);
         });
         mTesting = true;
-        static const char* labels[] = {"Forward", "Backward", "IK", "Full Body"};
-        std::string s = "Test " + std::string(labels[int(mode)]) + ": " + mJoints[size_t(mPress)].name;
+        std::string s = "Test " + std::string(stringsModeLabel(mode)) + ": " + mJoints[size_t(mPress)].name;
         if (!error.empty())
             s += "  " + error;
         else if (result.is_object() && result.contains("anchor"))
@@ -574,6 +634,8 @@ QWidget* makeRulesEditor(QWidget* parent)
     layers->add("Contacts", {}, "Click a joint: it holds still while you pose the rest", int(Layer::Contacts));
     layers->add("Limbs", {}, "Drag from a joint to one below it: a limb that bends together. Click a limb to remove it", int(Layer::Limbs));
     layers->add("Lines", {}, "Drag from a joint to one below it: a line of action strokes bind to. Click a line to remove it", int(Layer::Lines));
+    layers->add("Isolate", {}, "Click a joint: it keeps its world rotation while Isolate Rotation is on (squared)", int(Layer::Isolate));
+    layers->add("Modes", {}, "Click a joint: the mode it poses in under Default", int(Layer::Modes));
     layers->add("Test", {}, "Drag a joint: the character poses through its rules in the current Strings mode, and goes back on release", int(Layer::Test));
     layers->setCurrent(int(Layer::Contacts));
     auto* canvas = new RulesCanvas(w);

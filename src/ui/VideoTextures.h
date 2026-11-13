@@ -29,8 +29,11 @@ LILA_UI_API std::string error(const std::string& path);
 LILA_UI_API render::TexturePtr texture(const std::string& path, int64_t index);
 /** The same frame as a QImage, for widgets; null until a frame has decoded. */
 LILA_UI_API QImage image(const std::string& path, int64_t index);
-/** The frame a reference video shows at a scene time: its own rate from time 0, looping over its length. */
-LILA_UI_API int64_t referenceFrame(const std::string& path, double sceneSeconds);
+/**
+ * The frame a reference video shows at a scene time: from time 0 at fps (0 for its own rate), offset frames added,
+ * looping over its length.
+ */
+LILA_UI_API int64_t referenceFrame(const std::string& path, double sceneSeconds, double fps = 0.0, int64_t offset = 0);
 /** Blocks until the frame has decoded; for offscreen captures and tests. */
 LILA_UI_API bool waitFor(const std::string& path, int64_t index, double timeoutSeconds);
 

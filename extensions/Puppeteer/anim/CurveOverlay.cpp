@@ -1,6 +1,8 @@
 // The Curve Overlay: the selected joints' animation curves drawn over the viewport under the cursor, edited with the
 // Graph Editor's grammar while Shift is held. Without Shift the viewport keeps the mouse, so posing, the Spinner and the
-// camera work as usual. The horizontal axis is always the time slider's range.
+// camera work as usual. The horizontal axis is always the time slider's range. With a time range selected (here or on
+// the time slider) key and curve drags act across it with its falloff, and the range row sets its falloff type,
+// rotation type, every n and tweens it.
 
 #include "Puppeteer.h"
 
@@ -63,11 +65,18 @@ struct Frame
     std::array<QRectF, 3> kindChips;
     std::array<QRectF, 3> axisChips;
     QRectF button;
+    /** With a time range selected: falloff type, Local and Pivot, every n, and the tween scrubber. */
+    bool range = false;
+    QRectF falloffChip, localChip, pivotChip, everyChip, tweenChip;
+
+    static constexpr double kFalloffChip = 72.0, kRotChip = 44.0, kEveryChip = 66.0, kTweenChip = 78.0;
 
     explicit Frame(double w, double h)
     {
+        range = lanim::timeSelection().active;
         // Top centre: the corners belong to the HUD readouts and the view cube.
-        const double row = 6 * (kChip + 2) + 16 + 8 + OverlayPainter::textWidth("Graph Editor") + 16;
+        const double rangeRow = range ? 16 + kFalloffChip + 6 + 2 * kRotChip + 2 + 6 + kEveryChip + 6 + kTweenChip : 0.0;
+        const double row = 6 * (kChip + 2) + 16 + 8 + OverlayPainter::textWidth("Graph Editor") + 16 + rangeRow;
         const double left = std::max(kMargin, (w - row) / 2);
         names = QRectF(left, kMargin, std::max(row, 120.0), 18);
         double x = left;
@@ -86,6 +95,16 @@ struct Frame
         x += 8;
         button = QRectF(x, y, OverlayPainter::textWidth("Graph Editor") + 16, kChip);
         chips = QRectF(left, y, button.right() - left, kChip);
+        if (range)
+        {
+            x = button.right() + 16;
+            falloffChip = QRectF(x, y, kFalloffChip, kChip);
+            x = falloffChip.right() + 6;
+            localChip = QRectF(x, y, kRotChip, kChip);
+            pivotChip = QRectF(localChip.right() + 2, y, kRotChip, kChip);
+            everyChip = QRectF(pivotChip.right() + 6, y, kEveryChip, kChip);
+            tweenChip = QRectF(everyChip.right() + 6, y, kTweenChip, kChip);
+        }
         // The strip stays clear of the camera name along the bottom edge.
         plot = QRectF(QPointF(48, chips.bottom() + 18), QPointF(std::max(60.0, w - 16), std::max(chips.bottom() + 40, h - kStripHeight - 40)));
         strip = QRectF(plot.left(), plot.bottom() + 6, plot.width(), kStripHeight);
@@ -124,6 +143,10 @@ public:
         Scale,
         Scrub,
         RightPending,
+        RangeOffset,   // a key or curve dragged across the time range
+        RangeTween,    // the range row's tween scrubber
+        RangeSelect,   // Ctrl + Shift on the strip
+        RangeHandle,   // an edge or falloff foot on the strip
     };
     Drag drag = Drag::None;
     QPointF press, last;
@@ -134,6 +157,18 @@ public:
     std::optional<KeySel> anchor;
     double anchorValue = 0.0;
     int lock = 0; // 1 time locked, 2 value locked
+
+    /** A drag across the time range: the channels it edits, their whole values now (to put back), and the edit so far. */
+    struct RangeEdit
+    {
+        std::vector<NodeId> curves;
+        std::vector<std::pair<scene::PlugRef, scene::PlugValue>> held;
+        double offset = 0.0; // display units
+        double tween = 0.0;
+        double pressFrame = 0.0;
+        int handle = 0; // RangeHandle: 1 start, 2 end, 3 falloff before, 4 falloff after
+        bool both = false;
+    } range;
 
     int graphListener = -1;
 
@@ -181,6 +216,20 @@ public:
     void released(QMouseEvent* e, const ViewInfo& view);
     void scrubTo(const Frame& f, double x, bool holdPose);
     void cancelDrag();
+
+    // Range editing.
+    double rangeWeight(double t) const { return lanim::timeSelectionWeight(lanim::timeSelection(), t); }
+    bool inRange(double t) const;
+    /** The range's handle on the strip under pos: 1 start, 2 end, 3 the falloff foot before, 4 after; 0 none. */
+    int rangeHandleAt(const Frame& f, QPointF pos) const;
+    double handleX(const Frame& f, int handle) const;
+    void beginRangeEdit(Drag kind, std::vector<NodeId> curves);
+    /** The value a range drag in progress gives a channel at t, from its value v there as keyed. */
+    double rangeValue(NodeId curve, double t, double v) const;
+    void previewRangeNow();
+    void commitRange();
+    void drawRange(OverlayPainter& p, const Frame& f);
+    void drawRangeRow(OverlayPainter& p, const Frame& f);
     void showTangentMenu(QPoint global);
 };
 
@@ -511,6 +560,184 @@ double CurveOverlay::angleFor(const Frame& f, QPointF pos, double* weight) const
     return std::clamp(std::atan(slope) * 180.0 / 3.14159265358979323846, -89.9, 89.9);
 }
 
+// Range editing ------------------------------------------------------------------------------------------------------
+
+bool CurveOverlay::inRange(double t) const { return rangeWeight(t) > 0.0; }
+
+double CurveOverlay::handleX(const Frame& f, int handle) const
+{
+    const lanim::TimeSelection& sel = lanim::timeSelection();
+    const double from = lanim::frameOf(sel.start), to = lanim::frameOf(sel.end);
+    switch (handle)
+    {
+    case 1: return xOf(f, lanim::secondsOf(from - 0.5));
+    case 2: return xOf(f, lanim::secondsOf(to + 0.5));
+    case 3: return xOf(f, lanim::secondsOf(from - sel.before() - 1.0));
+    case 4: return xOf(f, lanim::secondsOf(to + sel.after() + 1.0));
+    default: return -1e9;
+    }
+}
+
+int CurveOverlay::rangeHandleAt(const Frame& f, QPointF pos) const
+{
+    if (!lanim::timeSelection().active || !f.strip.adjusted(0, -6, 0, 8).contains(pos))
+        return 0;
+    // The edges along the strip's top half, the falloff feet along its bottom half, as on the time slider.
+    const bool top = pos.y() < f.strip.center().y();
+    int best = 0;
+    double nearest = 6.0;
+    for (int h : {top ? 1 : 3, top ? 2 : 4})
+        if (const double d = std::abs(pos.x() - handleX(f, h)); d < nearest)
+        {
+            nearest = d;
+            best = h;
+        }
+    return best;
+}
+
+void CurveOverlay::beginRangeEdit(Drag kind, std::vector<NodeId> curves)
+{
+    Graph& g = Graph::current();
+    range = {};
+    range.curves = std::move(curves);
+    // The current frame shows the edit live in the view: the channels' whole values, put back before the keys land.
+    for (NodeId c : range.curves)
+        if (const Channel* ch = model.channelOf(c); ch && g.node(ch->plug.node))
+        {
+            const scene::PlugRef whole{ch->plug.node, ch->plug.attr, -1};
+            if (std::none_of(range.held.begin(), range.held.end(), [&](const auto& h) { return h.first == whole; }))
+                range.held.push_back({whole, g.value(whole)});
+        }
+    drag = kind;
+}
+
+double CurveOverlay::rangeValue(NodeId curve, double t, double v) const
+{
+    const double w = rangeWeight(t);
+    if (w <= 0.0)
+        return v;
+    const Channel* ch = model.channelOf(curve);
+    if (drag == Drag::RangeOffset)
+        return v + (ch ? range.offset / ch->mapScale : range.offset) * w;
+    if (drag != Drag::RangeTween)
+        return v;
+    const lanim::TimeSelection& sel = lanim::timeSelection();
+    const double f0 = std::round(lanim::frameOf(sel.start) - sel.before() - 1.0), f1 = std::round(lanim::frameOf(sel.end) + sel.after() + 1.0);
+    auto it = model.curves.find(curve);
+    if (it == model.curves.end())
+        return v;
+    auto eval = model.sampler(curve, it->second);
+    const double a = eval(lanim::secondsOf(f0)), b = eval(lanim::secondsOf(f1));
+    return v + range.tween * w * (a + (b - a) * (lanim::frameOf(t) - f0) / (f1 - f0) - v);
+}
+
+void CurveOverlay::previewRangeNow()
+{
+    Graph& g = Graph::current();
+    const double now = g.time();
+    for (const auto& [whole, v] : range.held)
+    {
+        if (!g.node(whole.node))
+            continue;
+        glm::dvec3 value = std::get<glm::dvec3>(v);
+        for (NodeId c : range.curves)
+            if (const Channel* ch = model.channelOf(c); ch && ch->plug.node == whole.node && ch->plug.attr == whole.attr && ch->plug.component >= 0)
+                value[ch->plug.component] = rangeValue(c, now, value[ch->plug.component]);
+        try
+        {
+            g.setValue(whole, value);
+        }
+        catch (const std::exception&)
+        {
+        }
+    }
+}
+
+void CurveOverlay::commitRange()
+{
+    Graph& g = Graph::current();
+    for (const auto& [whole, v] : range.held)
+        if (g.node(whole.node))
+            try
+            {
+                g.setValue(whole, v);
+            }
+            catch (const std::exception&)
+            {
+            }
+    json channels = json::array();
+    for (NodeId c : range.curves)
+        if (const Channel* ch = model.channelOf(c); ch && g.node(ch->plug.node) && ch->plug.component >= 0)
+            channels.push_back(g.plugName(ch->plug));
+    const bool tween = drag == Drag::RangeTween;
+    if (channels.empty() || (tween ? range.tween == 0.0 : range.offset == 0.0))
+        return;
+    json call = {{"channels", channels}};
+    if (tween)
+        call["tween"] = range.tween;
+    else
+    {
+        // Display units to the channel's own: every channel here shares the anchor's scale in the Absolute view.
+        const Channel* ch = model.channelOf(range.curves.front());
+        call["offset"] = range.offset / (ch ? ch->mapScale : 1.0);
+    }
+    addRangeFlags(call, lanim::timeSelection());
+    if (const std::string layer = stringsLayer(); !layer.empty())
+        call["layer"] = layer;
+    try
+    {
+        ops::execute("curveRangeEdit", call);
+    }
+    catch (const std::exception& e)
+    {
+        log::error("Curve Overlay: {}", e.what());
+    }
+}
+
+void CurveOverlay::drawRange(OverlayPainter& p, const Frame& f)
+{
+    const lanim::TimeSelection& sel = lanim::timeSelection();
+    if (!sel.active)
+        return;
+    const double a = std::max(f.strip.left(), handleX(f, 3)), b = std::min(f.strip.right(), handleX(f, 4));
+    // The falloff's profile along the strip, the edges' tabs and the feet.
+    std::vector<QPointF> profile;
+    for (double x = a; x <= b; x += 2.0)
+        profile.emplace_back(x, f.strip.bottom() - 1.0 - rangeWeight(timeAt(f, x)) * (f.strip.height() - 6.0));
+    if (profile.size() >= 2)
+        p.polyline(profile, 1.5f, gray(0.92f, 0.9f));
+    for (int h : {1, 2})
+    {
+        const double x = handleX(f, h);
+        p.line({x, f.strip.top()}, {x, f.strip.bottom()}, 1.5f, gray(0.95f, 0.9f));
+        p.rect(QRectF(x - 3, f.strip.top() - 4, 6, 5), gray(0.95f));
+    }
+    for (int h : {3, 4})
+    {
+        const double x = handleX(f, h);
+        p.triangle({x, f.strip.bottom() - 6}, {x - 4, f.strip.bottom()}, {x + 4, f.strip.bottom()}, gray(0.95f, 0.9f));
+    }
+}
+
+void CurveOverlay::drawRangeRow(OverlayPainter& p, const Frame& f)
+{
+    if (!f.range)
+        return;
+    const lanim::TimeSelection& sel = lanim::timeSelection();
+    auto chip = [&](const QRectF& r, const QString& text, bool on) {
+        p.rect(r, on ? gray(0.86f, 0.95f) : gray(0.06f, 0.6f));
+        p.text({r.center().x(), r.bottom() - 6}, text, on ? gray(0.08f) : gray(0.85f), OverlayPainter::Center);
+    };
+    QString shape = QString::fromUtf8(lanim::rangeFalloffName(sel.shape));
+    chip(f.falloffChip, shape.left(1).toUpper() + shape.mid(1), false);
+    const bool pivot = PrefStore::get().value<std::string>(kPrefs, "/strings/rotationType", "local") == "pivot";
+    chip(f.localChip, "Local", !pivot);
+    chip(f.pivotChip, "Pivot", pivot);
+    chip(f.everyChip, sel.every == 0 ? QString("Keys") : QString("Every %1").arg(sel.every), false);
+    const bool tweening = drag == Drag::RangeTween;
+    chip(f.tweenChip, tweening ? QString("Tween %1%").arg(int(std::round(range.tween * 100.0))) : QString("Tween"), tweening);
+}
+
 // Drawing ------------------------------------------------------------------------------------------------------------
 
 void CurveOverlay::drawScrim(OverlayPainter& p, const ViewInfo& view)
@@ -542,13 +769,6 @@ void CurveOverlay::drawGrid(OverlayPainter& p, const Frame& f)
         p.line({f.plot.left(), y}, {f.plot.right(), y}, 1.0f, gray(1.0f, zero ? 0.16f : 0.07f));
         p.text({f.plot.left() - 6, y + 4}, formatValue(zero ? 0.0 : v), gray(0.75f, 0.8f), OverlayPainter::Right);
     }
-    // The time slider's selected range: its keys are the ones range edits act on.
-    if (const lanim::TimeSelection& s = lanim::timeSelection(); s.active)
-    {
-        const double a = std::max(f.plot.left(), xOf(f, s.start)), b = std::min(f.plot.right(), xOf(f, s.end));
-        if (b > a)
-            p.rect(QRectF(a, f.plot.top(), std::max(1.0, b - a), f.plot.height()), gray(1.0f, 0.06f));
-    }
 }
 
 void CurveOverlay::drawStrip(OverlayPainter& p, const Frame& f)
@@ -563,12 +783,7 @@ void CurveOverlay::drawStrip(OverlayPainter& p, const Frame& f)
         p.line({x, f.strip.top()}, {x, f.strip.top() + 4}, 1.0f, gray(0.8f, 0.6f));
         p.text({x + 3, f.strip.bottom() - 6}, QString::number(fr, 'f', 0), gray(0.78f));
     }
-    if (const lanim::TimeSelection& s = lanim::timeSelection(); s.active)
-    {
-        const double a = std::max(f.strip.left(), xOf(f, s.start)), b = std::min(f.strip.right(), xOf(f, s.end));
-        if (b > a)
-            p.rect(QRectF(a, f.strip.top(), std::max(2.0, b - a), 3), gray(0.9f, 0.8f));
-    }
+    drawRange(p, f);
 }
 
 void CurveOverlay::drawChrome(OverlayPainter& p, const Frame& f)
@@ -596,6 +811,7 @@ void CurveOverlay::drawChrome(OverlayPainter& p, const Frame& f)
         chip(f.axisChips[size_t(i)], axisLetters[i], axes == 0 || (axes & (1 << i)), i);
     p.rect(f.button, gray(0.06f, 0.6f));
     p.text({f.button.center().x(), f.button.bottom() - 6}, "Graph Editor", gray(0.85f), OverlayPainter::Center);
+    drawRangeRow(p, f);
 }
 
 void CurveOverlay::draw(OverlayPainter& p, const ViewInfo& view)
@@ -616,6 +832,15 @@ void CurveOverlay::draw(OverlayPainter& p, const ViewInfo& view)
         ensureCache(f);
 
     drawGrid(p, f);
+    if (lanim::timeSelection().active)
+    {
+        // Under the curves, so the range's columns tint the background rather than the lines.
+        const double a = std::max(f.plot.left(), handleX(f, 3)), b = std::min(f.plot.right(), handleX(f, 4));
+        for (double x = std::floor(a); x < b; x += 2.0)
+            if (const double w = rangeWeight(timeAt(f, x + 1.0)); w > 0.0)
+                p.rect(QRectF(x, f.plot.top(), 2.0, f.plot.height()), gray(1.0f, float(0.07 * w)));
+    }
+    const bool rangeEditing = (drag == Drag::RangeOffset || drag == Drag::RangeTween) && moved;
     p.setShadow(true);
     const std::vector<NodeId> active = model.activeSet();
     auto isActive = [&](NodeId c) { return std::find(active.begin(), active.end(), c) != active.end(); };
@@ -639,8 +864,14 @@ void CurveOverlay::draw(OverlayPainter& p, const ViewInfo& view)
                 }
             }
             else if (auto v = cache.values.find(ch.curve); v != cache.values.end())
+            {
+                const bool edited = rangeEditing && std::find(range.curves.begin(), range.curves.end(), ch.curve) != range.curves.end();
                 for (size_t i = 0; i < v->second.size(); ++i)
-                    pts.emplace_back(f.plot.left() + f.plot.width() * double(i) / double(v->second.size() - 1), yOf(f, v->second[i]));
+                {
+                    const double x = f.plot.left() + f.plot.width() * double(i) / double(v->second.size() - 1);
+                    pts.emplace_back(x, yOf(f, edited ? rangeValue(ch.curve, timeAt(f, x), v->second[i]) : v->second[i]));
+                }
+            }
             for (QPointF& pt : pts)
                 pt.setY(std::clamp(pt.y(), f.plot.top() - 2, f.plot.bottom() + 2));
             const float alpha = active.empty() || pass == 1 ? 1.0f : float(look::kRecede);
@@ -715,6 +946,17 @@ QString CurveOverlay::readout() const
 {
     if (!moved)
         return {};
+    if (drag == Drag::RangeOffset)
+    {
+        const Channel* ch = range.curves.empty() ? nullptr : model.channelOf(range.curves.front());
+        const lanim::TimeSelection& sel = lanim::timeSelection();
+        return QString("Range %1-%2  %3%4%5")
+            .arg(lanim::frameOf(sel.start))
+            .arg(lanim::frameOf(sel.end))
+            .arg(range.offset >= 0.0 ? "+" : "")
+            .arg(formatValue(range.offset))
+            .arg(ch ? ch->unit : QString());
+    }
     if (drag == Drag::Tangent)
         return std::isnan(model.edit.tangentAngle) ? QString() : QString("Angle %1°").arg(formatValue(model.edit.tangentAngle));
     if (drag != Drag::Keys || !anchor)
@@ -773,6 +1015,33 @@ bool CurveOverlay::click(QPointF px, const ViewInfo& view)
         panels::show("graphEditor");
         return true;
     }
+    if (f.range)
+    {
+        const lanim::TimeSelection& sel = lanim::timeSelection();
+        if (f.falloffChip.contains(px))
+        {
+            static constexpr lanim::RangeFalloff order[] = {lanim::RangeFalloff::Smooth, lanim::RangeFalloff::Linear, lanim::RangeFalloff::Sharp,
+                                                            lanim::RangeFalloff::Soft, lanim::RangeFalloff::Constant};
+            const size_t i = size_t(std::find(std::begin(order), std::end(order), sel.shape) - std::begin(order));
+            ops::execute("timeRange", {{"falloffType", lanim::rangeFalloffName(order[(i + 1) % std::size(order)])}});
+            redraw(true);
+            return true;
+        }
+        if (f.localChip.contains(px) || f.pivotChip.contains(px))
+        {
+            actions::run(json(f.pivotChip.contains(px) ? "puppeteer.strings.rotation.pivot" : "puppeteer.strings.rotation.local"));
+            redraw();
+            return true;
+        }
+        if (f.everyChip.contains(px))
+        {
+            static constexpr int steps[] = {0, 1, 2, 3, 5};
+            const size_t i = size_t(std::find(std::begin(steps), std::end(steps), sel.every) - std::begin(steps));
+            ops::execute("timeRange", {{"every", steps[(i + 1) % std::size(steps)]}});
+            redraw(true);
+            return true;
+        }
+    }
     return false;
 }
 
@@ -784,6 +1053,22 @@ bool CurveOverlay::pressed(QMouseEvent* e, const ViewInfo& view)
     if (mods & Qt::AltModifier)
         return false;
     const bool shift = mods & Qt::ShiftModifier, ctrl = mods & Qt::ControlModifier;
+    {
+        // The tween scrubber needs no Shift: it is a control, not the curve layer.
+        const Frame f(view.width, view.height);
+        if (f.range && f.tweenChip.contains(e->position()) && e->button() == Qt::LeftButton)
+        {
+            press = last = e->position();
+            moved = false;
+            std::vector<NodeId> curves = model.targetCurves();
+            std::erase_if(curves, [&](NodeId c) {
+                const Channel* ch = model.channelOf(c);
+                return !ch || !ch->shown || ch->plug.component < 0;
+            });
+            beginRangeEdit(Drag::RangeTween, std::move(curves));
+            return true;
+        }
+    }
     // Shift is the curve layer; Ctrl alone joins it only once keys are picked.
     if (!shift && !(ctrl && !model.sel.empty() && e->button() == Qt::LeftButton))
         return false;
@@ -792,6 +1077,24 @@ bool CurveOverlay::pressed(QMouseEvent* e, const ViewInfo& view)
     moved = false;
     lock = 0;
     anchor.reset();
+    if (e->button() == Qt::LeftButton)
+    {
+        if (const int h = rangeHandleAt(f, press))
+        {
+            range = {};
+            range.handle = h;
+            range.both = ctrl;
+            drag = Drag::RangeHandle;
+            return true;
+        }
+        if (ctrl && f.strip.adjusted(0, -4, 0, 8).contains(press))
+        {
+            range = {};
+            range.pressFrame = std::round(lanim::frameOf(std::clamp(timeAt(f, press.x()), t0(), t1())));
+            drag = Drag::RangeSelect;
+            return true;
+        }
+    }
     if (f.strip.adjusted(0, -4, 0, 8).contains(press) && (e->button() == Qt::LeftButton || e->button() == Qt::MiddleButton))
     {
         drag = Drag::Scrub;
@@ -829,6 +1132,36 @@ bool CurveOverlay::pressed(QMouseEvent* e, const ViewInfo& view)
         model.edit.tangentSide = side;
         drag = Drag::Tangent;
         return true;
+    }
+    // With a range selected, a key or curve dragged inside it moves every frame of the range, eased across the falloff.
+    if (lanim::timeSelection().active && !ctrl)
+    {
+        std::vector<NodeId> curves;
+        if (auto hit = hitKey(f, press); hit && inRange(hit->time))
+        {
+            if (model.isSelected(hit->curve, hit->time))
+                for (const KeySel& k : model.sel)
+                    if (std::find(curves.begin(), curves.end(), k.curve) == curves.end())
+                        curves.push_back(k.curve);
+            if (curves.empty())
+                curves.push_back(hit->curve);
+            model.activeCurve = hit->curve;
+        }
+        else if (const NodeId c = hitCurve(f, press); c && inRange(timeAt(f, press.x())))
+        {
+            curves.push_back(c);
+            model.activeCurve = c;
+        }
+        std::erase_if(curves, [&](NodeId c) {
+            const Channel* ch = model.channelOf(c);
+            return !ch || ch->plug.component < 0;
+        });
+        if (!curves.empty())
+        {
+            beginRangeEdit(Drag::RangeOffset, std::move(curves));
+            redraw();
+            return true;
+        }
     }
     if (auto hit = hitKey(f, press))
     {
@@ -881,6 +1214,44 @@ void CurveOverlay::dragged(QMouseEvent* e, const ViewInfo& view)
     switch (drag)
     {
     case Drag::Scrub: scrubTo(f, pos.x(), e->buttons() & Qt::MiddleButton); break;
+    case Drag::RangeOffset:
+        if (!moved)
+            break;
+        range.offset = valueAt(f, pos.y()) - valueAt(f, press.y());
+        previewRangeNow();
+        break;
+    case Drag::RangeTween:
+        if (!moved)
+            break;
+        // A hundred and fifty pixels to the right takes the whole way to the inbetween; left exaggerates.
+        range.tween = std::clamp(std::round(total.x() / 1.5) / 100.0, -1.0, 2.0);
+        previewRangeNow();
+        break;
+    case Drag::RangeSelect:
+    {
+        const double fr = std::round(lanim::frameOf(std::clamp(timeAt(f, pos.x()), t0(), t1())));
+        if (fr != range.pressFrame || moved)
+            ops::execute("timeRange", {{"start", lanim::secondsOf(std::min(fr, range.pressFrame))}, {"end", lanim::secondsOf(std::max(fr, range.pressFrame))}});
+        break;
+    }
+    case Drag::RangeHandle:
+    {
+        const lanim::TimeSelection& sel = lanim::timeSelection();
+        const double fr = std::round(lanim::frameOf(std::clamp(timeAt(f, pos.x()), t0(), t1())));
+        const double from = std::round(lanim::frameOf(sel.start)), to = std::round(lanim::frameOf(sel.end));
+        json call;
+        if (range.handle == 1)
+            call = {{"start", lanim::secondsOf(std::min(fr, to))}, {"end", sel.end}};
+        else if (range.handle == 2)
+            call = {{"start", sel.start}, {"end", lanim::secondsOf(std::max(fr, from))}};
+        else
+        {
+            const double frames = std::max(0.0, range.handle == 3 ? from - fr - 1.0 : fr - to - 1.0);
+            call = range.both ? json{{"falloff", frames}} : json{{range.handle == 3 ? "falloffBefore" : "falloffAfter", frames}};
+        }
+        ops::execute("timeRange", call);
+        break;
+    }
     case Drag::Pan:
     {
         const double dv = total.y() / f.plot.height() * (pressV1 - pressV0);
@@ -950,6 +1321,27 @@ void CurveOverlay::released(QMouseEvent* e, const ViewInfo& view)
     switch (was)
     {
     case Drag::RightPending: showTangentMenu(e->globalPosition().toPoint()); break;
+    case Drag::RangeOffset:
+    case Drag::RangeTween:
+    {
+        drag = was;
+        commitRange();
+        drag = Drag::None;
+        range = {};
+        cache = {};
+        // A click without a drag still picks the key under it.
+        if (!moved && was == Drag::RangeOffset)
+            if (auto hit = hitKey(f, press))
+                model.select(std::span(&*hit, 1), SelectOp::Replace);
+        break;
+    }
+    case Drag::RangeSelect:
+        // Ctrl + Shift + click without a drag drops the range.
+        if (!moved)
+            ops::execute("timeRange", {{"clear", true}});
+        range = {};
+        break;
+    case Drag::RangeHandle: range = {}; break;
     case Drag::Keys:
     case Drag::Tangent:
         model.commit();
@@ -1000,6 +1392,16 @@ void CurveOverlay::cancelDrag()
 {
     if (model.edit.kind != KeyEdit::Kind::None)
         model.cancel();
+    for (const auto& [whole, v] : range.held)
+        if (Graph::current().node(whole.node))
+            try
+            {
+                Graph::current().setValue(whole, v);
+            }
+            catch (const std::exception&)
+            {
+            }
+    range = {};
     drag = Drag::None;
     moved = false;
     anchor.reset();
@@ -1123,12 +1525,23 @@ json curveOverlayState()
         if (ch.shown)
             channels.push_back(o.model.commandTarget(ch.curve));
     QWidget* w = o.target.data();
-    return {{"open", o.open},
-            {"channels", channels},
-            {"selectedKeys", keys},
-            {"valueRange", {o.v0, o.v1}},
-            {"view", w ? json{{"x", w->mapToGlobal(QPoint(0, 0)).x()}, {"y", w->mapToGlobal(QPoint(0, 0)).y()}, {"width", w->width()}, {"height", w->height()}}
-                       : json(nullptr)}};
+    json out = {{"open", o.open},
+                {"channels", channels},
+                {"selectedKeys", keys},
+                {"valueRange", {o.v0, o.v1}},
+                {"view", w ? json{{"x", w->mapToGlobal(QPoint(0, 0)).x()}, {"y", w->mapToGlobal(QPoint(0, 0)).y()}, {"width", w->width()}, {"height", w->height()}}
+                           : json(nullptr)}};
+    if (w)
+    {
+        // Where the plot, strip and range row sit in the view, logical px [x, y, width, height]: for scripts that drive it.
+        const Frame f(w->width(), w->height());
+        auto rect = [](const QRectF& r) { return json::array({r.x(), r.y(), r.width(), r.height()}); };
+        out["layout"] = {{"plot", rect(f.plot)}, {"strip", rect(f.strip)}};
+        if (f.range)
+            out["layout"]["rangeRow"] = {{"falloff", rect(f.falloffChip)}, {"local", rect(f.localChip)}, {"pivot", rect(f.pivotChip)},
+                                         {"every", rect(f.everyChip)}, {"tween", rect(f.tweenChip)}};
+    }
+    return out;
 }
 } // namespace
 
@@ -1137,7 +1550,8 @@ void registerCurveOverlayCommand(ext::Context& ctx)
     ctx.registerCommand({
         .name = "curveOverlay",
         .doc = "Opens or closes Puppeteer's Curve Overlay, and returns what it shows: whether it is open, its channels, the "
-               "selected keys (curve and frame), the value range it frames and the viewport it draws in (screen position and size).",
+               "selected keys (curve and frame), the value range it frames, the viewport it draws in (screen position and size) "
+               "and where its plot, strip and, with a time range selected, range row sit in that view.",
         .flags = {{"open", "o", ArgType::Bool, nullptr, "Open (true) or close (false) it; leave out to only ask."}},
         .undoable = false,
         .run = [](const Args& a) -> json {

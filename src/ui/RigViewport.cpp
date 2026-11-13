@@ -64,15 +64,15 @@ void addCircle(std::vector<render::LineVertex>& out, const glm::dvec3& c, const 
     for (int k = 0; k < segments; ++k)
     {
         double a0 = 2.0 * std::numbers::pi * k / segments, a1 = 2.0 * std::numbers::pi * (k + 1) / segments;
-        out.push_back({glm::vec3(c + (u * std::cos(a0) + v * std::sin(a0)) * r), color});
-        out.push_back({glm::vec3(c + (u * std::cos(a1) + v * std::sin(a1)) * r), color});
+        out.push_back({glm::dvec3(c + (u * std::cos(a0) + v * std::sin(a0)) * r), color});
+        out.push_back({glm::dvec3(c + (u * std::cos(a1) + v * std::sin(a1)) * r), color});
     }
 }
 
 void addLine(std::vector<render::LineVertex>& out, const glm::dvec3& a, const glm::dvec3& b, const glm::vec4& color)
 {
-    out.push_back({glm::vec3(a), color});
-    out.push_back({glm::vec3(b), color});
+    out.push_back({glm::dvec3(a), color});
+    out.push_back({glm::dvec3(b), color});
 }
 
 /** Maya-style bone: a four-sided double pyramid from the joint to the child, widest just past the joint sphere. */

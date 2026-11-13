@@ -68,6 +68,43 @@ struct GroupEdit
 GroupEdit readGroup(lila::scene::Graph& g, const TerrainTarget& t, const std::string& cmd);
 void commitGroup(GroupEdit& e, const std::string& cmd);
 
+/**
+ * Terrain edits on this thread made as one (terrainBatch): while one is open, terrain reads skip evaluating the scene,
+ * group edits stay in memory, and the stamp and road commands return without their results. commit() writes each
+ * edited group once.
+ */
+class EditBatch
+{
+public:
+    EditBatch();
+    ~EditBatch();
+    EditBatch(const EditBatch&) = delete;
+    EditBatch& operator=(const EditBatch&) = delete;
+    static bool active();
+    void commit(const std::string& cmd);
+};
+/** The batch's edit of the group on groupNode into out; false when no batch holds one. */
+bool batchedGroup(const lila::scene::Node& groupNode, lila::gn::Group& out);
+/** Keeps group as the batch's edit of groupNode; false when no batch is open. */
+bool batchGroup(const lila::scene::Node& groupNode, lila::gn::Group& group);
+
+/**
+ * A group node's JSON list property (stamps, roads) to edit. In a batch the list is parsed once and edited in place
+ * across commands, and the batch writes it back when it commits; otherwise store() writes it to n.
+ */
+class ListEdit
+{
+public:
+    ListEdit(const lila::scene::Node& groupNode, const lila::gn::GNode& n, const char* prop);
+    json& list() { return *mList; }
+    void store(lila::gn::GNode& n);
+
+private:
+    const char* mProp;
+    json mOwn;
+    json* mList;
+};
+
 lila::gn::GNode* nodeNamed(lila::gn::Group& grp, const std::string& name);
 lila::gn::GLink* linkInto(lila::gn::Group& grp, const std::string& node, const std::string& socket);
 

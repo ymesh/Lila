@@ -2,6 +2,7 @@
 
 #include "Seamwork.h"
 
+#include <lila/Relocate.h>
 #include <lila/Command.h>
 #include <lila/Curves.h>
 #include <lila/Extension.h>
@@ -559,6 +560,10 @@ bool registerNodes(ext::Context& ctx)
             "the objects as they move.";
     t.ownAttrs = seamAttrs();
     t.create = [] { return std::make_unique<SeamNode>(); };
-    return types::registerType(ctx, std::move(t)) != nullptr && registerFieldNodes(ctx);
+    if (!types::registerType(ctx, std::move(t)))
+        return false;
+    // Its curves and points are built in world space from the objects it reads, so they follow those objects.
+    lila::scene::relocate::registerWorldAttrs(kSeamType, {.directions = {"up"}, .worldOutput = true});
+    return registerFieldNodes(ctx);
 }
 } // namespace seamwork

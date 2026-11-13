@@ -42,6 +42,8 @@ struct MeshEntry;
 
 namespace lila::ui
 {
+class DroneFlight;
+
 /** Native child window the render thread presents into. Owns the camera and Maya-style navigation. */
 class LILA_UI_API ViewportWidget : public QWidget
 {
@@ -167,6 +169,8 @@ public:
     viewportHooks::DropTarget dropTarget(QPointF px);
 
 private:
+    friend class DroneFlight;
+
     enum class Nav
     {
         None,
@@ -275,6 +279,29 @@ private:
     };
     std::optional<CameraEdit> mCameraEdit;
     QTimer* mWheelCommit = nullptr; // a run of wheel clicks on a camera node commits once it stops
+    /**
+     * Camera smoothing: input arrives unevenly, so the view draws the camera a moment in the past, interpolated between the
+     * timestamped states around that moment, at the display's refresh. mCamera stays what navigation, picking and tools use.
+     */
+    struct CameraSample
+    {
+        double ms = 0.0;
+        Camera camera;
+    };
+    std::deque<CameraSample> mCameraSamples;
+    /** Running estimates of the time between camera updates while moving, and of how much it varies, ms. */
+    double mInputIntervalMs = 16.0, mInputSpreadMs = 4.0;
+    /** Each playback's current delay behind input, ms, and when playback last ran. */
+    double mLookDelayMs = 0.0, mMoveDelayMs = 0.0, mPlaybackLastMs = 0.0;
+    Camera mShownCamera;
+    bool mShownValid = false;
+    QTimer* mEaseTimer = nullptr;
+    /** mCamera, or the delayed, interpolated camera while smoothing is on. */
+    const Camera& shownCamera();
+    /** Records mCamera when it changed and starts playback. */
+    void startCameraEase();
+    /** One display frame of playback; stops once the drawn camera has reached mCamera. */
+    void easeCamera();
     double mLockedWarnMs = 0.0;
     scene::isolation::Set mIsolation;
     void drawHud(OverlayPainter& p);

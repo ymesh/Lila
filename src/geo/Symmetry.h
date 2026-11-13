@@ -277,6 +277,11 @@ public:
     int wedge(Index p) const;
     /** The wedge most of the points are in, 0 when tied or none are. */
     int majorityWedge(std::span<const Index> points) const;
+    /**
+     * The points split by the wedge (side) they lie in, unmatched ones with the majority's, so a symmetric selection merges
+     * per side. One group of them all when any is fixed: a selection reaching the plane merges onto it.
+     */
+    std::vector<std::vector<Index>> wedgeGroups(std::span<const Index> points) const;
     /** True when p is its orbit's point in wedge w, so it drives the rest (fixed and unmatched points always do). */
     bool drives(Index p, int w) const;
     /** On the plane, the axis, or a dihedral mirror plane: some element besides the identity leaves it in place. */

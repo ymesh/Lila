@@ -29,6 +29,7 @@
 #include <chrono>
 #include <format>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <random>
 #include <set>
@@ -160,7 +161,9 @@ json statsOf(const Result& r, size_t walls)
     for (const Stone& s : b.stones)
     {
         roles[roleName(s.role)] = roles[roleName(s.role)].get<int64_t>() + 1;
-        bounds.extend(s.center);
+        const glm::dvec3 e = halfExtentAabb(s);
+        bounds.extend(s.center - e);
+        bounds.extend(s.center + e);
         if (s.region >= 0 && size_t(s.region) < perRegion.size())
             ++perRegion[size_t(s.region)];
     }
@@ -180,6 +183,7 @@ json statsOf(const Result& r, size_t walls)
             {"coreTriangles", int64_t(triangles(b.core))},
             {"collisionHulls", int64_t(b.coreHulls.size())},
             {"ruin", r.ruin.toJson()},
+            {"bounds", bounds.valid() ? json{{"min", {bounds.min.x, bounds.min.y, bounds.min.z}}, {"max", {bounds.max.x, bounds.max.y, bounds.max.z}}} : json()},
             {"boundsMin", bounds.valid() ? json::array({bounds.min.x, bounds.min.y, bounds.min.z}) : json()},
             {"boundsMax", bounds.valid() ? json::array({bounds.max.x, bounds.max.y, bounds.max.z}) : json()}};
 }
@@ -899,11 +903,11 @@ void registerCommands(ext::Context& ctx)
             const WallRef w = wallRef(g, a, "masonryInfo");
             const std::shared_ptr<const Result> r = buildOf(w, false, "masonryInfo");
             json out = statsOf(*r, w.footprints.size());
-            std::vector<Stone> standing;
-            for (const Stone& s : r->built.stones)
-                if (s.role != Role::Rubble && !s.loose)
-                    standing.push_back(s);
-            const size_t overlapping = countOverlaps(standing);
+            std::vector<int> standing;
+            for (size_t k = 0; k < r->built.stones.size(); ++k)
+                if (r->built.stones[k].role != Role::Rubble && !r->built.stones[k].loose)
+                    standing.push_back(int(k));
+            const size_t overlapping = overlappingPairs(r->built, standing, 0.01).size();
             out["settings"] = w.values;
             out["checks"] = {{"overlaps", int64_t(overlapping)}, {"ok", overlapping == 0 && !r->built.stones.empty()}};
             out["mesh"] = w.mesh ? w.mesh->path() : std::string();
@@ -1023,8 +1027,10 @@ void registerCommands(ext::Context& ctx)
     ctx.registerCommand({
         .name = "masonryCheck",
         .doc = "Check a masonry wall or building before shipping it: floating stones (not on the ground and touching nothing "
-               "under them), standing stones interpenetrating by more than tolerance, missing collision, and an optional budget. "
-               "Returns {ok, issues: [text], floating, floatingStones (the first ten: region, role, at), overlaps, rubbleOverlaps, collisionHulls, stones, triangles}.",
+               "under them), standing stones interpenetrating by more than tolerance, rubble heaped higher than half the walls "
+               "(stacked), missing collision, and an optional budget. Returns {ok, issues: [text], floating, floatingStones (the "
+               "first ten: region, role, at), overlaps, overlapRegions (pairs per region, 'a + b' across two), overlapPairs (the "
+               "first ten: regions, roles, at), rubbleOverlaps, stacked, rubbleHeight, collisionHulls, stones, triangles}.",
         .positionalDoc = "masonry mesh or modifier (default the selection)",
         .flags = {{"tolerance", "", T::Float, 0.1, "Interpenetration allowed, and the gap a resting stone may have under it, cm.", {}, {}, 0.0},
                   {"maxStones", "", T::Int, int64_t(0), "Budget: most stones; 0 for none.", {}, {}, 0.0},
@@ -1038,21 +1044,44 @@ void registerCommands(ext::Context& ctx)
             const std::shared_ptr<const Result> r = buildOf(w, false, "masonryCheck");
             const Built& b = r->built;
             const double tol = std::max(0.0, a.get<double>("tolerance", 0.1));
-            std::vector<Stone> standing, rubble;
-            for (const Stone& s : b.stones)
-                (s.role == Role::Rubble ? rubble : standing).push_back(s);
-            const size_t overlaps = countOverlaps(standing, tol);
-            const size_t rubbleOverlaps = countOverlaps(rubble, std::max(tol, 1.0));
+            std::vector<int> standing, rubble;
+            for (size_t k = 0; k < b.stones.size(); ++k)
+                (isRubble(b.stones[k]) ? rubble : standing).push_back(int(k));
+            const std::vector<std::pair<int, int>> pairs = overlappingPairs(b, standing, tol);
+            const size_t overlaps = pairs.size();
+            const size_t rubbleOverlaps = overlappingPairs(b, rubble, std::max(tol, 1.0)).size();
+            auto regionOf = [&](const Stone& s) { return s.region >= 0 && size_t(s.region) < b.regions.size() ? b.regions[size_t(s.region)] : std::string(); };
+            std::map<std::string, int64_t> perRegion;
+            json overlapPairs = json::array();
+            for (const auto& [i, j] : pairs)
+            {
+                const Stone& s = b.stones[size_t(i)];
+                const Stone& t = b.stones[size_t(j)];
+                std::string ra = regionOf(s), rb = regionOf(t);
+                if (rb < ra)
+                    std::swap(ra, rb);
+                ++perRegion[ra == rb ? ra : ra + " + " + rb];
+                if (overlapPairs.size() < 10)
+                {
+                    const glm::dvec3 at = (s.center + t.center) * 0.5;
+                    overlapPairs.push_back({{"regions", {regionOf(s), regionOf(t)}}, {"roles", {roleName(s.role), roleName(t.role)}}, {"at", {at.x, at.y, at.z}}});
+                }
+            }
+            json overlapRegions = json::object();
+            for (const auto& [name, count] : perRegion)
+                overlapRegions[name] = count;
             std::vector<int> which;
             const int floating = countFloating(b.stones, std::max(tol, b.pitch * 0.15), &which);
             json floatingStones = json::array();
             for (size_t i = 0; i < which.size() && i < 10; ++i)
             {
                 const Stone& s = b.stones[size_t(which[i])];
-                floatingStones.push_back({{"region", s.region >= 0 && size_t(s.region) < b.regions.size() ? b.regions[size_t(s.region)] : std::string()},
-                                          {"role", roleName(s.role)},
-                                          {"at", {s.center.x, s.center.y, s.center.z}}});
+                floatingStones.push_back({{"region", regionOf(s)}, {"role", roleName(s.role)}, {"at", {s.center.x, s.center.y, s.center.z}}});
             }
+            // Rubble from a wall spreads at its foot: a heap higher than half the walls is a column, not a heap.
+            const double stackLimit = std::max(3.0 * b.pitch, 0.5 * b.courses * b.pitch);
+            double rubbleHeight = 0.0;
+            const int stacked = countStacked(b.stones, stackLimit, nullptr, &rubbleHeight);
             const json stats = statsOf(*r, w.footprints.size());
             json issues = json::array();
             if (b.stones.empty())
@@ -1060,7 +1089,20 @@ void registerCommands(ext::Context& ctx)
             if (floating > 0)
                 issues.push_back(std::format("{} stones float", floating));
             if (overlaps > 0)
-                issues.push_back(std::format("{} pairs of standing stones interpenetrate by more than {} cm", overlaps, tol));
+            {
+                std::vector<std::pair<int64_t, std::string>> ranked;
+                for (const auto& [name, count] : perRegion)
+                    ranked.push_back({count, name});
+                std::sort(ranked.begin(), ranked.end(), [](const auto& x, const auto& y) { return x.first > y.first || (x.first == y.first && x.second < y.second); });
+                std::string where;
+                for (size_t i = 0; i < ranked.size() && i < 4; ++i)
+                    where += std::format("{}{} {}", i ? ", " : "", ranked[i].second, ranked[i].first);
+                if (ranked.size() > 4)
+                    where += ", ...";
+                issues.push_back(std::format("{} pairs of standing stones interpenetrate by more than {} cm ({})", overlaps, tol, where));
+            }
+            if (stacked > 0)
+                issues.push_back(std::format("{} rubble stones are stacked up to {:.0f} cm above the ground, over half the walls' height ({:.0f} cm)", stacked, rubbleHeight, stackLimit));
             if (b.coreHulls.empty() && !b.stones.empty())
                 issues.push_back("no collision: the core is empty");
             if (const int64_t m = a.get<int64_t>("maxStones", 0); m > 0 && int64_t(b.stones.size()) > m)
@@ -1072,7 +1114,11 @@ void registerCommands(ext::Context& ctx)
                     {"floating", floating},
                     {"floatingStones", floatingStones},
                     {"overlaps", int64_t(overlaps)},
+                    {"overlapRegions", overlapRegions},
+                    {"overlapPairs", overlapPairs},
                     {"rubbleOverlaps", int64_t(rubbleOverlaps)},
+                    {"stacked", stacked},
+                    {"rubbleHeight", rubbleHeight},
                     {"collisionHulls", int64_t(b.coreHulls.size())},
                     {"stones", int64_t(b.stones.size())},
                     {"triangles", stats["stoneTriangles"]}};

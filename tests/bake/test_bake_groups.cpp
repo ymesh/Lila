@@ -586,12 +586,7 @@ TEST_CASE("one group per mesh and Arrange")
     const std::string loner = addMesh("loner", geo::makeCube());
     glm::dvec3 rockOffset(0.0), crateOffset(0.0);
     for (const auto& [name, o] : offsets.items())
-#ifdef _WIN32
-        (name.find("rock") != std::string::npos ? rockOffset : crateOffset) = {o[0].get<double>(), o[1].get<double>(), o[2].get<double>()};
-#else
-        // GCC finds no dvec3 for a braced list on the right of operator= (glm's operator= overloads); name the type.
         (name.find("rock") != std::string::npos ? rockOffset : crateOffset) = glm::dvec3(o[0].get<double>(), o[1].get<double>(), o[2].get<double>());
-#endif
     CHECK(bake::arrange::displayOffset(g, g.find(rock)->id()) == rockOffset);
     CHECK(bake::arrange::displayOffset(g, g.find(crateLow)->id()) == crateOffset);
     CHECK(bake::arrange::displayOffset(g, g.find(crateHigh)->id()) == crateOffset);

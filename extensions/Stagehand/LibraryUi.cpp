@@ -362,8 +362,8 @@ void drawGhost(render::FrameState& s, OverlayPainter&, const ViewInfo&)
     const glm::vec4 color(0.95f, 0.95f, 0.95f, 0.9f);
     for (const auto& e : edges)
     {
-        s.lines.push_back({glm::vec3(c[e[0]]), color});
-        s.lines.push_back({glm::vec3(c[e[1]]), color});
+        s.lines.push_back({glm::dvec3(c[e[0]]), color});
+        s.lines.push_back({glm::dvec3(c[e[1]]), color});
     }
 }
 } // namespace

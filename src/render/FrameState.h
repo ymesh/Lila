@@ -15,9 +15,13 @@ namespace lila::render
 /** FrameState::frameCap: draw at the display's refresh rate. */
 inline constexpr int kFrameCapRefresh = -1;
 
+/**
+ * A world-space (or, in FrameState::overlay, NDC) vertex. World positions are double: the renderer rebases them on the
+ * eye before they become float, so lines stay exact far from the origin.
+ */
 struct LineVertex
 {
-    glm::vec3 pos;
+    glm::dvec3 pos;
     glm::vec4 color;
 };
 
@@ -33,7 +37,7 @@ struct LineBatch
  * Everything a viewport needs for one frame, copied out of the scene on the main thread. The render thread only
  * ever sees these snapshots, never the live graph. An offline renderer would consume the same data.
  */
-/** One component dot: a world-space point and how it shows. */
+/** One component dot: a point relative to its cloud's origin, and how it shows. */
 struct PointVertex
 {
     glm::vec3 pos;
@@ -44,6 +48,8 @@ struct PointVertex
 struct PointCloud
 {
     std::vector<PointVertex> points;
+    /** World position the points are relative to, so they keep their precision far from the world origin. */
+    glm::dvec3 origin{0.0};
     uint64_t key = nextResourceKey();
 };
 
@@ -91,11 +97,64 @@ struct StrandCloud
 struct StrandDraw
 {
     std::shared_ptr<const StrandCloud> cloud;
-    glm::mat4 world{1.0f};
+    glm::dmat4 world{1.0};
     float keep = 1.0f;
     float widthScale = 1.0f;
     /** Highlight colour (linear) mixed in for a selected or preselected node; black for none. */
     glm::vec3 tint{0.0f};
+};
+
+/**
+ * One octree node of a streamed point cloud: its points packed as three words each (x | y << 16, z | r << 16 | g << 24,
+ * b | class << 8 | intensity << 16), positions 0 to 65535 across the node's cube. Kept on the GPU by key.
+ */
+struct PointChunk
+{
+    std::vector<uint32_t> words;
+    uint32_t count = 0;
+    uint64_t key = nextResourceKey();
+};
+
+/**
+ * A point cloud's visible nodes, drawn as points of a constant pixel size in the scene pass. Each chunk sits in its cube
+ * (min, size) in the cloud's space, placed by world. Clip boxes are world-to-box matrices, inside where |x|, |y|, |z| <= 0.5.
+ */
+struct PointCloudDraw
+{
+    struct Chunk
+    {
+        std::shared_ptr<const PointChunk> points;
+        glm::dvec3 min{0.0};
+        double size = 1.0;
+    };
+    std::vector<Chunk> chunks;
+    glm::dmat4 world{1.0};
+    float pointSize = 2.0f; // device pixels
+    float edl = 0.3f;       // eye-dome lighting strength, 0 off
+    enum ColorMode : uint32_t
+    {
+        Rgb,
+        Intensity,
+        Elevation,
+        Classification,
+        Single,
+    };
+    ColorMode colorMode = Rgb;
+    glm::vec3 color{0.8f}; // linear, Single
+    /** Elevation: the cloud-space up axis (1 Y, 2 Z) and the height range the ramp spans. */
+    int upAxis = 1;
+    glm::vec2 elevation{0.0f, 1.0f};
+    enum ClipMode : uint32_t
+    {
+        ClipOff,
+        ClipInside,
+        ClipOutside,
+    };
+    ClipMode clipMode = ClipOff;
+    std::vector<glm::dmat4> clips; // at most 8
+    /** Highlight colour (linear) mixed in for a selected or preselected cloud; black for none. */
+    glm::vec3 tint{0.0f};
+    uint64_t node = 0;
 };
 
 /** Pixel-space triangle vertex for the 2D overlay (gizmos, HUD, text). */
@@ -126,7 +185,7 @@ struct ImagePlaneDraw
         Scene,  // depth tested like geometry
         Front,  // over every mesh
     };
-    glm::vec3 corners[4]{};               // top left, top right, bottom right, bottom left
+    glm::dvec3 corners[4]{};              // top left, top right, bottom right, bottom left
     /** corners are view NDC (x, y; z unused) rather than world points: glued to the screen, untouched by the camera. */
     bool screen = false;
     glm::vec4 uv{0.0f, 0.0f, 1.0f, 1.0f}; // u0, v0, u1, v1; v0 is the image's top row
@@ -176,7 +235,7 @@ struct HeightfieldDraw
     int nz = 0;
     float cell = 100.0f;
     glm::vec2 origin{0.0f};
-    glm::mat4 world{1.0f};
+    glm::dmat4 world{1.0};
     /** Used when materials is empty. */
     glm::vec3 color{0.5f};
     float roughness = 0.55f;
@@ -259,7 +318,7 @@ struct LightDraw
         Disc, // width is the diameter
     };
     Kind kind = Point;
-    glm::vec3 position{0.0f};
+    glm::dvec3 position{0.0};
     glm::vec3 direction{0.0f, -1.0f, 0.0f}; // where the light travels
     glm::vec3 right{1.0f, 0.0f, 0.0f};      // area lights: the width axis
     glm::vec3 radiance{1.0f};               // colour times intensity, in the shader's units (1 lights like the default environment)
@@ -271,7 +330,7 @@ struct LightDraw
     bool castsShadows = false;
     /** World to the shadow map's clip space (reversed-Z), when it has one. */
     bool shadows = false;
-    glm::mat4 shadowViewProj{1.0f};
+    glm::dmat4 shadowViewProj{1.0};
     float shadowTexel = 1.0f; // world size of a shadow texel at the light's focus, cm, for the normal offset
     /**
      * For contact-hardening shadow maps: the map's near and far distances (cm), the light's size (the sun's angular radius
@@ -282,11 +341,19 @@ struct LightDraw
     uint32_t lightingChannels = 1;
 };
 
+/**
+ * World-space data comes in double. The renderer draws camera-relative: rebaseOnEye (render/CameraRelative.h) moves the
+ * frame so the eye sits at its float space's origin, and renderOrigin records where that is in the world.
+ */
 struct FrameState
 {
     glm::dmat4 view{1.0};
     glm::dmat4 proj{1.0}; // reversed-Z, infinite far
     glm::dvec3 eye{0.0};
+    /** The world position the frame's float space is centred on: 0 as built, the eye once rebased. */
+    glm::dvec3 renderOrigin{0.0};
+    /** Rebase on the eye when it is far from the origin (render::kRebaseBeyond); off draws in world space everywhere. */
+    bool cameraRelative = true;
     bool zUp = false;
     float gridSpacing = 10.0f; // cm between minor lines
     int gridMajorEvery = 10;
@@ -445,6 +512,7 @@ struct FrameState
     std::vector<LineVertex> tris3d;     // world-space triangle list, blended and biased toward the camera, no depth write
     std::vector<PointDraw> points;      // component dots, drawn after tris3d
     std::vector<StrandDraw> strands;    // hair, drawn in the scene pass after the meshes
+    std::vector<PointCloudDraw> pointClouds; // scans, drawn in the scene pass after the strands
     std::vector<LineVertex> linesXray;  // world-space lines with no depth test, over every surface (x-ray joints)
     /** Debug drawing (debug/DebugDraw.h), shared between frames while it doesn't change. Triangles are blended and depth tested. */
     std::shared_ptr<const std::vector<LineBatch>> debugLines;

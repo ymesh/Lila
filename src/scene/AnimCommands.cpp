@@ -345,6 +345,41 @@ TimeSelection& timeSelection()
     return s;
 }
 
+const char* rangeFalloffName(RangeFalloff f)
+{
+    switch (f)
+    {
+    case RangeFalloff::Smooth: return "smooth";
+    case RangeFalloff::Linear: return "linear";
+    case RangeFalloff::Sharp: return "sharp";
+    case RangeFalloff::Soft: return "soft";
+    case RangeFalloff::Constant: return "constant";
+    }
+    return "smooth";
+}
+
+std::optional<RangeFalloff> rangeFalloffFromName(std::string_view name)
+{
+    for (RangeFalloff f : {RangeFalloff::Smooth, RangeFalloff::Linear, RangeFalloff::Sharp, RangeFalloff::Soft, RangeFalloff::Constant})
+        if (name == rangeFalloffName(f))
+            return f;
+    return std::nullopt;
+}
+
+double rangeFalloffWeight(RangeFalloff f, double x)
+{
+    x = std::clamp(x, 0.0, 1.0);
+    switch (f)
+    {
+    case RangeFalloff::Smooth: return x * x * (3.0 - 2.0 * x);
+    case RangeFalloff::Linear: return x;
+    case RangeFalloff::Sharp: return x * x;
+    case RangeFalloff::Soft: return 1.0 - (1.0 - x) * (1.0 - x);
+    case RangeFalloff::Constant: return x > 0.0 ? 1.0 : 0.0;
+    }
+    return x;
+}
+
 double timeSelectionWeight(const TimeSelection& s, double seconds)
 {
     if (!s.active)
@@ -353,11 +388,33 @@ double timeSelectionWeight(const TimeSelection& s, double seconds)
     const double outside = frame < from ? from - frame : frame > to ? frame - to : 0.0;
     if (outside <= 1e-9)
         return 1.0;
-    if (s.falloff <= 0.0 || outside >= s.falloff + 1.0)
+    const double width = frame < from ? s.before() : s.after();
+    if (width <= 0.0 || outside >= width + 1.0)
         return 0.0;
-    // Smoothstep from the selection's edge to a frame past the falloff, so the last eased frame still moves a little.
-    const double x = 1.0 - outside / (s.falloff + 1.0);
-    return x * x * (3.0 - 2.0 * x);
+    // From the selection's edge to a frame past the falloff, so the last eased frame still moves a little.
+    return rangeFalloffWeight(s.shape, 1.0 - outside / (width + 1.0));
+}
+
+std::vector<double> timeSelectionFrames(const TimeSelection& s, const std::vector<double>& keyed)
+{
+    std::vector<double> out;
+    if (!s.active)
+        return out;
+    const double from = frameOf(s.start) - s.before(), to = frameOf(s.end) + s.after();
+    for (double t : keyed)
+        if (frameOf(t) >= from - 1e-6 && frameOf(t) <= to + 1e-6)
+            out.push_back(t);
+    if (s.every > 0)
+    {
+        const double first = std::ceil(from - 1e-6);
+        for (double f = first; f <= to + 1e-6; f += s.every)
+            out.push_back(secondsOf(f));
+        for (double f : {frameOf(s.start), frameOf(s.end), first, std::floor(to + 1e-6)})
+            out.push_back(secondsOf(f));
+    }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end(), [](double a, double b) { return std::abs(a - b) < 1e-9; }), out.end());
+    return out;
 }
 
 void playbackChanged()
@@ -541,6 +598,7 @@ NodeId setKey(Graph& g, const PlugRef& plug, double time, double value, std::opt
     if (!(a.flags & AttrInput))
         throw std::invalid_argument(g.plugName(plug) + " is an output");
 
+    routeKey(g, plug);
     if (auto rq = setLayeredRotationKey(g, plug, time, value, in, out))
         return *rq;
     if (keysAsRotation(g, plug))
@@ -568,7 +626,7 @@ NodeId setKey(Graph& g, const PlugRef& plug, double time, double value, std::opt
     if (auto r = redirectKey(g, plug, value))
     {
         // An offset blend's inputB is its one control value: posing on its layer moves it at every frame together.
-        if (const auto* bn = dynamic_cast<const BlendNode*>(g.node(r->plug.node)); bn && bn->staticInputB() && r->plug.attr == BlendNode::kInputB)
+        if (const auto* bn = dynamic_cast<const BlendNode*>(g.node(r->plug.node)); (bn && bn->staticInputB() && r->plug.attr == BlendNode::kInputB) || r->staticValue)
         {
             g.setValue(r->plug, r->value);
             return r->plug.node;
@@ -659,10 +717,18 @@ void registerCommands()
         Node* s = g.node(src.node);
         if (!s || !(isCurve(*s) || isBlend(*s)))
             return Graph::DrivenEdit::Reject;
-        // Interactive drags run with undo off; they hold, and the committing set keys.
-        if (autoKey() && UndoStack::get().enabled())
+        // Interactive drags run with undo off; they hold, and the committing set keys (or sets an offset's value).
+        if (!UndoStack::get().enabled())
+            return Graph::DrivenEdit::Hold;
+        if (editSetsStatic(g, dst))
         {
             setKey(g, dst, g.time(), v);
+            return Graph::DrivenEdit::Handled;
+        }
+        if (autoKey())
+        {
+            setKey(g, dst, g.time(), v);
+            notifyAutoKey(g, dst, g.time());
             return Graph::DrivenEdit::Handled;
         }
         return Graph::DrivenEdit::Hold;
@@ -676,12 +742,18 @@ void registerCommands()
     ops::registerCommand({
         .name = "timeRange",
         .doc = "The time slider's selected range (Shift + drag on it), which edits across frames act on, such as Strings "
-               "poses. Give start and end to select, clear to drop it, falloff for the frames edits ease out over either "
-               "side. Returns {active, start, end, falloff}, times in seconds.",
+               "poses and Curve Overlay drags. Give start and end to select, clear to drop it, falloff for the frames "
+               "edits ease out over either side (falloffBefore and falloffAfter for one side), falloffType for its shape, "
+               "every to key every n frames. Returns {active, start, end, falloffBefore, falloffAfter, falloffType, every}, "
+               "times in seconds.",
         .flags = {
             {"start", "s", T::Float, nullptr, "Seconds."},
             {"end", "e", T::Float, nullptr, "Seconds."},
             {"falloff", "fo", T::Float, nullptr, "Frames edits ease out over either side."},
+            {"falloffBefore", "fob", T::Float, nullptr, "Frames edits ease out over before the range."},
+            {"falloffAfter", "foa", T::Float, nullptr, "Frames edits ease out over after the range."},
+            {"falloffType", "fot", T::String, nullptr, "How edits ease out across the falloff.", {"smooth", "linear", "sharp", "soft", "constant"}},
+            {"every", "ev", T::Int, nullptr, "Range edits key every this many frames; 0 only the keyed frames.", {}, {}, 0.0, 100.0},
             {"clear", "c", T::Bool, false, "Drop the selection."},
         },
         .undoable = false,
@@ -697,9 +769,32 @@ void registerCommands()
                 s.active = true;
             }
             if (a.has("falloff"))
+            {
                 s.falloff = std::max(0.0, a.get<double>("falloff"));
+                s.falloffAfter = -1.0;
+            }
+            if (a.has("falloffBefore"))
+            {
+                const double after = s.after();
+                s.falloff = std::max(0.0, a.get<double>("falloffBefore"));
+                s.falloffAfter = after;
+            }
+            if (a.has("falloffAfter"))
+                s.falloffAfter = std::max(0.0, a.get<double>("falloffAfter"));
+            if (a.has("falloffType"))
+            {
+                const auto shape = rangeFalloffFromName(a.get<std::string>("falloffType"));
+                if (!shape)
+                    throw CommandError("timeRange: falloffType is smooth, linear, sharp, soft or constant");
+                s.shape = *shape;
+            }
+            if (a.has("every"))
+                s.every = std::clamp(a.get<int>("every"), 0, 100);
             playbackChanged();
-            return {{"active", s.active}, {"start", s.start}, {"end", s.end}, {"falloff", s.falloff}};
+            return {{"active", s.active},           {"start", s.start},
+                    {"end", s.end},                 {"falloffBefore", s.before()},
+                    {"falloffAfter", s.after()},    {"falloffType", rangeFalloffName(s.shape)},
+                    {"every", s.every}};
         },
     });
 

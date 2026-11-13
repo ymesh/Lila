@@ -73,6 +73,16 @@ double springGain(double frequency, double damping, double dt, double& dampGain)
     return k / d;
 }
 
+/** Whether a contact holds bodies i and j (or a parent or child of either) against each other, so they never fight it. */
+bool held(const RigDef& rig, int i, int j)
+{
+    auto near = [&](int x, int body) { return x == body || rig.bodies[size_t(x)].parent == body || rig.bodies[size_t(body)].parent == x; };
+    for (const ContactDef& c : rig.contacts)
+        if ((near(i, c.a) && near(j, c.b)) || (near(j, c.a) && near(i, c.b)))
+            return true;
+    return false;
+}
+
 ph::Pose poseOf(const glm::dmat4& m) { return {glm::dvec3(m[3]), glm::normalize(glm::quat_cast(glm::dmat3(m)))}; }
 
 BodyState stateOf(const ph::RawState& s) { return {s.position, s.rotation, s.velocity, s.angularVelocity}; }
@@ -131,6 +141,42 @@ struct World::Impl
         if (targetRot)
             angular = k * rotationVector(*targetRot * glm::conjugate(now.rotation)) - c * scene->angularVelocity(body);
         scene->accelerate(body, linear, angular);
+    }
+
+    /**
+     * A grapple contact: a spring between a point on each body, as equal and opposite forces, so each yields by its mass
+     * (a kinematic side doesn't yield). With a held rotation, a turning spring shared the same way.
+     */
+    void contact(const ContactDef& c, double weight, double frequency, double dt)
+    {
+        weight = std::clamp(weight, 0.0, 1.0);
+        if (weight <= 0.0 || frequency <= 0.0)
+            return;
+        const bool da = dynamic(size_t(c.a)), db = dynamic(size_t(c.b));
+        if (!da && !db)
+            return;
+        double damp = 0.0;
+        const double k = springGain(frequency, 1.0, dt, damp);
+        const ph::Pose pa = scene->pose(c.a), pb = scene->pose(c.b);
+        const glm::dvec3 a = pa.position + pa.rotation * c.pointA, b = pb.position + pb.rotation * c.pointB;
+        const double ma = scene->mass(c.a), mb = scene->mass(c.b);
+        const double mass = da && db ? ma * mb / std::max(ma + mb, 1e-9) : da ? ma : mb;
+        const glm::dvec3 force = (k * (b - a) - damp * (scene->pointVelocity(c.b, b) - scene->pointVelocity(c.a, a))) * mass * weight;
+        if (da)
+            scene->push(c.a, force, a);
+        if (db)
+            scene->push(c.b, -force, b);
+        if (c.rotation)
+        {
+            const glm::dvec3 turn = rotationVector(pb.rotation * *c.rotation * glm::conjugate(pa.rotation));
+            const glm::dvec3 spin = scene->angularVelocity(c.a) - scene->angularVelocity(c.b);
+            const glm::dvec3 accel = (k * turn - damp * spin) * weight;
+            const double shareA = da && db ? mb / std::max(ma + mb, 1e-9) : da ? 1.0 : 0.0;
+            if (da)
+                scene->accelerate(c.a, glm::dvec3(0.0), accel * shareA);
+            if (db)
+                scene->accelerate(c.b, glm::dvec3(0.0), -accel * (1.0 - shareA));
+        }
     }
 };
 
@@ -206,7 +252,8 @@ World::World(const RigDef& rig, const Shapes& shapes, const std::vector<BodyStat
             const BodyDef &a = rig.bodies[i], &b = rig.bodies[j];
             const bool related = a.parent == int(j) || b.parent == int(i);
             const bool grouped = a.group > 0 && a.group == b.group;
-            if (!rig.selfCollision || related || grouped)
+            const bool together = !rig.figures || a.skeleton == b.skeleton;
+            if ((together && (!rig.selfCollision || related)) || grouped || held(rig, int(i), int(j)))
                 scene.setCollides(int(i), int(j), false);
         }
 
@@ -331,6 +378,9 @@ void World::step(const Drive& drive, double dt)
     if (!w.options.live && drive.carried != glm::dvec3(0.0))
         for (size_t i = 0; i < n; ++i)
             scene.accelerate(int(i), drive.carried);
+
+    for (size_t k = 0; k < rig.contacts.size() && k < drive.contacts.size(); ++k)
+        w.contact(rig.contacts[k], drive.contacts[k].weight, drive.contacts[k].stiffness, dt);
 
     if (w.grabBody >= 0 && size_t(w.grabBody) < n && w.dynamic(size_t(w.grabBody)))
     {

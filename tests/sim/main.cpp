@@ -4,6 +4,7 @@
 #include "ops/Command.h"
 #include "core/MainQueue.h"
 #include "extensions/ExtensionManager.h"
+#include "fbx/Fbx.h"
 #include "gn/Gn.h"
 #include "io/SceneFile.h"
 #include "scene/Anim.h"
@@ -35,6 +36,7 @@ int main(int argc, char** argv)
     lila::extensions::registerCommands();
     lila::gn::registerCommands();
     lila::seq::registerCommands();
+    lila::fbx::registerCommands();
 
     doctest::Context ctx(argc, argv);
     int result = ctx.run();

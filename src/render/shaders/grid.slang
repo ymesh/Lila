@@ -11,7 +11,8 @@ struct GridPush
     float4 color;  // grid lines
     float4 axisX;
     float4 axisZ;  // the other ground axis: Z, or Y when Z-up
-    float4 origin; // the display origin the grid is drawn around
+    float4 origin; // the display origin the grid is drawn around, relative to the eye
+    float4 offset; // the eye's ground coordinates from the origin: xy exact for the axes, zw wrapped by a major cell for the lines
 };
 
 [[vk::push_constant]] GridPush pc;
@@ -77,12 +78,15 @@ PSOut gridPS(VSOut i)
     t = abs(t);
 
     float3 p = ro + rd * t;
-    float2 coord = zUp ? p.xy - origin.xy : p.xz - origin.xz;
+    // The frame is centred on the eye: ground coordinates are the eye's own plus the hit's offset from it.
+    float2 local = zUp ? p.xy - pc.eye.xy : p.xz - pc.eye.xz;
+    float2 coord = local + pc.offset.xy;
+    float2 lineCoord = local + pc.offset.zw;
 
     float minor = pc.params.x;
     float major = minor * pc.params.y;
-    float minorA = lineCoverage(coord, minor) * densityFade(coord, minor);
-    float majorA = lineCoverage(coord, major) * densityFade(coord, major);
+    float minorA = lineCoverage(lineCoord, minor) * densityFade(lineCoord, minor);
+    float majorA = lineCoverage(lineCoord, major) * densityFade(lineCoord, major);
 
     float2 px = pixelSize(coord);
     float alongX = 1.0 - saturate(abs(coord.y) / (px.y * 2.0));

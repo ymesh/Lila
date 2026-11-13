@@ -1,0 +1,10 @@
+MotionBricks SOMA model (mmm_v6_soma_fp16.onnx)
+Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+Licensed by NVIDIA Corporation under the NVIDIA Open Model Agreement.
+
+The agreement is in NVIDIA-Open-Model-Agreement.txt beside this file.
+
+Lila modifies the model's graph so DirectML can run it: four rank-5 MatMul nodes are rewritten as Unsqueeze, Mul and ReduceSum, the same computation (tools/motion/patch_model.py). The weights are unchanged. Lila's motion engine (src/motion) adapts the input preparation, decoding and endpoint correction of the MotionBricks runtime (https://github.com/NVlabs/motionbricks), Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES, licensed under the Apache License 2.0 (LICENSE beside this file).
+
+The SOMA skeleton (resources/motion/soma_skeleton.json) is converted from soma_base_skel_minimal_no_root.usd in MotionBricks, Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Changes: the joint names, parents and reference pose were extracted to JSON.

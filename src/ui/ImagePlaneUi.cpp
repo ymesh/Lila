@@ -426,7 +426,7 @@ void drawInto(render::FrameState& s, const ViewInfo& view)
         render::ImagePlaneDraw d;
         auto corners = p.quad.corners();
         for (int i = 0; i < 4; ++i)
-            d.corners[i] = glm::vec3(corners[size_t(i)]);
+            d.corners[i] = corners[size_t(i)];
         d.uv = glm::vec4(p.quad.uv);
         d.image = p.image;
         d.opacity = float(n.as<double>(ImagePlane::kAlphaGain));
@@ -445,7 +445,7 @@ void drawInto(render::FrameState& s, const ViewInfo& view)
                 for (size_t i = 0; i < 4; ++i)
                 {
                     St st = tri[std::min<size_t>(i, 2)];
-                    d.corners[i] = glm::vec3(worldAt(p.quad, st));
+                    d.corners[i] = worldAt(p.quad, st);
                     d.cornerUv[i] = glm::vec2(glm::mix(uv0, uv1, st));
                 }
                 s.imagePlanes.push_back(d);
@@ -457,14 +457,14 @@ void drawInto(render::FrameState& s, const ViewInfo& view)
             for (const auto& loop : outlineOf(p))
                 for (size_t i = 0; i < loop.size(); ++i)
                 {
-                    s.linesOnTop.push_back({glm::vec3(loop[i]), kSelectedColor});
-                    s.linesOnTop.push_back({glm::vec3(loop[(i + 1) % loop.size()]), kSelectedColor});
+                    s.linesOnTop.push_back({glm::dvec3(loop[i]), kSelectedColor});
+                    s.linesOnTop.push_back({glm::dvec3(loop[(i + 1) % loop.size()]), kSelectedColor});
                 }
         if (showGuides && isRootPlane(g, n))
             for (const GuideLine& l : guidesOf(p, view))
             {
-                s.linesOnTop.push_back({glm::vec3(l.start), kGuideColor});
-                s.linesOnTop.push_back({glm::vec3(l.edge), kGuideColor});
+                s.linesOnTop.push_back({glm::dvec3(l.start), kGuideColor});
+                s.linesOnTop.push_back({glm::dvec3(l.edge), kGuideColor});
             }
     }
 }
@@ -1127,12 +1127,12 @@ public:
         if (mDragging)
         {
             const glm::dvec2 a = local(mStart), b = local(mEnd);
-            s.linesOnTop.push_back({glm::vec3(mStart), kGuideColor});
-            s.linesOnTop.push_back({glm::vec3(mEnd), kGuideColor});
+            s.linesOnTop.push_back({glm::dvec3(mStart), kGuideColor});
+            s.linesOnTop.push_back({glm::dvec3(mEnd), kGuideColor});
             if (mirror())
             {
-                s.linesOnTop.push_back({glm::vec3(mirrored(mStart)), kGuideColor * glm::vec4(1, 1, 1, 0.6f)});
-                s.linesOnTop.push_back({glm::vec3(mirrored(mEnd)), kGuideColor * glm::vec4(1, 1, 1, 0.6f)});
+                s.linesOnTop.push_back({glm::dvec3(mirrored(mStart)), kGuideColor * glm::vec4(1, 1, 1, 0.6f)});
+                s.linesOnTop.push_back({glm::dvec3(mirrored(mEnd)), kGuideColor * glm::vec4(1, 1, 1, 0.6f)});
             }
             if (auto at = view.project(mEnd); at && glm::length(b - a) > 0.0)
                 p.label(*at + QPointF(14, -14), QString("%1\u00b0").arg(angleFromHorizontal(b - a), 0, 'f', 0));

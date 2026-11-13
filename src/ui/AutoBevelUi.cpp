@@ -102,8 +102,8 @@ void drawBevelEdges(render::FrameState& s, OverlayPainter&, const ViewInfo& view
             glm::dvec3 step = len > 0.0 ? side / len * view.unitsPerPixel(mid) : glm::dvec3(0.0);
             for (int k = -half; k <= half; ++k)
             {
-                s.linesOnTop.push_back({glm::vec3(a + step * double(k)), color});
-                s.linesOnTop.push_back({glm::vec3(b + step * double(k)), color});
+                s.linesOnTop.push_back({glm::dvec3(a + step * double(k)), color});
+                s.linesOnTop.push_back({glm::dvec3(b + step * double(k)), color});
             }
         }
     }

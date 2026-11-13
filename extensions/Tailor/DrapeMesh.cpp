@@ -24,9 +24,10 @@ using json = nlohmann::json;
 
 namespace tailor
 {
+using T = ArgType;
+
 namespace
 {
-using T = ArgType;
 constexpr const char* kCmd = "tailorDrapeMesh";
 constexpr size_t kGpuFrom = 400;
 

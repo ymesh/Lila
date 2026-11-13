@@ -167,7 +167,7 @@ void chains(const CutGraph& g, std::vector<std::vector<glm::dvec3>>& closed, std
             walk(v);
 }
 
-SectionContour finish(std::vector<glm::dvec3> pts, bool bridged, const Basis& b, const glm::dvec3& origin)
+SectionContour finishContour(std::vector<glm::dvec3> pts, bool bridged, const Basis& b, const glm::dvec3& origin)
 {
     SectionContour c;
     c.bridged = bridged;
@@ -206,7 +206,7 @@ std::vector<SectionContour> crossSections(std::span<const SectionMesh> meshes, c
     chains(g, closed, open);
     for (auto& c : closed)
         if (c.size() >= 3)
-            out.push_back(finish(std::move(c), false, b, origin));
+            out.push_back(finishContour(std::move(c), false, b, origin));
 
     // Open chains join whichever other open end is nearer than their own start, else close on themselves.
     while (!open.empty())
@@ -236,7 +236,7 @@ std::vector<SectionContour> crossSections(std::span<const SectionMesh> meshes, c
             cur.insert(cur.end(), next.begin(), next.end());
         }
         if (cur.size() >= 3)
-            out.push_back(finish(std::move(cur), true, b, origin));
+            out.push_back(finishContour(std::move(cur), true, b, origin));
     }
     return out;
 }

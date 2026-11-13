@@ -107,7 +107,7 @@ std::string groomGraphText(const Node& groom)
 
 namespace
 {
-Node& groomArg(Graph& g, const Args& a, const char* cmd)
+Node& lockGroomArg(Graph& g, const Args& a, const char* cmd)
 {
     if (!a.positional.empty())
     {
@@ -333,7 +333,7 @@ void registerLockCommands()
         .flags = styleFlags,
         .run = [](const Args& a) -> json {
             Graph& g = Graph::current();
-            Node& groom = groomArg(g, a, "groomAddStyle");
+            Node& groom = lockGroomArg(g, a, "groomAddStyle");
             guidesArg(g, groom, "groomAddStyle");
             Style k;
             if (!parseStyle(a.get<std::string>("style"), &k))
@@ -368,7 +368,7 @@ void registerLockCommands()
                   {"params", "", T::String, nullptr, "set: params as a JSON object, e.g. {\"amount\": 0.5}."}},
         .run = [](const Args& a) -> json {
             Graph& g = Graph::current();
-            Node& groom = groomArg(g, a, "groomStack");
+            Node& groom = lockGroomArg(g, a, "groomStack");
             const std::string edit = a.get<std::string>("edit", "list");
             if (edit != "list")
             {
@@ -416,7 +416,7 @@ void registerLockCommands()
                   {"snapRoot", "", T::Bool, true, "Move the root onto the scalp."}},
         .run = [](const Args& a) -> json {
             Graph& g = Graph::current();
-            Node& groom = groomArg(g, a, "groomDraw");
+            Node& groom = lockGroomArg(g, a, "groomDraw");
             Node& guides = guidesArg(g, groom, "groomDraw");
             const glm::dmat4 toLocal = glm::inverse(guides.as<glm::dmat4>(Transform::kWorldMatrix));
             std::vector<D3> stroke;
@@ -478,7 +478,7 @@ void registerLockCommands()
                   {"strength", "s", T::Float, 1.0, "0 to 1: how far they turn.", {}, {}, 0.0, 1.0}},
         .run = [](const Args& a) -> json {
             Graph& g = Graph::current();
-            Node& groom = groomArg(g, a, "groomPart");
+            Node& groom = lockGroomArg(g, a, "groomPart");
             Node& guides = guidesArg(g, groom, "groomPart");
             const glm::dmat4 w = guides.as<glm::dmat4>(Transform::kWorldMatrix), toLocal = glm::inverse(w);
             std::vector<D3> line;
@@ -511,7 +511,7 @@ void registerLockCommands()
                   {"seed", "", T::Int, 1, "Random seed."}},
         .run = [](const Args& a) -> json {
             Graph& g = Graph::current();
-            Node& groom = groomArg(g, a, "groomPreset");
+            Node& groom = lockGroomArg(g, a, "groomPreset");
             Node& guides = guidesArg(g, groom, "groomPreset");
             std::unique_ptr<Surface> scalp = scalpOf(g, guides);
             if (!scalp)
@@ -560,7 +560,7 @@ void registerLockCommands()
                   {"lockCollisions", "", T::Bool, true, "Locks collide with each other."}},
         .run = [](const Args& a) -> json {
             Graph& g = Graph::current();
-            Node& groom = groomArg(g, a, "groomSettle");
+            Node& groom = lockGroomArg(g, a, "groomSettle");
             Node& guides = guidesArg(g, groom, "groomSettle");
             const glm::dmat4 w = guides.as<glm::dmat4>(Transform::kWorldMatrix), toLocal = glm::inverse(w);
             const double scale = std::cbrt(std::abs(glm::determinant(glm::dmat3(toLocal))));
@@ -598,7 +598,7 @@ void registerLockCommands()
                   {"twist", "t", T::Float, nullptr, "Twist from root to tip, degrees: replaces the guide's tilt with an even ramp."}},
         .run = [](const Args& a) -> json {
             Graph& g = Graph::current();
-            Node& groom = groomArg(g, a, "groomEditLock");
+            Node& groom = lockGroomArg(g, a, "groomEditLock");
             Node& guides = guidesArg(g, groom, "groomEditLock");
             Splines s = guideSplines(g, guides);
             const int i = a.get<int>("index", 0);
@@ -636,7 +636,7 @@ void registerLockCommands()
         .flags = shellFlags,
         .run = [](const Args& a) -> json {
             Graph& g = Graph::current();
-            Node& groom = groomArg(g, a, "groomShell");
+            Node& groom = lockGroomArg(g, a, "groomShell");
             Node* op = g.createNode(*types::find("groomShell"), {}, kNoNode, true);
             applyFlags(g, *op, a, "groomShell");
             g.connect({groom.id(), idx(groom, "outCurve"), -1}, {op->id(), idx(*op, "inCurve"), -1});

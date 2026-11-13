@@ -373,7 +373,8 @@ enum class ColorChannel : uint8_t
 struct MeshDraw
 {
     std::shared_ptr<const RenderMesh> mesh;
-    glm::mat4 world{1.0f};
+    /** Double so the renderer can rebase it on the eye before it becomes float (camera-relative rendering). */
+    glm::dmat4 world{1.0};
     /**
      * Placements relative to world: when set and not empty the mesh draws once per entry, at world * entry, as one
      * instanced draw. Shared so frames can reuse one list.

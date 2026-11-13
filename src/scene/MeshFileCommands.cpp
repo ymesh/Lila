@@ -1,3 +1,4 @@
+#include "scene/GeoSidecar.h"
 #include "scene/MeshNodes.h"
 #include "ops/Command.h"
 #include "core/FileBytes.h"
@@ -224,25 +225,35 @@ void registerMeshFileCommands()
         .positionalDoc = "path",
         .flags = {unitFlag("m", "The file's length unit. Scanners and photogrammetry write metres."), upFlag(),
                   {"normals", "", T::Bool, true, "Keep the file's normals."},
+                  {"georeference", "", T::Bool, true,
+                   "Place it by the georeference files beside it (metadata.xml, _offset.xyz, .rcinfo, .prj): it sets the scene's "
+                   "georeference or moves into it, and unit and upAxis are the CRS's."},
                   {"report", "", T::Bool, false, "Return the import report instead of just the names."}},
         .run = [](const Args& a) -> json {
             const std::string path = readPath(a, "importPly");
             const glm::dmat4 m = fileToScene(a, "importPly");
+            const bool georeferenced = a.get<bool>("georeference", true) && geoSidecar::find(path);
             progress::Scope scope("Importing " + path + "...");
             geo::PlyReadResult r;
             progress::runOnWorker([&] {
                 r = geo::readPlyFile(path, {.keepNormals = a.get<bool>("normals", true)});
-                if (r.ok())
+                if (r.ok() && !georeferenced)
                     transformMesh(r.mesh, m);
             });
             if (!r.ok())
                 throw CommandError("importPly: " + r.error);
+            std::optional<std::string> placed;
+            if (georeferenced)
+                placed = geoSidecar::place(path, {&r.mesh});
             std::vector<std::pair<std::string, geo::Mesh>> meshes;
             meshes.emplace_back(fs::path(path).stem().string(), std::move(r.mesh));
             json names = addMeshes(meshes);
             if (!a.get<bool>("report"))
                 return names;
-            return {{"nodes", names}, {"pointCloud", r.pointCloud}, {"textureFiles", r.textureFiles}, {"skipped", r.skipped}};
+            json report = {{"nodes", names}, {"pointCloud", r.pointCloud}, {"textureFiles", r.textureFiles}, {"skipped", r.skipped}};
+            if (placed)
+                report["georeference"] = *placed;
+            return report;
         },
     });
 

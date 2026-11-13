@@ -101,6 +101,9 @@ struct Context
     uint64_t shownKey = 0;
     /** The view's isolation, for meshes it shows only some faces of; null when not isolating. */
     const scene::isolation::Set* isolation = nullptr;
+    /** The world point under the cursor (a surface, else the ground plane), for the georeference readout; nullopt off the view. */
+    std::optional<glm::dvec3> cursorWorld;
+    bool cursorOnSurface = false;
     double framesPerSecond = 0.0;
     /** GPU time of the last drawn frame and the ambient occlusion part of it; 0 when unknown. */
     double gpuMs = 0.0;

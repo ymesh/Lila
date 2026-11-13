@@ -29,11 +29,11 @@
 
 namespace lila::groom
 {
+using T = ArgType;
+
 namespace
 {
 using namespace scene;
-using json = nlohmann::json;
-using T = ArgType;
 namespace fs = std::filesystem;
 
 std::string lower(std::string s)

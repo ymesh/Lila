@@ -3,6 +3,7 @@
 
 #include "AnimCommands.h"
 #include "AnimOps.h"
+#include "Tracks.h"
 
 #include <lila/Command.h>
 #include <lila/Extension.h>
@@ -13,16 +14,18 @@
 #include <cmath>
 #include <fstream>
 #include <limits>
+#include <memory>
 
 using namespace lila;
 using namespace lila::scene;
 
 namespace puppeteer::anim
 {
+using T = ArgType;
+
 namespace
 {
 namespace sa = lila::scene::anim;
-using T = ArgType;
 
 Graph& graph() { return Graph::current(); }
 double fps() { return std::max(1.0, sa::playback().fps); }
@@ -39,11 +42,17 @@ template <class F> auto guarded(const char* cmd, F&& f)
     }
 }
 
-/** The character a command acts on and its keys, read once. */
+/** The character a command acts on and its keys (the character keys, or one control track's), read once. */
 struct Stack
 {
     Character ch;
+    /** The control track worked on; kNoNode for the character keys. */
+    NodeId track = kNoNode;
+    /** The curves whose keys are the rows. */
     std::vector<NodeId> curves;
+    /** The curves a retime moves: a track's own, or the character keys with every track following. */
+    std::vector<NodeId> warp;
+    std::shared_ptr<RouteScope> route;
     std::vector<double> keys;
     double loop = std::numeric_limits<double>::quiet_NaN();
 
@@ -53,11 +62,13 @@ struct Stack
     size_t cycleKeys() const { return looping() ? keys.size() - 1 : keys.size(); }
 };
 
-Stack stackOf(Graph& g, NodeId node, const char* cmd)
+Stack stackOf(Graph& g, NodeId node, const char* cmd, NodeId track = kNoNode)
 {
     Stack s;
     s.ch = guarded(cmd, [&] { return resolveCharacter(g, node); });
-    s.curves = characterCurves(g, s.ch);
+    s.track = track;
+    s.curves = track ? trackCurves(g, track) : characterCurves(g, s.ch, false);
+    s.warp = track ? s.curves : characterCurves(g, s.ch, true);
     s.keys = keyTimesOf(g, s.curves);
     s.loop = loopTimeOf(g, s.curves);
     return s;
@@ -72,7 +83,21 @@ Stack stackArg(const Args& a, const char* cmd)
     Node* n = g.find(objs.front());
     if (!n)
         throw CommandError(std::string(cmd) + ": no node named '" + objs.front() + "'");
-    return stackOf(g, n->id(), cmd);
+    NodeId track = kNoNode;
+    if (a.has("track"))
+    {
+        Node* t = g.find(a.get<std::string>("track"));
+        if (!t)
+            throw CommandError(std::string(cmd) + ": no node named '" + a.get<std::string>("track") + "'");
+        track = isTrack(g, t->id()) ? t->id() : trackOf(g, t->id());
+        if (!track)
+            throw CommandError(std::string(cmd) + ": " + t->path() + " has no control track");
+    }
+    Stack s = stackOf(g, n->id(), cmd, track);
+    // Reads and writes stay on the keys this stack lists, whatever the key target says.
+    const NodeId active = sa::activeLayer(g);
+    s.route = std::make_shared<RouteScope>(track ? track : active && !isTrack(g, active) ? active : kNoNode);
+    return s;
 }
 
 size_t indexOf(const json& j, const Stack& s, const char* cmd)
@@ -112,7 +137,7 @@ char axisArg(const Args& a)
 /** Moves the playback end and the active take's end along with the last key when they sat on it. */
 void followRange(Graph& g, const Stack& s, const TimeWarp& w)
 {
-    if (s.keys.empty())
+    if (s.keys.empty() || s.track)
         return;
     const double oldEnd = s.keys.back(), newEnd = w.map(oldEnd);
     if (sameTime(oldEnd, newEnd))
@@ -130,21 +155,42 @@ void followRange(Graph& g, const Stack& s, const TimeWarp& w)
             g.setValue({t, sa::TakeNode::kEnd}, newEnd);
 }
 
-/** Retimes the character's curves and marks together. */
+/** Retimes the stack's curves, and for the character keys their marks and the range too. */
 void applyWarp(Graph& g, const Stack& s, const TimeWarp& w)
 {
-    warpCurves(g, s.curves, w);
-    Marks m = marksOf(g, s.ch);
-    m.warp(w);
-    setMarks(g, s.ch, m);
+    warpCurves(g, s.warp, w);
+    if (!s.track)
+    {
+        Marks m = marksOf(g, s.ch);
+        m.warp(w);
+        setMarks(g, s.ch, m);
+    }
     followRange(g, s, w);
+}
+
+/** Marks of the stack: the character's, none for a track. */
+Marks stackMarks(Graph& g, const Stack& s) { return s.track ? Marks{} : marksOf(g, s.ch); }
+
+/** The nodes whose poses a stack reads and writes: the character, or a track's control. */
+std::vector<NodeId> scopeOf(Graph& g, const Stack& s)
+{
+    if (!s.track)
+        return s.ch.nodes;
+    const NodeId c = trackControl(g, s.track);
+    return c ? std::vector<NodeId>{c} : std::vector<NodeId>{};
+}
+
+/** Channels a stack writes: everything, or a track's members. */
+std::vector<std::string> channelsOf(const Stack& s)
+{
+    return s.track ? std::vector<std::string>{"translate", "rotate"} : std::vector<std::string>{};
 }
 
 json stackJson(Graph& g, const Stack& s)
 {
     const double f = fps();
     json rowsJson = json::array();
-    for (const Row& r : rows(s.keys, s.loop, marksOf(g, s.ch)))
+    for (const Row& r : rows(s.keys, s.loop, stackMarks(g, s)))
         rowsJson.push_back({{"index", r.index}, {"time", r.time}, {"frame", r.time * f}, {"gap", r.gap * f}, {"loop", r.loop},
                             {"mark", markName(r.mark)}});
     return {{"character", s.ch.id},
@@ -152,6 +198,7 @@ json stackJson(Graph& g, const Stack& s)
             {"fps", f},
             {"total", totalTime(s.keys) * f},
             {"loop", s.looping()},
+            {"track", s.track ? g.node(s.track)->path() : std::string()},
             {"rows", rowsJson}};
 }
 
@@ -160,6 +207,8 @@ struct Clip
 {
     std::string character;
     std::vector<std::pair<json, double>> keys;
+    /** Copied from a control track: the poses are what the track adds. */
+    bool track = false;
 };
 Clip& clipboard()
 {
@@ -167,8 +216,17 @@ Clip& clipboard()
     return c;
 }
 
+/** Track keys add to a pose and character keys are one, so neither pastes onto the other. */
+void checkClip(const Stack& s, const char* cmd)
+{
+    if (clipboard().track != (s.track != kNoNode))
+        throw CommandError(std::string(cmd) + (clipboard().track ? ": the copied keys are a control track's; paste them onto a track"
+                                                                 : ": the copied keys are character keys; paste them onto the character keys"));
+}
+
 const FlagDef kKeysFlag{"keys", "k", T::Any, nullptr, "Key index (0 first) or a list of them, as stackerKeys numbers them."};
 const FlagDef kAxisFlag{"axis", "ax", T::String, "x", "Axis the mirror plane faces.", {"x", "y", "z"}};
+const FlagDef kTrackFlag{"track", "tr", T::String, nullptr, "A control (or its track): work on its control track's keys instead of the character keys."};
 
 void registerStackerCommands(ext::Context& ctx)
 {
@@ -177,6 +235,7 @@ void registerStackerCommands(ext::Context& ctx)
         .doc = "A character's keys as the Stacker lists them: every key across its joints and layers, in order, with its "
                "frame, the gap to the next key (frames), its breakdown/extreme mark, and which is the loop key.",
         .positionalDoc = "a node in the character (default the selection)",
+        .flags = {kTrackFlag},
         .undoable = false,
         .run = [](const Args& a) -> json {
             Graph& g = graph();
@@ -189,7 +248,7 @@ void registerStackerCommands(ext::Context& ctx)
         .doc = "Set the gap (frames) from a key to the next: the key's span stretches to fit and every later key moves "
                "with the difference. Returns the keys.",
         .positionalDoc = "a node in the character (default the selection)",
-        .flags = {{"index", "i", T::Int, nullptr, "The key whose gap changes."}, {"gap", "g", T::Float, nullptr, "New gap, frames."}},
+        .flags = {{"index", "i", T::Int, nullptr, "The key whose gap changes."}, {"gap", "g", T::Float, nullptr, "New gap, frames."}, kTrackFlag},
         .run = [](const Args& a) -> json {
             Graph& g = graph();
             Stack s = stackArg(a, "stackerSetGap");
@@ -197,7 +256,7 @@ void registerStackerCommands(ext::Context& ctx)
                 throw CommandError("stackerSetGap: give index and gap");
             const size_t i = indexOf(a.flags.at("index"), s, "stackerSetGap");
             applyWarp(g, s, guarded("stackerSetGap", [&] { return retimeGap(s.keys, i, a.get<double>("gap") / fps()); }));
-            return stackJson(g, stackOf(g, s.ch.root, "stackerSetGap"));
+            return stackJson(g, stackOf(g, s.ch.root, "stackerSetGap", s.track));
         },
     });
 
@@ -206,7 +265,7 @@ void registerStackerCommands(ext::Context& ctx)
         .doc = "Lengthen (by > 0) or shorten the gaps after keys by whole frames, retiming everything after; gaps stay at "
                "least a frame. Returns the keys.",
         .positionalDoc = "a node in the character (default the selection)",
-        .flags = {kKeysFlag, {"by", "b", T::Float, 1.0, "Frames to add; negative shortens."}},
+        .flags = {kKeysFlag, {"by", "b", T::Float, 1.0, "Frames to add; negative shortens."}, kTrackFlag},
         .run = [](const Args& a) -> json {
             Graph& g = graph();
             Stack s = stackArg(a, "stackerNudgeGap");
@@ -219,14 +278,10 @@ void registerStackerCommands(ext::Context& ctx)
                     continue;
                 const double gap = std::max(1.0, std::round(gapAfter(s.keys, *it) * f) + a.get<double>("by", 1.0)) / f;
                 const TimeWarp w = retimeGap(s.keys, *it, gap);
-                warpCurves(g, s.curves, w);
-                Marks m = marksOf(g, s.ch);
-                m.warp(w);
-                setMarks(g, s.ch, m);
-                followRange(g, s, w);
+                applyWarp(g, s, w);
                 s.keys = w.apply(s.keys);
             }
-            return stackJson(g, stackOf(g, s.ch.root, "stackerNudgeGap"));
+            return stackJson(g, stackOf(g, s.ch.root, "stackerNudgeGap", s.track));
         },
     });
 
@@ -236,7 +291,7 @@ void registerStackerCommands(ext::Context& ctx)
                "it move later by the same gap. Returns the new key's index.",
         .positionalDoc = "a node in the character (default the selection)",
         .flags = {{"index", "i", T::Int, nullptr, "The key to follow. Default: the last key before the loop key."},
-                  {"gap", "g", T::Float, nullptr, "Frames after it. Default: the gap before it."}},
+                  {"gap", "g", T::Float, nullptr, "Frames after it. Default: the gap before it."}, kTrackFlag},
         .run = [](const Args& a) -> json {
             Graph& g = graph();
             Stack s = stackArg(a, "stackerCreateKey");
@@ -248,10 +303,10 @@ void registerStackerCommands(ext::Context& ctx)
             const double gap = a.has("gap") ? a.get<double>("gap") / fps() : lastGap(s.keys, i, 10.0 / fps());
             if (!(gap > kTimeEps))
                 throw CommandError("stackerCreateKey: the gap must be longer than zero");
-            const json pose = poseAt(g, s.ch.nodes, s.keys[i]);
+            const json pose = poseAt(g, scopeOf(g, s), s.keys[i]);
             applyWarp(g, s, openAfter(s.keys, i, gap));
-            KeyWriter w(g, s.ch.nodes);
-            w.write(pose, s.keys[i] + gap);
+            KeyWriter w(g, scopeOf(g, s));
+            w.write(pose, s.keys[i] + gap, channelsOf(s));
             w.commit();
             return i + 1;
         },
@@ -262,7 +317,7 @@ void registerStackerCommands(ext::Context& ctx)
         .doc = "Delete keys with their timing: every later key moves earlier by the deleted key's gap. The loop key "
                "can't be deleted (turn the loop off first). Returns the keys.",
         .positionalDoc = "a node in the character (default the selection)",
-        .flags = {kKeysFlag},
+        .flags = {kKeysFlag, kTrackFlag},
         .run = [](const Args& a) -> json {
             Graph& g = graph();
             Stack s = stackArg(a, "stackerDeleteKey");
@@ -273,19 +328,18 @@ void registerStackerCommands(ext::Context& ctx)
             for (auto it = keys.rbegin(); it != keys.rend(); ++it)
             {
                 removeKeysAt(g, s.curves, s.keys[*it]);
-                Marks m = marksOf(g, s.ch);
-                m.erase(s.keys[*it]);
-                setMarks(g, s.ch, m);
+                if (!s.track)
+                {
+                    Marks m = marksOf(g, s.ch);
+                    m.erase(s.keys[*it]);
+                    setMarks(g, s.ch, m);
+                }
                 const TimeWarp w = deleteWithTiming(s.keys, *it);
-                warpCurves(g, s.curves, w);
-                m = marksOf(g, s.ch);
-                m.warp(w);
-                setMarks(g, s.ch, m);
-                followRange(g, s, w);
+                applyWarp(g, s, w);
                 s.keys.erase(s.keys.begin() + long(*it));
                 s.keys = w.apply(s.keys);
             }
-            return stackJson(g, stackOf(g, s.ch.root, "stackerDeleteKey"));
+            return stackJson(g, stackOf(g, s.ch.root, "stackerDeleteKey", s.track));
         },
     });
 
@@ -297,6 +351,8 @@ void registerStackerCommands(ext::Context& ctx)
         .run = [](const Args& a) -> json {
             Graph& g = graph();
             Stack s = stackArg(a, "stackerMarkKey");
+            if (s.track)
+                throw CommandError("stackerMarkKey: marks are for the character keys, not a control track");
             const Mark mark = guarded("stackerMarkKey", [&] { return markFromName(a.get<std::string>("mark", "breakdown")); });
             Marks m = marksOf(g, s.ch);
             const std::vector<size_t> keys = keysArg(a, s, "stackerMarkKey");
@@ -312,7 +368,7 @@ void registerStackerCommands(ext::Context& ctx)
         .doc = "Key indices for a quick select: all keys, the first half or the second half of the cycle (the loop key "
                "is never picked).",
         .positionalDoc = "a node in the character (default the selection)",
-        .flags = {{"which", "w", T::String, "all", "all | firstHalf | secondHalf", {"all", "firstHalf", "secondHalf"}}},
+        .flags = {{"which", "w", T::String, "all", "all | firstHalf | secondHalf", {"all", "firstHalf", "secondHalf"}}, kTrackFlag},
         .undoable = false,
         .run = [](const Args& a) -> json {
             Stack s = stackArg(a, "stackerSelect");
@@ -326,15 +382,15 @@ void registerStackerCommands(ext::Context& ctx)
         .name = "stackerCopyKeys",
         .doc = "Copy keys' poses (and the gaps between them) for stackerPasteKeys and stackerInsertKeys. Returns how many.",
         .positionalDoc = "a node in the character (default the selection)",
-        .flags = {kKeysFlag},
+        .flags = {kKeysFlag, kTrackFlag},
         .undoable = false,
         .run = [](const Args& a) -> json {
             Graph& g = graph();
             Stack s = stackArg(a, "stackerCopyKeys");
-            Clip c{s.ch.id, {}};
+            Clip c{s.ch.id, {}, s.track != kNoNode};
             const std::vector<size_t> keys = keysArg(a, s, "stackerCopyKeys");
             for (size_t k = 0; k < keys.size(); ++k)
-                c.keys.push_back({poseAt(g, s.ch.nodes, s.keys[keys[k]]), k == 0 ? 0.0 : s.keys[keys[k]] - s.keys[keys[k - 1]]});
+                c.keys.push_back({poseAt(g, scopeOf(g, s), s.keys[keys[k]]), k == 0 ? 0.0 : s.keys[keys[k]] - s.keys[keys[k - 1]]});
             clipboard() = std::move(c);
             return keys.size();
         },
@@ -345,16 +401,17 @@ void registerStackerCommands(ext::Context& ctx)
         .doc = "Paste copied poses onto keys, in order, repeating the copied keys when pasting onto more. Returns the "
                "channel keys set.",
         .positionalDoc = "a node in the character (default the selection)",
-        .flags = {kKeysFlag},
+        .flags = {kKeysFlag, kTrackFlag},
         .run = [](const Args& a) -> json {
             Graph& g = graph();
             Stack s = stackArg(a, "stackerPasteKeys");
             if (clipboard().keys.empty())
                 throw CommandError("stackerPasteKeys: nothing copied; run stackerCopyKeys first");
+            checkClip(s, "stackerPasteKeys");
             const std::vector<size_t> keys = keysArg(a, s, "stackerPasteKeys");
-            KeyWriter w(g, s.ch.nodes);
+            KeyWriter w(g, scopeOf(g, s));
             for (size_t k = 0; k < keys.size(); ++k)
-                w.write(clipboard().keys[k % clipboard().keys.size()].first, s.keys[keys[k]]);
+                w.write(clipboard().keys[k % clipboard().keys.size()].first, s.keys[keys[k]], channelsOf(s));
             return w.commit();
         },
     });
@@ -364,13 +421,14 @@ void registerStackerCommands(ext::Context& ctx)
         .doc = "Insert the copied keys after a key, with the gaps they were copied with (the first one gap after it), "
                "moving later keys along. Returns the new keys' indices.",
         .positionalDoc = "a node in the character (default the selection)",
-        .flags = {{"index", "i", T::Int, nullptr, "The key to insert after. Default: the last key before the loop key."}},
+        .flags = {{"index", "i", T::Int, nullptr, "The key to insert after. Default: the last key before the loop key."}, kTrackFlag},
         .run = [](const Args& a) -> json {
             Graph& g = graph();
             Stack s = stackArg(a, "stackerInsertKeys");
             const Clip& c = clipboard();
             if (c.keys.empty())
                 throw CommandError("stackerInsertKeys: nothing copied; run stackerCopyKeys first");
+            checkClip(s, "stackerInsertKeys");
             if (s.keys.empty())
                 throw CommandError("stackerInsertKeys: the character has no keys yet");
             const size_t i = a.has("index") ? indexOf(a.flags.at("index"), s, "stackerInsertKeys") : s.cycleKeys() - 1;
@@ -386,11 +444,11 @@ void registerStackerCommands(ext::Context& ctx)
             }
             // Room for the inserted keys plus the gap that followed key i.
             applyWarp(g, s, openAfter(s.keys, i, at.back() - s.keys[i]));
-            KeyWriter w(g, s.ch.nodes);
+            KeyWriter w(g, scopeOf(g, s));
             json out = json::array();
             for (size_t k = 0; k < c.keys.size(); ++k)
             {
-                w.write(c.keys[k].first, at[k]);
+                w.write(c.keys[k].first, at[k], channelsOf(s));
                 out.push_back(i + 1 + k);
             }
             w.commit();
@@ -400,20 +458,37 @@ void registerStackerCommands(ext::Context& ctx)
 
     ctx.registerCommand({
         .name = "stackerMirrorKeys",
-        .doc = "Mirror the pose at keys: left and right swap, centre joints reflect across the mirror plane. Returns the "
-               "channel keys set.",
+        .doc = "Mirror the pose at keys: left and right swap, centre joints reflect across the mirror plane. On a "
+               "control track the track's keys go, mirrored, to the opposite control's track. Returns the channel keys set.",
         .positionalDoc = "a node in the character (default the selection)",
-        .flags = {kKeysFlag, kAxisFlag},
+        .flags = {kKeysFlag, kAxisFlag, kTrackFlag},
         .run = [](const Args& a) -> json {
             Graph& g = graph();
             Stack s = stackArg(a, "stackerMirrorKeys");
             const std::vector<size_t> keys = keysArg(a, s, "stackerMirrorKeys");
             std::vector<json> mirrored;
             for (size_t i : keys)
-                mirrored.push_back(mirrorPose(g, s.ch, poseAt(g, s.ch.nodes, s.keys[i]), axisArg(a)));
-            KeyWriter w(g, s.ch.nodes);
+                mirrored.push_back(mirrorPose(g, s.ch, poseAt(g, scopeOf(g, s), s.keys[i]), axisArg(a)));
+            std::vector<NodeId> scope = s.ch.nodes;
+            std::unique_ptr<RouteScope> onto;
+            if (s.track)
+            {
+                // Deltas mirror like poses (the same per-channel maths), onto the other side's own track.
+                const NodeId control = trackControl(g, s.track);
+                Node* other = nullptr;
+                if (control)
+                    for (NodeId id : s.ch.nodes)
+                        if (poses::stripNamespace(g.node(id)->name()) == poses::mirrorNodeName(poses::stripNamespace(g.node(control)->name())))
+                            other = g.node(id);
+                if (!other)
+                    throw CommandError("stackerMirrorKeys: " + (control ? g.node(control)->path() : std::string("the track")) + " has no opposite control");
+                const NodeId to = other->id() == control ? s.track : guarded("stackerMirrorKeys", [&] { return ensureTrack(g, other->id()); });
+                onto = std::make_unique<RouteScope>(to);
+                scope = {other->id()};
+            }
+            KeyWriter w(g, scope);
             for (size_t k = 0; k < keys.size(); ++k)
-                w.write(mirrored[k], s.keys[keys[k]]);
+                w.write(mirrored[k], s.keys[keys[k]], channelsOf(s));
             return w.commit();
         },
     });
@@ -425,10 +500,22 @@ void registerStackerCommands(ext::Context& ctx)
         .positionalDoc = "a node in the character (default the selection)",
         .flags = {kKeysFlag,
                   {"pose", "p", T::String, "bind", "Library pose: bind, ref or any other.", {}},
-                  {"channels", "ch", T::List, nullptr, "Channels: translate, rotate, scale or attribute names. Default: all."}},
+                  {"channels", "ch", T::List, nullptr, "Channels: translate, rotate, scale or attribute names. Default: all."}, kTrackFlag},
         .run = [](const Args& a) -> json {
             Graph& g = graph();
             Stack s = stackArg(a, "stackerResetKeys");
+            if (s.track)
+            {
+                // A track resets to adding nothing.
+                const NodeId control = trackControl(g, s.track);
+                if (!control)
+                    return 0;
+                const json zero = {{poses::stripNamespace(g.node(control)->name()), {{"translate", {0, 0, 0}}, {"rotate", {0, 0, 0}}}}};
+                KeyWriter w(g, scopeOf(g, s));
+                for (size_t i : keysArg(a, s, "stackerResetKeys"))
+                    w.write(zero, s.keys[i]);
+                return w.commit();
+            }
             const poses::Pose p = guarded("stackerResetKeys", [&] { return libraryPose(s.ch, a.get<std::string>("pose", "bind")); });
             std::vector<std::string> channels;
             if (a.has("channels"))
@@ -447,7 +534,7 @@ void registerStackerCommands(ext::Context& ctx)
                "or off. Returns the loop key frame, or None when off.",
         .positionalDoc = "a node in the character (default the selection)",
         .flags = {{"state", "st", T::Bool, nullptr, "On or off. Default: toggle."},
-                  {"gap", "g", T::Float, nullptr, "Frames from the last key to a new loop key. Default: the last gap."}},
+                  {"gap", "g", T::Float, nullptr, "Frames from the last key to a new loop key. Default: the last gap."}, kTrackFlag},
         .run = [](const Args& a) -> json {
             Graph& g = graph();
             Stack s = stackArg(a, "stackerLoopKey");
@@ -469,6 +556,8 @@ void registerStackerCommands(ext::Context& ctx)
             const double t = sa::setCurvesLoop(g, s.curves, true, s.keys.back() + gap);
             if (std::isnan(t))
                 return nullptr;
+            if (s.track)
+                return t * fps();
             sa::Playback& pb = sa::playback();
             pb.maxTime = std::max(t, pb.minTime);
             pb.animEnd = std::max(pb.animEnd, pb.maxTime);
@@ -823,6 +912,7 @@ bool registerMarksType(ext::Context& ctx)
 void registerAnimCommands(ext::Context& ctx)
 {
     registerMarksType(ctx);
+    registerTracks(ctx);
     registerStackerCommands(ctx);
     registerCycleCommands(ctx);
     registerBankCommands(ctx);

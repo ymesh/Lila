@@ -43,10 +43,11 @@ namespace lila::bake
 {
 namespace fs = std::filesystem;
 
+using Clock = std::chrono::steady_clock;
+
 namespace
 {
 using detail::shortName;
-using Clock = std::chrono::steady_clock;
 
 double since(Clock::time_point t) { return std::chrono::duration<double>(Clock::now() - t).count(); }
 

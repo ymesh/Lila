@@ -332,6 +332,61 @@ std::vector<Stone> vaultStones(const VaultSpec& v, const Units& stone, uint64_t 
     return out;
 }
 
+namespace
+{
+/** The stretch of the line o + t * dir (seen from above) inside the outline that holds t = 0; lo > hi when o is outside. */
+std::pair<double, double> stretchInside(const std::vector<glm::dvec3>& outline, const glm::dvec3& o, const glm::dvec3& dir)
+{
+    auto cross = [](double ax, double az, double bx, double bz) { return ax * bz - az * bx; };
+    std::vector<double> ts;
+    for (size_t i = 0, k = outline.size() - 1; i < outline.size(); k = i++)
+    {
+        const glm::dvec3 e = outline[i] - outline[k], w = outline[k] - o;
+        const double den = cross(dir.x, dir.z, e.x, e.z);
+        if (std::abs(den) < 1e-12)
+            continue;
+        const double u = cross(w.x, w.z, dir.x, dir.z) / den;
+        if (u >= 0.0 && u < 1.0)
+            ts.push_back(cross(w.x, w.z, e.x, e.z) / den);
+    }
+    std::sort(ts.begin(), ts.end());
+    for (size_t i = 0; i + 1 < ts.size(); i += 2)
+        if (ts[i] <= 0.0 && ts[i + 1] >= 0.0)
+            return {ts[i], ts[i + 1]};
+    return {1.0, 0.0};
+}
+
+/**
+ * Shrinks a flat stone (half extents along d and a about centre) to the outline, trimming each side back to where the
+ * outline crosses it. False when too little of it is left inside.
+ */
+bool trimToOutline(const std::vector<glm::dvec3>& outline, glm::dvec3& centre, const glm::dvec3& d, const glm::dvec3& a, double& length, double& width)
+{
+    double s0 = -length * 0.5, s1 = length * 0.5, w0 = -width * 0.5, w1 = width * 0.5;
+    for (int pass = 0; pass < 2; ++pass)
+    {
+        for (double off : {w0 * 0.999, w1 * 0.999})
+            if (const auto [lo, hi] = stretchInside(outline, centre + a * off, d); lo <= hi)
+            {
+                s0 = std::max(s0, lo);
+                s1 = std::min(s1, hi);
+            }
+        for (double off : {s0 * 0.999, s1 * 0.999})
+            if (const auto [lo, hi] = stretchInside(outline, centre + d * off, a); lo <= hi)
+            {
+                w0 = std::max(w0, lo);
+                w1 = std::min(w1, hi);
+            }
+    }
+    if (s1 - s0 < length * 0.3 || w1 - w0 < width * 0.3)
+        return false;
+    centre += d * ((s0 + s1) * 0.5) + a * ((w0 + w1) * 0.5);
+    length = s1 - s0;
+    width = w1 - w0;
+    return true;
+}
+} // namespace
+
 std::vector<Stone> pavingStones(const PavingSpec& p, double joint, uint64_t seed)
 {
     std::vector<Stone> out;
@@ -399,14 +454,15 @@ std::vector<Stone> pavingStones(const PavingSpec& p, double joint, uint64_t seed
         {
             const double r = unitRandom(mixKey(seed, uint64_t(row), uint64_t(k), 91));
             const double len = flags ? size * (0.8 + 1.0 * r) : size * (0.85 + 0.3 * r);
-            const glm::dvec3 plan = d * (x + len * 0.5) + a * (z + rowW * 0.5);
+            glm::dvec3 plan = d * (x + len * 0.5) + a * (z + rowW * 0.5);
             x += len + j;
-            if (!inside(plan.x, plan.z))
+            double length = len, width = rowW;
+            if (!inside(plan.x, plan.z) || !trimToOutline(p.outline, plan, d, a, length, width))
                 continue;
             Stone s;
             s.center = glm::dvec3(plan.x, p.y + thick * 0.5, plan.z);
             s.frame = glm::dmat3(d, kUp, glm::cross(d, kUp));
-            s.size = {len, thick, rowW};
+            s.size = {length, thick, width};
             s.role = Role::Paving;
             s.face = Face::Through;
             s.course = row;
@@ -417,7 +473,7 @@ std::vector<Stone> pavingStones(const PavingSpec& p, double joint, uint64_t seed
     return out;
 }
 
-Plan planWalls(std::span<const Footprint> footprints, const BuildOptions& o)
+Plan planWalls(std::span<const Footprint> footprints, const BuildOptions& o, const std::string& region)
 {
     Plan p;
     p.look = o;
@@ -428,7 +484,7 @@ Plan planWalls(std::span<const Footprint> footprints, const BuildOptions& o)
         wp.footprint = footprints[w];
         wp.params = o.wall;
         wp.region = int(p.regions.size());
-        p.regions.push_back("wall_" + std::to_string(w));
+        p.regions.push_back(region.empty() ? "wall_" + std::to_string(w) : (w == 0 ? region : region + "_" + std::to_string(w)));
         for (const Opening& op : wp.params.openings)
         {
             wp.openingRegions.push_back(int(p.regions.size()));

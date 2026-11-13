@@ -6,8 +6,11 @@
 #include "Common.h"
 #include "PanelModels.h"
 #include "Puppeteer.h"
+#include "Tracks.h"
 #include "lila/FileDialog.h"
 
+#include <lila/Controls.h>
+#include <lila/CursorBadges.h>
 #include <lila/Events.h>
 #include <lila/Ghosts.h>
 #include <lila/Icons.h>
@@ -77,6 +80,54 @@ std::string currentCharacter()
     return state().node;
 }
 
+/** The selected node of the current character the Stacker's track view and the track actions work on. */
+std::string currentControl()
+{
+    Graph& g = Graph::current();
+    for (NodeId id : g.selection())
+        if (Node* n = g.node(id); n && n->type().isA("transform"))
+            try
+            {
+                resolveCharacter(g, id);
+                return n->path();
+            }
+            catch (const std::exception&)
+            {
+            }
+    return {};
+}
+
+/** What the Stacker lists: the character keys, the selected control's track, or nothing (Control target, no track). */
+struct StackView
+{
+    bool control = false;
+    std::string track; // the control whose track it lists
+};
+
+StackView stackView()
+{
+    StackView v;
+    Graph& g = Graph::current();
+    const std::string ch = currentCharacter();
+    Node* root = ch.empty() ? nullptr : named(g, ch);
+    if (!root)
+        return v;
+    try
+    {
+        v.control = keyTarget(g, resolveCharacter(g, root->id())) == KeyTarget::Control;
+    }
+    catch (const std::exception&)
+    {
+        return v;
+    }
+    if (!v.control)
+        return v;
+    const std::string c = currentControl();
+    if (Node* n = c.empty() ? nullptr : g.find(c); n && trackOf(g, n->id()))
+        v.track = c;
+    return v;
+}
+
 json selectedKeysJson()
 {
     json k = json::array();
@@ -85,7 +136,7 @@ json selectedKeysJson()
     return k;
 }
 
-/** Runs a command on the current character. */
+/** Runs a command on the current character; Stacker commands work on the track the Stacker shows. */
 json onCharacter(const char* command, json call = json::object())
 {
     const std::string ch = currentCharacter();
@@ -93,6 +144,17 @@ json onCharacter(const char* command, json call = json::object())
     {
         log::write(LogLevel::Warning, std::string(command) + ": select a character");
         return nullptr;
+    }
+    if (std::string_view(command).starts_with("stacker"))
+    {
+        const StackView v = stackView();
+        if (v.control && v.track.empty())
+        {
+            log::write(LogLevel::Warning, std::string(command) + ": the key target is Control and the selected control has no track yet");
+            return nullptr;
+        }
+        if (!v.track.empty())
+            call["track"] = v.track;
     }
     call["args"] = json::array({ch});
     return runCommand(command, call);
@@ -209,6 +271,139 @@ QString frameText(double f)
     return std::abs(f - r) < 1e-3 ? QString::number(int64_t(r)) : QString::number(f, 'f', 2);
 }
 
+// Tracks: the character's control tracks, in the Stacker under its keys
+
+/** The selected controls, or the current one. */
+json selectedControls()
+{
+    json out = json::array();
+    Graph& g = Graph::current();
+    for (NodeId id : g.selection())
+        if (Node* n = g.node(id); n && n->type().isA("transform"))
+            out.push_back(n->path());
+    return out;
+}
+
+QWidget* makeTracksSection(QWidget* parent)
+{
+    auto* body = new QWidget(parent);
+    auto* v = new QVBoxLayout(body);
+    v->setContentsMargins(0, 0, 0, 0);
+    v->setSpacing(2);
+
+    auto* row = new QHBoxLayout;
+    row->setSpacing(2);
+    QToolButton* allOn = toolButton(body, "eye", actionTip("puppeteer.tracks.toggle"), [] { onCharacter("controlTracksOn"); }, true);
+    allOn->setText("All");
+    allOn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    row->addWidget(allOn);
+    row->addStretch(1);
+    row->addWidget(moreButton(body, {
+        {"Merge Into Character Keys", "Merge the selected controls' tracks into the character keys", [] {
+             runCommand("mergeControlTrack", {{"args", selectedControls()}});
+         }},
+        {"New Offset", "Give the selected controls a track of their own", [] { runCommand("controlTrack", {{"args", selectedControls()}}); }},
+    }));
+    auto deleteTracks = [] { runCommand("deleteControlTrack", {{"args", selectedControls()}}); };
+    row->addWidget(toolButton(body, "trash", "Delete Tracks\nDelete the selected controls' tracks; the character keys stay", deleteTracks));
+    v->addLayout(row);
+
+    auto* list = new QTreeWidget(body);
+    list->setObjectName("stackerTracks");
+    list->setColumnCount(4);
+    list->setHeaderHidden(true);
+    list->setRootIsDecorated(false);
+    list->setSelectionMode(QAbstractItemView::NoSelection);
+    QHeaderView* h = list->header();
+    h->setStretchLastSection(false);
+    h->setMinimumSectionSize(24);
+    for (int c : {0, 3})
+    {
+        h->setSectionResizeMode(c, QHeaderView::Fixed);
+        h->resizeSection(c, 26);
+    }
+    h->setSectionResizeMode(1, QHeaderView::Stretch);
+    h->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    list->setMaximumHeight(140);
+    v->addWidget(list);
+    auto* empty = new QLabel("No tracks. Pick Control and pose a control to give it one.", body);
+    empty->setForegroundRole(QPalette::PlaceholderText);
+    empty->setWordWrap(true);
+    v->addWidget(empty);
+
+    QWidget* section = controls::section("Tracks", body, parent, "puppeteer/stacker/tracks");
+    ui::deletion::claim(list, deleteTracks);
+
+    auto fill = [list, empty, allOn] {
+        const std::string ch = currentCharacter();
+        json info;
+        if (!ch.empty())
+            try
+            {
+                info = ops::execute("listControlTracks", {{"args", {ch}}});
+            }
+            catch (const std::exception&)
+            {
+            }
+        list->clear();
+        const json tracks = info.is_object() ? info["tracks"] : json::array();
+        {
+            const QSignalBlocker block(allOn);
+            const bool on = !info.is_object() || info.value("enabled", true);
+            allOn->setChecked(on);
+            allOn->setIcon(ui::icon(on ? "eye" : "eye-off"));
+            allOn->setEnabled(!tracks.empty());
+        }
+        list->setVisible(!tracks.empty());
+        empty->setVisible(tracks.empty());
+        const std::string selected = currentControl();
+        for (const json& t : tracks)
+        {
+            const std::string track = t.value("track", std::string());
+            const std::string control = t.value("control", std::string());
+            const bool mute = t.value("mute", false), solo = t.value("solo", false);
+            auto* it = new QTreeWidgetItem(list);
+            const std::string shortName = control.substr(control.find_last_of('|') + 1);
+            it->setText(1, QString::fromStdString(shortName));
+            it->setToolTip(1, "Click to pose this control on its track");
+            const size_t n = t["keys"].size();
+            it->setText(2, t.value("offset", false) ? QString("Offset") : QString("%1 keys").arg(n));
+            it->setTextAlignment(2, Qt::AlignRight | Qt::AlignVCenter);
+            it->setData(1, Qt::UserRole, QString::fromStdString(control));
+            QFont f = it->font(1);
+            f.setBold(control == selected);
+            it->setFont(1, f);
+            auto* eye = new QToolButton(list);
+            eye->setAutoRaise(true);
+            eye->setIcon(ui::icon(mute ? "eye-off" : "eye"));
+            eye->setToolTip(mute ? "Muted\nClick to turn the track back on" : "Mute\nTurn this track off; the character keys stay");
+            QObject::connect(eye, &QToolButton::clicked, list, [track, mute] { runCommand("editControlTrack", {{"args", {track}}, {"mute", !mute}}); });
+            list->setItemWidget(it, 0, eye);
+            auto* soloButton = new QToolButton(list);
+            soloButton->setAutoRaise(true);
+            soloButton->setCheckable(true);
+            soloButton->setChecked(solo);
+            soloButton->setText("S");
+            soloButton->setToolTip("Solo\nOnly this track on top of the character keys");
+            QObject::connect(soloButton, &QToolButton::clicked, list, [track, solo] { runCommand("editControlTrack", {{"args", {track}}, {"solo", !solo}}); });
+            list->setItemWidget(it, 3, soloButton);
+        }
+    };
+    QObject::connect(list, &QTreeWidget::itemClicked, list, [](QTreeWidgetItem* it, int column) {
+        if (column != 1 && column != 2)
+            return;
+        const std::string control = it->data(1, Qt::UserRole).toString().toStdString();
+        if (control.empty())
+            return;
+        runCommand("select", {{"args", {control}}});
+        onCharacter("keyTarget", {{"target", "control"}});
+    });
+    auto refresh = coalesced(body, fill);
+    subscribe(body, {events::Event::UndoStackChanged, events::Event::SelectionChanged, events::Event::SceneNew, events::Event::SceneOpened}, refresh);
+    fill();
+    return section;
+}
+
 // Stacker
 
 QWidget* makeStacker(QWidget* parent)
@@ -220,6 +415,17 @@ QWidget* makeStacker(QWidget* parent)
     auto* header = new QLabel(w);
     header->setForegroundRole(QPalette::PlaceholderText);
     v->addWidget(header);
+
+    auto* targetRow = new QHBoxLayout;
+    targetRow->setSpacing(4);
+    auto* target = new controls::Segmented(w);
+    target->add("Character", {}, "Character Keys\nPosing keys every control; tracks stay on top", 0);
+    target->add("Control", {}, "Control Track\nPosing goes to the posed control's own track: an offset until keyed", 1);
+    targetRow->addWidget(target);
+    targetRow->addStretch(1);
+    v->addLayout(targetRow);
+    QObject::connect(target, &controls::Segmented::picked, w,
+                     [](int id) { onCharacter("keyTarget", {{"target", id == 1 ? "control" : "character"}}); });
 
     auto* tools = new QHBoxLayout;
     tools->setSpacing(1);
@@ -248,6 +454,7 @@ QWidget* makeStacker(QWidget* parent)
     QObject::connect(nextGhost, &QToolButton::toggled, w, [ghostToggle](bool on) { ghostToggle(false, on); });
 
     auto* table = new QTableWidget(0, 3, w);
+    table->setObjectName("stackerKeys");
     table->setHorizontalHeaderLabels({"#", "Frame", "Gap"});
     table->verticalHeader()->setVisible(false);
     table->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -326,31 +533,48 @@ QWidget* makeStacker(QWidget* parent)
     reset->addStretch(1);
     v->addLayout(reset);
 
+    QWidget* tracks = makeTracksSection(w);
+    v->addWidget(tracks);
+
     auto filling = std::make_shared<bool>(false);
-    auto fill = [table, header, loop, prevGhost, nextGhost, filling] {
+    auto fill = [table, header, target, loop, prevGhost, nextGhost, filling] {
         const std::string ch = currentCharacter();
+        const StackView view = stackView();
         json keys;
-        if (!ch.empty())
+        if (!ch.empty() && !(view.control && view.track.empty()))
             try
             {
-                keys = ops::execute("stackerKeys", {{"args", {ch}}});
+                json call = {{"args", {ch}}};
+                if (!view.track.empty())
+                    call["track"] = view.track;
+                keys = ops::execute("stackerKeys", call);
             }
             catch (const std::exception&)
             {
             }
         *filling = true;
+        {
+            const QSignalBlocker block(target);
+            target->setCurrent(view.control ? 1 : 0);
+            target->setEnabled(!ch.empty());
+        }
         const std::vector<size_t> keep = state().selected;
         table->setRowCount(0);
         if (!keys.is_object())
         {
-            header->setText("No character. Select a Puppeteer character to stack its keys.");
+            const std::string control = currentControl();
+            header->setText(ch.empty()            ? "No character. Select a Puppeteer character to stack its keys."
+                            : control.empty()     ? "No control selected. Select one to see its track."
+                                                  : QString("%1: no track. Pose it to give it an offset.").arg(QString::fromStdString(control)));
             *filling = false;
             return;
         }
-        header->setText(QString("%1    %2 keys, %3 frames")
-                            .arg(QString::fromStdString(keys.value("root", std::string())))
-                            .arg(keys["rows"].size())
-                            .arg(frameText(keys.value("total", 0.0))));
+        const QString name = QString::fromStdString(view.track.empty() ? keys.value("root", std::string()) : view.track + " track");
+        header->setText(keys["rows"].empty() && !view.track.empty() ? QString("%1    offset").arg(name)
+                                                                     : QString("%1    %2 keys, %3 frames")
+                                                                           .arg(name)
+                                                                           .arg(keys["rows"].size())
+                                                                           .arg(frameText(keys.value("total", 0.0))));
         const double now = Graph::current().time();
         const json& rowsJson = keys["rows"];
         table->setRowCount(int(rowsJson.size()));
@@ -364,13 +588,17 @@ QWidget* makeStacker(QWidget* parent)
                 number += "  b";
             else if (mark == "extreme")
                 number += "  E";
+            else if (mark == "generated")
+                number += "  g";
             auto* num = new QTableWidgetItem(number);
             num->setFlags(num->flags() & ~Qt::ItemIsEditable);
             QFont f = num->font();
             f.setBold(mark == "extreme" || sameTime(row.value("time", 0.0), now));
             f.setItalic(mark == "breakdown" || isLoop);
             num->setFont(f);
-            num->setToolTip(isLoop ? "Loop key: mirrors the first key" : QString::fromStdString(mark == "none" ? "Key" : mark));
+            num->setToolTip(isLoop                  ? QString("Loop key: mirrors the first key")
+                            : mark == "generated" ? QString("Generated by Fill; filling again replaces it")
+                                                  : QString::fromStdString(mark == "none" ? "Key" : mark));
             auto* frame = new QTableWidgetItem(frameText(row.value("frame", 0.0)));
             frame->setFlags(frame->flags() & ~Qt::ItemIsEditable);
             frame->setFont(f);
@@ -413,7 +641,10 @@ QWidget* makeStacker(QWidget* parent)
             return;
         try
         {
-            const json keys = ops::execute("stackerKeys", {{"args", {ch}}});
+            json call = {{"args", {ch}}};
+            if (const StackView v = stackView(); !v.track.empty())
+                call["track"] = v.track;
+            const json keys = ops::execute("stackerKeys", call);
             if (row < int(keys["rows"].size()))
                 runCommand("currentTime", {{"args", {keys["rows"][size_t(row)]["time"]}}});
         }
@@ -536,6 +767,8 @@ QWidget* makeMixer(QWidget* parent)
         tree->clear();
         for (const LayerRow& r : mixerRows(layers))
         {
+            if (Node* l = r.base ? nullptr : Graph::current().find(r.name); l && isTrack(Graph::current(), l->id()))
+                continue;
             auto* it = new QTreeWidgetItem(tree);
             const QString name = QString::fromStdString(r.name);
             it->setText(1, r.base ? QString("Base Animation") : name);
@@ -808,6 +1041,24 @@ QWidget* makeCycleMaker(QWidget* parent)
     return w;
 }
 
+/** True while the current character's key target is Control; cached per graph change. */
+bool controlTargetShown()
+{
+    static const Graph* graphSeen = nullptr;
+    static uint64_t seen = ~uint64_t(0);
+    static std::vector<NodeId> selectionSeen;
+    static bool on = false;
+    Graph& g = Graph::current();
+    if (graphSeen != &g || seen != g.version() || selectionSeen != g.selection())
+    {
+        graphSeen = &g;
+        seen = g.version();
+        selectionSeen = g.selection();
+        on = stackView().control;
+    }
+    return on;
+}
+
 void registerUi(ext::Context& ctx)
 {
     const char* cat = "Animation";
@@ -829,6 +1080,35 @@ void registerUi(ext::Context& ctx)
     add("puppeteer.stacker.mirror", "Mirror Keys", "Mirror the pose at the selected Stacker keys.", [] { onKeys("stackerMirrorKeys"); });
     add("puppeteer.stacker.loopKey", "Toggle Loop Key", "Turn the character's loop key on or off.",
         [] { onCharacter("stackerLoopKey"); });
+    auto keyAction = [&](const char* id, const char* label, const char* doc, std::function<void()> fn, std::vector<std::string> keywords) {
+        actions::add(ctx, {.id = id, .label = label, .category = cat, .run = std::move(fn), .doc = doc, .keywords = std::move(keywords)});
+    };
+    keyAction("puppeteer.anim.setKey", "Set Key",
+              "Key the whole character at the current frame (key target Character), or the selected controls' tracks (Control).",
+              [] {
+                  // Anything outside a character keys as usual.
+                  if (currentCharacter().empty() || (currentControl().empty() && !Graph::current().selection().empty()))
+                      return void(runCommand("setKeyframe"));
+                  json call = {{"args", selectedControls()}};
+                  if (call["args"].empty())
+                      call["args"] = json::array({currentCharacter()});
+                  runCommand("characterKey", call);
+              },
+              {"key", "keyframe", "set key", "key all", "character key", "pose key"});
+    keyAction("puppeteer.keys.target", "Toggle Key Target",
+              "Switch where posing goes: the character keys, or the posed control's own track.",
+              [] { onCharacter("keyTarget", {{"toggle", true}}); },
+              {"key target", "control track", "character keys", "offset", "animation layer", "additive"});
+    keyAction("puppeteer.tracks.toggle", "Toggle Control Tracks",
+              "Turn every control track of the character off or on; the character keys and each track's mute stay.",
+              [] { onCharacter("controlTracksOn"); }, {"tracks", "offsets", "mute layers", "animation layers"});
+    keyAction("puppeteer.tracks.merge", "Merge Tracks Into Character Keys",
+              "Merge the selected controls' tracks into the character keys.",
+              [] { runCommand("mergeControlTrack", {{"args", selectedControls()}}); }, {"merge layer", "bake layer", "collapse", "flatten"});
+    keyAction("puppeteer.tracks.offset", "New Control Offset", "Give the selected controls a track of their own, starting as an offset.",
+              [] { runCommand("controlTrack", {{"args", selectedControls()}}); }, {"offset", "additive layer", "animation layer", "track"});
+    keyAction("puppeteer.tracks.delete", "Delete Control Tracks", "Delete the selected controls' tracks; the character keys stay.",
+              [] { runCommand("deleteControlTrack", {{"args", selectedControls()}}); }, {"delete layer", "remove offset"});
     add("puppeteer.cycle.step", "Cycle Step", "Build the second step of the cycle from the first half, mirrored.",
         [] { onCharacter("cycleStep"); });
     actions::add(ctx, {.id = "puppeteer.cycle.side", .label = "Cycle Side", .category = cat,
@@ -848,7 +1128,9 @@ void registerUi(ext::Context& ctx)
     int sep = 0;
     for (const char* a : {"window.puppeteerStacker", "window.puppeteerMixer", "window.puppeteerAnimBank", "window.puppeteerCycleMaker", "",
                           "puppeteer.stacker.createKey", "puppeteer.stacker.deleteKey", "puppeteer.stacker.gapIncrease",
-                          "puppeteer.stacker.gapDecrease", "puppeteer.stacker.loopKey", "", "puppeteer.cycle.step", "puppeteer.cycle.side",
+                          "puppeteer.stacker.gapDecrease", "puppeteer.stacker.loopKey", "", "puppeteer.anim.setKey", "puppeteer.keys.target",
+                          "puppeteer.tracks.offset", "puppeteer.tracks.toggle", "puppeteer.tracks.merge", "puppeteer.tracks.delete", "",
+                          "puppeteer.cycle.step", "puppeteer.cycle.side",
                           "puppeteer.cycle.walk", "puppeteer.cycle.run"})
     {
         if (*a)
@@ -858,8 +1140,19 @@ void registerUi(ext::Context& ctx)
     }
 
     hotkeyLayers::add(ctx, {.id = "puppeteer.anim.keys",
-                            .contexts = {{"global", {{"Ctrl+]", "puppeteer.stacker.gapIncrease"}, {"Ctrl+[", "puppeteer.stacker.gapDecrease"}}}},
+                            .contexts = {{"global",
+                                          {{"Ctrl+]", "puppeteer.stacker.gapIncrease"},
+                                           {"Ctrl+[", "puppeteer.stacker.gapDecrease"},
+                                           {"S", "puppeteer.anim.setKey"},
+                                           {"Alt+K", "puppeteer.keys.target"}}}},
                             .mode = kAnimateMode});
+
+    // Posing on a track shows by the cursor, where the pose is made.
+    cursorBadges::add(ctx, {.id = "puppeteer.controlTrack",
+                            .icon = "stack-2",
+                            .active = [](const ViewportState&) { return controlTargetShown(); },
+                            .message = "Key target: control track",
+                            .actions = {"puppeteer.keys.target"}});
 }
 } // namespace
 } // namespace puppeteer::anim

@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <stdexcept>
@@ -282,10 +283,14 @@ void ringUvs(double radius, int sides, std::vector<double>& us, std::vector<doub
 }
 } // namespace
 
-Arrays tube(const std::vector<glm::dvec3>& points, const std::vector<double>& radii, int sides)
+Arrays tube(const std::vector<glm::dvec3>& points, const std::vector<double>& radii, int sides, double pointBelow)
 {
     Arrays a;
-    const size_t rings = points.size();
+    const size_t count = points.size();
+    size_t rings = count;
+    if (radii.back() < pointBelow)
+        for (rings = count - 1; rings > 1 && radii[rings - 1] < pointBelow;)
+            --rings;
     const int stride = sides + 1;
     glm::dvec3 reference(0.0), previous(0.0);
     bool first = true;
@@ -295,8 +300,8 @@ Arrays tube(const std::vector<glm::dvec3>& points, const std::vector<double>& ra
         glm::dvec3 heading;
         if (i == 0)
             heading = normalized(points[1] - points[0]);
-        else if (i == rings - 1)
-            heading = normalized(points[rings - 1] - points[rings - 2]);
+        else if (i == count - 1)
+            heading = normalized(points[count - 1] - points[count - 2]);
         else
             heading = normalized(points[i + 1] - points[i - 1]);
         if (first)
@@ -343,7 +348,7 @@ Arrays tube(const std::vector<glm::dvec3>& points, const std::vector<double>& ra
     const Index apex = Index(a.points.size());
     a.points.push_back(points.back());
     size_t block = a.us.size();
-    const double tipRadius = std::max(kEps, radii.back());
+    const double tipRadius = std::max(kEps, radii[rings - 1]);
     ringUvs(tipRadius, sides, a.us, a.vs);
     a.us.push_back(tipRadius);
     a.vs.push_back(tipRadius);
@@ -517,8 +522,17 @@ Trunk buildTrunk(const json& trunk, const glm::dvec3& up)
     Rng rng(uint64_t(int64_t(num(trunk, "seed", 0.0))));
     Skeleton sk = skeleton(spec, rng);
     const int sides = std::max(3, integer(trunk, "sides", 8));
+    glm::dvec3 lo(std::numeric_limits<double>::max()), hi(-std::numeric_limits<double>::max());
+    for (const Limb& l : sk.limbs)
+        for (size_t i = 0; i < l.points.size(); ++i)
+        {
+            lo = glm::min(lo, l.points[i] - l.radii[i]);
+            hi = glm::max(hi, l.points[i] + l.radii[i]);
+        }
+    // A cap triangle is r^2 sin(2pi/sides) / 2; meshCheck calls a face zero-area under 1e-8 of the diagonal squared, so caps keep twice that.
+    const double pointBelow = glm::length(hi - lo) * std::sqrt(4e-8 / std::sin(2.0 * kPi / sides));
     std::vector<Arrays> pieces(sk.limbs.size());
-    tbb::parallel_for(size_t(0), sk.limbs.size(), [&](size_t i) { pieces[i] = tube(sk.limbs[i].points, sk.limbs[i].radii, sides); });
+    tbb::parallel_for(size_t(0), sk.limbs.size(), [&](size_t i) { pieces[i] = tube(sk.limbs[i].points, sk.limbs[i].radii, sides, pointBelow); });
     Trunk out;
     out.density = layoutUvs(pieces, text(trunk, "uv_mode", "packed"), num(trunk, "uv_tile", 0.0), num(trunk, "texel_density", 0.0),
                             integer(trunk, "uv_map_size", 2048), spec.radius, &out.warning);

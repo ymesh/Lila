@@ -791,6 +791,8 @@ void addBuiltIns(Registry<prefPages::Page>& r)
                "accurate");
         numberField(viewport, "AO radius (cm)", "/viewport/ao/radius", 30.0, 0.1, 10000.0, 1.0, 1);
         numberField(viewport, "AO intensity", "/viewport/ao/intensity", 1.0, 0.0, 4.0, 0.1);
+        sectionHeader(viewport, "Large Worlds");
+        toggleField(viewport, "Camera-relative beyond 1 km", vd::kCameraRelative, true);
         sectionHeader(viewport, "Color");
         numberField(viewport, "Exposure (stops)", vd::kExposure, 0.0, -10.0, 10.0, 0.1);
         numberField(viewport, "Gamma", vd::kGamma, 1.0, 0.1, 4.0, 0.05);
@@ -814,6 +816,10 @@ void addBuiltIns(Registry<prefPages::Page>& r)
         }
         toggleField(viewport, "Temporal (smooths shading shimmer)", vd::kTaa, true);
         numberField(viewport, "Still frames averaged", vd::kAccumulate, 16.0, 1.0, 256.0, 1.0, 0);
+        // Camera smoothing is off for now (see cameraSmoothing in ViewportWidget.cpp).
+        // sectionHeader(viewport, "Camera");
+        // numberField(viewport, "Look smoothing (0 off)", vd::kCameraLookSmoothing, 0.0, 0.0, 1.0, 0.05, 2);
+        // numberField(viewport, "Move smoothing (0 off)", vd::kCameraMoveSmoothing, 0.0, 0.0, 1.0, 0.05, 2);
         sectionHeader(viewport, "Frame Rate");
         intChoiceField(viewport, "Max frame rate", vd::kFrameCap,
                        {{"Display refresh", render::kFrameCapRefresh}, {"30", 30}, {"60", 60}, {"75", 75}, {"90", 90}, {"120", 120}, {"144", 144},

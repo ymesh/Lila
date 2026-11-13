@@ -38,8 +38,8 @@ void drawMarker(drawOverrides::DrawContext& c)
     glm::dvec3 pts[4] = {p + right * r, p + up * r, p - right * r, p - up * r};
     for (int k = 0; k < 4; ++k)
     {
-        c.frame.lines.push_back({glm::vec3(pts[k]), c.color});
-        c.frame.lines.push_back({glm::vec3(pts[(k + 1) % 4]), c.color});
+        c.frame.lines.push_back({glm::dvec3(pts[k]), c.color});
+        c.frame.lines.push_back({glm::dvec3(pts[(k + 1) % 4]), c.color});
     }
 }
 

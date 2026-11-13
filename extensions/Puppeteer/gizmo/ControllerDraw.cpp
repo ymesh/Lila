@@ -60,7 +60,7 @@ void drawLoop(drawOverrides::DrawContext& c, const std::vector<glm::dvec3>& pts,
     {
         const size_t j = (i + 1) % n;
         for (const glm::dvec3& p : {pts[i] - side[i], pts[j] - side[j], pts[j] + side[j], pts[i] - side[i], pts[j] + side[j], pts[i] + side[i]})
-            c.frame.tris3d.push_back({glm::vec3(p), color});
+            c.frame.tris3d.push_back({glm::dvec3(p), color});
     }
 }
 
@@ -132,8 +132,8 @@ void drawPivots(drawOverrides::DrawContext& c, Graph& g, const Node& foot)
         {
             glm::dvec3 d(0.0);
             d[k] = r;
-            c.frame.linesOnTop.push_back({glm::vec3(p - d), kPlain});
-            c.frame.linesOnTop.push_back({glm::vec3(p + d), kPlain});
+            c.frame.linesOnTop.push_back({glm::dvec3(p - d), kPlain});
+            c.frame.linesOnTop.push_back({glm::dvec3(p + d), kPlain});
         }
     }
 }
@@ -150,10 +150,10 @@ void drawPins(render::FrameState& frame, const ViewInfo& view)
             for (int a : {0, 1, 2, 3})
                 for (int b : {4, 5})
                 {
-                    frame.linesOnTop.push_back({glm::vec3(p + tips[a]), kLocked});
-                    frame.linesOnTop.push_back({glm::vec3(p + tips[b]), kLocked});
-                    frame.linesOnTop.push_back({glm::vec3(p + tips[a]), kLocked});
-                    frame.linesOnTop.push_back({glm::vec3(p + tips[(a + 1) % 4]), kLocked});
+                    frame.linesOnTop.push_back({glm::dvec3(p + tips[a]), kLocked});
+                    frame.linesOnTop.push_back({glm::dvec3(p + tips[b]), kLocked});
+                    frame.linesOnTop.push_back({glm::dvec3(p + tips[a]), kLocked});
+                    frame.linesOnTop.push_back({glm::dvec3(p + tips[(a + 1) % 4]), kLocked});
                 }
         }
 }

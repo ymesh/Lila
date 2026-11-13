@@ -768,3 +768,29 @@ TEST_CASE("settlement gen: calibrate" * doctest::skip())
     }
 }
 
+
+TEST_CASE("settlement gen: a main road to an attractor stays inside the outline when an exclusion blocks the way")
+{
+    // A long floor almost cut across by an exclusion from below: the way round outside is shorter than the gap inside.
+    Site s;
+    s.outline = {{0, 0}, {40000, 0}, {40000, 8000}, {0, 8000}};
+    s.attractors = {{32000, 4000}, {4000, 7600}};
+    s.hasCenter = true;
+    s.exclusions.push_back({1, "", "", {{15000, -3000}, {18000, -3000}, {18000, 5000}, {15000, 5000}}, 200.0});
+    Options o = gopts("europeanCity", json::object());
+    o.profile.pattern = Pattern::None;
+    o.blocks = false;
+    const Layout l = build(s, Ground::plane(), o);
+    int arterials = 0;
+    for (const StreetEdge& e : l.graph.edges)
+    {
+        if (!e.alive || e.cls != StreetClass::Arterial)
+            continue;
+        ++arterials;
+        const Vec2 mid = 0.5 * (l.graph.nodes[size_t(e.a)].p + l.graph.nodes[size_t(e.b)].p);
+        CAPTURE(mid.x);
+        CAPTURE(mid.y);
+        CHECK(contains(s.outline, mid));
+    }
+    CHECK(arterials > 0);
+}

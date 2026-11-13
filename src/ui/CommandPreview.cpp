@@ -219,7 +219,7 @@ void edgesMissing(const Shot& from, const Shot* against, std::vector<Edge>& out)
     const std::unordered_set<uint64_t> keys = against ? edgeKeys(*against) : std::unordered_set<uint64_t>{};
     forEachWorldEdge(from, [&](const glm::dvec3& a, const glm::dvec3& b, const glm::dvec3& n0, const glm::dvec3& n1) {
         if (out.size() < kMaxEdges && !keys.contains(edgeKey(pointKey(a), pointKey(b))))
-            out.push_back({glm::vec3(a), glm::vec3(b), glm::vec3(n0), glm::vec3(n1)});
+            out.push_back({glm::dvec3(a), glm::vec3(b), glm::vec3(n0), glm::vec3(n1)});
     });
 }
 
@@ -389,7 +389,7 @@ void swapResults(render::FrameState& s)
         if (auto rm = renderMeshFor(it->second.mesh))
         {
             d.mesh = std::move(rm);
-            d.world = glm::mat4(it->second.world);
+            d.world = it->second.world;
             d.instances.reset();
         }
         placed.insert(it->first);
@@ -403,7 +403,7 @@ void swapResults(render::FrameState& s)
             {
                 render::MeshDraw d;
                 d.mesh = std::move(rm);
-                d.world = glm::mat4(shot.world);
+                d.world = shot.world;
                 d.node = uint64_t(id);
                 s.meshes.push_back(std::move(d));
             }

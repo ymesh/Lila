@@ -178,6 +178,23 @@ TEST_CASE("tree geometry: skeleton counts and determinism")
     CHECK(sp["in"] == 2.0);
 }
 
+TEST_CASE("tree geometry: no preset's trunk has a zero-area face")
+{
+    using namespace treegen;
+    for (const std::string& preset : builtInPresets())
+    {
+        const json values = presetSettings(preset);
+        const json build = stylize(values, values["global.style"].get<double>());
+        const Trunk t = buildTrunk(sectionValues(build, "trunk"), {0, 1, 0});
+        // The same test meshCheck reports zero-area faces by.
+        const double scale = glm::length(t.mesh.bounds().size());
+        int degenerate = 0;
+        for (geo::Index f = 0; f < t.mesh.faceCapacity(); ++f)
+            degenerate += t.mesh.faceValid(f) && t.mesh.faceArea(f) < 1e-8 * scale * scale;
+        CHECK_MESSAGE(degenerate == 0, preset, ": ", degenerate, " zero-area faces of ", t.mesh.numFaces());
+    }
+}
+
 TEST_CASE("tree generator: package registers its commands, panel, actions and menu")
 {
     ensureLoaded();
@@ -401,4 +418,22 @@ TEST_CASE("tree generator: native texture sets from the species palette")
     const json e = run("texEvaluate", {{"args", {leaves}}, {"resolution", 16}, {"backend", "cpu"}, {"channels", {"baseColor"}},
                                        {"folder", (std::filesystem::temp_directory_path() / "lila_foliage_tests" / "tex").string()}});
     CHECK(e["files"].size() == 1);
+}
+
+TEST_CASE("tree generator: an exported tree's bake project comes from the paths the export stored")
+{
+    fresh();
+    const fs::path out = scratch("bakeproject");
+    const std::string leaf = run("treeLeafPlane").get<std::string>();
+    const std::string tree = run("treeBuild", {{"preset", "Kaede Young"}, {"settings", quick(5)}, {"leaf", leaf}, {"name", "maple"}}).get<std::string>();
+    json settings = json::object();
+    settings["export.path"] = out.string();
+    settings["export.name"] = "maple";
+    run("treeExport", {{"args", {tree}}, {"settings", settings}});
+
+    CHECK(run("treeBakeHandoff", {{"args", {tree}}})["high"] == (out / "maple_Hi.fbx").string());
+    const json r = run("treeTextureSet", {{"args", {tree}}, {"season", "autumn"}});
+    CHECK_FALSE(r["bakeProject"].get<std::string>().empty());
+    CHECK(r["warnings"].empty());
+    CHECK_FALSE(run("createBakeFromGenerator", {{"args", {tree}}, {"kind", "tree"}})["project"].get<std::string>().empty());
 }

@@ -114,8 +114,8 @@ bool keysAsRotation(Graph& g, const PlugRef& plug)
     Node* n = g.node(plug.node);
     if (!n || plug.attr != Transform::kRotate || !isTransform(*n))
         return false;
-    // Keys on an active layer go through the layer's blend (setLayeredRotationKey).
-    if (activeLayer(g))
+    // Keys on a layer go through its blend (setLayeredRotationKey). Asking routes the key that follows, which may make the layer.
+    if (routeKey(g, plug))
         return false;
     if (auto s = g.source({plug.node, plug.attr, -1}))
     {
@@ -125,7 +125,7 @@ bool keysAsRotation(Graph& g, const PlugRef& plug)
     for (int c = 0; c < 3; ++c)
         if (g.source({plug.node, plug.attr, c}))
             return false;
-    if (activeLayer(g))
+    if (routeKey(g, plug))
         return false;
     return RotationInterpolation(n->as<int64_t>(Transform::kRotationInterpolation)) != RotationInterpolation::Euler;
 }
@@ -390,12 +390,23 @@ void registerRotationCommands()
         if (!s || !isRotationCurve(*s))
             return Graph::DrivenEdit::Reject;
         // As scalar curves: interactive drags hold, and the committing set keys.
-        if (autoKey() && UndoStack::get().enabled())
+        if (!UndoStack::get().enabled())
+            return Graph::DrivenEdit::Hold;
+        const bool toStatic = editSetsStatic(g, dst);
+        if (!toStatic && !autoKey())
+            return Graph::DrivenEdit::Hold;
+        if (toStatic || routeKey(g, dst) != kNoNode)
         {
-            setRotationKey(g, dst, g.time(), v);
-            return Graph::DrivenEdit::Handled;
+            // A layer takes the edit (a router's track): each component goes through it, the others settling after.
+            for (int pass = 0; pass < 2; ++pass)
+                for (int c = 0; c < 3; ++c)
+                    setKey(g, {dst.node, dst.attr, c}, g.time(), v[c]);
         }
-        return Graph::DrivenEdit::Hold;
+        else
+            setRotationKey(g, dst, g.time(), v);
+        if (!toStatic)
+            notifyAutoKey(g, dst, g.time());
+        return Graph::DrivenEdit::Handled;
     });
 
     // A rotation curve's Euler output follows its transform's rotateOrder; loads and undo replay carry both already.

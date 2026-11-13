@@ -14,6 +14,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
+#include <limits>
 #include <set>
 
 using namespace lila;
@@ -93,16 +95,37 @@ std::vector<uint64_t> blockTargets(const Args& a, const Layout& l, const char* c
     return ids;
 }
 
-std::vector<uint64_t> lotTargets(const Args& a, const Layout& l, const char* cmd)
+/** The lots named by lot= and at=. With snapped, an at= point on no lot takes the nearest lot within kSnapReach and
+ *  says so in *snapped; otherwise a miss names the nearest lot. */
+std::vector<uint64_t> lotTargets(const Args& a, const Layout& l, const char* cmd, json* snapped = nullptr)
 {
+    constexpr double kSnapReach = 10000.0;
     std::vector<uint64_t> ids = idList(a, "lot", cmd);
     if (a.has("at"))
     {
         const Vec2 q = pointFlag(a, "at", cmd);
         auto it = std::ranges::find_if(l.lots, [&](const Lot& lot) { return contains(lot.outline.pts, q); });
         if (it == l.lots.end())
-            throw CommandError(std::string(cmd) + ": no lot at [" + std::to_string(q.x) + ", " + std::to_string(q.y) + "]");
-        ids.push_back(it->key);
+        {
+            const Lot* nearest = nullptr;
+            double best = std::numeric_limits<double>::max();
+            for (const Lot& lot : l.lots)
+                if (const double d = boundaryDistance(lot.outline.pts, q); d < best)
+                {
+                    best = d;
+                    nearest = &lot;
+                }
+            const std::string where = "no lot at [" + std::to_string(q.x) + ", " + std::to_string(q.y) + "]";
+            if (!nearest)
+                throw CommandError(std::string(cmd) + ": " + where + ": the settlement has no lots");
+            if (!snapped || best > kSnapReach)
+                throw CommandError(std::format("{}: {}; the nearest is lotId {} ({:.0f} m away, center [{:.0f}, {:.0f}])", cmd, where, nearest->key,
+                                               best / 100.0, centroid(nearest->outline).x, centroid(nearest->outline).y));
+            *snapped = {{"from", xzJson(q)}, {"lotId", nearest->key}, {"distanceM", best / 100.0}};
+            ids.push_back(nearest->key);
+        }
+        else
+            ids.push_back(it->key);
     }
     for (uint64_t id : ids)
         if (std::ranges::none_of(l.lots, [&](const Lot& lot) { return lot.key == id; }))
@@ -483,7 +506,7 @@ void registerLotCommands(ext::Context& ctx)
                "central streets and residential wealth tiers by land value. clear=True drops the lot's use override.",
         .positionalDoc = "settlement mesh or its modifier",
         .flags = {{"lot", "lt", LotT::Any, nullptr, "Lot id, or a list of them."},
-                  {"at", "", LotT::List, nullptr, "Or the lot under this point, [x, z]."},
+                  {"at", "", LotT::List, nullptr, "Or the lot under this point, [x, z], or the nearest one (returned as snapped)."},
                   {"use", "u", LotT::String, nullptr, "The use to give them.", uses},
                   {"clear", "cl", LotT::Bool, false, "Drop their use overrides."}},
         .run = [](const Args& a) -> json {
@@ -491,7 +514,8 @@ void registerLotCommands(ext::Context& ctx)
 
             const char* cmd = "settlementLandUse";
             const Rebuilt r = lotSettlementOf(a, cmd);
-            const std::vector<uint64_t> ids = lotTargets(a, r.layout, cmd);
+            json snapped;
+            const std::vector<uint64_t> ids = lotTargets(a, r.layout, cmd, &snapped);
             const Layout* l = &r.layout;
             Rebuilt after;
             if (!ids.empty())
@@ -526,13 +550,16 @@ void registerLotCommands(ext::Context& ctx)
             std::sort(access.begin(), access.end());
             auto q = [&](double f) { return access.empty() ? 0.0 : access[std::min(access.size() - 1, size_t(f * double(access.size())))]; };
             const json stats = parcelStats(*l);
-            return {{"lots", changed},
-                    {"uses", stats["lotUses"]},
-                    {"residentialWealth", stats["residentialWealth"]},
-                    {"access", {{"p10", q(0.1)}, {"p50", q(0.5)}, {"p90", q(0.9)}}},
-                    {"era", eraOf(l->profile)},
-                    {"windAngle", l->profile.windAngle},
-                    {"landmarks", stats["landmarks"]}};
+            json out = {{"lots", changed},
+                        {"uses", stats["lotUses"]},
+                        {"residentialWealth", stats["residentialWealth"]},
+                        {"access", {{"p10", q(0.1)}, {"p50", q(0.5)}, {"p90", q(0.9)}}},
+                        {"era", eraOf(l->profile)},
+                        {"windAngle", l->profile.windAngle},
+                        {"landmarks", stats["landmarks"]}};
+            if (!snapped.is_null())
+                out["snapped"] = snapped;
+            return out;
         },
         .examples = {"settlementLandUse('Settlement')['uses']", "settlementLandUse('Settlement', at=[2400, 600], use='industrial')"},
     });
@@ -540,12 +567,12 @@ void registerLotCommands(ext::Context& ctx)
     ctx.registerCommand({
         .name = "settlementPlaceLandmark",
         .doc = "Reserve a lot as a landmark under a name (a footprint to fill from the library or Masonry), by stable id or the "
-               "lot under at=, kept in the edits; use= changes its use too. remove=True takes the name off again. Generated "
+               "lot under at= (or the nearest within 100 m, returned as snapped), kept in the edits; use= changes its use too. remove=True takes the name off again. Generated "
                "landmarks (market_square, church, town_hall, castle or temple on high ground, axis_end_N, park_N, cemetery) "
                "carry the reasons they are where they are; settlementLots(landmarks=True) lists them all.",
         .positionalDoc = "settlement mesh or its modifier",
         .flags = {{"lot", "lt", LotT::Any, nullptr, "Lot id."},
-                  {"at", "", LotT::List, nullptr, "Or the lot under this point, [x, z]."},
+                  {"at", "", LotT::List, nullptr, "Or the lot under this point, [x, z], or the nearest one."},
                   {"name", "n", LotT::String, nullptr, "Landmark name, such as guild_hall."},
                   {"use", "u", LotT::String, nullptr, "Its use.", uses},
                   {"remove", "rm", LotT::Bool, false, "Take the landmark name off."}},
@@ -554,7 +581,8 @@ void registerLotCommands(ext::Context& ctx)
 
             const char* cmd = "settlementPlaceLandmark";
             const Rebuilt r = lotSettlementOf(a, cmd);
-            const std::vector<uint64_t> ids = lotTargets(a, r.layout, cmd);
+            json snapped;
+            const std::vector<uint64_t> ids = lotTargets(a, r.layout, cmd, &snapped);
             if (ids.size() != 1)
                 throw CommandError(std::string(cmd) + ": give one lot (lot= or at=)");
             const bool remove = a.get<bool>("remove", false);
@@ -577,7 +605,12 @@ void registerLotCommands(ext::Context& ctx)
             const Rebuilt after = rebuildSettlement(scene::Graph::current(), r.modifier, cmd);
             for (const Lot& lot : after.layout.lots)
                 if (lot.key == ids[0])
-                    return lotSummary(after.layout, lot);
+                {
+                    json out = lotSummary(after.layout, lot);
+                    if (!snapped.is_null())
+                        out["snapped"] = snapped;
+                    return out;
+                }
             throw CommandError(std::string(cmd) + ": the lot is gone after the rebuild");
         },
         .examples = {"settlementPlaceLandmark('Settlement', at=[300, 4200], name='guild_hall', use='civic')"},

@@ -98,4 +98,10 @@ Built realizePlan(const Plan& plan, const RuinParams& ruin, const AgeParams& age
 
 /** Stones whose bottom is not on the ground or resting on another stone (within tolerance cm). What masonryCheck counts. */
 int countFloating(std::span<const Stone> stones, double tolerance, std::vector<int>* which = nullptr);
+
+/** What the ruin left lying: rubble, and slab pieces that fell. */
+inline bool isRubble(const Stone& s) { return s.role == Role::Rubble || (s.role == Role::Slab && s.loose); }
+
+/** Rubble lying more than height (cm) above the ground under it: heaps stacked into columns. What masonryCheck counts. */
+int countStacked(std::span<const Stone> stones, double height, std::vector<int>* which = nullptr, double* highest = nullptr);
 } // namespace masonry

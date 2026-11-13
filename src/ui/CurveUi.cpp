@@ -128,8 +128,8 @@ bool editing(const scene::Node& n)
 void line(render::FrameState& f, const glm::dvec3& a, const glm::dvec3& b, const glm::vec4& c, bool onTop)
 {
     auto& out = onTop ? f.linesOnTop : f.lines;
-    out.push_back({glm::vec3(a), c});
-    out.push_back({glm::vec3(b), c});
+    out.push_back({glm::dvec3(a), c});
+    out.push_back({glm::dvec3(b), c});
 }
 
 /** The curve's own line colour: the theme's curve colour unless a highlight or display layer gives another. */
@@ -273,7 +273,7 @@ render::StrandDraw strandDraw(const scene::Node& n, const curve::Splines& spline
     const StrandEntry& e = strandEntry(n, splines);
     render::StrandDraw d;
     d.cloud = e.cloud;
-    d.world = glm::mat4(world);
+    d.world = world;
     const glm::dvec3 centre = xf(world, e.centre);
     const double scale = std::cbrt(std::abs(glm::determinant(glm::dmat3(world))));
     const double pixels = e.radius * scale / std::max(1e-9, view.unitsPerPixel(centre));
@@ -319,7 +319,7 @@ void drawCurve(drawOverrides::DrawContext& c)
         size_t segs = pl.closed ? pl.size() : (pl.size() ? pl.size() - 1 : 0);
         for (size_t i = 0; i < segs; ++i)
         {
-            glm::vec3 a(xf(c.world, pl.points[i])), b(xf(c.world, pl.points[(i + 1) % pl.size()]));
+            glm::dvec3 a(xf(c.world, pl.points[i])), b(xf(c.world, pl.points[(i + 1) % pl.size()]));
             const glm::vec4& col = sketch && sketchUi::spanFixed(*sketch, splines, li, pl.params[i]) ? fixedColor : color;
             halo.push_back({a, kHalo});
             halo.push_back({b, kHalo});

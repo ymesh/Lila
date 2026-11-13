@@ -120,7 +120,7 @@ void MainWindow::buildMenus()
     addSubmenu("Create", "Polygon Primitives");
     menus::addActions("Create/Polygon Primitives", {"create.cube", "create.sphere", "create.cylinder", "create.capsule", "create.cone", "create.plane", "create.torus",
                                              "create.disc", "create.pipe", "create.quadSphere", "create.icoSphere"});
-    menus::addActions("Create", {"create.locator", "create.camera", "create.cameraFromView", "create.emptyGroup", "create.turntableBase", "create.audio"});
+    menus::addActions("Create", {"create.locator", "create.camera", "create.cameraFromView", "create.emptyGroup", "create.turntableBase", "create.audio", "anim.importFootage"});
     addSubmenu("Create", "Reference Images");
     menus::addActions("Create/Reference Images", {"create.imagePlane", "imagePlane.cut", "imagePlane.guides", "reference.addImages", "referenceOverlay.addImage", "", "referenceOverlay.adjust",
                                                    "referenceOverlay.toggle", "referenceOverlay.next", ""});
@@ -345,14 +345,15 @@ void MainWindow::buildMenus()
     addSubmenu("Display", "Views", syncChecks);
     menus::addActions("Display/Views", {"viewport.view.persp", "viewport.view.top", "viewport.view.front", "viewport.view.right", "viewport.view.left",
                                  "viewport.view.back", "viewport.view.bottom"});
-    menus::addActions("Display", {"viewport.frameSelected", "viewport.frameAll", "viewport.frameUnderCursor", "viewport.cameraUndo", "viewport.cameraRedo", "#Overlays",
+    menus::addActions("Display", {"viewport.frameSelected", "viewport.frameAll", "viewport.frameUnderCursor", "viewport.cameraUndo", "viewport.cameraRedo", "view.drone", "#Overlays",
                            "viewport.toggleGrid", "viewport.toggleResolutionGate", "viewport.toggleFilmGate", "viewport.cameraSettings",
                            "window.renderSettings", "#View", "viewport.toggleToolbar", "window.toggleToolBox", "viewport.resetExposure"});
 
     menu("Animation", "Animation", Area::MenuBar, {}, "", {"Animate", "Rig", "Effects"});
     menus::addActions("Animation", {"#Keys", "anim.setKey", "anim.setKeyTranslate", "anim.setKeyRotate", "anim.setKeyScale", "anim.autoKeyToggle", "#Playback",
                              "anim.play", "anim.playBackward", "anim.stop", "anim.firstFrame", "anim.lastFrame", "anim.nextFrame",
-                             "anim.prevFrame", "anim.nextKey", "anim.prevKey", "#Editors", "window.graphEditor", "window.timeSlider"});
+                             "anim.prevFrame", "anim.nextKey", "anim.prevKey", "#Reference", "anim.importFootage", "create.audio",
+                             "#Editors", "window.graphEditor", "window.timeSlider"});
     menus::addActions("Animation", {"#Ghosting and Poses"});
     addGhostingMenu("Animation");
     menus::addActions("Animation", {"window.poseLibrary", "pose.mirror", "window.controlPicker", "picker.editMode"});
@@ -509,7 +510,7 @@ void MainWindow::buildPanelMenus()
         addMenu({.id = std::string("panel.") + title, .title = title, .area = Area::Hotbox});
     menus::addActions("panel.View", {"viewport.view.persp", "viewport.view.top", "viewport.view.front", "viewport.view.right", "viewport.view.left",
                               "viewport.view.back", "viewport.view.bottom", "", "viewport.frameSelected", "viewport.frameAll",
-                              "viewport.cameraUndo", "viewport.cameraRedo", "", "viewport.toggleResolutionGate", "viewport.toggleFilmGate",
+                              "viewport.cameraUndo", "viewport.cameraRedo", "view.drone", "", "viewport.toggleResolutionGate", "viewport.toggleFilmGate",
                               "viewport.cameraSettings", "", "viewport.imagePlaneImport", "referenceOverlay.addImage", "referenceOverlay.adjust",
                               "referenceOverlay.bindView", "referenceOverlay.goToView", "referenceOverlay.park"});
     menus::addActions("panel.Shading", {"viewport.wireframe", "viewport.shaded", "viewport.textured", "viewport.wireOnShaded", "", "viewport.toggleAO",

@@ -724,7 +724,7 @@ private:
     void applyValues(const json& values)
     {
         mLoading = true;
-        // items() is a view: before C++23 a range-for keeps only it alive, not sanitize()'s temporary json.
+        // Range-for keeps only items()'s view alive, not the json it reads.
         const json clean = sanitize(values);
         for (const auto& [name, value] : clean.items())
             writeValue(name, value);

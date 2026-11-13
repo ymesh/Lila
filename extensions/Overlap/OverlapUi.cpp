@@ -92,16 +92,16 @@ void drawSimulation(drawOverrides::DrawContext& c)
         const glm::dvec3 p(f->world[i][3]);
         if (auto it = index.find(g.parent(info.outputs[i])); it != index.end())
         {
-            c.frame.linesOnTop.push_back({glm::vec3(glm::dvec3(f->world[it->second][3])), color});
-            c.frame.linesOnTop.push_back({glm::vec3(p), color});
+            c.frame.linesOnTop.push_back({glm::dvec3((f->world[it->second][3])), color});
+            c.frame.linesOnTop.push_back({glm::dvec3(p), color});
         }
         const double r = 3.0 * c.view.unitsPerPixel(p);
         for (int axis = 0; axis < 3; ++axis)
         {
             glm::dvec3 d(0.0);
             d[axis] = r;
-            c.frame.linesOnTop.push_back({glm::vec3(p - d), color});
-            c.frame.linesOnTop.push_back({glm::vec3(p + d), color});
+            c.frame.linesOnTop.push_back({glm::dvec3(p - d), color});
+            c.frame.linesOnTop.push_back({glm::dvec3(p + d), color});
         }
     }
     if (info.loop && !info.converged && !f->world.empty())
@@ -114,15 +114,15 @@ void circle(drawOverrides::DrawContext& c, const glm::dvec3& centre, const glm::
             double span = kTau)
 {
     constexpr int kSegments = 32;
-    glm::dvec3 prev;
+    glm::dvec3 prev(0.0);
     for (int k = 0; k <= kSegments; ++k)
     {
         const double a = from + span * double(k) / kSegments;
         const glm::dvec3 p = glm::dvec3(c.world * glm::dvec4(centre + (u * std::cos(a) + v * std::sin(a)) * r, 1.0));
         if (k > 0)
         {
-            c.frame.lines.push_back({glm::vec3(prev), c.color});
-            c.frame.lines.push_back({glm::vec3(p), c.color});
+            c.frame.lines.push_back({glm::dvec3(prev), c.color});
+            c.frame.lines.push_back({glm::dvec3(p), c.color});
         }
         prev = p;
     }
@@ -151,8 +151,8 @@ void drawCollider(drawOverrides::DrawContext& c)
     circle(c, b, x, z, r, -kTau / 4, kTau / 2);
     for (const glm::dvec3& side : {y, -y, z, -z})
     {
-        c.frame.lines.push_back({glm::vec3(glm::dvec3(c.world * glm::dvec4(a + side * r, 1.0))), c.color});
-        c.frame.lines.push_back({glm::vec3(glm::dvec3(c.world * glm::dvec4(b + side * r, 1.0))), c.color});
+        c.frame.lines.push_back({glm::dvec3((c.world * glm::dvec4(a + side * r, 1.0))), c.color});
+        c.frame.lines.push_back({glm::dvec3((c.world * glm::dvec4(b + side * r, 1.0))), c.color});
     }
 }
 

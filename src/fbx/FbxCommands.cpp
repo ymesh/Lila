@@ -1,4 +1,6 @@
 #include "fbx/Fbx.h"
+#include "scene/GeoSidecar.h"
+#include "scene/Georef.h"
 #include "fbx/GameExport.h"
 
 #include "ops/Command.h"
@@ -191,7 +193,9 @@ void registerCommands()
                   {"setPlayback", "", T::Bool, true, "Set the scene fps and playback range from the take."},
                   {"instances", "", T::Bool, true, "Objects sharing one geometry come in as instances of the first."},
                   {"report", "", T::Bool, false, "Return the import report instead of just the names."},
-                  {"select", "", T::Bool, true, "Select the imported roots."}},
+                  {"select", "", T::Bool, true, "Select the imported roots."},
+                  {"georeference", "", T::Bool, true,
+                   "Place it by the georeference it carries (a georeferenced Lila export) or the files beside it (metadata.xml, _offset.xyz, .rcinfo, .prj), as importObj does."}},
         .run = [](const Args& a) -> json {
             if (a.positional.empty() || !a.positional[0].is_string())
                 throw CommandError("importFbx: path required");
@@ -210,9 +214,29 @@ void registerCommands()
             opts.take = a.get<std::string>("take", "");
             opts.setPlayback = a.get<bool>("setPlayback", true);
             opts.instances = a.get<bool>("instances", true);
+            opts.georeference = a.get<bool>("georeference", true);
             ImportResult r = importFbx(g, utf8Path(path), opts);
             if (!r.ok)
                 throw CommandError("importFbx: " + r.error);
+            // A georeferenced photogrammetry export: its scene is east, north, up from the sidecar's offset.
+            if (a.get<bool>("georeference", true) && !r.georeferenced)
+                if (const auto found = scene::geoSidecar::find(utf8Path(path)))
+                {
+                    const bool zUp = scene::georef::sceneZUp();
+                    const scene::georef::CrsInfo info = scene::georef::crsInfo(found->georeference.crs);
+                    const double perUnit = 100.0 * info.unitToMetre;
+                    // The importer's scene axes back to east, north, height in CRS units (it turned a Z-up file into the scene's up).
+                    glm::dmat4 toEnu(1.0 / perUnit);
+                    toEnu[3][3] = 1.0;
+                    if (!zUp)
+                        toEnu = glm::dmat4(glm::dvec4(1, 0, 0, 0), glm::dvec4(0, 0, 1, 0), glm::dvec4(0, -1, 0, 0), glm::dvec4(0, 0, 0, 1)) *
+                                glm::dmat4(glm::dvec4(1.0 / perUnit, 0, 0, 0), glm::dvec4(0, 1.0 / perUnit, 0, 0), glm::dvec4(0, 0, 1.0 / perUnit, 0), glm::dvec4(0, 0, 0, 1));
+                    const scene::georef::Placement placed = scene::georef::place(found->georeference);
+                    const glm::dmat4 m = placed.matrix * scene::georef::localFrame(found->georeference, zUp) * toEnu;
+                    std::vector<uint64_t> roots(r.roots.begin(), r.roots.end());
+                    scene::georef::placeRoots(g, roots, m);
+                    log::info("importFbx: {} ({})", placed.message, found->source);
+                }
             for (const std::string& s : r.skipped)
                 log::info("importFbx: skipped {}", s);
             for (const std::string& w : r.warnings)

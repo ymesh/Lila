@@ -7,6 +7,7 @@
     python scripts/issues.py --hold N [--note "..."]
     python scripts/issues.py --unsolve N
     python scripts/issues.py --retag N Bug
+    python scripts/issues.py --unofficial N
     python scripts/issues.py --reply N "Which menu was open?"
     python scripts/issues.py --files N
     python scripts/issues.py --setup
@@ -65,6 +66,9 @@ process.stdout.write(`${head}.${body}.${b64(sig)}`);
 """
 
 _token = None
+
+UNOFFICIAL_NOTE = ("Reports are taken from official Lila builds only, sent with Help > Report Issue so the build is "
+                   "known. Download Lila from lila-3d.github.io and report from there.")
 
 
 def app_token():
@@ -275,6 +279,8 @@ def dump(args):
         lines += [f"## #{i['number']} {i['title']}", "", f"{i['url']} | {i['status']} | labels: {tags} | by {i['reporter'] or 'Lila user (no GitHub)'} | {i['created'][:10]}", ""]
         if not i["kind"]:
             lines += ["**Untagged:** give it a kind with --retag.", ""]
+        if not i["from_lila"] and i["state"] == "open":
+            lines += ["**Not sent from Lila:** no verified build; close it with --unofficial.", ""]
         lines += [i["body"], ""]
         for c in i["comments"]:
             lines += [f"> **{c['author']}** ({c['role'].lower()}, {c['at'][:10]})", ">", *[f"> {l}" for l in c["body"].splitlines()], ""]
@@ -297,6 +303,7 @@ def main():
     p.add_argument("--unsolve", type=int, metavar="N", help="back to Pending, reopened")
     p.add_argument("--retag", nargs=2, metavar=("N", "KIND"), help="replace the kind label (Bug, Crash, Performance, Request, Question)")
     p.add_argument("--reply", nargs=2, metavar=("N", "TEXT"), help="comment, mentioning the reporter, without changing labels")
+    p.add_argument("--unofficial", type=int, metavar="N", help="dismiss an issue not sent from an official build, with the stock reply")
     p.add_argument("--note", help="the reply that goes with --solve, --dismiss, --ask, --hold or --unsolve")
     p.add_argument("--files", type=int, metavar="N", help="download the private attachments to OUT/files/N")
     p.add_argument("--setup", action="store_true", help="create or update the labels")
@@ -320,6 +327,8 @@ def main():
         triage(args.hold, "On Hold", args.note)
     elif args.unsolve:
         triage(args.unsolve, "Pending", args.note, reopen=True)
+    elif args.unofficial:
+        triage(args.unofficial, "Dismissed", args.note or UNOFFICIAL_NOTE, close="not_planned")
     elif args.retag:
         retag(int(args.retag[0]), args.retag[1])
     elif args.reply:

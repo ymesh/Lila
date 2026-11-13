@@ -177,8 +177,8 @@ public:
             for (int side = 0; side < 2; ++side)
                 if (std::optional<D3> h = handlePoint(side))
                 {
-                    f.linesOnTop.push_back({glm::vec3(mPicks[size_t(side)].point), kHandle});
-                    f.linesOnTop.push_back({glm::vec3(*h), kHandle});
+                    f.linesOnTop.push_back({glm::dvec3(mPicks[size_t(side)].point), kHandle});
+                    f.linesOnTop.push_back({glm::dvec3(*h), kHandle});
                     dot(p, view, *h, 4.0f, kHandle);
                 }
         }
@@ -394,12 +394,12 @@ private:
         std::vector<curve::CombTooth> teeth = curve::curvatureComb(*mBlend, 24, 0.3 * chord / most);
         for (size_t i = 0; i < teeth.size(); ++i)
         {
-            f.linesOnTop.push_back({glm::vec3(teeth[i].base), kCombColor});
-            f.linesOnTop.push_back({glm::vec3(teeth[i].tip), kCombColor});
+            f.linesOnTop.push_back({glm::dvec3(teeth[i].base), kCombColor});
+            f.linesOnTop.push_back({glm::dvec3(teeth[i].tip), kCombColor});
             if (i + 1 < teeth.size())
             {
-                f.linesOnTop.push_back({glm::vec3(teeth[i].tip), kCombColor});
-                f.linesOnTop.push_back({glm::vec3(teeth[i + 1].tip), kCombColor});
+                f.linesOnTop.push_back({glm::dvec3(teeth[i].tip), kCombColor});
+                f.linesOnTop.push_back({glm::dvec3(teeth[i + 1].tip), kCombColor});
             }
         }
     }

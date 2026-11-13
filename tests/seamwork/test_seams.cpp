@@ -16,7 +16,7 @@ using lila::geo::Index;
 namespace
 {
 /** An axis-aligned box, faces wound outward. */
-std::shared_ptr<const Mesh> box(const glm::dvec3& lo, const glm::dvec3& hi)
+std::shared_ptr<const Mesh> seamBox(const glm::dvec3& lo, const glm::dvec3& hi)
 {
     std::vector<glm::dvec3> p(8);
     for (int k = 0; k < 8; ++k)
@@ -63,7 +63,7 @@ Options quick()
 
 TEST_CASE("seams: a wall sunk in flat ground gives its footprint exactly")
 {
-    const std::vector<Object> objs = {object("Wall", box({-200, -20, -10}, {200, 280, 10}))};
+    const std::vector<Object> objs = {object("Wall", seamBox({-200, -20, -10}, {200, 280, 10}))};
     const Ground g = flatGround();
     const Result r = findSeams(objs, &g, quick());
     REQUIRE(r.curves.size() == 1);
@@ -85,9 +85,9 @@ TEST_CASE("seams: a wall sunk in flat ground gives its footprint exactly")
 
 TEST_CASE("seams: the same wall in a ground mesh gives the same curve")
 {
-    Object ground = object("Floor", box({-1000, -50, -1000}, {1000, 0, 1000}));
+    Object ground = object("Floor", seamBox({-1000, -50, -1000}, {1000, 0, 1000}));
     ground.ground = true;
-    const std::vector<Object> objs = {object("Wall", box({-200, -20, -10}, {200, 280, 10})), ground};
+    const std::vector<Object> objs = {object("Wall", seamBox({-200, -20, -10}, {200, 280, 10})), ground};
     const Result r = findSeams(objs, nullptr, quick());
     CHECK(totalLength(r, Kind::Ground) == doctest::Approx(840.0).epsilon(0.001));
     for (const Curve& c : r.curves)
@@ -99,7 +99,7 @@ TEST_CASE("seams: the same wall in a ground mesh gives the same curve")
 
 TEST_CASE("seams: box in box gives the exact crossing loop")
 {
-    const std::vector<Object> objs = {object("A", box({0, 0, 0}, {100, 100, 100})), object("B", box({50, 25, 25}, {150, 75, 75}))};
+    const std::vector<Object> objs = {object("A", seamBox({0, 0, 0}, {100, 100, 100})), object("B", seamBox({50, 25, 25}, {150, 75, 75}))};
     Options o = quick();
     o.nearContact = false;
     const Result r = findSeams(objs, nullptr, o);
@@ -113,7 +113,7 @@ TEST_CASE("seams: box in box gives the exact crossing loop")
 
 TEST_CASE("seams: a wall hovering 1 cm up is a near contact with its gap")
 {
-    const std::vector<Object> objs = {object("Wall", box({-200, 1, -10}, {200, 301, 10}))};
+    const std::vector<Object> objs = {object("Wall", seamBox({-200, 1, -10}, {200, 301, 10}))};
     const Ground g = flatGround();
     Options o = quick();
     o.gap = 2.0;
@@ -133,7 +133,7 @@ TEST_CASE("seams: a wall hovering 1 cm up is a near contact with its gap")
     }
     SUBCASE("a sunk wall has no near contact besides its crossing")
     {
-        const std::vector<Object> sunk = {object("Wall", box({-200, -20, -10}, {200, 280, 10}))};
+        const std::vector<Object> sunk = {object("Wall", seamBox({-200, -20, -10}, {200, 280, 10}))};
         const Result rs = findSeams(sunk, &g, o);
         CHECK(totalLength(rs, Kind::Ground, true) == 0.0);
         CHECK(totalLength(rs, Kind::Ground) == doctest::Approx(840.0).epsilon(0.001));
@@ -142,7 +142,7 @@ TEST_CASE("seams: a wall hovering 1 cm up is a near contact with its gap")
 
 TEST_CASE("seams: a box resting on another is a near contact between them")
 {
-    const std::vector<Object> objs = {object("Base", box({0, 0, 0}, {100, 100, 100})), object("Top", box({25, 100.5, 25}, {75, 150, 75}))};
+    const std::vector<Object> objs = {object("Base", seamBox({0, 0, 0}, {100, 100, 100})), object("Top", seamBox({25, 100.5, 25}, {75, 150, 75}))};
     const Result r = findSeams(objs, nullptr, quick());
     REQUIRE_FALSE(r.curves.empty());
     CHECK(totalLength(r, Kind::Mesh, true) == doctest::Approx(200.0).epsilon(0.002));
@@ -153,7 +153,7 @@ TEST_CASE("seams: a box resting on another is a near contact between them")
 
 TEST_CASE("seams: instances of one mesh join each other; a shared group never does")
 {
-    auto cube = box({0, 0, 0}, {100, 100, 100});
+    auto cube = seamBox({0, 0, 0}, {100, 100, 100});
     auto bvh = std::make_shared<const MeshBvh>(*cube);
     std::vector<Object> objs(2);
     for (int i = 0; i < 2; ++i)
@@ -176,8 +176,8 @@ TEST_CASE("seams: instances of one mesh join each other; a shared group never do
 
 TEST_CASE("seams: the same result at any thread count")
 {
-    const std::vector<Object> objs = {object("Wall", box({-200, -20, -10}, {200, 280, 10})), object("Rock", box({150, -30, -40}, {260, 60, 40})),
-                                      object("Crate", box({-100, 280, -5}, {-60, 320, 30}))};
+    const std::vector<Object> objs = {object("Wall", seamBox({-200, -20, -10}, {200, 280, 10})), object("Rock", seamBox({150, -30, -40}, {260, 60, 40})),
+                                      object("Crate", seamBox({-100, 280, -5}, {-60, 320, 30}))};
     const Ground g = flatGround();
     Options o;
     o.exposureRays = 8;
@@ -205,7 +205,7 @@ TEST_CASE("seams: the same result at any thread count")
 
 TEST_CASE("seams: points, distance fields and the terrain mask follow the curves")
 {
-    const std::vector<Object> objs = {object("Wall", box({-200, -20, -10}, {200, 280, 10}))};
+    const std::vector<Object> objs = {object("Wall", seamBox({-200, -20, -10}, {200, 280, 10}))};
     Ground g = flatGround();
     const Result r = findSeams(objs, &g, quick());
     const auto pts = samplePoints(r, 10.0);
@@ -257,7 +257,7 @@ TEST_CASE("seams: bands fade by their falloff, custom curves included")
 TEST_CASE("seams: creases between stacked boxes come from occlusion")
 {
     // An L of two boxes touching along a face but not crossing: the inner corner is a crease.
-    const std::vector<Object> objs = {object("Floor", box({0, 0, 0}, {200, 20, 200})), object("Block", box({50, 20.0, 50}, {150, 120, 150}))};
+    const std::vector<Object> objs = {object("Floor", seamBox({0, 0, 0}, {200, 20, 200})), object("Block", seamBox({50, 20.0, 50}, {150, 120, 150}))};
     Options o = quick();
     o.nearContact = false;
     o.crease = true;
@@ -274,8 +274,8 @@ TEST_CASE("seams: creases between stacked boxes come from occlusion")
 
 TEST_CASE("seams: crease occlusion through the bake's AO kernel matches the CPU trace")
 {
-    const std::vector<Object> objs = {object("Floor", box({0, 0, 0}, {200, 20, 200})), object("Block", box({50, 20.0, 50}, {150, 120, 150})),
-                                      object("Post", box({160, 20, 160}, {180, 80, 180}))};
+    const std::vector<Object> objs = {object("Floor", seamBox({0, 0, 0}, {200, 20, 200})), object("Block", seamBox({50, 20.0, 50}, {150, 120, 150})),
+                                      object("Post", seamBox({160, 20, 160}, {180, 80, 180}))};
     // Below every vertex: a buried point is solid ground to the heightfield trace but behind a one-sided surface to the bake.
     const Ground g = flatGround(-5.0);
     Options o = quick();
@@ -319,7 +319,7 @@ TEST_CASE("seams: crease occlusion through the bake's AO kernel matches the CPU 
 
 TEST_CASE("scatter: placements sit on the join, wedge along the bisector and repeat exactly")
 {
-    const std::vector<Object> objs = {object("Wall", box({-200, -20, -10}, {200, 280, 10}))};
+    const std::vector<Object> objs = {object("Wall", seamBox({-200, -20, -10}, {200, 280, 10}))};
     const Ground g = flatGround();
     const Result r = findSeams(objs, &g, quick());
     ScatterOptions o;
@@ -356,7 +356,7 @@ TEST_CASE("scatter: placements sit on the join, wedge along the bisector and rep
 
 TEST_CASE("scatter: proximity rules repel, shrink, tilt and cull")
 {
-    Object door = object("Door", box({-50, 0, -50}, {50, 200, 50}));
+    Object door = object("Door", seamBox({-50, 0, -50}, {50, 200, 50}));
     ProximityRule repel{RuleKind::Repel, door, 100.0, 1.0};
     const glm::dmat4 at = glm::translate(glm::dmat4(1.0), glm::dvec3(80, 0, 0));
     RuleOutcome r = applyRules(at, {repel}, {0, 1, 0});
@@ -388,7 +388,7 @@ TEST_CASE("scatter: every preset builds its assets")
 
 TEST_CASE("strips: ribbons lie on the ground beside the wall, faded and facing up")
 {
-    const std::vector<Object> objs = {object("Wall", box({-200, -20, -10}, {200, 280, 10}))};
+    const std::vector<Object> objs = {object("Wall", seamBox({-200, -20, -10}, {200, 280, 10}))};
     const Ground g = flatGround();
     const Result r = findSeams(objs, &g, quick());
     StripOptions o;
@@ -562,13 +562,13 @@ TEST_CASE("skirt: a box wall on a floor mesh is unioned, on a closed floor and o
 {
     const std::vector<glm::dvec3> quad = {{-5000, 0, -5000}, {-5000, 0, 5000}, {5000, 0, 5000}, {5000, 0, -5000}};
     const std::vector<Index> qs = {4}, qi = {0, 1, 2, 3};
-    const std::shared_ptr<const Mesh> floors[] = {box({-1000, -50, -1000}, {1000, 0, 1000}),
+    const std::shared_ptr<const Mesh> floors[] = {seamBox({-1000, -50, -1000}, {1000, 0, 1000}),
                                                   std::make_shared<const Mesh>(Mesh::fromPolygons(quad, qs, qi))};
     for (const auto& fm : floors)
     {
         Object floor = object("Floor", fm);
         floor.ground = true;
-        const std::vector<Object> objs = {object("Wall", box({-200, -20, -10}, {200, 280, 10})), floor};
+        const std::vector<Object> objs = {object("Wall", seamBox({-200, -20, -10}, {200, 280, 10})), floor};
         const Result r = findSeams(objs, nullptr, quick());
         SkirtOptions o;
         o.width = 15.0;
@@ -602,7 +602,7 @@ TEST_CASE("skirt: a union's ground border keeps the full width along the wall, w
     SkirtOptions o;
     o.width = 30.0;
     o.method = SkirtMethod::Union;
-    const std::vector<Object> wall = {object("Wall", box({-200, -20, -10}, {200, 280, 10}))};
+    const std::vector<Object> wall = {object("Wall", seamBox({-200, -20, -10}, {200, 280, 10}))};
     for (const double cell : {50.0, 10.0})
     {
         Ground g;
@@ -631,7 +631,7 @@ TEST_CASE("skirt: a union's ground border keeps the full width along the wall, w
 
 TEST_CASE("skirt: on terrain the box wall is unioned with a fillet, borders on both surfaces")
 {
-    const std::vector<Object> objs = {object("Wall", box({-200, -20, -10}, {200, 280, 10}))};
+    const std::vector<Object> objs = {object("Wall", seamBox({-200, -20, -10}, {200, 280, 10}))};
     const Ground g = flatGround();
     const Result r = findSeams(objs, &g, quick());
     SkirtOptions o;
@@ -646,7 +646,7 @@ TEST_CASE("skirt: on terrain the box wall is unioned with a fillet, borders on b
 
 TEST_CASE("skirt: a unioned box wall's outer corners are rounded, not tapered")
 {
-    const std::vector<Object> objs = {object("Wall", box({-200, -20, -10}, {200, 280, 10}))};
+    const std::vector<Object> objs = {object("Wall", seamBox({-200, -20, -10}, {200, 280, 10}))};
     const Ground g = flatGround();
     const Result r = findSeams(objs, &g, quick());
     SkirtOptions o;
@@ -854,7 +854,7 @@ void checkUnionSkirt(const std::vector<Object>& objs, const Ground& g, double wi
 
 TEST_CASE("skirt: a box wall's union keeps the full width round every face on flat ground")
 {
-    const std::vector<Object> objs = {object("Wall", box({-200, -20, -10}, {200, 280, 10}))};
+    const std::vector<Object> objs = {object("Wall", seamBox({-200, -20, -10}, {200, 280, 10}))};
     for (const double cell : {50.0, 10.0})
     {
         INFO("terrain cell " << cell);
@@ -875,7 +875,7 @@ TEST_CASE("skirt: an L-shaped wall's union keeps the full width along every outs
 
 TEST_CASE("skirt: a box wall's union on a slope and on bumpy terrain keeps its borders on the ground at full width")
 {
-    const std::vector<Object> objs = {object("Wall", box({-200, -300, -10}, {200, 500, 10}))};
+    const std::vector<Object> objs = {object("Wall", seamBox({-200, -300, -10}, {200, 500, 10}))};
     const double slope = std::tan(glm::radians(25.0));
     auto sloped = [&](double x, double z) { return slope * (x * 0.8 + z * 0.6); };
     auto bumpy = [](double x, double z) { return 10.0 * std::sin(x / 90.0) * std::cos(z / 70.0) + 4.0 * std::sin((x + z) / 55.0); };

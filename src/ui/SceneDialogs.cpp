@@ -58,7 +58,11 @@
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QVBoxLayout>
+#include <QVariantAnimation>
+#include <QWheelEvent>
 
+#include <algorithm>
+#include <cmath>
 #include <map>
 
 namespace lila::ui
@@ -266,11 +270,17 @@ public:
     }
 };
 
-/** The examples grid, scrolled a row per wheel step. */
+/** The examples grid: each wheel notch glides one row, landing on a row boundary, at most two rows ahead of the view. */
 class WholeRowList : public QListWidget
 {
 public:
-    using QListWidget::QListWidget;
+    explicit WholeRowList(QWidget* parent) : QListWidget(parent)
+    {
+        mGlide.setDuration(160);
+        mGlide.setEasingCurve(QEasingCurve::OutCubic);
+        QObject::connect(&mGlide, &QVariantAnimation::valueChanged, this,
+                         [this](const QVariant& v) { verticalScrollBar()->setValue(v.toInt()); });
+    }
 
 protected:
     void updateGeometries() override
@@ -278,6 +288,40 @@ protected:
         QListWidget::updateGeometries();
         verticalScrollBar()->setSingleStep(std::max(1, gridSize().height() / 3));
     }
+
+    void wheelEvent(QWheelEvent* e) override
+    {
+        if (e->modifiers() != Qt::NoModifier || e->angleDelta().y() == 0)
+            return QListWidget::wheelEvent(e);
+        e->accept();
+        QScrollBar* bar = verticalScrollBar();
+        const int row = std::max(1, gridSize().height());
+        if (mGlide.state() != QAbstractAnimation::Running)
+            mTarget = bar->value();
+        // Touchpads and free-spinning wheels send fractions of a notch; a row moves only per whole notch.
+        if ((mNotches < 0) != (e->angleDelta().y() < 0))
+            mNotches = 0;
+        mNotches += e->angleDelta().y();
+        const int steps = mNotches / 120;
+        if (steps == 0)
+            return;
+        mNotches -= steps * 120;
+        const int shown = int(std::lround(double(bar->value()) / row));
+        const int next = std::clamp(int(std::lround(double(mTarget) / row)) - steps, shown - 2, shown + 2);
+        const int target = std::clamp(next * row, bar->minimum(), bar->maximum());
+        if (target == mTarget)
+            return;
+        mTarget = target;
+        mGlide.stop();
+        mGlide.setStartValue(bar->value());
+        mGlide.setEndValue(target);
+        mGlide.start();
+    }
+
+private:
+    QVariantAnimation mGlide;
+    int mTarget = 0;
+    int mNotches = 0;
 };
 
 /** Holds the examples grid at a whole number of rows, so a card is never cut off at the bottom edge. */

@@ -799,9 +799,10 @@ void nameStreets(Layout& l, const Site& site);
 std::string streetName(const Layout& l, uint64_t street);
 
 /**
- * Gives every street edge the stable id of its street: a run of edges through plain (two-street) junctions, keyed by
- * its end points, length and the edit it came from. The same street gets the same id whenever the layout makes it again,
- * whatever else changed; a street split or joined by an edit gets a new one.
+ * Gives every street edge the stable id of its street: a run of edges of one class and path (generated, or one edit's)
+ * through every junction where no other street of that class and path meets it, keyed by its end points, length and the
+ * edit it came from. The same street gets the same id whenever the layout makes it again, whatever else changed: side
+ * streets and drawn streets joining or crossing it leave it whole. A street a new one of its own class meets gets new ids.
  */
 void assignStreetIds(Layout& l);
 

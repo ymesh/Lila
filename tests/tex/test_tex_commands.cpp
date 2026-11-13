@@ -75,6 +75,60 @@ TEST_CASE("tex: commands build, edit and undo a texture set")
     CHECK(std::none_of(types.begin(), types.end(), [](const json& t) { return t["type"] == "levels"; }));
 }
 
+TEST_CASE("tex: texBuildGraph builds a set from one spec, or reports every problem and changes nothing")
+{
+    run("newScene");
+    run("polyCube", {{"name", "Box"}});
+    json spec = {
+        {"material", "Brick"},
+        {"settings", {{"width", 64}, {"height", 64}}},
+        {"nodes",
+         {{{"name", "Bricks"}, {"type", "bricks"}, {"params", {{"rows", 12}}}},
+          {{"name", "Tint"}, {"type", "colorize"}},
+          {{"name", "Nrm"}, {"type", "heightToNormal"}},
+          {{"name", "Output"}, {"type", "materialOutput"}, {"values", {{"roughness", 0.8}}}}}},
+        {"links", {"Bricks.mask -> Tint.input", "Tint.out -> Output.baseColor", json::array({"Bricks.mask", "Nrm.height"}),
+                   json::array({"Nrm", "normal", "Output", "normal"})}},
+    };
+    json r = run("texBuildGraph", {{"args", {spec}}, {"assign", {"Box"}}});
+    CHECK(r["set"] == "BrickTex");
+    CHECK(r["material"] == "Brick");
+    CHECK_FALSE(r.contains("error"));
+    CHECK(r["channels"] == json::array({"baseColor", "normal"}));
+    json info = run("texGraphInfo", {{"args", {"BrickTex"}}});
+    CHECK(info["settings"]["width"] == 64);
+    for (const json& n : info["nodes"])
+        if (n["name"] == "Bricks")
+            for (const json& p : n["params"])
+                if (p["id"] == "rows")
+                    CHECK(p["value"] == 12);
+    CHECK(run("materialInfo", {{"args", {"Brick"}}}).is_object());
+
+    // Rebuilding replaces the graph; the Material Output is added when the spec leaves it out.
+    run("texBuildGraph", {{"args", {{{"material", "Brick"}, {"nodes", {{{"name", "N"}, {"type", "bricks"}}}}, {"links", {"N.mask -> Output.height"}}}}}});
+    CHECK(run("texGraphInfo", {{"args", {"BrickTex"}}})["nodes"].size() == 2);
+
+    json bad = {{"material", "Brick"},
+                {"nodes", {{{"name", "A"}, {"type", "brick"}}, {{"name", "B"}, {"type", "colorize"}, {"values", {{"nothing", 1}}}}}},
+                {"links", {"B.out -> Output.nope", "B.out"}}};
+    try
+    {
+        run("texBuildGraph", {{"args", {bad}}});
+        FAIL("expected an error");
+    }
+    catch (const CommandError& e)
+    {
+        const std::string msg = e.what();
+        CHECK(msg.find("4 problems") != std::string::npos);
+        CHECK(msg.find("did you mean") != std::string::npos);
+        CHECK(msg.find("no parameter or input 'nothing'") != std::string::npos);
+        CHECK(msg.find("no input 'nope'") != std::string::npos);
+    }
+    CHECK(run("texGraphInfo", {{"args", {"BrickTex"}}})["nodes"].size() == 2);
+    CHECK_THROWS_AS(run("texBuildGraph", {{"args", {{{"set", "Same"}, {"material", "Same"}}}}}), CommandError);
+    CHECK_THROWS_AS(run("texBuildGraph", {{"args", {{{"set", "Lone"}}}}, {"assign", {"Box"}}}), CommandError);
+}
+
 TEST_CASE("tex: texture sets save and load in .lila and .lilaa")
 {
     buildRock();

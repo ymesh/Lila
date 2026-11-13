@@ -1,5 +1,7 @@
 #include "ui/ViewportRenderers.h"
 
+#include "render/GpuImage.h"
+
 #include "core/Log.h"
 #include "core/MainQueue.h"
 #include "core/PrefStore.h"

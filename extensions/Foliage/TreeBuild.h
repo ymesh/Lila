@@ -107,8 +107,9 @@ struct Arrays
     void append(const Arrays& other);
 };
 
-/** One closed limb with world unit UVs: the bark as one island, each end cap as another. */
-Arrays tube(const std::vector<glm::dvec3>& points, const std::vector<double>& radii, int sides);
+/** One closed limb with world unit UVs: the bark as one island, each end cap as another. A tip thinner than pointBelow closes as a
+    cone from the last ring at least that thick, so a twig's cap never shrinks to a zero-area fan. */
+Arrays tube(const std::vector<glm::dvec3>& points, const std::vector<double>& radii, int sides, double pointBelow = 0.0);
 
 /** Rescales tube UVs in place: "tiled" repeats every tile cm, "packed" lays the islands out in 0-1. Returns the packed density in px/m, 0 for tiled. */
 double layoutUvs(std::vector<Arrays>& pieces, const std::string& mode, double tile, double density, int mapSize, double baseRadius, std::string* warning = nullptr);

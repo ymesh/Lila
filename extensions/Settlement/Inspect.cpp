@@ -184,7 +184,7 @@ bool edgeIsBridge(const Layout& l, int edge)
     return false;
 }
 
-json checkLayout(const Layout& l, const Ground& ground, const Options& o)
+json checkLayout(const Layout& l, const Ground& ground, const Options& o, const std::map<uint64_t, GradedStreet>* graded)
 {
     LILA_ZONE();
 
@@ -239,7 +239,8 @@ json checkLayout(const Layout& l, const Ground& ground, const Options& o)
         const StreetEdge& x = l.graph.edges[e];
         const Vec2 a = l.graph.nodes[size_t(x.a)].p, b = l.graph.nodes[size_t(x.b)].p;
         const bool bridge = edgeIsBridge(l, int(e));
-        if (!bridge && ground.gradeAlong(a, b) > classMaxGrade(p, x.cls) * 1.05 + 1e-9)
+        const bool asGraded = graded && graded->contains(x.street);
+        if (!bridge && !asGraded && ground.gradeAlong(a, b) > classMaxGrade(p, x.cls) * 1.05 + 1e-9)
         {
             auto& s = steepest[x.street];
             if (ground.gradeAlong(a, b) > s.first)
@@ -258,6 +259,23 @@ json checkLayout(const Layout& l, const Ground& ground, const Options& o)
                           glm::length(b - a) / 100.0, classMaxGrade(p, x.cls) * 100.0),
               at((a + b) * 0.5));
     }
+    if (graded)
+        for (const auto& [street, s] : *graded)
+        {
+            if (!gradedOverLimit(s))
+                continue;
+            int edge = -1;
+            for (size_t e = 0; e < l.graph.edges.size() && edge < 0; ++e)
+                if (l.graph.isStreet(int(e)) && l.graph.edges[e].street == street)
+                    edge = int(e);
+            if (edge < 0)
+                continue;
+            const StreetEdge& x = l.graph.edges[size_t(edge)];
+            issue("grade", "warning", "street:" + std::to_string(street),
+                  std::format("{} street {} is graded at {:.1f}% over {:.1f} m, over its {:.1f}%{}", className(x.cls), street, s.grade, s.length / 100.0,
+                              s.limit, s.why.empty() ? "" : ": " + s.why),
+                  at((l.graph.nodes[size_t(x.a)].p + l.graph.nodes[size_t(x.b)].p) * 0.5));
+        }
 
     std::map<int, const Lot*> lotById;
     for (const Lot& lot : l.lots)
@@ -377,10 +395,10 @@ json explain(const Layout& l, const Ground& ground, const json& siting, const st
     std::vector<std::string> reasons;
     json out = {{"id", id}};
     auto slopeAt = [&](Vec2 q) { return ground.grade(q) * 100.0; };
-    auto number = [&](std::string_view s) -> int64_t {
+    auto number = [&](std::string_view s) -> uint64_t {
         try
         {
-            return std::stoll(std::string(s));
+            return std::stoull(std::string(s));
         }
         catch (...)
         {
@@ -420,13 +438,18 @@ json explain(const Layout& l, const Ground& ground, const json& siting, const st
     }
     else if (id.starts_with("lot:") || id.starts_with("landmark:"))
     {
-        const int lotId = int(number(id.substr(id.find(':') + 1)));
+        const uint64_t wanted = number(id.substr(id.find(':') + 1));
         const Lot* lot = nullptr;
+        // The stable lotId first; a small number that matches no key is the lot's index.
         for (const Lot& x : l.lots)
-            if (x.id == lotId)
+            if (x.key == wanted)
+                lot = &x;
+        for (const Lot& x : l.lots)
+            if (!lot && uint64_t(x.id) == wanted)
                 lot = &x;
         if (!lot)
-            throw std::runtime_error("no lot " + std::to_string(lotId));
+            throw std::runtime_error("no lot " + std::to_string(wanted) + " (settlementLots lists them: lotId or lot)");
+        const int lotId = lot->id;
         out["kind"] = id.starts_with("lot:") ? "lot" : "landmark";
         out["use"] = useName(lot->use);
         out["area"] = lot->area;
@@ -461,13 +484,17 @@ json explain(const Layout& l, const Ground& ground, const json& siting, const st
     }
     else if (id.starts_with("block:"))
     {
-        const int blockId = int(number(id.substr(6)));
+        const uint64_t wanted = number(id.substr(6));
         const Block* block = nullptr;
         for (const Block& b : l.blocks)
-            if (b.id == blockId)
+            if (b.key == wanted)
+                block = &b;
+        for (const Block& b : l.blocks)
+            if (!block && uint64_t(b.id) == wanted)
                 block = &b;
         if (!block)
-            throw std::runtime_error("no block " + std::to_string(blockId));
+            throw std::runtime_error("no block " + std::to_string(wanted) + " (settlementBlocks lists them: blockId or block)");
+        const int blockId = block->id;
         out["kind"] = "block";
         out["use"] = useName(block->use);
         out["area"] = block->area;
@@ -481,7 +508,7 @@ json explain(const Layout& l, const Ground& ground, const json& siting, const st
     }
     else
     {
-        const uint64_t street = uint64_t(number(id.starts_with("street:") ? id.substr(7) : id));
+        const uint64_t street = number(id.starts_with("street:") ? id.substr(7) : id);
         std::vector<int> edges;
         for (size_t e = 0; e < l.graph.edges.size(); ++e)
             if (l.graph.isStreet(int(e)) && l.graph.edges[e].street == street)

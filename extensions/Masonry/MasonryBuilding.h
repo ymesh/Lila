@@ -51,8 +51,8 @@ struct Plan
     double pitch = 0.0;                    // nominal course height, for the ruin's scales
 };
 
-/** Footprints as walls sharing one set of options, regions wall_0, wall_1, ... and their openings. */
-Plan planWalls(std::span<const Footprint> footprints, const BuildOptions& o);
+/** Footprints as walls sharing one set of options, regions wall_0, wall_1, ... (or region, region_1, ...) and their openings. */
+Plan planWalls(std::span<const Footprint> footprints, const BuildOptions& o, const std::string& region = {});
 
 /** Parses a building spec (see specSchema) into a plan. Throws std::runtime_error naming what is wrong. */
 Plan planBuilding(const nlohmann::json& spec, const BuildOptions& look);

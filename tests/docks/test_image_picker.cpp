@@ -4,6 +4,8 @@
 #include "ui/Environments.h"
 #include "ui/ImagePicker.h"
 
+#include <QApplication>
+#include <QDeadlineTimer>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QToolButton>
@@ -21,6 +23,19 @@ QListWidgetItem* itemNamed(QListWidget* list, const QString& text)
         if (list->item(i)->text() == text)
             return list->item(i);
     return nullptr;
+}
+
+/** The picker's library list once it opens; a single click on the thumbnail waits out the double-click interval first. */
+QListWidget* listOnceOpen(ImagePicker& picker)
+{
+    const QDeadlineTimer deadline(QApplication::doubleClickInterval() + 5000);
+    QListWidget* list = picker.findChild<QListWidget*>();
+    while (!list && !deadline.hasExpired())
+    {
+        QApplication::processEvents(QEventLoop::AllEvents, 20);
+        list = picker.findChild<QListWidget*>();
+    }
+    return list;
 }
 } // namespace
 
@@ -53,7 +68,7 @@ TEST_CASE("image picker: dome texture lists the HDRIs with thumbnails, filters a
     std::vector<QString> chosen;
     QObject::connect(&picker, &ImagePicker::chosen, [&](const QString& v) { chosen.push_back(v); });
     button->click();
-    auto* list = picker.findChild<QListWidget*>();
+    QListWidget* list = listOnceOpen(picker);
     QLineEdit* search = nullptr;
     for (QLineEdit* e : picker.findChildren<QLineEdit*>())
         if (e != path)

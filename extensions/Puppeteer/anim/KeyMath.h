@@ -246,9 +246,14 @@ enum class Mark
     None,
     Breakdown,
     Extreme,
+    /** Keyed by generated motion between the animator's keys; refilling replaces it. */
+    Generated,
 };
 
-inline const char* markName(Mark m) { return m == Mark::Breakdown ? "breakdown" : m == Mark::Extreme ? "extreme" : "none"; }
+inline const char* markName(Mark m)
+{
+    return m == Mark::Breakdown ? "breakdown" : m == Mark::Extreme ? "extreme" : m == Mark::Generated ? "generated" : "none";
+}
 
 inline Mark markFromName(const std::string& s)
 {
@@ -256,9 +261,11 @@ inline Mark markFromName(const std::string& s)
         return Mark::Breakdown;
     if (s == "extreme")
         return Mark::Extreme;
+    if (s == "generated")
+        return Mark::Generated;
     if (s == "none" || s.empty())
         return Mark::None;
-    throw std::invalid_argument("mark is breakdown, extreme or none");
+    throw std::invalid_argument("mark is breakdown, extreme, generated or none");
 }
 
 /** Marks by key time: retimed with the keys, dropped with them. */

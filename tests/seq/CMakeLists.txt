@@ -4,5 +4,3 @@ add_executable(lila_seq_tests
     test_seq_nodes.cpp)
 target_link_libraries(lila_seq_tests PRIVATE LilaScene doctest::doctest)
 add_test(NAME lila_seq_tests COMMAND lila_seq_tests)
-# known_failing tests stay out of the release gate and the nightly run (ctest -LE known_failing).
-set_tests_properties(lila_seq_tests PROPERTIES LABELS known_failing)

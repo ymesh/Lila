@@ -336,8 +336,8 @@ std::vector<PathPair> planPairs(const Mesh& mesh, std::span<const Index> edges, 
         }
     for (size_t i = 0; i < n; ++i)
         if (!paired[i])
-            if (std::optional<PathPair> sides = sidesToBridge(mesh, paths[i]))
-                out.push_back(std::move(*sides));
+            if (std::optional<PathPair> facing = sidesToBridge(mesh, paths[i]))
+                out.push_back(std::move(*facing));
     return out;
 }
 

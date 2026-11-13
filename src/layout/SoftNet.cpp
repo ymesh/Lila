@@ -58,8 +58,8 @@ sn::SurfacePoint pointFrom(const json& j)
     return p;
 }
 
-json vecJson(const glm::dvec3& v) { return {v.x, v.y, v.z}; }
-glm::dvec3 vecFrom(const json& j) { return j.is_array() && j.size() == 3 ? glm::dvec3(j[0].get<double>(), j[1].get<double>(), j[2].get<double>()) : glm::dvec3(0.0); }
+json netVecJson(const glm::dvec3& v) { return {v.x, v.y, v.z}; }
+glm::dvec3 netVecFrom(const json& j) { return j.is_array() && j.size() == 3 ? glm::dvec3(j[0].get<double>(), j[1].get<double>(), j[2].get<double>()) : glm::dvec3(0.0); }
 
 std::vector<glm::dvec3> pointsOf(const geo::Mesh& m) { return {m.positions().begin(), m.positions().end()}; }
 
@@ -100,7 +100,7 @@ json NetBind::toJson() const
         for (const sn::SurfacePoint& p : r.along)
             along.push_back(pointJson(p));
         for (const glm::dvec3& d : r.restDirections)
-            dirs.push_back(vecJson(d));
+            dirs.push_back(netVecJson(d));
         for (const auto& [j, w] : r.blend)
             blend.push_back({j, w});
         k.push_back({{"at", pointJson(r.at)},
@@ -108,8 +108,8 @@ json NetBind::toJson() const
                      {"dirs", dirs},
                      {"blend", blend},
                      {"degree", r.degree},
-                     {"origin", vecJson(r.origin)},
-                     {"rest", {vecJson(r.rest[0]), vecJson(r.rest[1]), vecJson(r.rest[2])}}});
+                     {"origin", netVecJson(r.origin)},
+                     {"rest", {netVecJson(r.rest[0]), netVecJson(r.rest[1]), netVecJson(r.rest[2])}}});
     }
     return {{"knots", k}};
 }
@@ -127,15 +127,15 @@ NetBind NetBind::fromJson(const std::string& text)
         for (const json& p : k.value("along", json::array()))
             r.along.push_back(pointFrom(p));
         for (const json& d : k.value("dirs", json::array()))
-            r.restDirections.push_back(vecFrom(d));
+            r.restDirections.push_back(netVecFrom(d));
         for (const json& w : k.value("blend", json::array()))
             if (w.is_array() && w.size() == 2)
                 r.blend.emplace_back(w[0].get<int>(), w[1].get<double>());
         r.degree = k.value("degree", 0);
-        r.origin = vecFrom(k.value("origin", json()));
+        r.origin = netVecFrom(k.value("origin", json()));
         const json rest = k.value("rest", json::array());
         if (rest.size() == 3)
-            r.rest = glm::dmat3(vecFrom(rest[0]), vecFrom(rest[1]), vecFrom(rest[2]));
+            r.rest = glm::dmat3(netVecFrom(rest[0]), netVecFrom(rest[1]), netVecFrom(rest[2]));
         b.knots.push_back(std::move(r));
     }
     return b;

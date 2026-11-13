@@ -1227,8 +1227,8 @@ private:
         auto& out = onTop ? f.linesOnTop : f.lines;
         for (size_t i = 0; i < segs; ++i)
         {
-            out.push_back({glm::vec3(toWorld(pl.points[i])), color});
-            out.push_back({glm::vec3(toWorld(pl.points[(i + 1) % pl.size()])), color});
+            out.push_back({glm::dvec3(toWorld(pl.points[i])), color});
+            out.push_back({glm::dvec3(toWorld(pl.points[(i + 1) % pl.size()])), color});
         }
     }
 
@@ -1561,8 +1561,8 @@ private:
             pts.push_back(pl.at);
         const std::optional<D2> cursor = hoverHere ? std::optional(mInference->at) : std::nullopt;
         auto line2 = [&](const D2& a, const D2& b, const glm::vec4& col) {
-            f.linesOnTop.push_back({glm::vec3(toWorld(mPlane.to3d(a))), col});
-            f.linesOnTop.push_back({glm::vec3(toWorld(mPlane.to3d(b))), col});
+            f.linesOnTop.push_back({glm::dvec3(toWorld(mPlane.to3d(a))), col});
+            f.linesOnTop.push_back({glm::dvec3(toWorld(mPlane.to3d(b))), col});
         };
         if (mMode == SketchMode::Line)
         {

@@ -157,7 +157,7 @@ void keyVec(Graph& g, NodeId id, int attr, const glm::dvec3& v)
     const double t = g.time();
     const PlugRef whole{id, attr, -1};
     const auto order = RotateOrder(g.node(id)->as<int64_t>(Transform::kRotateOrder));
-    if (attr == Transform::kRotate && anim::keysAsRotation(g, whole) && anim::blendChain(g, whole).empty() && !anim::activeLayer(g))
+    if (attr == Transform::kRotate && anim::keysAsRotation(g, whole) && anim::blendChain(g, whole).empty() && !anim::keyLayer(g, whole))
     {
         anim::setRotationKey(g, whole, t, v);
         return;

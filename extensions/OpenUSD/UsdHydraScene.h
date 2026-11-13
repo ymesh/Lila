@@ -55,7 +55,21 @@ struct ViewContext
     std::function<double(const glm::dvec3&)> unitsPerPixel;
     float curvePixels = 2.0f;
     glm::vec4 curveColor{0.392f, 0.392f, 0.392f, 1.0f};
+    /** Where Hydra's float space is centred (hydraOrigin of the eye): prims sit relative to it, so Storm draws exactly far from the world origin. */
+    glm::dvec3 origin{0.0};
 };
+
+/** Hydra moves its origin in steps this many cm apart, each a full transform update, so it rarely does. */
+inline constexpr double kHydraOriginCell = 65536.0;
+
+/** The eye snapped to kHydraOriginCell: within a cell every prim near the camera keeps float precision under 0.01 cm. */
+inline glm::dvec3 hydraOrigin(const glm::dvec3& eye)
+{
+    // Within 1 km of the origin floats are exact, so ordinary scenes never resync.
+    if (glm::length(eye) <= 1e5)
+        return glm::dvec3(0.0);
+    return glm::floor(eye / kHydraOriginCell + 0.5) * kHydraOriginCell;
+}
 
 /** Lila's meshes, curves, cameras and lights as Hydra prims, flat under nodesRoot() with world transforms. */
 class LilaSceneIndex final : public pxr::HdSceneIndexBase
@@ -78,6 +92,8 @@ public:
     void syncView(const ViewContext& view);
     /** The material slots the meshes use. */
     const std::set<std::string>& usedSlots() const { return mSlots; }
+    /** Moves every prim so origin is at Hydra's origin; a no-op while it stays the same. */
+    void setOrigin(const glm::dvec3& origin);
 
 private:
     LilaSceneIndex() = default;
@@ -122,6 +138,7 @@ private:
     std::map<pxr::SdfPath, Prim> mPrims;
     std::map<pxr::SdfPath, std::set<pxr::SdfPath>> mChildren;
     std::unordered_map<scene::NodeId, Node> mNodes;
+    glm::dvec3 mOrigin{0.0};
     std::map<std::pair<const void*, int>, std::pair<scene::MeshPtr, std::shared_ptr<const MeshData>>> mMeshes;
     std::set<std::string> mSlots;
     Counts mCounts;

@@ -20,6 +20,17 @@ namespace lila::scene::pins
 inline constexpr const char* kSocketAttr = "unrealSocket";
 /** The prop's unrealSocket, empty when it has none. */
 LILA_SCENE_API std::string socketOf(const Node& n);
+/**
+ * A prop's socket bone when it attaches to an existing bone with an offset (puppeteerPropUnreal) rather than to a joint
+ * bakePin made: the socket (kSocketAttr) is then made on this bone with kSocketOffsetAttr, the prop's matrix in the
+ * bone's rigid space.
+ */
+inline constexpr const char* kSocketBoneAttr = "unrealSocketBone";
+inline constexpr const char* kSocketOffsetAttr = "unrealSocketOffset";
+/** The prop's unrealSocketBone, empty when it has none. */
+LILA_SCENE_API std::string socketBoneOf(const Node& n);
+/** The prop's unrealSocketOffset; identity when it has none. */
+LILA_SCENE_API glm::dmat4 socketOffsetOf(const Node& n);
 
 void registerTypes();
 void registerCommands();

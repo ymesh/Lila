@@ -12,9 +12,8 @@ add_executable(lila_terrain_tests main.cpp test_terrain.cpp test_stamps.cpp test
     ${CMAKE_SOURCE_DIR}/extensions/Terrain/Materials.cpp ${CMAKE_SOURCE_DIR}/extensions/Terrain/GroundCover.cpp ${CMAKE_SOURCE_DIR}/extensions/Terrain/Cliffs.cpp)
 target_include_directories(lila_terrain_tests PRIVATE ${CMAKE_SOURCE_DIR}/extensions/Terrain)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    # GCC 15.2 segfaults in its sccp pass (scalar-evolution final value replacement) on this file at -O2.
-    set_source_files_properties(test_heightfield_draw.cpp PROPERTIES COMPILE_OPTIONS -fno-tree-scev-cprop
-        SKIP_UNITY_BUILD_INCLUSION ON)
+    # GCC 15.2 crashes in scalar-evolution final value replacement on this file at -O2.
+    set_source_files_properties(test_heightfield_draw.cpp PROPERTIES COMPILE_OPTIONS -fno-tree-scev-cprop SKIP_UNITY_BUILD_INCLUSION ON)
 endif()
 find_package(miniz CONFIG REQUIRED)
 target_link_libraries(lila_terrain_tests PRIVATE LilaUI doctest::doctest miniz::miniz)

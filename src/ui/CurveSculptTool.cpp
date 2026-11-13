@@ -254,8 +254,8 @@ public:
             for (const curve::Spline& s : mWork)
                 for (size_t i = 1; i < s.size(); ++i)
                 {
-                    f.lines.push_back({glm::vec3(xform(w, s.points[i - 1], 1.0)), col});
-                    f.lines.push_back({glm::vec3(xform(w, s.points[i], 1.0)), col});
+                    f.lines.push_back({glm::dvec3(xform(w, s.points[i - 1], 1.0)), col});
+                    f.lines.push_back({glm::dvec3(xform(w, s.points[i], 1.0)), col});
                 }
         }
         const Qt::KeyboardModifiers mods = QApplication::keyboardModifiers();

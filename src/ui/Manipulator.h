@@ -16,6 +16,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 class QKeyEvent;
@@ -126,6 +127,8 @@ private:
         double linearSign = 1.0;
         Tool tool = Tool::Move;
         std::vector<Saved> saved;
+        /** Component drags: each edited mesh's drawn result at the press, where edges to the moving points snap. */
+        std::unordered_map<scene::NodeId, scene::MeshPtr> startMeshes;
         /** Pivot edit on joints: the joints' children, which the live preview moves back to stay in place. */
         std::vector<Saved> savedChildren;
         std::vector<glm::dvec3> startPivots;

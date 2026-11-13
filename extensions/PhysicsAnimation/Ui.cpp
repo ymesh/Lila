@@ -91,11 +91,11 @@ void drawShape(render::FrameState& f, const ViewInfo& view, const ShapeGeometry&
         const double facing = len > 1e-12 ? std::abs(glm::dot(n / len, view.viewDir((a + b + c) / 3.0))) : 1.0;
         const glm::vec4 col(glm::vec3(color) * float(0.45 + 0.55 * facing), fill);
         for (const glm::dvec3& p : {a, b, c})
-            f.tris3d.push_back({glm::vec3(p), col});
+            f.tris3d.push_back({glm::dvec3(p), col});
     }
     auto& lines = onTop ? f.linesOnTop : f.lines;
     for (const glm::dvec3& p : geo.lines)
-        lines.push_back({glm::vec3(glm::dvec3(world * glm::dvec4(p, 1.0))), color});
+        lines.push_back({glm::dvec3(glm::dvec3(world * glm::dvec4(p, 1.0))), color});
 }
 
 glm::dmat4 jointWorld(Graph& g, NodeId joint) { return rigid(g.node(joint)->as<glm::dmat4>(Transform::kWorldMatrix)); }
@@ -171,8 +171,8 @@ void drawSolver(drawOverrides::DrawContext& c)
         for (size_t i = 0; i < info.outputs.size() && i < f->world.size(); ++i)
             if (info.outputs[i] == joint)
             {
-                c.frame.linesOnTop.push_back({glm::vec3(glm::dvec3(pin->as<glm::dmat4>(Transform::kWorldMatrix)[3])), kSimColor});
-                c.frame.linesOnTop.push_back({glm::vec3(glm::dvec3(f->world[i][3])), kSimColor});
+                c.frame.linesOnTop.push_back({glm::dvec3(glm::dvec3(pin->as<glm::dmat4>(Transform::kWorldMatrix)[3])), kSimColor});
+                c.frame.linesOnTop.push_back({glm::dvec3(glm::dvec3(f->world[i][3])), kSimColor});
             }
     }
     if (info.loop && !info.converged && !f->world.empty())
@@ -188,8 +188,8 @@ void drawCross(drawOverrides::DrawContext& c, double pixels)
     {
         glm::dvec3 d(0.0);
         d[axis] = r;
-        c.frame.lines.push_back({glm::vec3(p - d), c.color});
-        c.frame.lines.push_back({glm::vec3(p + d), c.color});
+        c.frame.lines.push_back({glm::dvec3(p - d), c.color});
+        c.frame.lines.push_back({glm::dvec3(p + d), c.color});
     }
 }
 
@@ -201,8 +201,8 @@ void drawField(drawOverrides::DrawContext& c)
     if (glm::length(d) < 1e-12 || integer(c.node, "kind") >= 2)
         return;
     d = glm::normalize(d) * (40.0 * c.view.unitsPerPixel(p));
-    c.frame.lines.push_back({glm::vec3(p), c.color});
-    c.frame.lines.push_back({glm::vec3(p + d), c.color});
+    c.frame.lines.push_back({glm::dvec3(p), c.color});
+    c.frame.lines.push_back({glm::dvec3(p + d), c.color});
 }
 
 std::optional<double> pickPoint(const drawOverrides::PickContext& c)
@@ -344,8 +344,8 @@ public:
             drawShape(s, view, *geometryOf(mRig.bodies[i].shape), bodyWorld(i), int(i) == mGrab ? brighter(kSimColor, 0.4f) : kSimColor, 0.22f, true);
         if (mGrab >= 0)
         {
-            s.linesOnTop.push_back({glm::vec3(glm::dvec3(bodyWorld(size_t(mGrab)) * glm::dvec4(mGrabLocal, 1.0))), kSimColor});
-            s.linesOnTop.push_back({glm::vec3(mTarget), kSimColor});
+            s.linesOnTop.push_back({glm::dvec3(glm::dvec3(bodyWorld(size_t(mGrab)) * glm::dvec4(mGrabLocal, 1.0))), kSimColor});
+            s.linesOnTop.push_back({glm::dvec3(mTarget), kSimColor});
         }
         drawToolStatus(p, view,
                        {.tool = "Physics Live",

@@ -28,8 +28,8 @@ using json = nlohmann::json;
  */
 Character resolveCharacter(Graph& g, NodeId node);
 
-/** Every curve animating the character in its active take, through every anim layer. */
-std::vector<NodeId> characterCurves(Graph& g, const Character& ch);
+/** Every curve animating the character in its active take, through every anim layer; withTracks false leaves out the control tracks' curves (the character keys). */
+std::vector<NodeId> characterCurves(Graph& g, const Character& ch, bool withTracks = true);
 /** Sorted, unique key times of those curves. */
 std::vector<double> keyTimesOf(Graph& g, const std::vector<NodeId>& curves);
 /** The latest loop key time among the curves, NaN when none loops. */

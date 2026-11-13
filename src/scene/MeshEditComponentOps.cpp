@@ -348,9 +348,11 @@ void registerMeshEditComponentCommands()
             const bool pair = components::mode() == K::Vertex;
             return editSelected("Merge", K::Vertex, [&](geo::Mesh& m, const Ids& sel, const geo::SymmetryMap* s) {
                 geo::MergeOptions o{a.get<double>("distance"), a.get<bool>("average"), s};
-                // Just past the pair's own gap, so a mirrored pair welds too without reaching further.
-                if (pair && sel.size() == 2 && m.pointValid(sel[0]) && m.pointValid(sel[1]))
-                    o.distance = std::max(o.distance, glm::distance(m.position(sel[0]), m.position(sel[1])) * 1.001 + 1e-6);
+                // Just past the pair's own gap, so a mirrored pair welds too without reaching further. A symmetric
+                // selection is the pair once per side.
+                const Ids one = s && sel.size() > 2 ? s->wedgeGroups(sel).front() : sel;
+                if (pair && one.size() == 2 && m.pointValid(one[0]) && m.pointValid(one[1]))
+                    o.distance = std::max(o.distance, glm::distance(m.position(one[0]), m.position(one[1])) * 1.001 + 1e-6);
                 return points(geo::mergeByDistance(m, sel, o));
             }, true);
         },
@@ -360,9 +362,12 @@ void registerMeshEditComponentCommands()
         .name = "polyMergeCenter",
         .doc = "Weld the selected vertices into one at their centre.",
         .run = [](const Args&) -> json {
-            return editSelected("Merge to Center", K::Vertex, [](geo::Mesh& m, const Ids& sel, const geo::SymmetryMap*) {
-                Index p = geo::mergeToCenter(m, sel);
-                return points(p == geo::kInvalid ? Ids{} : Ids{p});
+            return editSelected("Merge to Center", K::Vertex, [](geo::Mesh& m, const Ids& sel, const geo::SymmetryMap* s) {
+                Ids out;
+                for (const Ids& group : s ? s->wedgeGroups(sel) : std::vector<Ids>{sel})
+                    if (const Index p = geo::mergeToCenter(m, group); p != geo::kInvalid)
+                        out.push_back(p);
+                return points(std::move(out));
             });
         },
     });

@@ -132,11 +132,13 @@ TEST_CASE("curve to curve history")
     std::string plane = run("polyPlane", {{"width", 200}, {"depth", 200}})[0];
     std::string high = run("curve", {{"type", "poly"}, {"points", pts({D3(-20, 30, 0), D3(20, 30, 10)})}, {"name", "High"}});
     json pr = run("projectCurve", {{"args", {high}}, {"mesh", plane}, {"direction", {0, -1, 0}}});
-    for (const json& p : localCurveJson(pr[0])[0]["points"])
+    const json listed135 = localCurveJson(pr[0]);
+    for (const json& p : listed135[0]["points"])
         CHECK(std::abs(p[1].get<double>()) < 1e-6);
     // Live: lifting the plane lifts the projection.
     run("move", {{"args", {plane}}, {"by", {0, 5, 0}}});
-    for (const json& p : localCurveJson(pr[0])[0]["points"])
+    const json listed139 = localCurveJson(pr[0]);
+    for (const json& p : listed139[0]["points"])
         CHECK(p[1].get<double>() == doctest::Approx(5.0));
 
     std::string a2 = run("curve", {{"type", "poly"}, {"points", pts({D3(0), D3(5, 0, 0)})}});

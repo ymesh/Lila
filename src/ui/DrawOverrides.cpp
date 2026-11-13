@@ -34,8 +34,8 @@ void drawLocator(DrawContext& c)
 {
     for (auto& [a, b] : locatorLines(c.world, locatorSize(c.node)))
     {
-        c.frame.lines.push_back({glm::vec3(a), c.color});
-        c.frame.lines.push_back({glm::vec3(b), c.color});
+        c.frame.lines.push_back({glm::dvec3(a), c.color});
+        c.frame.lines.push_back({glm::dvec3(b), c.color});
     }
 }
 

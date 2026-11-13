@@ -2,6 +2,7 @@
 // main roads from its router, grading as road features, pads and stamps (settlementGrade), re-planning only where the
 // terrain changed (settlementReplan), and the agent's checks and explanations (settlementCheck, settlementExplain).
 
+#include "Export.h"
 #include "Settlement.h"
 #include "SettlementTerrain.h"
 
@@ -14,6 +15,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <format>
 #include <limits>
@@ -78,6 +80,38 @@ json terrainCall(const char* name, const std::string& terrain, json flags, const
 }
 
 std::string linkTextOf(const json& v) { return v.is_string() ? v.get<std::string>() : std::string(); }
+
+/** The settlement's streets as the terrain's roads in roadLayer were built, by street id (key/street/<id>[/<part>]). */
+std::map<uint64_t, GradedStreet> gradedStreets(const std::string& terrain, const std::string& key, const std::string& roadLayer, const std::string& cmd)
+{
+    LILA_ZONE();
+
+    std::map<uint64_t, GradedStreet> out;
+    const std::string prefix = key + "/street/";
+    for (const json& road : terrainCall("terrainRoads", terrain, json::object(), cmd).value("layers", json::object()).value(roadLayer, json::array()))
+    {
+        const std::string id = road.value("id", std::string());
+        if (!id.starts_with(prefix))
+            continue;
+        uint64_t street = 0;
+        const char* begin = id.data() + prefix.size();
+        if (std::from_chars(begin, id.data() + id.size(), street).ec != std::errc())
+            continue;
+        GradedStreet& s = out[street];
+        const double grade = road.value("maxGrade", 0.0);
+        s.limit = std::max(s.limit, road.value("design", json::object()).value("maxGrade", 0.0));
+        s.length += road.value("length", 0.0);
+        if (s.road.empty() || grade > s.grade)
+        {
+            s.road = id;
+            s.grade = grade;
+            s.why.clear();
+            for (const json& w : road.value("warnings", json::array()))
+                s.why += (s.why.empty() ? "" : "; ") + w.get<std::string>();
+        }
+    }
+    return out;
+}
 
 /** The current revision, remembered by the terrain so terrainDirtyRegions can compare with it later. */
 std::string revisionOf(const std::string& terrain, const std::string& cmd)
@@ -499,7 +533,7 @@ json grade(Graph& g, const std::string& name, const Args& a, const std::string& 
     json edits = editsOf(*mod, cmd);
     Rebuilt r = rebuildSettlement(g, name, cmd.c_str(), &edits);
     const std::string terrain = terrainOf(r, a, cmd);
-    for (const char* need : {"terrainAddRoad", "terrainStampPad", "terrainStampRegion", "terrainStamps", "terrainRoads", "terrainDirtyRegions"})
+    for (const char* need : {"terrainAddRoad", "terrainStampPad", "terrainStampRegion", "terrainStamps", "terrainRoads", "terrainDirtyRegions", "terrainBatch"})
         if (!ops::find(need))
             throw CommandError(cmd + ": the Terrain command " + std::string(need) + " is not available; load the Terrain extension");
 
@@ -546,7 +580,9 @@ json grade(Graph& g, const std::string& name, const Args& a, const std::string& 
         {
             if (line.surface || line.pts.size() < 2)
                 continue;
-            std::string id = key + "/street/" + std::to_string(line.street);
+            // A street runs on through junctions as several lines, each named by its street and its ends.
+            const std::string road = roadKey(line);
+            std::string id = key + "/street/" + std::to_string(line.street) + (road.find('.') != std::string::npos ? road.substr(road.find('.')) : "");
             if (const int n = taken[id]++; n > 0)
                 id += "/" + std::to_string(n);
             idOfStreet.emplace(line.street, id);
@@ -748,6 +784,33 @@ json grade(Graph& g, const std::string& name, const Args& a, const std::string& 
         }
         return false;
     };
+    // Roads, rings and stamps go to the terrain in one batch: it is written and evaluated once, not once per part.
+    std::vector<std::pair<const Send*, int*>> queued;
+    auto queue = [&](const Send& s, int& sent) { queued.push_back({&s, &sent}); };
+    auto flush = [&] {
+        if (queued.empty())
+            return;
+        json calls = json::array();
+        for (const auto& [s, sent] : queued)
+        {
+            json flags = s->flags;
+            flags["args"] = json::array({terrain});
+            calls.push_back({{"command", s->command}, {"flags", std::move(flags)}});
+        }
+        const json done = ops::execute("terrainBatch", {{"calls", calls}});
+        std::set<size_t> failed;
+        for (const json& e : done.value("errors", json::array()))
+        {
+            const size_t k = e.value("index", size_t(0));
+            failed.insert(k);
+            if (errors.size() < 20 && k < queued.size())
+                errors.push_back(queued[k].first->command + " " + queued[k].first->id + ": " + e.value("error", std::string()));
+        }
+        for (size_t k = 0; k < queued.size(); ++k)
+            if (!failed.contains(k))
+                ++*queued[k].second;
+        queued.clear();
+    };
     auto isPart = [&](const std::string& id, const std::string& base) {
         return id.size() == base.size() + 2 && id.starts_with(base) && id[base.size()] == '_' && std::isalpha(static_cast<unsigned char>(id.back()));
     };
@@ -768,12 +831,12 @@ json grade(Graph& g, const std::string& name, const Args& a, const std::string& 
         terrainCall("terrainRoadRemove", terrain, {{"ids", partsToRemove}, {"layer", roadLayer}}, cmd);
     for (const Send& s : roads)
         if (resend.contains(s.id))
-            sentRoads += send(s);
+            queue(s, sentRoads);
     for (const Send& s : rings)
     {
         made[s.id] = s.hash;
         if (ringsToSend.contains(s.id))
-            sentRings += send(s);
+            queue(s, sentRings);
         else
             ++kept;
     }
@@ -783,8 +846,9 @@ json grade(Graph& g, const std::string& name, const Args& a, const std::string& 
         if (unchanged(s, haveStamps))
             ++kept;
         else
-            sentStamps += send(s);
+            queue(s, sentStamps);
     }
+    flush();
     const json prevRivers = edits.value("terrain", json::object()).value("rivers", json::array());
     json riverIds = json::array();
     for (const Send& s : rivers)
@@ -824,27 +888,23 @@ json grade(Graph& g, const std::string& name, const Args& a, const std::string& 
     if (!staleRivers.empty() && ops::find("terrainWaterRemove"))
         terrainCall("terrainWaterRemove", terrain, {{"ids", staleRivers}}, cmd);
 
-    // Every street the terrain could not lay within its grade is reported with the road solver's reason.
+    // Every street the terrain could not lay within its grade is reported with the road solver's reason; settlementCheck
+    // judges graded streets by the same numbers.
     json overGrade = json::array();
     if (a.get<bool>("streets", true))
-        for (const json& road : terrainCall("terrainRoads", terrain, json::object(), cmd).value("layers", json::object()).value(roadLayer, json::array()))
+        for (const auto& [street, s] : gradedStreets(terrain, key, roadLayer, cmd))
         {
-            const std::string id = road.value("id", std::string());
-            const double limit = road.value("design", json::object()).value("maxGrade", 0.0), grade = road.value("maxGrade", 0.0);
-            if (!id.starts_with(key + "/street/") || limit <= 0.0 || grade <= limit * 1.01 + 0.05)
+            if (!gradedOverLimit(s))
                 continue;
-            std::string why;
-            for (const json& w : road.value("warnings", json::array()))
-                why += (why.empty() ? "" : "; ") + w.get<std::string>();
-            if (why.empty())
-                why = "the ground under it is steeper than the limit over a stretch the road cannot lengthen";
-            log::warn("{}: {} climbs {:.1f}% over its {:.1f}%: {}", cmd, id, grade, limit, why);
-            overGrade.push_back({{"id", id}, {"length", road.value("length", 0.0)}, {"grade", grade}, {"maxGrade", limit}, {"why", why}});
+            const std::string why = s.why.empty() ? "the ground under it is steeper than the limit over a stretch the road cannot lengthen" : s.why;
+            log::warn("{}: {} climbs {:.1f}% over its {:.1f}%: {}", cmd, s.road, s.grade, s.limit, why);
+            overGrade.push_back({{"id", street}, {"road", s.road}, {"length", s.length}, {"grade", s.grade}, {"maxGrade", s.limit}, {"why", why}});
         }
     out["overGrade"] = overGrade;
 
     const std::string rev = revisionOf(terrain, cmd);
-    edits["terrain"] ={{"terrain", terrain}, {"revision", rev}, {"graded", made}, {"rivers", riverIds}, {"keys", keys}};
+    edits["terrain"] = {{"terrain", terrain}, {"revision", rev}, {"graded", made}, {"rivers", riverIds}, {"keys", keys}, {"roadLayer", roadLayer},
+                        {"streets", a.get<bool>("streets", true)}};
     // The plan is pinned at the graded terrain, so the grading itself never counts as a change to re-plan for.
     if (edits.contains("plan") && !edits["plan"].is_null() && r.layout.plan == "pinned")
     {
@@ -1327,7 +1387,14 @@ void registerTerrainCommands(ext::Context& ctx)
             if (names.size() != 1)
                 throw CommandError(cmd + ": give one settlement");
             const Rebuilt r = rebuildSettlement(Graph::current(), names[0], cmd.c_str());
-            json out = checkLayout(r.layout, r.ground, r.options);
+            // A graded settlement's streets are judged as their terrain roads were built, as settlementGrade reports them.
+            std::map<uint64_t, GradedStreet> graded;
+            const json t = editsOf(*modifierOf(Graph::current(), names[0], cmd), cmd).value("terrain", json::object());
+            const std::string terrain = t.value("terrain", std::string());
+            const bool hasGraded = !terrain.empty() && t.value("streets", false) && ops::find("terrainRoads") && Graph::current().find(terrain);
+            if (hasGraded)
+                graded = gradedStreets(terrain, r.mesh.empty() ? r.modifier : r.mesh, t.value("roadLayer", std::string("CityRoads")), cmd);
+            json out = checkLayout(r.layout, r.ground, r.options, hasGraded ? &graded : nullptr);
             out["plan"] = r.layout.plan;
             if (a.get<bool>("report", false))
             {

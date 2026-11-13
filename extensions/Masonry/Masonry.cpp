@@ -45,6 +45,7 @@ const Input kWall[] = {
     {"stoneDepth", Input::Float, 10.25, nullptr, 0.5, 1e5, 50, "Stones", "Stone depth into the wall, cm; also a header's width on the face."},
     {"joint", Input::Float, 1.0, nullptr, 0, 1e4, 5, "Stones", "Mortar joint, cm."},
     {"recess", Input::Float, 0.6, nullptr, 0, 1e4, 3, "Stones", "How far the mortar sits behind the stone faces, cm."},
+    {"region", Input::String, 0, "", 0, 0, 0, "Wall", "Region name of the wall (ruin, masonryInfo and masonryCheck use it); empty is wall_0. More footprints are region_1, region_2, ..."},
 };
 const Input kBuilding[] = {
     {"spec", Input::String, 0, "{}", 0, 0, 0, "Building", "The building as a JSON spec (masonrySpec reads it back; lila://masonry/spec-schema describes it)."},
@@ -666,7 +667,7 @@ std::shared_ptr<const Result> buildMasonry(std::span<const Footprint> footprints
         plan = planBuilding(parsed, look);
     }
     else
-        plan = planWalls(footprints, look);
+        plan = planWalls(footprints, look, values.value("region", std::string()));
     auto result = std::make_shared<Result>();
     result->built = realizePlan(plan, ruinFromValues(values), ageFromValues(values), lods, &result->ruin);
     std::lock_guard lock(gCacheLock);

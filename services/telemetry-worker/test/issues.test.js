@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 
 import { allowedHost, sanitizeText, stripPaths, LINK_HOSTS } from "../src/issues.js";
-import { appJwt, attachmentName, handleIssues, MAX_BYTES_PER_DAY, MAX_REPLIES_PER_IP_DAY, MAX_REPORTS_PER_IP_DAY, issueBody, parseReport, replyAttachmentName, reportStatus, sha256 } from "../src/issues.js";
+import { appJwt, attachmentName, buildCommit, UNOFFICIAL_BUILD, handleIssues, MAX_BYTES_PER_DAY, MAX_REPLIES_PER_IP_DAY, MAX_REPORTS_PER_IP_DAY, issueBody, parseReport, replyAttachmentName, reportStatus, sha256 } from "../src/issues.js";
 
 /** An R2 stand-in holding bytes in a Map. */
 function fakeR2() {
@@ -57,10 +57,15 @@ function fakeGitHub() {
       }
       return Response.json(m[2] ? issue.commentList || [] : issue);
     }
+    const cmp = path.match(/^\/repos\/lila-3d\/Lila\/compare\/([0-9a-f]+)\.\.\.main$/);
+    if (cmp && COMMITS[cmp[1]]) return Response.json({ status: COMMITS[cmp[1]] });
     return new Response("nope", { status: 404 });
   };
   return { issues, calls, fetcher };
 }
+
+/** Commits the fake GitHub knows, by how main compares to them. */
+const COMMITS = { "9641744ab1": "ahead", aaaaaaaaaa: "identical", f0f0f0f0f0: "diverged" };
 
 const env = (extra = {}) => ({ REPORTS: fakeR2(), REPORTS_GITHUB_TOKEN: "t0ken", ADMIN_TOKEN: "admin", ...extra });
 
@@ -75,7 +80,7 @@ const META = {
   title: "Bevel crashes",
   sections: [{ heading: "What happened?", text: "Bevel on a cube crashes." }],
   kind: "Bug",
-  version: "0.9.1",
+  version: "0.9.1+9641744ab1 (build 202611120000-9641744ab1)",
   os: "Windows 11",
   gpu: "RTX 4090",
 };
@@ -314,4 +319,27 @@ test("the App JWT is RS256 and signed by the key", async () => {
   assert.equal(claims.exp - claims.iat, 540);
   const { createVerify } = await import("node:crypto");
   assert.ok(createVerify("RSA-SHA256").update(`${h}.${c}`).verify(publicKey, Buffer.from(s, "base64url")));
+});
+
+test("reports come only from builds of a commit on main", async () => {
+  const send = async (version, e = env()) => {
+    const res = await handleIssues(reportRequest({ ...META, version }), e, fakeGitHub().fetcher);
+    return { status: res.status, body: await res.json() };
+  };
+  assert.equal(buildCommit("0.1.0+9641744ab1 (build 202610281430-9641744ab1)"), "9641744ab1");
+  assert.equal(buildCommit("0.1.0+9641744ab1 (build 202610281430-9641744ab1-dirty)"), null);
+  assert.equal(buildCommit("0.1.0"), null);
+
+  assert.equal((await send("0.9.1+aaaaaaaaaa (build 1-aaaaaaaaaa)")).status, 200);
+  for (const version of ["0.9.1+f0f0f0f0f0 (build 1-f0f0f0f0f0)", "0.9.1+0123456789 (build 1-0123456789)", "0.9.1+9641744ab1 (build 1-9641744ab1-dirty)", "0.9.1", undefined]) {
+    const r = await send(version);
+    assert.equal(r.status, 403, String(version));
+    assert.equal(r.body.error, UNOFFICIAL_BUILD);
+  }
+
+  const e = env();
+  assert.equal((await send(META.version, e)).status, 200);
+  assert.ok(e.REPORTS.items.has("builds/9641744ab1.json"));
+  const down = await handleIssues(reportRequest({ ...META, version: "0.9.1+aaaaaaaaaa (build 1-aaaaaaaaaa)" }), env(), async () => new Response("", { status: 500 }));
+  assert.equal(down.status, 502);
 });

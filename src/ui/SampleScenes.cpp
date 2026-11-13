@@ -1,5 +1,7 @@
 #include "ui/SampleScenes.h"
 
+#include <QCoreApplication>
+
 #include "core/Log.h"
 #include "core/Paths.h"
 #include "python/Python.h"
@@ -169,6 +171,8 @@ bool download(QWidget* parent, const QString& label, const std::string& url, std
     QNetworkAccessManager nam;
     QNetworkRequest req{QUrl(qstr(url))};
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    // Qt's default "Mozilla/5.0" is refused by some hosts (Zenodo) as a scraper posing as a browser.
+    req.setHeader(QNetworkRequest::UserAgentHeader, QCoreApplication::applicationName());
     QNetworkReply* reply = nam.get(req);
     QProgressDialog* bar = progress(parent, label);
     QEventLoop loop;

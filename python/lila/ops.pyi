@@ -557,7 +557,7 @@ def attachCurve(*objects: Any, blend: bool | None = None, keepOriginal: bool | N
         keepOriginal: Keep the second curve. Short form kp. Default False.
     """
 
-def audio(*objects: Any, fileName: str | None = None, offset: float | None = None, gain: float | None = None, mute: bool | None = None, take: str | None = None, name: str | None = None, f: str | None = None, o: float | None = None, g: float | None = None, m: bool | None = None, t: str | None = None, n: str | None = None) -> Any:
+def audio(*objects: Any, fileName: str | None = None, track: int | None = None, offset: float | None = None, sourceStart: float | None = None, sourceEnd: float | None = None, gain: float | None = None, mute: bool | None = None, take: str | None = None, name: str | None = None, f: str | None = None, tr: int | None = None, o: float | None = None, ss: float | None = None, se: float | None = None, g: float | None = None, m: bool | None = None, t: str | None = None, n: str | None = None) -> Any:
     """Create an audio node from a sound file, or edit the one named. Returns its name.
 
     Audio plays under the time slider during playback and scrubbing. With take, it belongs to that take: heard only while the take is active, its offset counted from the take's start.
@@ -565,7 +565,10 @@ def audio(*objects: Any, fileName: str | None = None, offset: float | None = Non
     Args:
         objects: audio node to edit (omit to create one).
         fileName: Sound file; stored relative to the workspace root. Short form f.
+        track: Sound track of a file with several, from 0. Short form tr.
         offset: Frame the sound starts at. Short form o.
+        sourceStart: Frame of the file the sound starts from. Short form ss.
+        sourceEnd: Frame of the file the sound stops at; 0 for the end. Short form se.
         gain: Volume multiplier. Short form g.
         mute: Silence it. Short form m.
         take: Take it belongs to. Short form t.
@@ -755,6 +758,19 @@ def bakeForTarget(project: str | None = None, target: str | None = None, optiona
         backend: Where to bake; defaults to the target's backend, else cpu. Short form be.
         async: Return at once and bake off the main thread, as bake async=True. Short form as. Default False.
         overrideGroups: Give every existing group the target's group defaults, including settings made on a group by hand. Short form og. Default False.
+    """
+
+def bakeGrapple(*objects: Any, grapple: str | None = None, start: int | None = None, end: int | None = None, g: str | None = None) -> Any:
+    """Bake the grapple onto the characters' joints as plain keys, on its own additive layer (replacing the one it baked before; mute the layer to compare, delete it to go back). Every frame is solved with the characters' animation below the layer. Returns {'layer', 'frames', 'contactError', 'penetration'}: the worst contact gap and body overlap left, cm.
+
+    Args:
+        objects: grapple or one of its contacts (default the selection, else the scene's only grapple).
+        grapple: The grapple. Short form g.
+        start: First frame. Default: the playback range.
+        end: Last frame.
+
+    Examples:
+        bakeGrapple("grapple1", start=0, end=120)
     """
 
 def bakeGroup(*objects: Any, project: str | None = None, lows: Sequence[Any] | None = None, highs: Sequence[Any] | None = None, addLow: Sequence[Any] | None = None, removeLow: Sequence[Any] | None = None, addHigh: Sequence[Any] | None = None, removeHigh: Sequence[Any] | None = None, self: bool | None = None, modifiers: Any | None = None, preset: str | None = None, cage: str | None = None, cageOffset: float | None = None, frontal: float | None = None, rear: float | None = None, ignoreBackfaces: bool | None = None, aoScope: str | None = None, skew: float | None = None, unlinks: Any | None = None, addHighFile: Sequence[Any] | None = None, removeHighFile: Sequence[Any] | None = None, fileObject: str | None = None, fileFrame: float | None = None, pj: str | None = None, lo: Sequence[Any] | None = None, hi: Sequence[Any] | None = None, al: Sequence[Any] | None = None, rl: Sequence[Any] | None = None, ah: Sequence[Any] | None = None, rh: Sequence[Any] | None = None, sf: bool | None = None, md: Any | None = None, ps: str | None = None, cg: str | None = None, co: float | None = None, fd: float | None = None, rd: float | None = None, ib: bool | None = None, sk: float | None = None, ul: Any | None = None, ahf: Sequence[Any] | None = None, rhf: Sequence[Any] | None = None, fob: str | None = None, ffr: float | None = None) -> Any:
@@ -1518,7 +1534,7 @@ def cameraSettings(*objects: Any, filmFit: str | None = None, overscan: float | 
         query: Short form q. Default False.
     """
 
-def captureTurntable(view: str | None = None, lookThrough: str | None = None, yaw: float | None = None, pitch: float | None = None, width: int | None = None, height: int | None = None, display: str | None = None, isolate: bool | None = None, frameSelection: bool | None = None, grid: bool | None = None, showSelection: bool | None = None, samples: int | None = None, label: bool | None = None, overlays: bool | None = None, path: str | None = None, count: int | None = None, columns: int | None = None, views: Sequence[Any] | None = None, *, v: str | None = None, lt: str | None = None, w: int | None = None, h: int | None = None, d: str | None = None, fs: bool | None = None, ov: bool | None = None, p: str | None = None, c: int | None = None) -> Any:
+def captureTurntable(view: str | None = None, lookThrough: str | None = None, yaw: float | None = None, pitch: float | None = None, width: int | None = None, height: int | None = None, display: str | None = None, isolate: bool | None = None, frameSelection: bool | None = None, grid: bool | None = None, showSelection: bool | None = None, samples: int | None = None, label: bool | None = None, overlays: bool | None = None, hud: bool | None = None, path: str | None = None, count: int | None = None, columns: int | None = None, views: Sequence[Any] | None = None, *, v: str | None = None, lt: str | None = None, w: int | None = None, h: int | None = None, d: str | None = None, fs: bool | None = None, ov: bool | None = None, p: str | None = None, c: int | None = None) -> Any:
     """Render several views offscreen and tile them into one PNG contact sheet (row by row): count angles around the subject, or the named views. Returns the path.
 
     Args:
@@ -1536,13 +1552,14 @@ def captureTurntable(view: str | None = None, lookThrough: str | None = None, ya
         samples: Jittered frames averaged into the image: 16 or more gives a supersampled still. Default 1.
         label: Write the view's name in the top-left corner. Default True.
         overlays: Draw what the viewport draws over the scene too: locators, curves' draw overrides, Soft Net lines and knots, extension drawers. Short form ov. Default False.
+        hud: Draw the heads-up readouts the view shows (the cursor taken at the view's centre) and the Drone Camera banner. Default False.
         path: PNG file to write. Short form p.
         count: Views around the up axis, starting at the front. Short form c. Default 4.
         columns: Tiles per row; 0 picks. Default 0.
         views: Named views to tile instead of a turn, e.g. ['front', 'right', 'top', 'persp'].
     """
 
-def captureView(view: str | None = None, lookThrough: str | None = None, yaw: float | None = None, pitch: float | None = None, width: int | None = None, height: int | None = None, display: str | None = None, isolate: bool | None = None, frameSelection: bool | None = None, grid: bool | None = None, showSelection: bool | None = None, samples: int | None = None, label: bool | None = None, overlays: bool | None = None, path: str | None = None, *, v: str | None = None, lt: str | None = None, w: int | None = None, h: int | None = None, d: str | None = None, fs: bool | None = None, ov: bool | None = None, p: str | None = None) -> Any:
+def captureView(view: str | None = None, lookThrough: str | None = None, yaw: float | None = None, pitch: float | None = None, width: int | None = None, height: int | None = None, display: str | None = None, isolate: bool | None = None, frameSelection: bool | None = None, grid: bool | None = None, showSelection: bool | None = None, samples: int | None = None, label: bool | None = None, overlays: bool | None = None, hud: bool | None = None, path: str | None = None, *, v: str | None = None, lt: str | None = None, w: int | None = None, h: int | None = None, d: str | None = None, fs: bool | None = None, ov: bool | None = None, p: str | None = None) -> Any:
     """Render the scene offscreen from a named view or angle and save a PNG. Never moves a viewport's camera, works with Lila in the background and in batch mode. Returns the path.
 
     Args:
@@ -1560,6 +1577,7 @@ def captureView(view: str | None = None, lookThrough: str | None = None, yaw: fl
         samples: Jittered frames averaged into the image: 16 or more gives a supersampled still. Default 1.
         label: Write the view's name in the top-left corner. Default True.
         overlays: Draw what the viewport draws over the scene too: locators, curves' draw overrides, Soft Net lines and knots, extension drawers. Short form ov. Default False.
+        hud: Draw the heads-up readouts the view shows (the cursor taken at the view's centre) and the Drone Camera banner. Default False.
         path: PNG file to write. Short form p.
     """
 
@@ -3248,6 +3266,15 @@ def exportPly(*objects: Any, unit: str | None = None, upAxis: str | None = None,
         colors: Write the current color set as 8-bit RGBA. Default True.
     """
 
+def exportPointCloud(*objects: Any, spacing: float | None = None, clip: bool | None = None, s: float | None = None) -> Any:
+    """Write a point cloud to LAS or LAZ (by extension), cut by its clip boxes and thinned to spacing: in the scene's CRS at its real coordinates when the scene is georeferenced (the WKT goes in the file), else in metres Z up. Unreal's LiDAR Point Cloud plugin reads it. Returns {path, points}.
+
+    Args:
+        objects: path pointCloud.
+        spacing: Keep one point per cube this many cm across; 0 keeps every point. Short form s. Default 0.0.
+        clip: Apply the cloud's clip boxes. Default True.
+    """
+
 def exportSoundCues(path: str | None = None, start: float | None = None, end: float | None = None, profile: str | None = None, *, p: str | None = None, s: float | None = None, e: float | None = None, ax: str | None = None) -> Any:
     """Write the sounds the cues fire, to play them in Unreal.
 
@@ -3565,6 +3592,15 @@ def fitCurve(*objects: Any, tolerance: float | None = None, constructionHistory:
         name: Name of a new curve. Short form n.
     """
 
+def fitGrappleBodies(*objects: Any, grapple: str | None = None, keepMass: bool | None = None, g: str | None = None, km: bool | None = None) -> Any:
+    """Refit the grapple's collision capsules and masses at the current pose: from the characters' physics markers, else their skinned meshes, else bone-sized. Keeps each figure's planted feet. Returns the figures with what each was fitted from.
+
+    Args:
+        objects: grapple or one of its contacts (default the selection, else the scene's only grapple).
+        grapple: The grapple. Short form g.
+        keepMass: Keep each figure's mass as it is. Short form km. Default False.
+    """
+
 def fixDuplicateJointNames(*objects: Any) -> Any:
     """Rename joints that share a name with another joint in the same skeleton (the given roots and their descendants, or the selection), so the skeleton exports with unique bone names. Returns [[old, new], ...].
 
@@ -3749,6 +3785,35 @@ def gameExportSavePreset(*objects: Any, path: str | None = None, filename: str |
         scene: Keep it in the scene (a gameExportPreset node) instead of the prefs. Default False.
     """
 
+def georeference() -> Any:
+    """The scene's georeference: its CRS, the projected coordinates of the scene origin (origin), that origin's latitude, longitude and height in the CRS's datum (originLatLonHeight) and in WGS 84 with ellipsoidal height (wgs84). None when the scene has none."""
+
+def georeferenceConvert(points: Sequence[Any] | None = None, to: str | None = None, *, p: Sequence[Any] | None = None, **flags: Any) -> Any:
+    """Convert points between scene coordinates (cm), the scene CRS's projected coordinates, latitude/longitude/height, or another CRS.
+
+    Args:
+        points: [[x, y, z], ...] in the from= space. Short form p.
+        from: scene, projected, geographic (latitude, longitude, height) or a CRS. Default 'scene'.
+        to: scene, projected, geographic or a CRS. Default 'geographic'.
+    """
+
+def georeferencePlace(*objects: Any, crs: str | None = None, origin: Sequence[Any] | None = None) -> Any:
+    """Place nodes from a georeferenced file into the scene: the file's CRS and origin set the scene's georeference when it has none, otherwise the nodes are moved and turned into the scene's. Importers call it with what the file carries; returns the message saying which happened.
+
+    Args:
+        objects: nodes: the imported root transforms.
+        crs: The file's CRS: an authority code (EPSG:32632) or WKT.
+        origin: The file's origin in that CRS: [easting, northing, height].
+    """
+
+def georeferenceSearch(*objects: Any, limit: int | None = None) -> Any:
+    """Projected CRSs in PROJ's EPSG database whose code or name contains the query: [[code, name], ...].
+
+    Args:
+        objects: query.
+        limit: Most results. Default 50.
+    """
+
 def getAttr(*objects: Any, lock: bool | None = None, multiIndices: bool | None = None, l: bool | None = None, mi: bool | None = None) -> Any:
     """Value of 'node.attr'; a whole array gives its elements' values in index order. lock=True returns whether it is locked instead; multiIndices=True an array's element indices.
 
@@ -3767,7 +3832,7 @@ def getVertexColorData(*objects: Any, colorSet: str | None = None, base: bool | 
         base: The editable base mesh; False reads the modified result. Default True.
     """
 
-def ghosting(enable: bool | None = None, mode: str | None = None, before: int | None = None, after: int | None = None, step: int | None = None, opacity: float | None = None, show: str | None = None, beforeColor: str | None = None, afterColor: str | None = None, refresh: bool | None = None, *, e: bool | None = None, m: str | None = None, b: int | None = None, a: int | None = None, st: int | None = None, o: float | None = None, sh: str | None = None, bc: str | None = None, ac: str | None = None, r: bool | None = None) -> Any:
+def ghosting(enable: bool | None = None, mode: str | None = None, before: int | None = None, after: int | None = None, step: int | None = None, opacity: float | None = None, show: str | None = None, beforeColor: str | None = None, afterColor: str | None = None, range: bool | None = None, refresh: bool | None = None, *, e: bool | None = None, m: str | None = None, b: int | None = None, a: int | None = None, st: int | None = None, o: float | None = None, sh: str | None = None, bc: str | None = None, ac: str | None = None, rg: bool | None = None, r: bool | None = None) -> Any:
     """Animation ghosting of the selected characters: their meshes or skeletons at the previous and next keys, or every step frames. Sets the given options (user prefs) and returns them all.
 
     Args:
@@ -3780,6 +3845,7 @@ def ghosting(enable: bool | None = None, mode: str | None = None, before: int | 
         show: What to draw. Short form sh. One of 'mesh', 'skeleton', 'both'.
         beforeColor: sRGB #rrggbb tint of ghosts before now. Short form bc.
         afterColor: sRGB #rrggbb tint of ghosts after now. Short form ac.
+        range: While the time slider has a range selected, spread the ghosts across it and its falloff. Short form rg.
         refresh: Recapture every ghost. Short form r. Default False.
     """
 
@@ -4166,6 +4232,78 @@ def goToBindPose(*objects: Any) -> Any:
 
     Args:
         objects: mesh.
+    """
+
+def grappleAim(*objects: Any, axis: str | None = None, pivot: str | None = None, style: str | None = None, anchor: str | None = None, reach: float | None = None, drop: float | None = None, grapple: str | None = None, time: float | None = None, blend: float | None = None, name: str | None = None, ax: str | None = None, pv: str | None = None, s: str | None = None, an: str | None = None, r: float | None = None, d: float | None = None, g: str | None = None, t: float | None = None, b: float | None = None, n: str | None = None) -> Any:
+    """Aim what a joint holds at a target: the axis (a muzzle, a blade's tip; its +X) is turned onto the target about the pivot, moving the joint and, through the grapple's solve, the arms and body with it. style places the pivot first: shoulder on the anchor (rifles, launchers), extend out toward the target (pistols), guard below that line (blades). Key weight to blend it. Returns the aim.
+
+    Args:
+        objects: holding joint, target.
+        axis: The transform whose +X is aimed. Short form ax.
+        pivot: The transform turned about. Default: axis. Short form pv.
+        style: turn, shoulder, extend or guard. Short form s. One of 'turn', 'shoulder', 'extend', 'guard'. Default 'turn'.
+        anchor: Shoulder, extend, guard: the joint or point the pivot is placed from. Short form an.
+        reach: Extend, guard: cm from the anchor. 0: 0.9 of the arm. Short form r. Default 0.0.
+        drop: Guard: cm below the line to the target. Short form d. Default 0.0.
+        grapple: The grapple to add it to. Default: the one holding the character, else a new one. Short form g.
+        time: Seconds the aim comes on at. Default: now. Short form t.
+        blend: Seconds it blends in over. 0 makes it on at every time. Short form b. Default 0.2.
+        name: Name for the aim. Short form n.
+
+    Examples:
+        grappleAim("hand_r", "target1", axis="rifle_muzzle", pivot="rifle_stock", style="shoulder", anchor="upperarm_r")
+    """
+
+def grappleContact(*objects: Any, point: Sequence[float] | None = None, kind: str | None = None, orient: bool | None = None, lead: str | None = None, grapple: str | None = None, time: float | None = None, blend: float | None = None, name: str | None = None, p: Sequence[float] | None = None, k: str | None = None, o: bool | None = None, l: str | None = None, g: str | None = None, t: float | None = None, b: float | None = None, n: str | None = None) -> Any:
+    """Hold a joint of one character to a point on another (grab a wrist, a collar, an arm round a neck, hands under a body to lift it). The characters are solved together every frame by their grapple; key the contact's weight to blend it in and out. Returns the contact.
+
+    Args:
+        objects: source joint, target joint.
+        point: World point the source is held to, riding the target joint. Default: the target's body surface nearest the source. Short form p.
+        kind: grab holds position and rotation; hold position only; push lets the source lead; lift lets the source lead and frees the target's feet. Short form k. One of 'grab', 'hold', 'push', 'lift'. Default 'grab'.
+        orient: Hold the source's rotation against the target too. Default by kind. Short form o.
+        lead: Who yields. Default by kind: auto (by mass), or source for push and lift. Short form l. One of 'auto', 'source', 'target', 'even'.
+        grapple: The grapple to add it to. Default: the one holding either character, else a new one. Short form g.
+        time: Seconds the contact comes on at. Default: now. Short form t.
+        blend: Seconds it blends in over, keyed from what it was before. 0 makes it on at every time. Short form b. Default 0.2.
+        name: Name for the contact. Short form n.
+
+    Examples:
+        grappleContact("attacker:hand_r", "defender:lowerarm_l", kind="grab")
+
+        grappleContact("lifter:hand_l", "lifted:spine_02", kind="lift", blend=0.3)
+    """
+
+def grappleFigure(*objects: Any, grapple: str | None = None, mass: float | None = None, plant: bool | None = None, g: str | None = None, m: float | None = None, pl: bool | None = None) -> Any:
+    """A character's settings in its grapple: its mass (who yields: the heavier side moves less) and whether its feet stay where the animation plants them. Returns every figure of the grapple.
+
+    Args:
+        objects: a joint of the character.
+        grapple: The grapple. Default: the one holding the character. Short form g.
+        mass: kg. Short form m.
+        plant: Keep the feet where the animation puts them. Short form pl.
+    """
+
+def grappleInfo(*objects: Any, grapple: str | None = None, frame: int | None = None, g: str | None = None, f: int | None = None) -> Any:
+    """The grapple's figures and contacts, and how its solve does at a frame: {'figures', 'contacts', 'contactError', 'penetration', 'iterations'} (cm). Solves up to the frame if it isn't cached.
+
+    Args:
+        objects: grapple or one of its contacts (default the selection, else the scene's only grapple).
+        grapple: The grapple. Short form g.
+        frame: Frame. Default: the current one. Short form f.
+    """
+
+def grappleKey(*objects: Any, on: bool | None = None, time: float | None = None, blend: float | None = None, t: float | None = None, b: float | None = None) -> Any:
+    """Key contacts on or off: their weight reaches 1 (on) or 0 (off) at the time, blending from what it was before. Returns the contacts.
+
+    Args:
+        objects: contacts (default the selected ones).
+        on: True keys them on, False off. Default True.
+        time: Seconds. Default: now. Short form t.
+        blend: Seconds the blend takes. Short form b. Default 0.2.
+
+    Examples:
+        grappleKey("hand_r_to_lowerarm_l", on=False, time=2.0)
     """
 
 def groomAddMap(*objects: Any, name: str | None = None, kind: str | None = None, file: str | None = None, color: bool | None = None, value: float | None = None, n: str | None = None, k: str | None = None, f: str | None = None, v: float | None = None) -> Any:
@@ -4624,6 +4762,22 @@ def imagePlaneGuide(*objects: Any, lines: Any | None = None, remove: int | None 
         clear: Remove every guide. Short form cl. Default False.
     """
 
+def import3dTiles(*objects: Any, maxError: float | None = None, centre: Sequence[Any] | None = None, radius: float | None = None, maxTiles: int | None = None, georeference: bool | None = None, name: str | None = None, n: str | None = None) -> Any:
+    """Import a 3D Tiles tileset (tileset.json, 1.0 or 1.1) from a local folder, or a single b3dm, i3dm, pnts, cmpt or glb tile. Tiles are picked by geometric error: along each branch the first tile within maxError, or the finest. Meshes come in through the glTF importer (Draco and meshopt included) and point tiles as point clouds, all placed from the tileset's Earth-centred frame into the scene's georeference; a scene without one takes the UTM zone around the tileset. Returns the group and counts; skipped content is listed and logged.
+
+    Args:
+        objects: path.
+        maxError: Geometric error to stop refining at, metres; 0 takes the finest tiles. Default 0.0.
+        centre: With radius: only tiles reaching within radius of this [latitude, longitude, height].
+        radius: Metres around centre (or the tileset's centre) to bring in; 0 takes everything. Default 0.0.
+        maxTiles: Stop after this many tiles, and say so. Default 1000.
+        georeference: Set the scene's georeference from the tileset when it has none. Default True.
+        name: Name of the group the tiles go under. Short form n.
+
+    Examples:
+        import3dTiles("D:/city/tileset.json", maxError=2, centre=[45.8257, 11.5324], radius=500)
+    """
+
 def importAlembic(*objects: Any, profile: str | None = None, scale: float | None = None, parent: str | None = None, setPlayback: bool | None = None, report: bool | None = None, select: bool | None = None, ax: str | None = None, sc: float | None = None, p: str | None = None) -> Any:
     """Import an Alembic (.abc) file's PolyMeshes as meshes, each placed through its transforms at its first sample. A mesh whose points move over time gets a meshCache deformer playing every sample (interpolated between them); one whose topology changes keeps its first sample. Returns the new mesh names, or with report=True a dict of nodes, meshCaches, start, end and warnings.
 
@@ -4691,7 +4845,7 @@ def importDxf(*objects: Any, unit: str | None = None, upAxis: str | None = None,
         name: Name of the group; the file name by default. Short form n.
     """
 
-def importFbx(*objects: Any, parent: str | None = None, skins: bool | None = None, animation: bool | None = None, take: str | None = None, setPlayback: bool | None = None, instances: bool | None = None, report: bool | None = None, select: bool | None = None, p: str | None = None, anim: bool | None = None) -> Any:
+def importFbx(*objects: Any, parent: str | None = None, skins: bool | None = None, animation: bool | None = None, take: str | None = None, setPlayback: bool | None = None, instances: bool | None = None, report: bool | None = None, select: bool | None = None, georeference: bool | None = None, p: str | None = None, anim: bool | None = None) -> Any:
     """Import an FBX file: its node hierarchy as transforms, joints and meshes, converted to the scene's axes and cm. LimbNodes become joints (PreRotation into jointOrient), skins become skinClusters with the file's weights and bind matrices, morph channels become a morph with a target per channel (in-betweens kept), and one take is baked onto the channels. Cameras become camera nodes with their lens, film back and clipping (focal length, film back and clipping curves keyed per frame); lights are reported, not imported. Returns the new node names, or with report=True a dict of nodes, roots, joints, skinClusters, take, fps, skipped and warnings.
 
     Args:
@@ -4704,6 +4858,7 @@ def importFbx(*objects: Any, parent: str | None = None, skins: bool | None = Non
         instances: Objects sharing one geometry come in as instances of the first. Default True.
         report: Return the import report instead of just the names. Default False.
         select: Select the imported roots. Default True.
+        georeference: Place it by the georeference it carries (a georeferenced Lila export) or the files beside it (metadata.xml, _offset.xyz, .rcinfo, .prj), as importObj does. Default True.
     """
 
 def importFile(*objects: Any, translator: str | None = None, options: Any | None = None) -> Any:
@@ -4713,6 +4868,24 @@ def importFile(*objects: Any, translator: str | None = None, options: Any | None
         objects: path.
         translator: Translator id to use instead of the one for the file's extension.
         options: {flag: value} passed on to the translator's command.
+    """
+
+def importFootage(*objects: Any, camera: str | None = None, take: str | None = None, frame: float | None = None, sound: bool | None = None, track: int | None = None, name: str | None = None, c: str | None = None, t: str | None = None, fr: float | None = None, s: bool | None = None, tr: int | None = None, n: str | None = None) -> Any:
+    """Bring in reference footage for the shot in one step: a video becomes an image plane on the camera, and its sound (or a sound file given alone) an audio node starting on the same frame. Both belong to the active take, so they play only with it and line up from its start. Returns the nodes made.
+
+    Args:
+        objects: video or sound file.
+        camera: View or camera the video is seen through. Short form c. Default 'persp'.
+        take: Take the media belongs to; default the active one, empty for none. Short form t.
+        frame: Frame the footage starts on: default the take's first frame, or the playback start without a take. Short form fr.
+        sound: Also make an audio node from a video's sound. Short form s. Default True.
+        track: Sound track of a video with several, from 0. Short form tr. Default 0.
+        name: Base name; default the file's. Short form n.
+
+    Examples:
+        importFootage('ref/shot010.mov')
+
+        importFootage('ref/shot010.mov', camera='shotCam', frame=1001)
     """
 
 def importGltf(*objects: Any, parent: str | None = None, skins: bool | None = None, animation: bool | None = None, take: str | None = None, setPlayback: bool | None = None, materials: bool | None = None, textureDir: str | None = None, report: bool | None = None, select: bool | None = None, p: str | None = None, anim: bool | None = None) -> Any:
@@ -4747,11 +4920,29 @@ def importGroom(*objects: Any, mesh: str | None = None, strands: bool | None = N
         name: Base name of the new nodes; the file's name when left out. Short form n.
     """
 
-def importObj(*objects: Any) -> Any:
-    """Import an OBJ file; one mesh per object. Returns the new mesh names.
+def importIfc(*objects: Any, georeference: bool | None = None, properties: bool | None = None, circleSegments: int | None = None) -> Any:
+    """Import an IFC file (IFC2x3, IFC4, IFC4x3): each building element a mesh with its colours in the ifcColor set, the spatial structure (project, site, building, storeys, spaces) as groups, and every property set value as an attribute named <set>_<property>, with ifcType and ifcGlobalId.
+
+    IfcMapConversion places it: it sets the scene's georeference or moves the model into it; without one the model is read as metres. The log says which. Returns the counts.
 
     Args:
         objects: path.
+        georeference: Place it by its IfcMapConversion. Default True.
+        properties: Bring the property sets in as attributes. Default True.
+        circleSegments: Segments a full circle is tessellated with. Default 12.
+
+    Examples:
+        importIfc("D:/bim/school.ifc")
+    """
+
+def importObj(*objects: Any, georeference: bool | None = None) -> Any:
+    """Import an OBJ file; one mesh per object. Returns the new mesh names.
+
+    A georeferenced export (metadata.xml, _offset.xyz, .rcinfo or .prj beside it) sets the scene's georeference or is moved into it; the log says which.
+
+    Args:
+        objects: path.
+        georeference: Place it by the georeference files beside it. Default True.
     """
 
 def importPicker(*objects: Any, name: str | None = None, replace: bool | None = None, n: str | None = None, r: bool | None = None) -> Any:
@@ -4763,7 +4954,7 @@ def importPicker(*objects: Any, name: str | None = None, replace: bool | None = 
         replace: Replace a scene picker of the same name. Short form r. Default False.
     """
 
-def importPly(*objects: Any, unit: str | None = None, upAxis: str | None = None, normals: bool | None = None, report: bool | None = None) -> Any:
+def importPly(*objects: Any, unit: str | None = None, upAxis: str | None = None, normals: bool | None = None, georeference: bool | None = None, report: bool | None = None) -> Any:
     """Import a PLY file (ASCII or binary, either byte order) as one mesh: polygons with normals, UVs (per vertex or MeshLab's per-corner texcoord), vertex colors as colorSet and face colors as faceColor. Other numeric vertex and face properties (quality, intensity, confidence...) become float attributes of the same name. A file with only vertices comes in as a point cloud: a mesh of loose points. Returns the new mesh names, or with report=True a dict of nodes, pointCloud, textureFiles and skipped.
 
     Args:
@@ -4771,7 +4962,25 @@ def importPly(*objects: Any, unit: str | None = None, upAxis: str | None = None,
         unit: The file's length unit. Scanners and photogrammetry write metres. One of 'mm', 'cm', 'm', 'in'. Default 'm'.
         upAxis: The file's up axis; converted to the scene's. One of 'y', 'z'. Default 'z'.
         normals: Keep the file's normals. Default True.
+        georeference: Place it by the georeference files beside it (metadata.xml, _offset.xyz, .rcinfo, .prj): it sets the scene's georeference or moves into it, and unit and upAxis are the CRS's. Default True.
         report: Return the import report instead of just the names. Default False.
+    """
+
+def importPointCloud(*objects: Any, name: str | None = None, cache: str | None = None, rebuild: bool | None = None, georeference: bool | None = None, unitScale: float | None = None, n: str | None = None) -> Any:
+    """Import a LAS, LAZ or E57 scan as a point cloud. Its points are sorted into a level-of-detail cache (.lilapc, beside the scan) that the view streams from, so clouds of hundreds of millions of points open at once; a cache newer than the scan is reused.
+
+    A CRS in the file (or a .prj beside it) sets the scene's georeference or moves the cloud into it; without one the cloud is read as metres, Z up, rebased on its centre. The log says which. Returns the node, cache and counts.
+
+    Args:
+        objects: path.
+        name: Node name; the file's by default. Short form n.
+        cache: Where the cache goes, instead of beside the scan.
+        rebuild: Build the cache again even when it is up to date. Default False.
+        georeference: Place it by its CRS. Default True.
+        unitScale: cm per file unit when the file has no CRS. Default 100.0.
+
+    Examples:
+        importPointCloud("D:/scans/site.laz")
     """
 
 def importReference(*objects: Any) -> Any:
@@ -5434,7 +5643,7 @@ def mayaReference(*objects: Any, path: str | None = None, namespace: str | None 
 def measureSelection() -> Any:
     """Measure the selection without making nodes: 2 vertices or objects give distance and dx/dy/dz, 3 an angle, edges total and per-edge length, a closed edge loop or 4+ vertices a best-fit circle, faces area and perimeter, one object its bounding box (and diameter when it is cylinder-like), a measure node its value. Returns a dict: lengths in cm; 'value' and 'text' are the headline in the display unit (/units/linear)."""
 
-def measureView(view: str | None = None, lookThrough: str | None = None, yaw: float | None = None, pitch: float | None = None, width: int | None = None, height: int | None = None, display: str | None = None, isolate: bool | None = None, frameSelection: bool | None = None, grid: bool | None = None, showSelection: bool | None = None, samples: int | None = None, label: bool | None = None, overlays: bool | None = None, frames: int | None = None, ambientOcclusion: bool | None = None, *, v: str | None = None, lt: str | None = None, w: int | None = None, h: int | None = None, d: str | None = None, fs: bool | None = None, ov: bool | None = None, ao: bool | None = None) -> Any:
+def measureView(view: str | None = None, lookThrough: str | None = None, yaw: float | None = None, pitch: float | None = None, width: int | None = None, height: int | None = None, display: str | None = None, isolate: bool | None = None, frameSelection: bool | None = None, grid: bool | None = None, showSelection: bool | None = None, samples: int | None = None, label: bool | None = None, overlays: bool | None = None, hud: bool | None = None, frames: int | None = None, ambientOcclusion: bool | None = None, *, v: str | None = None, lt: str | None = None, w: int | None = None, h: int | None = None, d: str | None = None, fs: bool | None = None, ov: bool | None = None, ao: bool | None = None) -> Any:
     """Draw the scene offscreen several times like captureView and return the median GPU time per frame in ms, with the ambient occlusion share, and the render thread's time recording it: {gpuMs, aoMs, cpuMs, aoCpuMs, frames}. 0 where the GPU has no timestamps.
 
     Args:
@@ -5452,8 +5661,19 @@ def measureView(view: str | None = None, lookThrough: str | None = None, yaw: fl
         samples: Jittered frames averaged into the image: 16 or more gives a supersampled still. Default 1.
         label: Write the view's name in the top-left corner. Default True.
         overlays: Draw what the viewport draws over the scene too: locators, curves' draw overrides, Soft Net lines and knots, extension drawers. Short form ov. Default False.
+        hud: Draw the heads-up readouts the view shows (the cursor taken at the view's centre) and the Drone Camera banner. Default False.
         frames: Frames to draw; the result is their median. Default 20.
         ambientOcclusion: Force ambient occlusion on or off instead of the viewport pref. Short form ao.
+    """
+
+def mediaInfo(*objects: Any) -> Any:
+    """What a video or sound file holds: its picture (size, rate, frames, codec, the decoder that reads it) and its sound tracks, the choices for an audio node's track.
+
+    Args:
+        objects: file.
+
+    Examples:
+        mediaInfo('ref/shot010.mov')
     """
 
 def mergeAnimLayers(*objects: Any) -> Any:
@@ -5646,6 +5866,110 @@ def morphTargets(*objects: Any) -> Any:
 
     Args:
         objects: morph, mesh or target.
+    """
+
+def motionBuildGaits(spec: Any | None = None, out: str | None = None, *, s: Any | None = None, o: str | None = None) -> Any:
+    """Build a gait library from motion capture (BVH): each clip retargeted to the model's skeleton, its speed and cycle measured, target windows sampled across one cycle. For your own mocap, or to rebuild Lila's.
+
+    Args:
+        spec: {'provenance': text, 'windows': 6, 'gaits': [{'file', 'style', 'name', 'scale', 'from', 'to', 'crouch'}], 'idle': {'file', 'at'}}. Short form s.
+        out: The gaits .json to write. Short form o.
+    """
+
+def motionDevice(device: str | None = None, *, d: str | None = None) -> Any:
+    """Choose where motion generates: auto (the GPU where it works, else the CPU), gpu or cpu. Saved as a preference; the model reloads on next use.
+
+    Args:
+        device: auto, gpu or cpu. Short form d. One of 'auto', 'gpu', 'cpu'. Default 'auto'.
+    """
+
+def motionFollowPath(*objects: Any, path: Sequence[Any] | None = None, style: str | None = None, speed: float | None = None, stop: bool | None = None, facing: Sequence[float] | None = None, variant: int | None = None, lookahead: float | None = None, take: str | None = None, start: float | None = None, rootMotion: bool | None = None, plantFeet: bool | None = None, lockFeet: bool | None = None, p: Sequence[Any] | None = None, st: str | None = None, sp: float | None = None, s: bool | None = None, f: Sequence[float] | None = None, v: int | None = None, la: float | None = None, t: str | None = None, sa: float | None = None, rm: bool | None = None, pf: bool | None = None, lf: bool | None = None) -> Any:
+    """Generate a character walking, running, strafing or crouching along a path, performing any spots on it, and key the motion into a new take. The path is points, curves and spots in order; the character starts as posed at the start time.
+
+    Args:
+        objects: the character (a joint of its skeleton, or the node above it).
+        path: Waypoints in order: points [x, y, z] (cm), curve names, motionSpot names. Short form p.
+        style: walk, run, crouch, strafeLeft, strafeRight or backward (motionGaits lists them). Short form st. Default 'walk'.
+        speed: m/s; 0 uses the gait's own. Short form sp. Default 0.0.
+        stop: Come to rest at the end. Short form s. Default True.
+        facing: Strafe styles face this direction; default: the way the path starts. Short form f.
+        variant: Other values give other, equally valid motion. Short form v. Default 0.
+        lookahead: Seconds of travel each target sits ahead: lower follows tighter. Short form la. Default 0.9.
+        take: Take to key into; one of that name is replaced. Empty keys the current animation. Short form t. Default 'Path'.
+        start: Seconds; default the playback start. Short form sa.
+        rootMotion: The root joint follows the pelvis on the ground (for engine root motion). Short form rm. Default True.
+        plantFeet: Hold feet still where the model predicts contact. Short form pf. Default True.
+        lockFeet: Key the foot lock of the character's IK chains where feet are planted. Short form lf. Default True.
+
+    Examples:
+        motionFollowPath('Manny', path=[[0, 0, 400], [300, 0, 700]], style='run')
+
+        motionFollowPath('Manny', path=['pathCurve1', 'chairSpot'], take='SitDown')
+    """
+
+def motionGaits() -> Any:
+    """List the locomotion styles and their gaits (speed in m/s, cycle in seconds) motionFollowPath can use, and where their poses came from."""
+
+def motionSample(*objects: Any, start: float | None = None, end: float | None = None, joints: Sequence[Any] | None = None, s: float | None = None, e: float | None = None, j: Sequence[Any] | None = None) -> Any:
+    """A character's motion as the motion model sees it: per frame at 30 fps, the world positions (cm) of SOMA joints, the heading and the ground point. For checking generated motion and building spots from clips.
+
+    Args:
+        objects: the character.
+        start: Seconds; default the playback start. Short form s.
+        end: Seconds; default the playback end. Short form e.
+        joints: SOMA joint names (Hips, LeftHand, RightFoot ...); default Hips, hands and feet. Short form j.
+    """
+
+def motionSpot(preset: str | None = None, file: str | None = None, name: str | None = None, position: Sequence[float] | None = None, yaw: float | None = None, list: bool | None = None, *, pr: str | None = None, f: str | None = None, n: str | None = None, p: Sequence[float] | None = None, y: float | None = None, l: bool | None = None) -> Any:
+    """Make a spot: a starter interaction Lila ships (by name), a .lilaspot file, or an empty one to capture poses into. Returns the node, or with list the starters.
+
+    Args:
+        preset: A shipped spot by name (list shows them). Short form pr.
+        file: A .lilaspot file. Short form f.
+        name: Node name. Short form n.
+        position: World position, cm. Short form p.
+        yaw: Degrees about Y: the way the spot faces. Short form y. Default 0.0.
+        list: List the shipped spots instead. Short form l. Default False.
+
+    Examples:
+        motionSpot(preset='Pick Up', position=[0, 0, 300])
+    """
+
+def motionSpotSave(*objects: Any, file: str | None = None, provenance: str | None = None, f: str | None = None, pv: str | None = None) -> Any:
+    """Save a spot's targets as a .lilaspot asset to reuse in other scenes (motionSpot file=...).
+
+    Args:
+        objects: the motionSpot node.
+        file: Where to write; default the spot's file. Short form f.
+        provenance: Where the poses came from, stored with the asset. Short form pv.
+    """
+
+def motionSpotTarget(*objects: Any, capture: str | None = None, time: float | None = None, poses: int | None = None, index: int | None = None, remove: bool | None = None, name: str | None = None, transitionEarly: int | None = None, minTokens: int | None = None, maxTokens: int | None = None, pins: Sequence[Any] | None = None, hold: int | None = None, c: str | None = None, t: float | None = None, ps: int | None = None, i: int | None = None, rm: bool | None = None, n: str | None = None, te: int | None = None, mn: int | None = None, mx: int | None = None, pi: Sequence[Any] | None = None, h: int | None = None) -> Any:
+    """Add, change or remove a spot's targets. capture adds the character's pose at a time (and the next poses at 30 Hz for a moving arrival) relative to the spot. Returns the spot's targets.
+
+    Args:
+        objects: the motionSpot node.
+        capture: Character to capture a target from. Short form c.
+        time: Seconds; default the current time. Short form t.
+        poses: Poses to capture, 1 to 4: more gives the arrival its velocity. Short form ps. Default 1.
+        index: Target to change or remove; capture inserts before it (default: at the end). Short form i.
+        remove: Remove the target at index. Short form rm. Default False.
+        name: Target name. Short form n.
+        transitionEarly: Frames before arriving the next target takes over: higher passes through. Short form te.
+        minTokens: Shortest approach, tokens of 4 frames (6..16). Short form mn.
+        maxTokens: Longest approach, tokens of 4 frames (6..16). Short form mx.
+        pins: Hands and feet held on the pose as it arrives: leftHand, rightHand, leftFoot, rightFoot. Short form pi.
+        hold: Frames to stay in the pose. Short form h.
+
+    Examples:
+        motionSpotTarget('chairSpot', capture='Manny', time=2.0, poses=1, name='Sit')
+    """
+
+def motionStatus(reload: bool | None = None, *, r: bool | None = None) -> Any:
+    """Load the motion model if needed and report what it runs on: the device (GPU through DirectML, or CPU, with the reason when it fell back), the model file, the runtime version, or what is missing.
+
+    Args:
+        reload: Load the model again (after replacing the file). Short form r. Default False.
     """
 
 def move(*objects: Any, by: Sequence[float] | None = None, to: Sequence[float] | None = None, x: float | None = None, y: float | None = None, z: float | None = None, space: str | None = None) -> Any:
@@ -6318,6 +6642,30 @@ def playbackOptions(minTime: float | None = None, maxTime: float | None = None, 
         speedMultiplier: Real-time multiplier of the custom speed, e.g. 0.25 or 1.5. Selects custom unless playbackSpeed is given. Short form sm.
         everyFrame: True plays every frame up to fps (everyFrameMaxRealTime), False real time. Short form ef.
         query: Short form q. Default False.
+    """
+
+def pointCloudClipBox(*objects: Any) -> Any:
+    """Add a clip box to a point cloud, around its middle half, and select it. Move, turn and scale it like any object; clipMode on the cloud keeps the inside or cuts it away. Returns the box's name.
+
+    Args:
+        objects: pointCloud.
+    """
+
+def pointCloudExtract(*objects: Any, spacing: float | None = None, clip: bool | None = None, maxPoints: int | None = None, s: float | None = None) -> Any:
+    """Make a mesh of a point cloud's points (loose vertices with their colours in colorSet), cut by its clip boxes and thinned to one point per spacing cube: for snapping, retopology, or meshing elsewhere. Returns the mesh's name.
+
+    Args:
+        objects: pointCloud.
+        spacing: Keep one point per cube this many cm across; 0 keeps every point. Short form s. Default 5.0.
+        clip: Apply the cloud's clip boxes. Default True.
+        maxPoints: Refuse more than this many points. Default 20000000.
+    """
+
+def pointCloudInfo(*objects: Any) -> Any:
+    """A point cloud's counts, bounds (node space, cm) and source: {points, nodes, depth, color, crs, format, boundsMin, boundsMax}.
+
+    Args:
+        objects: pointCloud.
     """
 
 def pointConstraint(*objects: Any, maintainOffset: bool | None = None, weight: float | None = None, name: str | None = None, offset: Sequence[float] | None = None, skip: Sequence[Any] | None = None, mo: bool | None = None, w: float | None = None, n: str | None = None, o: Sequence[float] | None = None, sk: Sequence[Any] | None = None) -> Any:
@@ -7212,6 +7560,8 @@ def relocateScene(*objects: Any, to: Sequence[float] | None = None, offset: Sequ
     """Move the whole scene (or chosen hierarchies) so a point becomes the world origin, keeping every rig, deformer and animation working.
 
     One rigid move M is applied: the roots take it through their channels and keys, and nodes that store world-space data (skin bind matrices, deformer bind matrices, world spaces, world up vectors, measures) are rewritten to match. Every transform and deformed mesh point is then checked at several frames (and in every take) against M times where it was; if anything is off by more than 1e-6 cm, or the scene holds a node type relocateScene doesn't know, nothing changes and the error says why. One undo step.
+
+    In a georeferenced scene a whole-scene move shifts the georeference origin the other way, so everything keeps its projected coordinates and place on the Earth; it can't turn the whole scene, since the CRS grid's axes are fixed. Moving chosen hierarchies (nodes=) moves them on the Earth too.
 
     Args:
         objects: objects the from= point is taken from (default: the selection).
@@ -8720,6 +9070,23 @@ def setFieldLayer(*objects: Any, index: int | None = None, params: Any | None = 
         params: The settings to change.
     """
 
+def setGeoreference(crs: str | None = None, origin: Sequence[float] | None = None, latLonHeight: Sequence[float] | None = None, clear: bool | None = None, *, llh: Sequence[float] | None = None) -> Any:
+    """Place the scene on the Earth: a projected CRS and the projected coordinates of the scene origin. Nothing in the scene moves; imports, exports and readouts use it. Saved with the scene.
+
+    Axes match Unreal's georeferencing: a Z-up scene has east +X and north +Y, a Y-up one north +X and east +Z; the up axis is height. Scene cm become the CRS's units.
+
+    Args:
+        crs: EPSG code ("EPSG:32633", or with a vertical CRS "EPSG:32633+5773"), WKT or a PROJ string. Example: `setGeoreference(crs="EPSG:32633", origin=(500000, 4649776, 0))`
+        origin: The scene origin's easting, northing and height, in the CRS's units.
+        latLonHeight: The scene origin as latitude, longitude (degrees) and height instead of origin=. Short form llh.
+        clear: Remove the scene's georeference. Default False.
+
+    Examples:
+        setGeoreference(crs="EPSG:32633", origin=(500000, 4649776, 0))
+
+        setGeoreference(crs="EPSG:27700", llh=(51.5007, -0.1246, 0))
+    """
+
 def setInfinity(*objects: Any, attribute: Any | None = None, preInfinite: str | None = None, postInfinite: str | None = None, query: bool | None = None, at: Any | None = None, pri: str | None = None, poi: str | None = None, q: bool | None = None) -> Any:
     """Curve behaviour outside its keys: constant, linear, cycle, cycleRelative (cycle with offset), oscillate. query=True returns [{curve, pre, post}].
 
@@ -9153,6 +9520,17 @@ def skinningMethod(*objects: Any, method: str | None = None, m: str | None = Non
     Args:
         objects: meshes.
         method: linear | dualQuaternion | centresOfRotation | directDeltaMush. Short form m. One of 'linear', 'dualQuaternion', 'centresOfRotation', 'directDeltaMush'. Default 'linear'.
+    """
+
+def slideMedia(*objects: Any, frames: float | None = None, f: float | None = None) -> Any:
+    """Move audio nodes and image planes along the timeline by a number of frames: an audio node's offset, an image plane's start frame. Trims stay with the sound.
+
+    Args:
+        objects: audio nodes or image planes.
+        frames: Frames to move by; negative moves earlier. Short form f. Default 0.0.
+
+    Examples:
+        slideMedia('shot010', 'shot010Ref', frames=-6)
     """
 
 def smartJoin(*objects: Any, segments: int | None = None, tension: float | None = None, twist: int | None = None, holeScale: float | None = None, offsetU: float | None = None, offsetV: float | None = None, limbLoop: int | None = None, deleteBuried: bool | None = None, relax: int | None = None, trimMargin: float | None = None, keepOriginals: bool | None = None, flip: bool | None = None, name: str | None = None) -> Any:
@@ -9852,6 +10230,14 @@ def texBrushPresets(name: str | None = None, reload: bool | None = None, *, n: s
         reload: Rescan the folders first.
     """
 
+def texBuildGraph(*objects: Any, assign: Sequence[Any] | None = None) -> Any:
+    """Build a material's texture graph from a compact spec, creating its texture set when it doesn't exist: {material, set, settings, description, nodes: [{name, type, params: {...}, values: {...}, position}], links: ['A.out -> Output.baseColor', ...]}. The set defaults to <material>Tex. A Material Output named Output is added when missing; positions are laid out when omitted. Nothing changes unless the whole spec is valid; the error lists every problem with the valid names. Returns the set, the material, the channels the graph drives and any compile error.
+
+    Args:
+        objects: spec.
+        assign: Meshes to give the material (created when missing).
+    """
+
 def texClearLayer(*objects: Any, layer: str | None = None) -> Any:
     """Clear a paint layer: drop its strokes and pixels.
 
@@ -10300,13 +10686,17 @@ def textureFolders(include: Sequence[Any] | None = None, exclude: Sequence[Any] 
         clear: Remove the lists at that level (with scene, the scene falls back to the workspace). Short form c. Default False.
     """
 
-def timeRange(start: float | None = None, end: float | None = None, falloff: float | None = None, clear: bool | None = None, *, s: float | None = None, e: float | None = None, fo: float | None = None, c: bool | None = None) -> Any:
-    """The time slider's selected range (Shift + drag on it), which edits across frames act on, such as Strings poses. Give start and end to select, clear to drop it, falloff for the frames edits ease out over either side. Returns {active, start, end, falloff}, times in seconds.
+def timeRange(start: float | None = None, end: float | None = None, falloff: float | None = None, falloffBefore: float | None = None, falloffAfter: float | None = None, falloffType: str | None = None, every: int | None = None, clear: bool | None = None, *, s: float | None = None, e: float | None = None, fo: float | None = None, fob: float | None = None, foa: float | None = None, fot: str | None = None, ev: int | None = None, c: bool | None = None) -> Any:
+    """The time slider's selected range (Shift + drag on it), which edits across frames act on, such as Strings poses and Curve Overlay drags. Give start and end to select, clear to drop it, falloff for the frames edits ease out over either side (falloffBefore and falloffAfter for one side), falloffType for its shape, every to key every n frames. Returns {active, start, end, falloffBefore, falloffAfter, falloffType, every}, times in seconds.
 
     Args:
         start: Seconds. Short form s.
         end: Seconds. Short form e.
         falloff: Frames edits ease out over either side. Short form fo.
+        falloffBefore: Frames edits ease out over before the range. Short form fob.
+        falloffAfter: Frames edits ease out over after the range. Short form foa.
+        falloffType: How edits ease out across the falloff. Short form fot. One of 'smooth', 'linear', 'sharp', 'soft', 'constant'.
+        every: Range edits key every this many frames; 0 only the keyed frames. Short form ev.
         clear: Drop the selection. Short form c. Default False.
     """
 
@@ -10813,6 +11203,16 @@ def unrealSendGroom(*objects: Any, folder: str | None = None, name: str | None =
         wait: Block until Unreal answers and return its reply. Short form wt. Default False.
     """
 
+def unrealSendPointCloud(*objects: Any, spacing: float | None = None, clip: bool | None = None, folder: str | None = None, s: float | None = None) -> Any:
+    """Send a point cloud to Unreal's open level through its LiDAR Point Cloud plugin: cut by its clip boxes, thinned to spacing, written as LAS in the level's coordinates and shown on a LidarPointCloudActor named after the cloud. A georeferenced scene puts the level on its place on the Earth first. Returns what Unreal made.
+
+    Args:
+        objects: pointCloud.
+        spacing: Keep one point per cube this many cm across; 0 keeps every point. Short form s. Default 2.0.
+        clip: Apply the cloud's clip boxes. Default True.
+        folder: Content folder for the asset. Default '/Game/Lila/PointClouds'.
+    """
+
 def unrealSendTextureSet(*objects: Any, folder: str | None = None, materialParent: str | None = None, materialFolder: str | None = None, exportFolder: str | None = None, preset: str | None = None, all: bool | None = None, remember: bool | None = None, save: bool | None = None, wait: bool | None = None, fo: str | None = None, mp: str | None = None, mf: str | None = None, ef: str | None = None, pr: str | None = None, a: bool | None = None, rm: bool | None = None, sv: bool | None = None, w: bool | None = None) -> Any:
     """Send a texture set to Unreal: exports it through the Unreal preset (only tiles and channels that changed since the last export are rewritten and sent, unless all=True) and updates the textures and the material instance of the set's slot (MI_<slot>), set on the slot of every mapped mesh using it. Painterly and Toon materials become instances of LilaLink's stylised masters with their palette values; others need materialParent (or the unreal pref), else only textures go. The set then also goes on every save. Returns {queued, textures} or, with wait=True, Unreal's {assets, warnings, errors}.
 
@@ -10845,6 +11245,9 @@ def unrealSendTextures(project: str | None = None, folder: str | None = None, ma
         save: Save the packages in Unreal afterwards. Short form sv.
         wait: Block until Unreal finishes and return its reply. Short form w. Default False.
     """
+
+def unrealSetGeoreference() -> Any:
+    """Put Unreal's open level on the scene's place on the Earth: sets the GeoReferencing plugin's GeoReferencingSystem and Cesium for Unreal's CesiumGeoreference (whichever the project has) to the scene's georeference, so what Lila places lands at the right spot. unrealPlaceInstances does this itself. Returns what was set."""
 
 def unrealSoftNet(*objects: Any, start: int | None = None, end: int | None = None, step: int | None = None, skeletalMesh: str | None = None, deformer: str | None = None, dryRun: bool | None = None, sm: str | None = None, df: str | None = None, dry: bool | None = None) -> Any:
     """Run a skinned mesh's Soft Net live in Unreal: its knots and tangent handles become joints keyed over the range (export the skeleton with them, deformOnly off), and LilaLink binds every LOD of the skeletal mesh to the net's precomputed influence (each vertex takes the entries of the point at its place) under the Lila Soft Net Deformer Graph: linear skinning, then the net's offset from the knot bones. Returns {skeletalMesh, deformer, joints, unreal}.

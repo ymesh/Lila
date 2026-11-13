@@ -23,7 +23,7 @@ curve::Spline line(std::vector<D3> pts)
     return s;
 }
 
-std::vector<uv::Chart> islands(const geo::Mesh& m)
+std::vector<uv::Chart> hoseCharts(const geo::Mesh& m)
 {
     uv::ChartOptions co;
     co.source = uv::IslandSource::Uvs;
@@ -33,7 +33,7 @@ std::vector<uv::Chart> islands(const geo::Mesh& m)
 size_t folded(const geo::Mesh& m)
 {
     size_t n = 0;
-    for (const uv::Chart& ch : islands(m))
+    for (const uv::Chart& ch : hoseCharts(m))
         n += uv::foldedTriangles(ch);
     return n;
 }
@@ -52,7 +52,7 @@ std::vector<Index> seamEdges(const geo::Mesh& m)
 size_t squareStrips(const geo::Mesh& m)
 {
     size_t n = 0;
-    for (const uv::Chart& ch : islands(m))
+    for (const uv::Chart& ch : hoseCharts(m))
     {
         glm::dvec2 size = ch.uvMax() - ch.uvMin();
         n += std::abs(std::abs(ch.areaUv()) - size.x * size.y) < 1e-6 * size.x * size.y;
@@ -109,10 +109,10 @@ TEST_CASE("hose: capped tube becomes one straight strip and two round caps")
     CHECK(r.otherFaces == 0);
     CHECK(r.lengthCuts == 0);
     CHECK(r.unstraightened == 0);
-    CHECK(islands(m).size() == 3);
+    CHECK(hoseCharts(m).size() == 3);
     CHECK(folded(m) == 0);
     // The strip is laid square to the axes, so packing keeps it straight.
-    for (const uv::Chart& ch : islands(m))
+    for (const uv::Chart& ch : hoseCharts(m))
         if (ch.faces.size() == 16 * 8)
         {
             glm::dvec2 size = ch.uvMax() - ch.uvMin();
@@ -137,7 +137,7 @@ TEST_CASE("hose: a torus gets one ring cut and one rail")
     CHECK(r.strips == 1);
     CHECK(r.caps == 0);
     CHECK(r.otherFaces == 0);
-    CHECK(islands(m).size() == 1);
+    CHECK(hoseCharts(m).size() == 1);
     CHECK(seamEdges(m).size() == size_t(o.subdivAxis + o.subdivHeight));
     CHECK(folded(m) == 0);
 }
@@ -151,7 +151,7 @@ TEST_CASE("hose: long runs are cut into strips no longer than the limit")
     uv::HoseResult r = uv::hoseUv(m, {}, "uv0", o);
     CHECK(r.lengthCuts == 4);
     CHECK(r.strips == 5);
-    for (const uv::Chart& ch : islands(m))
+    for (const uv::Chart& ch : hoseCharts(m))
     {
         double lo = 1e9, hi = -1e9;
         for (const D3& p : ch.pos)

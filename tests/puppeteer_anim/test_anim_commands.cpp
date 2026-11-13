@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "AnimTestUtil.h"
 #include "ops/Command.h"
 #include "extensions/ExtensionManager.h"
 #include "scene/Anim.h"
@@ -15,13 +16,10 @@ using namespace lila;
 using namespace lila::scene;
 using json = nlohmann::json;
 using Approx = doctest::Approx;
+using namespace animtest;
 
 namespace
 {
-json run(const char* name, json call = json::object()) { return ops::execute(name, call); }
-json v3(double x, double y, double z) { return json::array({x, y, z}); }
-double sec(double frame) { return frame / 30.0; }
-
 void loadPuppeteer()
 {
     if (!ops::find("stackerKeys"))
@@ -41,16 +39,6 @@ double valueAt(const std::string& plug, double frame)
     Graph& g = Graph::current();
     g.setTime(sec(frame));
     return std::get<double>(g.value(g.plug(plug)));
-}
-
-void key(const std::string& plug, double frame, double v) { run("setKeyframe", {{"args", {plug}}, {"time", sec(frame)}, {"value", v}}); }
-
-std::vector<double> frames(const json& stack)
-{
-    std::vector<double> out;
-    for (const json& r : stack["rows"])
-        out.push_back(std::round(r["frame"].get<double>() * 1000.0) / 1000.0);
-    return out;
 }
 
 /** root, a chain j1 > j2, and an arm pair; j1.tx keyed at 0, 4, 10, 16 and j2's rotation at 0 and 10. */

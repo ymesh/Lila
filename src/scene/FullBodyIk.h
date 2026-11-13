@@ -60,6 +60,8 @@ struct Bone
 struct Effector
 {
     int bone = -1;
+    /** The point on the bone, in its space, that has to reach position: its origin by default. */
+    glm::dvec3 point{0.0};
     std::optional<glm::dvec3> position;
     std::optional<glm::dquat> rotation;
     double weight = 1.0;

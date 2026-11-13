@@ -43,8 +43,10 @@ struct HeightfieldPatch
 
 struct HeightfieldView
 {
-    glm::dmat4 viewProj{1.0}; // unjittered, reversed-Z
-    glm::dvec3 eye{0.0};
+    glm::dmat4 viewProj{1.0}; // unjittered, reversed-Z; relative to origin
+    glm::dvec3 eye{0.0};      // relative to origin
+    /** The world position viewProj and eye are relative to (FrameState::renderOrigin). */
+    glm::dvec3 origin{0.0};
     bool ortho = false;
     double focalPx = 1000.0;  // perspective: the view's focal length in device pixels
     double pixelWorld = 1.0;  // ortho: world size of a device pixel

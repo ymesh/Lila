@@ -366,7 +366,7 @@ private:
         if (const auto& sel = anim::timeSelection(); sel.active)
         {
             call["range"] = {sel.start, sel.end};
-            call["falloff"] = sel.falloff;
+            call["falloff"] = sel.before();
             if (const std::string layer = stringsLayer(); !layer.empty())
                 call["layer"] = layer;
         }

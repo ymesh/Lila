@@ -22,6 +22,8 @@ New-Item -ItemType Directory $out | Out-Null
 robocopy $bin $out /E /NFL /NDL /NJH /NJS /NP /XD __pycache__ `
     /XF *.pdb *.ilk *.old* *.iconbak imgui.ini *_tests.exe lila_crashtest.exe | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy bin failed" }
+# The motion model is not in git; a release without it would ship Motion broken.
+if (-not (Test-Path "$out\models\motionbricks\mmm_v6_soma_fp16.onnx")) { throw "No models\motionbricks\mmm_v6_soma_fp16.onnx in $bin. Configure with LILA_MOTIONBRICKS_MODEL_DIR and build." }
 
 robocopy "$repo\resources" "$out\resources" /E /NFL /NDL /NJH /NJS /NP | Out-Null
 robocopy "$repo\python" "$out\python" /E /NFL /NDL /NJH /NJS /NP /XD tests __pycache__ | Out-Null

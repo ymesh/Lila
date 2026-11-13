@@ -38,7 +38,7 @@ scene::MeshPtr outMesh(const std::string& path)
 
 const curve::Splines& guides(const std::string& path) { return curve::shapeSplines(scene::Graph::current(), curvetest::idOf(path)); }
 
-json stroke(double azimuth, int n = 12, double len = 14.0)
+json strokePoints(double azimuth, int n = 12, double len = 14.0)
 {
     json p = json::array();
     for (int i = 0; i < n; ++i)
@@ -77,7 +77,7 @@ TEST_CASE("createGroom: guides, groom node and locks mesh wired up; empty until 
     scene::MeshPtr m = outMesh(locks);
     CHECK((!m || m->numFaces() == 0));
 
-    const json ids = run("groomDraw", {{"args", {guide}}, {"points", stroke(0.0)}});
+    const json ids = run("groomDraw", {{"args", {guide}}, {"points", strokePoints(0.0)}});
     REQUIRE(ids.size() == 1);
     m = outMesh(locks);
     REQUIRE(m);
@@ -98,9 +98,9 @@ TEST_CASE("groomDraw shapes, styles in the stack, reorder, toggle and remove")
 {
     const json made = makeGroom();
     const std::string groom = made["groom"], guide = made["guides"], locks = made["locks"];
-    run("groomDraw", {{"args", {groom}}, {"points", stroke(0.0)}, {"shape", "braid"}});
+    run("groomDraw", {{"args", {groom}}, {"points", strokePoints(0.0)}, {"shape", "braid"}});
     CHECK(guides(guide).size() == 3);
-    run("groomDraw", {{"args", {groom}}, {"points", stroke(1.0)}});
+    run("groomDraw", {{"args", {groom}}, {"points", strokePoints(1.0)}});
     const size_t facesBefore = outMesh(locks)->numFaces();
 
     const std::string split = run("groomAddStyle", {{"args", {groom}}, {"style", "split"}, {"count", 3}});
@@ -159,7 +159,7 @@ TEST_CASE("groomShell: one live mesh over the locks; scene round trip keeps the 
     const json made = makeGroom();
     const std::string groom = made["groom"], guide = made["guides"];
     for (int k = 0; k < 5; ++k)
-        run("groomDraw", {{"args", {groom}}, {"points", stroke(k * 0.35)}, {"width", 1.4}});
+        run("groomDraw", {{"args", {groom}}, {"points", strokePoints(k * 0.35)}, {"width", 1.4}});
     const json shell = run("groomShell", {{"args", {groom}}, {"voxelSize", 0.35}, {"blend", 0.8}});
     scene::MeshPtr m = outMesh(shell[0]);
     REQUIRE(m);
@@ -185,7 +185,7 @@ TEST_CASE("groomShell quads: the shell quad remeshed for retopology in the same 
     const json made = makeGroom();
     const std::string groom = made["groom"];
     for (int k = 0; k < 5; ++k)
-        run("groomDraw", {{"args", {groom}}, {"points", stroke(k * 0.35)}, {"width", 1.4}});
+        run("groomDraw", {{"args", {groom}}, {"points", strokePoints(k * 0.35)}, {"width", 1.4}});
     const json shell = run("groomShell", {{"args", {groom}}, {"voxelSize", 0.35}, {"blend", 0.8}, {"quads", 1500}});
     REQUIRE(shell.size() == 3);
     scene::MeshPtr q = outMesh(shell[2]["name"]);
@@ -215,7 +215,7 @@ TEST_CASE("presets: Lila's are listed; a saved preset brings back the stack, loc
     CHECK(stack[0]["style"] == "split");
 
     for (int k = 0; k < 3; ++k)
-        run("groomDraw", {{"args", {groom}}, {"points", stroke(k * 0.4)}});
+        run("groomDraw", {{"args", {groom}}, {"points", strokePoints(k * 0.4)}});
     run("setAttr", {{"args", {groom + ".width", 3.5}}});
     const std::string id = run("groomSavePreset", {{"args", {groom}}, {"name", "Test Bob"}, {"guides", true}});
     CHECK(id == "user/Test_Bob");
@@ -239,8 +239,8 @@ TEST_CASE("groomEditLock sets a guide's width and twist; grab with settle moves 
 {
     const json made = makeGroom();
     const std::string groom = made["groom"], guide = made["guides"];
-    run("groomDraw", {{"args", {groom}}, {"points", stroke(0.0)}});
-    run("groomDraw", {{"args", {groom}}, {"points", stroke(0.15)}});
+    run("groomDraw", {{"args", {groom}}, {"points", strokePoints(0.0)}});
+    run("groomDraw", {{"args", {groom}}, {"points", strokePoints(0.15)}});
     run("groomEditLock", {{"args", {guide}}, {"index", 1}, {"width", 2.0}, {"twist", 90.0}});
     const curve::Splines& s = guides(guide);
     // Its width scale goes into its points' radius: twice the other lock's, drawn the same.
@@ -272,7 +272,7 @@ TEST_CASE("symmetry: brushing the mirrored side edits the guides; a lock on the 
     const json made = run("createGroom", {{"args", {head}}, {"symmetry", "x"}});
     const std::string groom = made["groom"], guide = made["guides"];
     // A lock on the +X side; its mirror shows on -X.
-    run("groomDraw", {{"args", {groom}}, {"points", stroke(0.0)}});
+    run("groomDraw", {{"args", {groom}}, {"points", strokePoints(0.0)}});
     scene::Graph& g = scene::Graph::current();
     g.evaluate();
     scene::Node* gr = g.find(groom);

@@ -1,0 +1,20 @@
+{
+  "name": "web-ifc",
+  "version": "0.78",
+  "port-version": 1,
+  "description": "web-ifc's native C++ library: IFC parsing and geometry, built for Lila with its bundled dependencies pinned",
+  "homepage": "https://github.com/ThatOpen/engine_web-ifc",
+  "license": "MPL-2.0",
+  "supports": "!uwp",
+  "dependencies": [
+    "glm",
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ]
+}

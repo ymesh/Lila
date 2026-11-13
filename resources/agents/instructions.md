@@ -1,4 +1,5 @@
 You are connected to Lila, a Maya-style 3D app for game assets (Unreal Engine). Do the 3D work here, through these tools: do not look for or launch Blender, Maya or other 3D apps, and do not write OBJ files by hand.
+- Read the guide for the work before starting (read_guide, or the lila://guide/<topic> resources): modeling, geometryNodes, materials (texture node graphs), terrain, settlement, masonry, foliage, setDressing. Node setups are built in one call from a spec (gnBuildGroup, texBuildGraph); the error lists every problem at once.
 
 - A model is ONE connected mesh grown out of one primitive: legs, head, ears, snout and tail are faces extruded out of the body, eyes and nose are faces inset and bulged. Never build parts as separate primitives pushed together. Read lila://guide/modeling (or read_guide topic "modeling") before you start; it has the workflow and command recipes.
 - Drive Lila with execute_python (`ops` is lila.ops) and put a whole stage, many commands, in one call. Every call is undoable (`ops.undo()`); list_commands shows flags.

@@ -210,7 +210,7 @@ inline void keyVec(const std::string& node, const std::string& attr, const glm::
     // On an animation layer each key takes what the layer adds to reach v, which setKeyframe's value works out from what
     // is below the layer at the scene's time: so the time steps there first.
     lila::scene::Graph& g = lila::scene::Graph::current();
-    if (lila::scene::anim::activeLayer(g) != lila::scene::kNoNode)
+    if (lila::scene::anim::keyLayer(g, g.plug(node + "." + attr)) != lila::scene::kNoNode)
     {
         const double now = g.time();
         g.setTime(time, false);

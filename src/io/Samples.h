@@ -40,6 +40,7 @@ struct Sample
     std::string scene;        // file name of the .lila setup.py writes
     std::string camera;       // the scene's camera the viewport looks through when it opens; empty frames the scene
     bool featured = false;    // listed first and drawn with an accent border
+    std::string after;        // listed right after this sample's id; empty keeps folder-name order
     /** The importer setup.py converts with ("blend"); the scene is converted again when that importer's version changes. */
     std::string converter;
     fs::path folder;          // resources/samples/<id>

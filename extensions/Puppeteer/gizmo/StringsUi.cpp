@@ -23,7 +23,7 @@ namespace puppeteer
 {
 namespace
 {
-QString joinNames(const json& names, const char* separator)
+QString joinedNames(const json& names, const char* separator)
 {
     QStringList out;
     for (const json& n : names)
@@ -72,8 +72,14 @@ QWidget* rulesSection(NodeId character)
     limbsBox->addWidget(limbsCount, 0, Qt::AlignLeft);
     limbsBox->addWidget(limbs);
     limbsBox->addWidget(limbsFrom);
+    auto* isolated = new QLabel(w);
+    isolated->setWordWrap(true);
+    auto* modes = new QLabel(w);
+    modes->setWordWrap(true);
     form->addRow("Contacts", contactsBox);
     form->addRow("Limbs", limbsBox);
+    form->addRow("Isolated", isolated);
+    form->addRow("Modes", modes);
     v->addLayout(form);
     auto* row = new QHBoxLayout;
     row->setSpacing(2);
@@ -99,7 +105,7 @@ QWidget* rulesSection(NodeId character)
             return;
         }
         const auto from = [](const json& source) { return "From " + QString::fromStdString(source.get<std::string>()); };
-        contacts->setText(r["contacts"].empty() ? QString("None") : joinNames(r["contacts"], ", "));
+        contacts->setText(r["contacts"].empty() ? QString("None") : joinedNames(r["contacts"], ", "));
         contactsFrom->setText(from(r["contactsFrom"]));
         QStringList rows;
         for (const json& c : r["chains"])
@@ -109,6 +115,12 @@ QWidget* rulesSection(NodeId character)
         limbsCount->setText(rows.isEmpty() ? QString("None: limbs run to the next branch") : QString::number(rows.size()));
         limbsCount->setEnabled(!rows.isEmpty());
         limbsFrom->setText(from(r["chainsFrom"]));
+        isolated->setText(r["isolate"].empty() ? QString("None") : joinedNames(r["isolate"], ", "));
+        QStringList picks;
+        for (const auto& [joint, mode] : r["modes"].items())
+            if (const auto m = strings::modeFromName(mode.get<std::string>()))
+                picks << QString("%1 %2").arg(QString::fromStdString(joint), QString::fromUtf8(stringsModeLabel(*m)));
+        modes->setText(picks.isEmpty() ? QString("None: moves IK, turns Forward") : picks.join(", "));
     };
     fill();
     const events::SubscriptionId sub = events::subscribe(events::Event::UndoStackChanged, [fill](const events::EventData&) { fill(); }, "Puppeteer");

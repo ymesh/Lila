@@ -5,6 +5,7 @@
 #include "scene/CenterInMesh.h"
 #include "scene/DominantInfluence.h"
 #include "scene/FullBodyIk.h"
+#include "scene/Grapple.h"
 #include "scene/Pin.h"
 #include "scene/RigElements.h"
 #include "scene/SelectAs.h"
@@ -631,6 +632,7 @@ void registerRigCommands()
     rigel::registerCommands();
     spline::registerCommands();
     fbik::registerCommands();
+    grapple::registerCommands();
     registerEditSkeletonCommands();
     registerCenterCommands();
     registerDominantInfluenceCommands();

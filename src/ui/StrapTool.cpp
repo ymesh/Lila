@@ -180,8 +180,8 @@ public:
             for (geo::Index e = 0; e < m.edgeCapacity(); ++e)
                 if (m.edgeValid(e))
                 {
-                    f.lines.push_back({glm::vec3(m.position(m.edgePoint(e, 0))), kPreview});
-                    f.lines.push_back({glm::vec3(m.position(m.edgePoint(e, 1))), kPreview});
+                    f.lines.push_back({glm::dvec3(m.position(m.edgePoint(e, 0))), kPreview});
+                    f.lines.push_back({glm::dvec3(m.position(m.edgePoint(e, 1))), kPreview});
                 }
             if (!mPreview.warning.empty())
                 drawToolMessage(p, view, QString::fromStdString("Strap: " + mPreview.warning));

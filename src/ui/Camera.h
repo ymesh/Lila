@@ -17,6 +17,9 @@ class Node;
 
 namespace lila::ui
 {
+/** Largest camera distance and orthographic width, cm: far enough to frame a continent from orbit. */
+inline constexpr double kMaxCameraDistance = 1e10;
+
 /** Maya-style tumble camera around a center of interest. */
 struct LILA_UI_API Camera
 {

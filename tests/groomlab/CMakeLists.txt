@@ -104,12 +104,7 @@ add_executable(lila_groomlab_tests
     io/test_guide_cache.cpp
     io/test_sim_cache.cpp
     example_node_src/example_op.cpp)
-if(WIN32)
-    target_link_libraries(lila_groomlab_tests PRIVATE groomlab_core lila_groom_evaluator GTest::gtest_main nlohmann_json::nlohmann_json Alembic::Alembic psapi)
-else()
-    # psapi (process memory counters) is Windows-only.
-    target_link_libraries(lila_groomlab_tests PRIVATE groomlab_core lila_groom_evaluator GTest::gtest_main nlohmann_json::nlohmann_json Alembic::Alembic)
-endif()
+target_link_libraries(lila_groomlab_tests PRIVATE groomlab_core lila_groom_evaluator GTest::gtest_main nlohmann_json::nlohmann_json Alembic::Alembic $<$<PLATFORM_ID:Windows>:psapi>)
 target_include_directories(lila_groomlab_tests PRIVATE core ${CMAKE_SOURCE_DIR}/third_party/stb ${CMAKE_SOURCE_DIR}/src/groom/groomlab/core/src)
 target_compile_definitions(lila_groomlab_tests PRIVATE "GROOMLAB_TEST_DATA=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
     "GROOMLAB_SHIPPED_PRESETS=\"${CMAKE_CURRENT_SOURCE_DIR}/data/shipped_presets\""
@@ -131,6 +126,9 @@ target_compile_definitions(lila_groomlab_gpu_tests PRIVATE "GROOMLAB_TEST_DATA=\
     "GROOMLAB_SHIPPED_PRESETS=\"${CMAKE_CURRENT_SOURCE_DIR}/data/shipped_presets\"")
 if(MSVC)
     target_compile_options(lila_groomlab_gpu_tests PRIVATE /wd4456 /wd4457 /wd4267 /wd4005 /wd4189)
+else()
+    # u8path is deprecated in C++20; the MSVC side silences it with the define below.
+    target_compile_options(lila_groomlab_gpu_tests PRIVATE -Wno-deprecated-declarations)
 endif()
 target_compile_definitions(lila_groomlab_gpu_tests PRIVATE _SILENCE_CXX20_U8PATH_DEPRECATION_WARNING)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")

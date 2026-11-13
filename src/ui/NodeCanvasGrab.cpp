@@ -226,13 +226,13 @@ void NodeCanvas::endGrab(bool keep)
 }
 
 /** A key held this long before its release was a hold, which places the grab; shorter is a tap that leaves it live. */
-constexpr qint64 kHoldMs = 250;
+constexpr qint64 kGrabHoldMs = 250;
 
 bool NodeCanvas::grabKeyRelease(QKeyEvent* e)
 {
     if (mGrab == Grab::None || mGrabAction.empty() || e->isAutoRepeat() || !Hotkeys::get().isKeyFor(e, mGrabAction))
         return false;
-    if (mGrabHeld.elapsed() >= kHoldMs)
+    if (mGrabHeld.elapsed() >= kGrabHoldMs)
         endGrab(true);
     return true;
 }

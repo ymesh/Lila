@@ -113,16 +113,16 @@ void spinLighting(render::FrameState& s, scene::Graph& g, double degrees)
 {
     s.envRotation += float(degrees);
     const geo::Bounds b = subjectBounds(g);
-    const glm::vec3 centre = b.valid() ? glm::vec3(b.center()) : glm::vec3(0.0f);
-    const glm::vec3 up = s.zUp ? glm::vec3(0, 0, 1) : glm::vec3(0, 1, 0);
+    const glm::dvec3 centre = b.valid() ? glm::dvec3(b.center()) : glm::dvec3(0.0);
+    const glm::dvec3 up = s.zUp ? glm::dvec3(0, 0, 1) : glm::dvec3(0, 1, 0);
     // The environment turns the other way round the up axis from a rotation of the world by the same angle.
-    const glm::mat4 turn = glm::rotate(glm::mat4(1.0f), glm::radians(float(-degrees)), up);
-    const glm::mat4 about = glm::translate(glm::mat4(1.0f), centre) * turn * glm::translate(glm::mat4(1.0f), -centre);
+    const glm::dmat4 turn = glm::rotate(glm::dmat4(1.0), glm::radians(-degrees), up);
+    const glm::dmat4 about = glm::translate(glm::dmat4(1.0), centre) * turn * glm::translate(glm::dmat4(1.0), -centre);
     for (render::LightDraw& l : s.lights)
     {
-        l.position = glm::vec3(about * glm::vec4(l.position, 1.0f));
-        l.direction = glm::vec3(turn * glm::vec4(l.direction, 0.0f));
-        l.right = glm::vec3(turn * glm::vec4(l.right, 0.0f));
+        l.position = glm::dvec3(about * glm::dvec4(l.position, 1.0));
+        l.direction = glm::vec3(turn * glm::dvec4(l.direction, 0.0));
+        l.right = glm::vec3(turn * glm::dvec4(l.right, 0.0));
         l.shadowViewProj = l.shadowViewProj * glm::inverse(about);
     }
 }

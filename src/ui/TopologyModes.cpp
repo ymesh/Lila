@@ -1174,7 +1174,7 @@ void TopologyTool::drawConstructs(render::FrameState& s, OverlayPainter& p, cons
             std::vector<Index> pts = mRefWorldMesh.facePoints(f);
             for (size_t k = 1; k + 1 < pts.size(); ++k)
                 for (Index q : {pts[0], pts[k], pts[k + 1]})
-                    s.tris3d.push_back({glm::vec3(mRefWorldMesh.position(q)), c});
+                    s.tris3d.push_back({glm::dvec3(mRefWorldMesh.position(q)), c});
         }
     }
 

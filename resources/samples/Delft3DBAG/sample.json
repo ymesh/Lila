@@ -1,0 +1,62 @@
+{
+    "name": "Delft 3DBAG",
+    "description": "Delft's historic centre from the Dutch national 3DBAG: 12,207 buildings over 5.8 km² (2.4 × 2.4 km), read from its 3D Tiles and placed at their real coordinates.",
+    "files": [
+        {
+            "url": "https://data.3dbag.nl/v20250903/cesium3dtiles/lod22/tileset.json",
+            "path": "tileset.json"
+        },
+        {
+            "url": "https://data.3dbag.nl/v20250903/cesium3dtiles/lod22/tileset-5-288-448.json",
+            "path": "tileset-5-288-448.json"
+        },
+        {
+            "url": "https://data.3dbag.nl/v20250903/cesium3dtiles/lod22/tileset-5-288-480.json",
+            "path": "tileset-5-288-480.json"
+        },
+        {
+            "url": "https://data.3dbag.nl/v20250903/cesium3dtiles/lod22/t/9/304/468.glb",
+            "path": "t/9/304/468.glb"
+        },
+        {
+            "url": "https://data.3dbag.nl/v20250903/cesium3dtiles/lod22/t/9/304/470.glb",
+            "path": "t/9/304/470.glb"
+        },
+        {
+            "url": "https://data.3dbag.nl/v20250903/cesium3dtiles/lod22/t/9/306/468.glb",
+            "path": "t/9/306/468.glb"
+        },
+        {
+            "url": "https://data.3dbag.nl/v20250903/cesium3dtiles/lod22/t/9/306/470.glb",
+            "path": "t/9/306/470.glb"
+        },
+        {
+            "url": "https://data.3dbag.nl/v20250903/cesium3dtiles/lod22/t/9/308/468.glb",
+            "path": "t/9/308/468.glb"
+        },
+        {
+            "url": "https://data.3dbag.nl/v20250903/cesium3dtiles/lod22/t/9/308/470.glb",
+            "path": "t/9/308/470.glb"
+        },
+        {
+            "url": "https://data.3dbag.nl/v20250903/cesium3dtiles/lod22/t/9/304/472.glb",
+            "path": "t/9/304/472.glb"
+        },
+        {
+            "url": "https://data.3dbag.nl/v20250903/cesium3dtiles/lod22/t/9/306/472.glb",
+            "path": "t/9/306/472.glb"
+        },
+        {
+            "url": "https://data.3dbag.nl/v20250903/cesium3dtiles/lod22/t/8/308/472.glb",
+            "path": "t/8/308/472.glb"
+        }
+    ],
+    "size": 15337939,
+    "diskSize": 30000000,
+    "license": "CC BY 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+    "credit": "© 3DBAG by tudelft3d and 3DGI (https://docs.3dbag.nl/en/copyright), CC BY 4.0. A 350 m area of the LoD2.2 tileset.",
+    "source": "https://3dbag.nl",
+    "scene": "delft.lila",
+    "after": "AsiagoDroneSurvey"
+}

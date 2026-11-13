@@ -463,6 +463,9 @@ void BakerPanel::runLint(bool full)
 {
     if (!ops::find("bakeLint") || mProject.empty() || !findNode(mProject))
         return;
+    // The full check covers whatever a pending automatic pass would find, so that pass mustn't replace its findings.
+    if (full)
+        mLintTimer->stop();
     json r;
     try
     {

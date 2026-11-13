@@ -34,8 +34,6 @@ namespace lila::ui
 {
 namespace
 {
-using json = nlohmann::json;
-
 constexpr int kPointerRole = Qt::UserRole;
 
 std::string fieldText(const json& j, const char* key)

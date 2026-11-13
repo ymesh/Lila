@@ -1185,7 +1185,7 @@ void TopologyTool::removeOwnDraw(render::FrameState& s) const
     if (!out)
         return;
     geo::Bounds b = out->bounds();
-    glm::mat4 world(mRetopoWorld);
+    const glm::dmat4 world(mRetopoWorld);
     float tol = float(std::max(1e-4, glm::length(b.max - b.min) * 1e-4));
     std::erase_if(s.meshes.edit(), [&](const render::MeshDraw& d) {
         if (!d.mesh || d.world != world)
@@ -1225,7 +1225,7 @@ void TopologyTool::drawRetopo(render::FrameState& s, OverlayPainter& p, const Vi
         glm::vec4 c(g, g, g, 0.45f);
         for (size_t k = 1; k + 1 < pts.size(); ++k)
             for (Index q : {pts[0], pts[k], pts[k + 1]})
-                s.tris3d.push_back({glm::vec3(world(q)), c});
+                s.tris3d.push_back({glm::dvec3(world(q)), c});
     }
     for (Index e = 0; e < m.edgeCapacity(); ++e)
     {
@@ -1257,13 +1257,13 @@ void TopologyTool::drawRetopo(render::FrameState& s, OverlayPainter& p, const Vi
         for (const std::vector<Index>& f : mPreviewFaces)
             for (size_t k = 0; k < f.size(); ++k)
             {
-                s.linesOnTop.push_back({glm::vec3(mPreviewPos[f[k]]), kHotLinear});
-                s.linesOnTop.push_back({glm::vec3(mPreviewPos[f[(k + 1) % f.size()]]), kHotLinear});
+                s.linesOnTop.push_back({glm::dvec3(mPreviewPos[f[k]]), kHotLinear});
+                s.linesOnTop.push_back({glm::dvec3(mPreviewPos[f[(k + 1) % f.size()]]), kHotLinear});
             }
         for (const std::vector<Index>& f : mPreviewFaces)
             for (size_t k = 1; k + 1 < f.size(); ++k)
                 for (Index q : {f[0], f[k], f[k + 1]})
-                    s.tris3d.push_back({glm::vec3(mPreviewPos[q]), glm::vec4(0.5f, 0.5f, 0.5f, 0.45f)});
+                    s.tris3d.push_back({glm::dvec3(mPreviewPos[q]), glm::vec4(0.5f, 0.5f, 0.5f, 0.45f)});
     }
 }
 

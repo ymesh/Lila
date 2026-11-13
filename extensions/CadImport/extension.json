@@ -1,0 +1,14 @@
+{
+    "id": "CadImport",
+    "name": "CAD Import",
+    "version": "0.1.0",
+    "vendor": "Lila",
+    "description": "Import STEP, IGES and BREP models through OpenCascade, tessellated to meshes with their assembly tree, names and colours.",
+    "sdk": "1.0",
+    "entry": {
+        "windows": "CadImport.dll",
+        "linux": "CadImport.so",
+        "macos": "CadImport.dylib"
+    },
+    "enabledByDefault": true
+}

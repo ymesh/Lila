@@ -34,6 +34,8 @@ namespace
 {
 /** The largest turn a joint takes in one iteration, radians. */
 constexpr double kMaxStep = 0.5;
+/** Radians a rotation pin may be off when the solve stops. */
+constexpr double kTurnTolerance = 1e-5;
 
 /** How much more a joint resists than a free one: 1 at stiffness 0, growing without bound toward 1. */
 double resistance(double stiffness)
@@ -115,6 +117,8 @@ std::vector<double> carriedWeights(const Problem& p)
     return carried;
 }
 
+glm::dvec3 pointOf(const glm::dmat4& world, const Effector& e) { return glm::dvec3(world * glm::dvec4(e.point, 1.0)); }
+
 glm::dmat3 skew(const glm::dvec3& v) { return {0.0, v.z, -v.y, -v.z, 0.0, v.x, v.y, -v.x, 0.0}; }
 
 void put(Eigen::MatrixXd& m, Eigen::Index row, Eigen::Index col, const glm::dmat3& b)
@@ -167,12 +171,21 @@ Solution solveFrom(const Problem& p, Solution out, bool stretching)
         double worst = 0.0;
         for (const Effector& e : p.effectors)
             if (e.position && !e.soft)
-                worst = std::max(worst, glm::length(*e.position - glm::dvec3(f.world[size_t(e.bone)][3])));
+                worst = std::max(worst, glm::length(*e.position - pointOf(f.world[size_t(e.bone)], e)));
+        return worst;
+    };
+    // Radians the held rotations are still off, so the finish doesn't stop with the positions met and a hand still turned.
+    auto turnError = [&](const Frames& f) {
+        double worst = 0.0;
+        for (const Effector& e : p.effectors)
+            if (e.rotation && !e.soft)
+                worst = std::max(worst, glm::length(rotationVector(*e.rotation * glm::conjugate(rotationOf(f.world[size_t(e.bone)])))));
         return worst;
     };
 
     Frames f = framesOf(p, out.rotation, out.offset, out.stretch);
     out.error = pinError(f);
+    double turned = turnError(f);
     if (cols == 0 || rows == 0)
         return out;
 
@@ -200,7 +213,7 @@ Solution solveFrom(const Problem& p, Solution out, bool stretching)
                 continue;
             const glm::dmat4& w = fr.world[size_t(e.bone)];
             if (e.position)
-                c += glm::length2((*e.position - glm::dvec3(w[3])) * (e.weight / L));
+                c += glm::length2((*e.position - pointOf(w, e)) * (e.weight / L));
             if (e.rotation)
                 c += glm::length2(rotationVector(*e.rotation * glm::conjugate(rotationOf(w))) * e.weight);
         }
@@ -236,7 +249,7 @@ Solution solveFrom(const Problem& p, Solution out, bool stretching)
             mu = 1e-3;
             current = cost(f, out.rotation, out.offset, out.stretch, false);
         }
-        if (!pulling && out.error <= p.tolerance)
+        if (!pulling && out.error <= p.tolerance && turned <= kTurnTolerance)
             break;
 
         J.setZero();
@@ -253,7 +266,7 @@ Solution solveFrom(const Problem& p, Solution out, bool stretching)
             const glm::dmat4& w = f.world[size_t(e.bone)];
             if (e.position)
             {
-                const glm::dvec3 at(w[3]);
+                const glm::dvec3 at = pointOf(w, e);
                 const glm::dvec3 err = (*e.position - at) * (e.weight / L);
                 r.segment<3>(row) << err.x, err.y, err.z;
                 for (size_t b : chains[k])
@@ -346,6 +359,7 @@ Solution solveFrom(const Problem& p, Solution out, bool stretching)
             std::swap(out.stretch, trialStr);
             f = std::move(trial);
             out.error = pinError(f);
+            turned = turnError(f);
             current = next;
             mu = std::max(mu / 3.0, 1e-9);
             if (settled && pulling)
@@ -428,7 +442,10 @@ Problem problemFor(Graph& g, NodeId root, const PoseOptions& opts, std::vector<N
     Node* top = g.node(root);
     if (!top || !rig::isJoint(*top))
         throw std::invalid_argument("fullBodyIk: the root must be a joint");
-    g.evaluate();
+    // Only the skeleton is read: meshes skinned to it stay dirty rather than being skinned again.
+    std::vector<NodeId> skeleton = g.descendants(root);
+    skeleton.push_back(root);
+    g.evaluateUpstream(skeleton);
 
     Problem p;
     index.clear();

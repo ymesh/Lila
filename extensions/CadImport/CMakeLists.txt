@@ -1,0 +1,15 @@
+# CadImport, built as <bin>/<config>/extensions/CadImport.lilaext: STEP, IGES and BREP through OpenCascade (LGPL-2.1,
+# dynamically linked: its DLLs sit beside lila.exe). Only built when the vcpkg "cad" feature brought OpenCascade in.
+find_package(OpenCASCADE CONFIG QUIET)
+if(NOT OpenCASCADE_FOUND)
+    message(STATUS "CadImport: OpenCascade not found (vcpkg feature \"cad\" off); skipping")
+    return()
+endif()
+lila_add_extension(lila_cadimport_extension ID CadImport MANIFEST extension.json SOURCES CadImport.cpp)
+target_include_directories(lila_cadimport_extension SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+target_link_libraries(lila_cadimport_extension PRIVATE TKernel TKMath TKBRep TKTopAlgo TKMesh TKXSBase TKDESTEP TKDEIGES TKXCAF TKLCAF TKCAF TKCDF TKG3d TKGeomBase)
+foreach(_host lila lilabatch)
+    if(TARGET ${_host})
+        add_dependencies(${_host} lila_cadimport_extension)
+    endif()
+endforeach()

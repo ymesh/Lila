@@ -208,20 +208,6 @@ uint64_t topologyHash(const geo::Mesh& m)
     LILA_ZONE();
 
     using geo::Index;
-#ifdef _WIN32
-    uint64_t h = hashWords(m.pointCapacity(), 1, [&](size_t p) { return m.pointValid(Index(p)) ? uint64_t(m.pointEdge(Index(p))) : ~0ull; });
-    h = hashCombine(h, hashWords(m.edgeCapacity(), 2, [&](size_t i) {
-                        const Index e = Index(i);
-                        if (!m.edgeValid(e))
-                            return ~0ull;
-                        const Index a = m.edgePoint(e, 0), b = m.edgePoint(e, 1);
-                        return mix64((uint64_t(a) << 32 | b) ^ mix64(uint64_t(m.edgeNextAround(e, a)) << 32 | m.edgeNextAround(e, b)));
-                    }));
-    h = hashCombine(h, hashWords(m.cornerCapacity(), 3, [&](size_t i) {
-                        const Index c = Index(i);
-                        return m.cornerValid(c) ? uint64_t(m.cornerPoint(c)) << 32 | m.cornerNext(c) : ~0ull;
-                    }));
-#else
     // uint64_t is unsigned long here, not unsigned long long, so ~0ull would deduce a second lambda return type.
     uint64_t h = hashWords(m.pointCapacity(), 1, [&](size_t p) { return m.pointValid(Index(p)) ? uint64_t(m.pointEdge(Index(p))) : ~uint64_t(0); });
     h = hashCombine(h, hashWords(m.edgeCapacity(), 2, [&](size_t i) {
@@ -235,7 +221,6 @@ uint64_t topologyHash(const geo::Mesh& m)
                         const Index c = Index(i);
                         return m.cornerValid(c) ? uint64_t(m.cornerPoint(c)) << 32 | m.cornerNext(c) : ~uint64_t(0);
                     }));
-#endif
     return h;
 }
 

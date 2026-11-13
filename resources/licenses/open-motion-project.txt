@@ -1,0 +1,6 @@
+Open Motion Project, Advanced Computing Center for the Arts and Design (ACCAD), The Ohio State University (https://accad.ohio-state.edu/research/motion-lab/mocap-system-and-data).
+
+Licensed under the Creative Commons Attribution 3.0 Unported License (CC BY 3.0). You may share and adapt the material for any purpose, even commercially, provided you give appropriate credit, provide a link to the license and indicate if changes were made.
+
+License: https://creativecommons.org/licenses/by/3.0/
+Legal code: https://creativecommons.org/licenses/by/3.0/legalcode

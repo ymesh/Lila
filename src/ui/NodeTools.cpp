@@ -711,8 +711,8 @@ public:
         for (const Preview& pv : mPreviews)
             for (const auto& [a, b] : pv.edges)
             {
-                s.linesOnTop.push_back({glm::vec3(pv.world * glm::dvec4(a, 1.0)), wire});
-                s.linesOnTop.push_back({glm::vec3(pv.world * glm::dvec4(b, 1.0)), wire});
+                s.linesOnTop.push_back({glm::dvec3(pv.world * glm::dvec4(a, 1.0)), wire});
+                s.linesOnTop.push_back({glm::dvec3(pv.world * glm::dvec4(b, 1.0)), wire});
             }
         for (size_t t = 0; t < mPreviews.size(); ++t)
             for (size_t k = 0; k < mPreviews[t].gizmos.size(); ++k)

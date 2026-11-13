@@ -274,7 +274,8 @@ std::vector<FurniturePlacement> placeFurniture(const Layout& l, const RoadNetwor
             const Vec2 right = planXZ(end.p) - kerbSide(d) * off;
             auto add = [&](const char* kind, Vec2 q, Vec2 facing) {
                 FurniturePlacement x;
-                x.id = furnitureMix(furnitureMix(jKey, textKey(kind)), line.street) & kStreetscapeIdMask;
+                // A street running on through the junction comes in from both sides: its approach's own point tells them apart.
+                x.id = furnitureMix(furnitureMix(furnitureMix(jKey, textKey(kind)), line.street), pointKey(planXZ(end.p))) & kStreetscapeIdMask;
                 x.kind = kind;
                 x.p = groundAt(q, sec.sidewalk > 0.0 && !sec.kerbless ? kCurb : 0.0);
                 x.heading = headingOf(facing);

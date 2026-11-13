@@ -31,7 +31,8 @@ struct GpuFrame
     float4 fogParams; // height, falloff per cm, start, sun scatter
     float4 fogExtra;  // anisotropy, up axis (1 Y, 2 Z)
     float4 shadowing; // one past the light each rtShadowTex channel traces, 0 for none
-    float4 pad[7];
+    float4 worldOffset; // xyz: the render origin wrapped by a large period, for world-space patterns
+    float4 pad[6];
 };
 
 struct MeshPush

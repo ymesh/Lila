@@ -3,6 +3,7 @@
 #include "ops/Command.h"
 #include "core/Paths.h"
 
+#include <cctype>
 #include <fstream>
 #include <map>
 #include <sstream>
@@ -125,34 +126,115 @@ std::string nodeCatalogue()
     return out;
 }
 
+/** The texture-node catalogue from the live node library, appended to the materials guide. */
+std::string textureCatalogue()
+{
+    const CommandDef* d = ops::find("texNodeTypes");
+    if (!d)
+        return {};
+    Args a;
+    a.flags = {{"detail", true}};
+    json types;
+    try
+    {
+        types = d->run(a);
+    }
+    catch (const std::exception&)
+    {
+        return {};
+    }
+    std::map<std::string, std::vector<const json*>> byCategory;
+    for (const json& t : types)
+        byCategory[t.value("category", "Other")].push_back(&t);
+    std::string out = "\n\n## Node catalogue\n\nParameters go in a node's `params`, unlinked input values in `values`.\n";
+    for (auto& [cat, list] : byCategory)
+    {
+        out += "\n### " + cat + "\n\n";
+        for (const json* t : list)
+        {
+            out += "- `" + t->value("type", "") + "`: " + t->value("doc", "") + "\n";
+            std::string params;
+            for (const json& p : t->value("params", json::array()))
+            {
+                params += (params.empty() ? "" : "; ") + p.value("id", "") + " " + p.value("type", "");
+                if (p.contains("options") && !p["options"].empty())
+                {
+                    std::string opts;
+                    for (const json& o : p["options"])
+                        opts += (opts.empty() ? "" : "|") + o.get<std::string>();
+                    params += " " + opts;
+                }
+                params += " = " + p["default"].dump();
+            }
+            if (!params.empty())
+                out += "  - params: " + params + "\n";
+            std::string ins, outs;
+            for (const json& s : t->value("inputs", json::array()))
+                ins += (ins.empty() ? "" : ", ") + socketLine(s);
+            for (const json& s : t->value("outputs", json::array()))
+                outs += (outs.empty() ? "" : ", ") + s.value("id", "") + " " + s.value("type", "");
+            if (!ins.empty())
+                out += "  - in: " + ins + "\n";
+            if (!outs.empty())
+                out += "  - out: " + outs + "\n";
+        }
+    }
+    return out;
+}
+
+/** An agent guide: an MCP resource, and a read_guide topic for clients that can't read resources. */
 struct Doc
 {
     const char* uri;
+    const char* topic;
     const char* file;
     const char* name;
     const char* description;
+    /** Generated from the live registries and appended, so it never goes stale. */
+    std::string (*appendix)() = nullptr;
 };
 
-constexpr Doc kDocs[] = {
-    {"lila://guide/modeling", "guide-modeling.md", "Modeling guide",
+const Doc kDocs[] = {
+    {"lila://guide/modeling", "modeling", "guide-modeling.md", "Modeling guide",
      "How to model in Lila from code: one connected mesh grown from one primitive with symmetry and extrusion, recipes for "
      "limbs, head, snout, eyes, ears and tail, selecting components by position and normal, checking with mesh_check and "
      "captures, cheap token use. Read before modeling anything."},
-    {"lila://guide/api", "guide-api.md", "API guide", "Where Lila's commands and Python modules live and how to call them, plus an index of every command."},
-    {"lila://guide/geometry-nodes", "guide-geometry-nodes.md", "Geometry nodes guide",
+    {"lila://guide/api", "api", "guide-api.md", "API guide", "Where Lila's commands and Python modules live and how to call them, plus an index of every command.",
+     commandIndex},
+    {"lila://guide/geometry-nodes", "geometryNodes", "guide-geometry-nodes.md", "Geometry nodes guide",
      "Authoring geometry-node groups from code: the one-call gnBuildGroup spec, group interfaces, nested groups, colours and "
-     "normals for export, sharing as .lilanodes, and the full node catalogue with sockets and options."},
-    {"lila://guide/set-dressing", "guide-set-dressing.md", "Set dressing guide",
+     "normals for export, sharing as .lilanodes, and the full node catalogue with sockets and options.",
+     nodeCatalogue},
+    {"lila://guide/materials", "materials", "guide-materials.md", "Materials guide",
+     "Procedural materials as texture graphs: the one-call texBuildGraph spec, channels, mesh maps from bakes, previewing, "
+     "exporting maps and sending to Unreal, and the full texture node catalogue. Read before building a material node setup.",
+     textureCatalogue},
+    {"lila://guide/set-dressing", "setDressing", "guide-set-dressing.md", "Set dressing guide",
      "Dressing scenes with props: library search and placement, physics settle/push/drop, shelf fills, scatters and piles, "
      "modular kit snapping, and dressCheck to verify. Read before placing or arranging props."},
-    {"lila://guide/terrain", "guide-terrain.md", "Terrain guide",
+    {"lila://guide/terrain", "terrain", "guide-terrain.md", "Terrain guide",
      "Building terrain from code: recipes first, one-JSON specs and presets, named places (terrainQuery, region:<name>), wedges, "
      "create, import and erode, sample and route, sculpt strokes, building pads and plaza stamps "
      "(cut and fill, walls, piles), and sending the landscape with its paint layers to Unreal. Read before any terrain work."},
-    {"lila://examples/low-poly-dog", "examples/low_poly_dog.py", "Example: low-poly dog",
+    {"lila://guide/settlement", "settlement", "guide-settlement.md", "Settlement guide",
+     "Building villages, towns, cities and regions from code: recipes first, settlementCreate on flat ground or a Terrain "
+     "(settlementSuggest for the site, settlementGrade to build it into the ground), styles, eras, walls and districts, editing "
+     "streets and lots by stable id, settlementCheck, settlementExplain and framed captures to verify, and settlementSendToUnreal "
+     "or settlementExport to ship. Read before any settlement work."},
+    {"lila://guide/masonry", "masonry", "guide-masonry.md", "Masonry guide",
+     "Building masonry from code: recipes first (ruined round tower, building from one spec, stone over a blockout, walls on "
+     "terrain), the masonryBuilding spec keys, ruin, age, wedges, masonryCheck and captures, and shipping instanced stones to "
+     "Unreal on MF_LilaMasonry. Read before building walls, towers or ruins."},
+    {"lila://guide/foliage", "foliage", "guide-foliage.md", "Foliage guide",
+     "Growing trees and plants from code: recipes first (windswept pines, broadleaf, bush), the presets and the settings that "
+     "matter (lengths in metres), leaf cards and detail levels, bark and leaf texture sets, checking with meshInfo and captures, "
+     "and sending trees to Unreal or exporting the bake pair. Read before making any tree or plant."},
+    {"lila://examples/low-poly-dog", "example", "examples/low_poly_dog.py", "Example: low-poly dog",
      "A complete script: a very low-poly dog as one closed symmetric mesh (legs, head, snout, nose, eyes, floppy ears, tail "
      "all extruded), checked with meshCheck and captures."},
 };
+
+std::string readDoc(const Doc& d) { return readFile(agentsDir() / d.file) + (d.appendix ? d.appendix() : std::string()); }
 } // namespace
 
 std::string agentInstructions()
@@ -163,7 +245,7 @@ std::string agentInstructions()
     }
     catch (const std::exception&)
     {
-        return "You are connected to Lila, a Maya-style 3D DCC. Do the 3D work here with these tools, not in Blender or Maya. Read "
+        return "You are connected to Lila, a Maya-style 3D app. Do the 3D work here with these tools, not in Blender or Maya. Read "
                "the lila://guide/modeling resource (or the read_guide tool) before modeling.";
     }
 }
@@ -173,41 +255,42 @@ void registerAgentResources()
     Server& s = Server::get();
     s.setInstructions(agentInstructions());
 
+    std::string topicDocs;
     for (const Doc& d : kDocs)
     {
-        std::string uri = d.uri, file = d.file;
-        bool api = uri == "lila://guide/api";
-        bool nodes = uri == "lila://guide/geometry-nodes";
+        const std::string file = d.file;
         s.addResource({
-            .uri = uri,
+            .uri = d.uri,
             .name = d.name,
             .description = d.description,
             .mimeType = file.ends_with(".py") ? "text/x-python" : "text/markdown",
-            .read = [file, api, nodes] { return readFile(agentsDir() / file) + (api ? commandIndex() : nodes ? nodeCatalogue() : std::string()); },
+            .read = [&d] { return readDoc(d); },
         });
+        topicDocs += std::string(topicDocs.empty() ? "" : "; ") + d.topic + " (" + d.name + ")";
     }
 
     s.addTool({
         .name = "read_guide",
-        .description = "Lila's agent guides, for clients that cannot read MCP resources. topic: modeling (read before modeling), api, "
-                       "geometryNodes (read before building node groups: spec format and node catalogue), setDressing (read before "
-                       "placing or arranging props), terrain (read before terrain work), or example (a complete low-poly dog script).",
-        .inputSchema = {{"type", "object"},
-                        {"properties", {{"topic", {{"type", "string"}, {"enum", {"modeling", "api", "geometryNodes", "setDressing", "terrain", "example"}}}}}},
-                        {"required", {"topic"}}},
-        .run = [](const json& args) {
-            std::string topic = args.value("topic", "modeling");
-            if (topic == "api")
-                return readFile(agentsDir() / "guide-api.md") + commandIndex();
-            if (topic == "geometryNodes")
-                return readFile(agentsDir() / "guide-geometry-nodes.md") + nodeCatalogue();
-            if (topic == "setDressing")
-                return readFile(agentsDir() / "guide-set-dressing.md");
-            if (topic == "terrain")
-                return readFile(agentsDir() / "guide-terrain.md");
-            if (topic == "example")
-                return readFile(agentsDir() / "examples" / "low_poly_dog.py");
-            return readFile(agentsDir() / "guide-modeling.md");
+        .description = "Lila's agent guides, for clients that cannot read MCP resources. Read the one for the work before starting. "
+                       "topic: " + topicDocs + "; extensions add more (any lila://guide/<name>). Leave topic out for the list.",
+        .inputSchema = {{"type", "object"}, {"properties", {{"topic", {{"type", "string"}}}}}},
+        .run = [](const json& args) -> std::string {
+            const std::string topic = args.value("topic", std::string());
+            for (const Doc& d : kDocs)
+                if (topic == d.topic)
+                    return readDoc(d);
+            // Extension guides: "geometryNodes" and "geometry-nodes" both name lila://guide/geometry-nodes.
+            std::string kebab;
+            for (char c : topic)
+                kebab += std::isupper(static_cast<unsigned char>(c)) ? std::string("-") + char(std::tolower(c)) : std::string(1, c);
+            const std::vector<Resource> guides = Server::get().resources("lila://guide/");
+            for (const Resource& r : guides)
+                if (r.uri == "lila://guide/" + topic || r.uri == "lila://guide/" + kebab)
+                    return r.read();
+            std::string list = topic.empty() ? "Lila's guides:\n" : "No guide '" + topic + "'. Lila's guides:\n";
+            for (const Resource& r : guides)
+                list += "- " + r.uri.substr(std::string("lila://guide/").size()) + ": " + r.description + "\n";
+            return list;
         },
     });
 

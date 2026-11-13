@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
+#include <tuple>
 
 using namespace lila;
 
@@ -36,31 +38,159 @@ double TerrainTarget::localHeight(double up, glm::dvec2 xz) const
     return std::abs(k) > 1e-12 ? (up - base) / k : up;
 }
 
+namespace
+{
+struct BatchState
+{
+    int depth = 0;
+    std::map<scene::NodeId, gn::Group> groups;
+    // Lists edited in place, by group node, node name and property.
+    std::map<std::tuple<scene::NodeId, std::string, std::string>, json> lists;
+};
+
+json parseList(const gn::GNode& n, const char* prop)
+{
+    auto it = n.values.find(prop);
+    if (it == n.values.end() || !it->is_string() || it->get<std::string>().empty())
+        return json::array();
+    json j = json::parse(it->get<std::string>(), nullptr, false);
+    return j.is_array() ? j : json::array();
+}
+
+BatchState& batchState()
+{
+    thread_local BatchState s;
+    return s;
+}
+} // namespace
+
+EditBatch::EditBatch() { ++batchState().depth; }
+
+EditBatch::~EditBatch()
+{
+    try
+    {
+        commit("terrainBatch");
+    }
+    catch (...)
+    {
+    }
+    --batchState().depth;
+}
+
+bool EditBatch::active() { return batchState().depth > 0; }
+
+void EditBatch::commit(const std::string& cmd)
+{
+    Graph& g = Graph::current();
+    std::map<scene::NodeId, gn::Group> groups = std::move(batchState().groups);
+    auto lists = std::move(batchState().lists);
+    batchState().groups.clear();
+    batchState().lists.clear();
+    for (auto& [key, list] : lists)
+    {
+        const auto& [id, nodeName, prop] = key;
+        Node* node = g.node(id);
+        if (!node)
+            continue;
+        if (!groups.contains(id))
+            groups[id] = gn::readGroup(*node);
+        if (gn::GNode* n = nodeNamed(groups[id], nodeName))
+            n->values[prop] = list.dump();
+    }
+    for (auto& [id, group] : groups)
+        if (Node* node = g.node(id))
+        {
+            GroupEdit e{node, std::move(group)};
+            const int depth = std::exchange(batchState().depth, 0);
+            try
+            {
+                commitGroup(e, cmd);
+            }
+            catch (...)
+            {
+                batchState().depth = depth;
+                throw;
+            }
+            batchState().depth = depth;
+        }
+}
+
+bool batchedGroup(const Node& groupNode, gn::Group& out)
+{
+    BatchState& s = batchState();
+    if (s.depth == 0)
+        return false;
+    auto it = s.groups.find(groupNode.id());
+    if (it == s.groups.end())
+        return false;
+    out = it->second;
+    return true;
+}
+
+bool batchGroup(const Node& groupNode, gn::Group& group)
+{
+    BatchState& s = batchState();
+    if (s.depth == 0)
+        return false;
+    s.groups[groupNode.id()] = std::move(group);
+    return true;
+}
+
+ListEdit::ListEdit(const Node& groupNode, const gn::GNode& n, const char* prop) : mProp(prop), mList(&mOwn)
+{
+    BatchState& s = batchState();
+    if (s.depth == 0)
+    {
+        mOwn = parseList(n, prop);
+        return;
+    }
+    const auto key = std::make_tuple(groupNode.id(), n.name, std::string(prop));
+    auto it = s.lists.find(key);
+    if (it == s.lists.end())
+        it = s.lists.emplace(key, parseList(n, prop)).first;
+    mList = &it->second;
+}
+
+void ListEdit::store(gn::GNode& n)
+{
+    if (mList == &mOwn)
+        n.values[mProp] = mOwn.dump();
+}
+
 TerrainTarget findTerrain(Graph& g, const std::string& name, const std::string& cmd)
 {
     Node* n = g.find(name);
     if (!n)
         throw CommandError(cmd + ": no node named '" + name + "'");
-    g.evaluate();
     TerrainTarget t;
-    if (gn::isGnModifier(*n))
+    for (bool evaluated = !EditBatch::active(); ; evaluated = true)
     {
-        t.modifier = n;
-        t.local = gn::modifierHeightfield(n->id());
-        const scene::NodeId meshId = scene::modifiers::meshOf(g, n->id());
-        t.mesh = meshId != scene::kNoNode ? g.node(meshId) : nullptr;
-    }
-    else
-    {
-        t.mesh = n;
-        const std::vector<scene::NodeId> stack = scene::modifiers::stack(g, n->id());
-        for (auto it = stack.rbegin(); it != stack.rend() && !t.local; ++it)
-            if (Node* m = g.node(*it); m && gn::isGnModifier(*m))
-                if (auto h = gn::modifierHeightfield(m->id()))
-                {
-                    t.modifier = m;
-                    t.local = std::move(h);
-                }
+        if (evaluated)
+            g.evaluate();
+        t = {};
+        if (gn::isGnModifier(*n))
+        {
+            t.modifier = n;
+            t.local = gn::modifierHeightfield(n->id());
+            const scene::NodeId meshId = scene::modifiers::meshOf(g, n->id());
+            t.mesh = meshId != scene::kNoNode ? g.node(meshId) : nullptr;
+        }
+        else
+        {
+            t.mesh = n;
+            const std::vector<scene::NodeId> stack = scene::modifiers::stack(g, n->id());
+            for (auto it = stack.rbegin(); it != stack.rend() && !t.local; ++it)
+                if (Node* m = g.node(*it); m && gn::isGnModifier(*m))
+                    if (auto h = gn::modifierHeightfield(m->id()))
+                    {
+                        t.modifier = m;
+                        t.local = std::move(h);
+                    }
+        }
+        // In a batch the heightfield from the last evaluation does; a terrain never evaluated yet is evaluated now.
+        if (evaluated || (t.local && !t.local->empty()))
+            break;
     }
     if (!t.local || t.local->empty())
         throw CommandError(cmd + ": " + n->path() + " makes no heightfield (make a terrain with terrainCreate)");
@@ -84,7 +214,10 @@ GroupEdit readGroup(Graph& g, const TerrainTarget& t, const std::string& cmd)
         throw CommandError(cmd + ": " + (t.modifier ? t.modifier->path() : std::string("the terrain")) + " has no node group");
     try
     {
-        return {node, gn::readGroup(*node)};
+        GroupEdit e{node, {}};
+        if (!batchedGroup(*node, e.group))
+            e.group = gn::readGroup(*node);
+        return e;
     }
     catch (const std::exception& e)
     {
@@ -94,6 +227,8 @@ GroupEdit readGroup(Graph& g, const TerrainTarget& t, const std::string& cmd)
 
 void commitGroup(GroupEdit& e, const std::string& cmd)
 {
+    if (batchGroup(*e.node, e.group))
+        return;
     try
     {
         gn::commitGroup(Graph::current(), *e.node, std::move(e.group));

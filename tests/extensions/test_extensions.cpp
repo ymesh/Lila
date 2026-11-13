@@ -283,7 +283,7 @@ TEST_CASE("python extension: load, call, errors, unload")
     CHECK(docs->flags[0].choices == std::vector<std::string>{"a", "b"});
     CHECK(docs->flags[0].example == "pyDocs(mode=\"b\")");
     CHECK(python::run("from lila import _stubgen, ops\n"
-                      "stub = _stubgen._render()\n"
+                      "stub = _stubgen._render(next(c['owner'] for c in _stubgen._lila.commands() if c['name'] == 'pyDocs'))\n"
                       "assert 'def pyDocs(*objects: Any, mode: str | None = None, md: str | None = None) -> Any:' in stub, stub\n"
                       "doc = ops.pyDocs.__doc__\n"
                       "for part in ('Summary line.', 'Args:', 'objects: Things.',"

@@ -3,6 +3,8 @@
 #include "ui/Hotkeys.h"
 #include "ui/ViewportHud.h"
 #include "ui/ViewportToolbar.h"
+#include "ui/GizmoMath.h"
+#include "ui/SurfaceSnap.h"
 #include "scene/HudStats.h"
 #include "scene/SoftSelect.h"
 #include "scene/Turntable.h"
@@ -562,6 +564,23 @@ void ViewportWidget::drawHud(OverlayPainter& p)
         return n && mIsolation.shows(id) && !mLodHidden.contains(id) && scene::selectionMask::shown(*n) && !viewportHooks::hiddenInView(id);
     };
     ctx.shownKey = hudShownKey();
+    if (hud::shown(mHudPanel, "georeference"))
+        if (QPointF cursor = mapFromGlobal(QCursor::pos().toPointF()); rect().contains(cursor.toPoint()))
+        {
+            if (const std::optional<surfaceSnap::Hit> hit = surfaceSnap::underCursor(cursor, ctx.view))
+            {
+                ctx.cursorWorld = hit->position;
+                ctx.cursorOnSurface = true;
+            }
+            else
+            {
+                glm::dvec3 o, d;
+                ctx.view.ray(cursor, o, d);
+                const glm::dvec3 up = mCamera.zUp ? glm::dvec3(0, 0, 1) : glm::dvec3(0, 1, 0);
+                if (glm::dvec3 ground; gizmo::rayPlane(o, d, glm::dvec3(0.0), up, ground) && glm::dot(ground - o, d) > 0.0)
+                    ctx.cursorWorld = ground;
+            }
+        }
     // Frames the renderer drew, not states submitted: mouse moves submit far more often than the display can show.
     double span = mFrameSamples.back().first - mFrameSamples.front().first;
     ctx.framesPerSecond = span > 100.0 ? double(mFrameSamples.back().second - mFrameSamples.front().second) * 1000.0 / span : 0.0;
@@ -578,6 +597,8 @@ void ViewportWidget::drawHud(OverlayPainter& p)
             requestFrame();
         });
     }
+    // The drone's key list takes the corner before the tool messages fill it with the layout's.
+    drone::draw(p, this);
     flushToolMessages(p, ctx.view, drawn);
     viewportToast::draw(p, ctx.view, this, drawn);
 }

@@ -44,7 +44,42 @@ Settings Settings::fromPrefs()
     const std::string show = p.value<std::string>("general", kShow, "mesh");
     s.mesh = show != "skeleton";
     s.skeleton = show != "mesh";
+    s.range = p.value<bool>("general", kRange, true);
     return s;
+}
+
+std::vector<GhostTime> rangeGhostTimes(const Settings& s, double now, const std::vector<double>& keys, double fps, const anim::TimeSelection& range)
+{
+    std::vector<GhostTime> out;
+    if (!range.active)
+        return out;
+    if (fps <= 0.0)
+        fps = 30.0;
+    const double eps = 0.5 / fps;
+    const double from = anim::frameOf(range.start) - range.before(), to = anim::frameOf(range.end) + range.after();
+    std::vector<double> times;
+    if (s.keys)
+    {
+        for (double t : keys)
+            if (anim::frameOf(t) >= from - 1e-6 && anim::frameOf(t) <= to + 1e-6)
+                times.push_back(t);
+    }
+    else
+        for (double f = std::ceil(from - 1e-6); f <= to + 1e-6; f += std::max(1, s.step))
+            times.push_back(anim::secondsOf(f));
+    std::erase_if(times, [&](double t) { return std::abs(t - now) < eps || anim::timeSelectionWeight(range, t) <= 0.0; });
+    if (times.size() > size_t(kMaxRangeGhosts))
+    {
+        std::vector<double> picked;
+        for (int i = 0; i < kMaxRangeGhosts; ++i)
+            picked.push_back(times[size_t(std::lround(double(i) * double(times.size() - 1) / double(kMaxRangeGhosts - 1)))]);
+        picked.erase(std::unique(picked.begin(), picked.end()), picked.end());
+        times = std::move(picked);
+    }
+    const int before = int(std::count_if(times.begin(), times.end(), [&](double t) { return t < now; }));
+    for (int i = 0; i < int(times.size()); ++i)
+        out.push_back({times[size_t(i)], i < before ? i - before : i - before + 1});
+    return out;
 }
 
 std::vector<GhostTime> ghostTimes(const Settings& s, double now, const std::vector<double>& keys, double fps)
@@ -231,7 +266,7 @@ std::vector<Ghost> Cache::ghosts(const Settings& s)
         mKeysValid = true;
     }
     const double now = mGraph.time();
-    std::vector<GhostTime> times = ghostTimes(s, now, mKeys, fps());
+    std::vector<GhostTime> times = timesNow(s);
     std::vector<double> missing;
     for (const auto& [t, offset] : times)
         if (!mFrames.contains(ticks(t)) && !mPreview.contains(ticks(t)))
@@ -249,11 +284,20 @@ std::vector<Ghost> Cache::ghosts(const Settings& s)
         mGraph.setTime(now);
         mGraph.evaluate();
     }
+    const int before = int(std::count_if(times.begin(), times.end(), [](const GhostTime& g) { return g.second < 0; }));
+    const int after = int(times.size()) - before;
+    const anim::TimeSelection& range = anim::timeSelection();
+    const bool spread = s.range && range.active;
     for (const auto& [t, offset] : times)
+    {
+        Ghost g{.offset = offset, .count = std::max(1, offset < 0 ? before : after), .weight = spread ? anim::timeSelectionWeight(range, t) : 1.0};
         if (auto p = mPreview.find(ticks(t)); p != mPreview.end())
-            out.push_back({p->second, offset});
+            g.frame = p->second;
         else if (auto it = mFrames.find(ticks(t)); it != mFrames.end())
-            out.push_back({it->second, offset});
+            g.frame = it->second;
+        if (g.frame)
+            out.push_back(std::move(g));
+    }
     return out;
 }
 
@@ -269,6 +313,13 @@ std::vector<GhostTime> Cache::shownTimes(const Settings& s)
         mKeys = anim::keyTimes(mGraph, mTargets);
         mKeysValid = true;
     }
+    return timesNow(s);
+}
+
+std::vector<GhostTime> Cache::timesNow(const Settings& s) const
+{
+    if (const anim::TimeSelection& range = anim::timeSelection(); s.range && range.active)
+        return rangeGhostTimes(s, mGraph.time(), mKeys, fps(), range);
     return ghostTimes(s, mGraph.time(), mKeys, fps());
 }
 
@@ -312,6 +363,7 @@ void registerCommands()
             {"show", "sh", T::String, nullptr, "What to draw.", {"mesh", "skeleton", "both"}},
             {"beforeColor", "bc", T::String, nullptr, "sRGB #rrggbb tint of ghosts before now."},
             {"afterColor", "ac", T::String, nullptr, "sRGB #rrggbb tint of ghosts after now."},
+            {"range", "rg", T::Bool, nullptr, "While the time slider has a range selected, spread the ghosts across it and its falloff."},
             {"refresh", "r", T::Bool, false, "Recapture every ghost."},
         },
         .undoable = false,
@@ -339,6 +391,8 @@ void registerCommands()
                     p.set("general", key, std::max(flag == std::string("step") ? 1 : 0, a.get<int>(flag)));
             if (a.has("opacity"))
                 p.set("general", kOpacity, std::clamp(a.get<double>("opacity"), 0.0, 1.0));
+            if (a.has("range"))
+                p.set("general", kRange, a.get<bool>("range"));
             for (const auto& [flag, key] : {Pair{"beforeColor", kBeforeColor}, Pair{"afterColor", kAfterColor}})
                 if (a.has(flag))
                     p.set("general", key, a.get<std::string>(flag));
@@ -353,7 +407,8 @@ void registerCommands()
                     {"opacity", s.opacity},
                     {"show", s.mesh && s.skeleton ? "both" : s.mesh ? "mesh" : "skeleton"},
                     {"beforeColor", p.value<std::string>("general", kBeforeColor, kDefaultBeforeColor)},
-                    {"afterColor", p.value<std::string>("general", kAfterColor, kDefaultAfterColor)}};
+                    {"afterColor", p.value<std::string>("general", kAfterColor, kDefaultAfterColor)},
+                    {"range", s.range}};
         },
     });
 }

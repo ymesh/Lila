@@ -518,7 +518,7 @@ private:
     size_t mChainIndex = 0;
 };
 
-void writeSeams(geo::Mesh& m, std::span<const Index> faces, const Plan& plan, bool keep)
+void writeHoseSeams(geo::Mesh& m, std::span<const Index> faces, const Plan& plan, bool keep)
 {
     std::span<bool> seam = m.edgeAttrs().getOrAdd<bool>(geo::attr::kSeam);
     for (Index f : faces)
@@ -548,7 +548,7 @@ Plan plan(geo::Mesh& mesh, std::span<const Index> faceIds, const HoseOptions& op
 {
     faces = liveFaces(mesh, faceIds);
     Plan p = Analysis(mesh, faces, opts).run();
-    writeSeams(mesh, faces, p, opts.keepSeams);
+    writeHoseSeams(mesh, faces, p, opts.keepSeams);
     if (std::vector<Index> other = facesOf(p, faces, Kind::Other); !other.empty())
     {
         AutoSeamOptions ao;

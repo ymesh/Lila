@@ -137,7 +137,7 @@ int buttonIndex(Qt::MouseButton b)
     }
 }
 
-bool isModifierKey(int key)
+bool isBareModifier(int key)
 {
     return key == Qt::Key_Control || key == Qt::Key_Shift || key == Qt::Key_Alt || key == Qt::Key_Meta;
 }
@@ -517,7 +517,7 @@ bool Hotkeys::eventFilter(QObject* obj, QEvent* e)
                 stopRepeat();
             return true;
         }
-        if (e->type() == QEvent::KeyPress && !isModifierKey(k->key()))
+        if (e->type() == QEvent::KeyPress && !isBareModifier(k->key()))
             stopRepeat();
     }
 

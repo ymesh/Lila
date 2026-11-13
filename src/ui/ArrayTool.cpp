@@ -629,7 +629,7 @@ void ArrayTool::draw(render::FrameState& s, OverlayPainter& p, const ViewInfo& v
                     placements->push_back(glm::mat4(wi * xf[k] * w));
                 render::MeshDraw d;
                 d.mesh = std::move(rm);
-                d.world = glm::mat4(w);
+                d.world = w;
                 d.instances = std::move(placements);
                 d.flags = render::DrawShaded | render::DrawWire;
                 d.wireColor = kPreviewWire;

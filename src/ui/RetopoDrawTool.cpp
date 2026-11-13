@@ -774,8 +774,8 @@ void RetopoDrawTool::drawRun(render::FrameState& s, const retopo::BorderRun& run
 {
     for (size_t i = 0; i < run.edges.size(); ++i)
     {
-        s.linesOnTop.push_back({glm::vec3(pointWorld(run.points[i])), kHotLinear});
-        s.linesOnTop.push_back({glm::vec3(pointWorld(run.points[(i + 1) % run.points.size()])), kHotLinear});
+        s.linesOnTop.push_back({glm::dvec3(pointWorld(run.points[i])), kHotLinear});
+        s.linesOnTop.push_back({glm::dvec3(pointWorld(run.points[(i + 1) % run.points.size()])), kHotLinear});
     }
 }
 
@@ -1062,7 +1062,7 @@ void RetopoDrawTool::removeOwnDraw(render::FrameState& s) const
     if (!out)
         return;
     geo::Bounds b = out->bounds();
-    glm::mat4 world(mRetopoWorld);
+    const glm::dmat4 world(mRetopoWorld);
     float tol = float(std::max(1e-4, glm::length(b.size()) * 1e-4));
     std::erase_if(s.meshes.edit(), [&](const render::MeshDraw& d) {
         if (!d.mesh || d.world != world)
@@ -1104,7 +1104,7 @@ void RetopoDrawTool::draw(render::FrameState& s, OverlayPainter& p, const ViewIn
             glm::vec4 c(g, g, g, 0.45f);
             for (size_t k = 1; k + 1 < pts.size(); ++k)
                 for (Index q : {pts[0], pts[k], pts[k + 1]})
-                    s.tris3d.push_back({glm::vec3(world(q)), c});
+                    s.tris3d.push_back({glm::dvec3(world(q)), c});
         }
         for (Index e = 0; e < m.edgeCapacity(); ++e)
             if (m.edgeValid(e))
@@ -1122,19 +1122,19 @@ void RetopoDrawTool::draw(render::FrameState& s, OverlayPainter& p, const ViewIn
             loopPreview(loopEdge, mLoopFraction, segs);
             for (auto& [a, b] : segs)
             {
-                s.linesOnTop.push_back({glm::vec3(a), kHotLinear});
-                s.linesOnTop.push_back({glm::vec3(b), kHotLinear});
+                s.linesOnTop.push_back({glm::dvec3(a), kHotLinear});
+                s.linesOnTop.push_back({glm::dvec3(b), kHotLinear});
             }
         }
         if (mDrag == Drag::Extend && m.edgeValid(mDragEdge))
         {
             glm::dvec3 q[4] = {pointWorld(m.edgePoint(mDragEdge, 0)), pointWorld(m.edgePoint(mDragEdge, 1)), mExtendTo[1], mExtendTo[0]};
             for (int k : {0, 1, 2, 0, 2, 3})
-                s.tris3d.push_back({glm::vec3(q[k]), glm::vec4(0.6f, 0.6f, 0.6f, 0.5f)});
+                s.tris3d.push_back({glm::dvec3(q[k]), glm::vec4(0.6f, 0.6f, 0.6f, 0.5f)});
             for (int k = 0; k < 4; ++k)
             {
-                s.linesOnTop.push_back({glm::vec3(q[k]), kHotLinear});
-                s.linesOnTop.push_back({glm::vec3(q[(k + 1) % 4]), kHotLinear});
+                s.linesOnTop.push_back({glm::dvec3(q[k]), kHotLinear});
+                s.linesOnTop.push_back({glm::dvec3(q[(k + 1) % 4]), kHotLinear});
             }
         }
 
@@ -1149,11 +1149,11 @@ void RetopoDrawTool::draw(render::FrameState& s, OverlayPainter& p, const ViewIn
                 size_t j = (i + 1) % mRun.points.size();
                 glm::dvec3 q[4] = {pointWorld(mRun.points[i]), pointWorld(mRun.points[j]), mRunTo[j], mRunTo[i]};
                 for (int k : {0, 1, 2, 0, 2, 3})
-                    s.tris3d.push_back({glm::vec3(q[k]), glm::vec4(0.6f, 0.6f, 0.6f, 0.5f)});
+                    s.tris3d.push_back({glm::dvec3(q[k]), glm::vec4(0.6f, 0.6f, 0.6f, 0.5f)});
                 for (int k = 1; k < 4; ++k)
                 {
-                    s.linesOnTop.push_back({glm::vec3(q[k]), kHotLinear});
-                    s.linesOnTop.push_back({glm::vec3(q[(k + 1) % 4]), kHotLinear});
+                    s.linesOnTop.push_back({glm::dvec3(q[k]), kHotLinear});
+                    s.linesOnTop.push_back({glm::dvec3(q[(k + 1) % 4]), kHotLinear});
                 }
             }
         }
@@ -1202,11 +1202,11 @@ void RetopoDrawTool::draw(render::FrameState& s, OverlayPainter& p, const ViewIn
         const std::vector<glm::dvec3>& q = fill->points;
         for (size_t k = 1; k + 1 < q.size(); ++k)
             for (const glm::dvec3& v : {q[0], q[k], q[k + 1]})
-                s.tris3d.push_back({glm::vec3(v), kFillPreview});
+                s.tris3d.push_back({glm::dvec3(v), kFillPreview});
         for (size_t k = 0; k < q.size(); ++k)
         {
-            s.linesOnTop.push_back({glm::vec3(q[k]), kHotLinear});
-            s.linesOnTop.push_back({glm::vec3(q[(k + 1) % q.size()]), kHotLinear});
+            s.linesOnTop.push_back({glm::dvec3(q[k]), kHotLinear});
+            s.linesOnTop.push_back({glm::dvec3(q[(k + 1) % q.size()]), kHotLinear});
         }
     }
     if (here && shift && !ctrl && !mTabDown && !fill && (mDrag == Drag::None || mDrag == Drag::FillClick))
@@ -1339,11 +1339,11 @@ void RetopoDrawTool::drawDeleteTarget(render::FrameState& s, OverlayPainter& p, 
         std::vector<Index> pts = m.facePoints(f);
         for (size_t k = 1; k + 1 < pts.size(); ++k)
             for (Index q : {pts[0], pts[k], pts[k + 1]})
-                s.tris3d.push_back({glm::vec3(pointWorld(q)), kDeleteFace});
+                s.tris3d.push_back({glm::dvec3(pointWorld(q)), kDeleteFace});
         for (size_t k = 0; k < pts.size(); ++k)
         {
-            s.linesOnTop.push_back({glm::vec3(pointWorld(pts[k])), kHotLinear});
-            s.linesOnTop.push_back({glm::vec3(pointWorld(pts[(k + 1) % pts.size()])), kHotLinear});
+            s.linesOnTop.push_back({glm::dvec3(pointWorld(pts[k])), kHotLinear});
+            s.linesOnTop.push_back({glm::dvec3(pointWorld(pts[(k + 1) % pts.size()])), kHotLinear});
         }
     }
     if (mHover.point != kInvalid && m.pointValid(mHover.point))

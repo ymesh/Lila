@@ -321,6 +321,8 @@ LILA_EXTENSION_EXPORT int lilaExtensionInit(ext::Context& ctx)
                       {"setPlayback", "", T::Bool, true, "Set the scene fps and playback range from the stage."},
                       {"materials", "", T::Bool, true, "Create materials from the bound UsdPreviewSurface networks and assign them."},
                       {"loadPayloads", "", T::Bool, true, "Load payloads; False leaves them out and lists them as skipped."},
+                      {"georeference", "", T::Bool, true,
+                       "Place it by the georeference it carries (a georeferenced Lila export, or a Cesium georeference prim)."},
                       {"variants", "", T::Any, nullptr,
                        "Variant selections before importing: {'set': 'variant'} for every prim with that set, or "
                        "{'/prim/path': {'set': 'variant'}} for one prim.",

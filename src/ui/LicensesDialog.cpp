@@ -46,25 +46,6 @@ QStringList cells(const QString& row)
     return out;
 }
 
-/** The licenses/<id>.txt a component's text ships as: its vcpkg port name, or the vendored file's name. */
-QString fileId(const QString& name)
-{
-    static const std::pair<const char*, const char*> kIds[] = {
-        {"Qt 6", "qtbase"}, {"Eigen", "eigen3"}, {"oneTBB", "tbb"}, {"hwloc", "hwloc"}, {"Alembic", "alembic"}, {"OpenUSD", "usd"},
-        {"Draco", "draco"}, {"Imath", "imath"}, {"Manifold", "manifold"}, {"Clipper2", "clipper2"}, {"Slang", "shader-slang"},
-        {"Vulkan-Headers", "vulkan-headers"}, {"Vulkan Memory Allocator", "vulkan-memory-allocator"}, {"volk", "volk"},
-        {"meshoptimizer", "meshoptimizer"}, {"Jolt", "joltphysics"}, {"GLM", "glm"}, {"nlohmann", "nlohmann-json"},
-        {"cpp-httplib", "cpp-httplib"}, {"Brotli", "brotli"}, {"cgltf", "cgltf"}, {"libwebp", "libwebp"}, {"Zstandard", "zstd"},
-        {"Tracy", "tracy"}, {"Capstone", "capstone"}, {"doctest", "doctest"}, {"Dem Bones", "dem-bones"}, {"FFmpeg", "ffmpeg"},
-        {"miniaudio", "miniaudio"}, {"Archivo", "archivo"}, {"Inter", "inter"}, {"JetBrains Mono", "jetbrains-mono"},
-        {"Tabler Icons", "tabler-icons"}, {"OpenVDB", "openvdb"}, {"MaterialX", "materialx"}, {"GroomLab", "groomlab"},
-        {"GoogleTest", "gtest"},
-    };
-    for (const auto& [prefix, id] : kIds)
-        if (name.startsWith(QLatin1String(prefix)))
-            return id;
-    return name.toLower().replace(QRegularExpression("[^a-z0-9]+"), "-");
-}
 } // namespace
 
 std::vector<Component> parse(const QString& markdown)
@@ -116,6 +97,27 @@ QString noticesPath()
     if (QFile::exists(beside))
         return beside;
     return QDir(QString::fromUtf8(LILA_SOURCE_DIR)).filePath("THIRD-PARTY-NOTICES.md");
+}
+
+QString fileId(const QString& name)
+{
+    static const std::pair<const char*, const char*> kIds[] = {
+        {"Qt 6", "qtbase"}, {"Eigen", "eigen3"}, {"oneTBB", "tbb"}, {"hwloc", "hwloc"}, {"Alembic", "alembic"}, {"OpenUSD", "usd"},
+        {"Draco", "draco"}, {"Imath", "imath"}, {"Manifold", "manifold"}, {"Clipper2", "clipper2"}, {"Slang", "shader-slang"},
+        {"Vulkan-Headers", "vulkan-headers"}, {"Vulkan Memory Allocator", "vulkan-memory-allocator"}, {"volk", "volk"},
+        {"meshoptimizer", "meshoptimizer"}, {"Jolt", "joltphysics"}, {"GLM", "glm"}, {"nlohmann", "nlohmann-json"},
+        {"cpp-httplib", "cpp-httplib"}, {"Brotli", "brotli"}, {"cgltf", "cgltf"}, {"libwebp", "libwebp"}, {"Zstandard", "zstd"},
+        {"Tracy", "tracy"}, {"Capstone", "capstone"}, {"doctest", "doctest"}, {"Dem Bones", "dem-bones"}, {"FFmpeg", "ffmpeg"},
+        {"miniaudio", "miniaudio"}, {"Archivo", "archivo"}, {"Inter", "inter"}, {"JetBrains Mono", "jetbrains-mono"},
+        {"Tabler Icons", "tabler-icons"}, {"OpenVDB", "openvdb"}, {"MaterialX", "materialx"}, {"GroomLab", "groomlab"},
+        {"GoogleTest", "gtest"}, {"MD4C", "md4c"}, {"SQLite", "sqlite3"}, {"OpenSSL", "openssl"}, {"ONNX Runtime", "onnx-runtime"}, {"DirectML", "directml"},
+        {"MotionBricks SOMA", "motionbricks-soma-model"}, {"MotionBricks", "motionbricks"}, {"SOMA skeleton", "motionbricks"},
+        {"Gait and spot poses", "open-motion-project"}, {"PROJ", "proj"}, {"Xerces-C++", "xerces-c"}, {"web-ifc", "web-ifc"}, {"CRCpp", "crcpp"},
+    };
+    for (const auto& [prefix, id] : kIds)
+        if (name.startsWith(QLatin1String(prefix)))
+            return id;
+    return name.toLower().replace(QRegularExpression("[^a-z0-9]+"), "-");
 }
 
 QString licenseText(const Component& c)

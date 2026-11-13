@@ -54,7 +54,7 @@ geo::Bounds worldBounds(scene::Graph& g, const scene::Node& n, int plug = scene:
 }
 
 /** The ground a settlement centred at (x, z) stands on: the widest visible faced mesh spanning that point, or none. */
-std::string groundUnder(scene::Graph& g, double x, double z)
+std::string groundNameUnder(scene::Graph& g, double x, double z)
 {
     std::string best;
     double bestArea = 0.0;
@@ -102,7 +102,7 @@ std::string groundFromSelection(scene::Graph& g, std::vector<std::string>* sites
         else if (const geo::Bounds b = worldBounds(g, *n); ground.empty() && b.valid() && b.size().x > 0.0 && b.size().z > 0.0)
             ground = n->path();
     }
-    return ground.empty() ? groundUnder(g, cx, cz) : ground;
+    return ground.empty() ? groundNameUnder(g, cx, cz) : ground;
 }
 
 /**

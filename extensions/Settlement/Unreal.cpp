@@ -292,7 +292,7 @@ std::vector<glm::dvec3> trimmed(std::vector<glm::dvec3> pts, double d, bool fron
     return pts;
 }
 
-double polylineLength(const std::vector<glm::dvec3>& pts)
+double linePointsLength(const std::vector<glm::dvec3>& pts)
 {
     double len = 0.0;
     for (size_t k = 1; k < pts.size(); ++k)
@@ -429,8 +429,8 @@ json zoneData(const Rebuilt& r, const RoadNetwork& net)
     std::set<std::pair<int, bool>> turning;
     for (const std::vector<FreeEnd>& g : groups)
     {
-        if (g.size() == 2 && polylineLength(linePts[size_t(g[0].line)]) > 3.0 * kJoinTrim &&
-            polylineLength(linePts[size_t(g[1].line)]) > 3.0 * kJoinTrim)
+        if (g.size() == 2 && linePointsLength(linePts[size_t(g[0].line)]) > 3.0 * kJoinTrim &&
+            linePointsLength(linePts[size_t(g[1].line)]) > 3.0 * kJoinTrim)
         {
             linked[{g[0].line, g[0].start}] = {g[1].line, g[1].start};
             linked[{g[1].line, g[1].start}] = {g[0].line, g[0].start};
@@ -546,7 +546,7 @@ json zoneData(const Rebuilt& r, const RoadNetwork& net)
     for (size_t k = 0; k < lineCount; ++k)
     {
         const auto a = junctionAt.find({int(k), true}), b = junctionAt.find({int(k), false});
-        if (a == junctionAt.end() || b == junctionAt.end() || a->second == b->second || polylineLength(net.lines[k].pts) >= kMinLink)
+        if (a == junctionAt.end() || b == junctionAt.end() || a->second == b->second || linePointsLength(net.lines[k].pts) >= kMinLink)
             continue;
         internal[k] = 1;
         group[root(size_t(a->second - net.junctions.data()))] = root(size_t(b->second - net.junctions.data()));

@@ -32,6 +32,8 @@ struct DrawBatch
 struct DrawBatches
 {
     std::vector<GpuInstance> instances;
+    /** Each instance's world translation in double; rebaseInstances moves the float ones to the frame's render origin. */
+    std::vector<glm::dvec3> translations;
     std::vector<DrawBatch> shaded;
     /** Wire overlays; within a batch the highlighted placements come last so they win depth ties. */
     std::vector<DrawBatch> wire;
@@ -58,6 +60,9 @@ LILA_UI_API DrawBatches batchDraws(const FrameState& s, bool shaderWire = false)
 
 /** True when two frames' mesh draws are the same list: same meshes, materials, placements and display state, in order. */
 LILA_UI_API bool sameDraws(const std::vector<MeshDraw>& a, const std::vector<MeshDraw>& b);
+
+/** Sets every instance's translation to its double translation minus origin, the frame's render origin. */
+LILA_UI_API void rebaseInstances(DrawBatches& batches, const glm::dvec3& origin);
 
 /** Points a kept batch list at another frame's draws, which sameDraws found equal to the ones it was made from. */
 LILA_UI_API void rebind(DrawBatches& batches, const std::vector<MeshDraw>& draws);

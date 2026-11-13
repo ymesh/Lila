@@ -10,6 +10,7 @@
 #include "scene/RenderSettings.h"
 #include "ui/Actions.h"
 #include "ui/DisplayAids.h"
+#include "ui/DroneCamera.h"
 #include "ui/Environments.h"
 #include "ui/Icons.h"
 #include "ui/ImagePlaneUi.h"
@@ -154,6 +155,8 @@ std::optional<bool> viewportActionState(const std::string& id, const ViewportWid
         return PrefStore::get().value<std::string>("general", vd::kLighting, "environment") == id.substr(18);
     if (view && id.starts_with("viewport.aid."))
         return displayAids::actionState(id, view);
+    if (view && id == "view.drone")
+        return drone::active(view);
     if (const Action* a = actions::find(id); a && a->checked)
         return a->checked();
     if (!view)

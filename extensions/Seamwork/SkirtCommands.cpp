@@ -3,6 +3,7 @@
 #include "Seamwork.h"
 #include "Skirt.h"
 
+#include <lila/Relocate.h>
 #include <lila/Command.h>
 #include <lila/Extension.h>
 #include <lila/Log.h>
@@ -165,7 +166,10 @@ bool registerSkirtNodes(ext::Context& ctx)
         {.name = "warning", .type = PlugType::String, .defaultValue = std::string(), .flags = AttrOutput, .doc = "Problems with the last build."},
     };
     t.create = [] { return std::make_unique<SkirtNode>(); };
-    return types::registerType(ctx, std::move(t)) != nullptr;
+    if (!types::registerType(ctx, std::move(t)))
+        return false;
+    lila::scene::relocate::registerWorldAttrs(kSkirtType, {.worldOutput = true});
+    return true;
 }
 
 void registerSkirtCommands(ext::Context& ctx)

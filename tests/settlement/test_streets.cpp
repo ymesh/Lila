@@ -128,6 +128,54 @@ TEST_CASE("settlement: organic streets keep their ids through an edit in one cor
     }
 }
 
+TEST_CASE("settlement: a street drawn across a main road leaves the main road's id, and side streets never split it")
+{
+    for (const std::string name : {"europeanCity", "medievalTown"})
+    {
+        CAPTURE(name);
+        Options o;
+        REQUIRE(builtinProfile(name, &o.profile));
+        Site site{.size = 60000.0};
+        const Layout a = build(site, Ground::plane(), o);
+        std::set<uint64_t> arterials;
+        int crossed = -1;
+        for (size_t e = 0; e < a.graph.edges.size(); ++e)
+            if (a.graph.isStreet(int(e)) && a.graph.edges[e].cls == StreetClass::Arterial)
+            {
+                arterials.insert(a.graph.edges[e].street);
+                if (crossed < 0 && a.graph.length(int(e)) > 3000.0)
+                    crossed = int(e);
+            }
+        REQUIRE(crossed >= 0);
+        // A main road keeps one id from junction with another main road to the next.
+        for (size_t n = 0; n < a.graph.nodes.size(); ++n)
+        {
+            std::vector<int> mains;
+            for (int e : a.graph.incident(int(n)))
+                if (a.graph.isStreet(e) && a.graph.edges[size_t(e)].cls == StreetClass::Arterial && a.graph.edges[size_t(e)].path < 0)
+                    mains.push_back(e);
+            if (mains.size() == 2)
+                CHECK(a.graph.edges[size_t(mains[0])].street == a.graph.edges[size_t(mains[1])].street);
+        }
+
+        const StreetEdge& x = a.graph.edges[size_t(crossed)];
+        const Vec2 pa = a.graph.nodes[size_t(x.a)].p, pb = a.graph.nodes[size_t(x.b)].p, mid = (pa + pb) * 0.5;
+        const Vec2 across = glm::normalize(Vec2(pa.y - pb.y, pb.x - pa.x)) * 2500.0;
+        Site drawn = site;
+        SitePath path;
+        path.id = 1;
+        path.pts = {{mid.x - across.x, 0.0, mid.y - across.y}, {mid.x + across.x, 0.0, mid.y + across.y}};
+        drawn.paths.push_back(path);
+        const Layout b = build(drawn, Ground::plane(), o);
+        const std::set<uint64_t> after = streetIds(b);
+        CHECK(after.contains(x.street));
+        size_t kept = 0;
+        for (uint64_t id : arterials)
+            kept += after.contains(id);
+        CHECK(kept == arterials.size());
+    }
+}
+
 TEST_CASE("settlement: road profiles go to shape grammar slots and come back")
 {
     RoadProfile avenue;

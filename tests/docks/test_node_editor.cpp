@@ -15,6 +15,7 @@
 #include "ui/GraphEditor.h"
 #include "ui/Hotkeys.h"
 #include "ui/NodeEditor.h"
+#include "ui/ThemeModel.h"
 #include "core/PrefStore.h"
 
 #include <QApplication>
@@ -777,7 +778,7 @@ TEST_CASE("wire styles, dimming unrelated wires, and wire summaries")
     editor->setSelectedWiresOnly(false);
     CHECK(wires(view).size() == 2);
 
-    // Wires take their socket type's colour; the pref draws them one grey in a grey theme like the default.
+    // Wires take their socket type's colour; the pref draws them one grey in a grey theme (the Monotone toggle).
     std::set<QRgb> colours;
     for (QGraphicsPathItem* w : wires(view))
         colours.insert(w->pen().color().rgb());
@@ -789,13 +790,26 @@ TEST_CASE("wire styles, dimming unrelated wires, and wire summaries")
         widths.insert(w->pen().widthF());
     CHECK(widths.size() == 2);
     CHECK(*widths.rbegin() > *widths.begin());
+    auto wireColours = [&] {
+        std::set<QRgb> out;
+        for (QGraphicsPathItem* w : wires(view))
+            out.insert(w->pen().color().rgb());
+        return out;
+    };
+    // A hued theme keeps its wire colours with the pref on.
     PrefStore::get().set("general", "/nodeEditor/greyWiresInMonotone", true);
     pump();
-    colours.clear();
-    for (QGraphicsPathItem* w : wires(view))
-        colours.insert(w->pen().color().rgb());
-    CHECK(colours.size() == 1);
+    CHECK(wireColours().size() == 2);
+    PrefStore::get().set("general", ui::themes::kMonotonePref, true);
+    ui::themes::invalidate();
     PrefStore::get().set("general", "/nodeEditor/greyWiresInMonotone", false);
+    pump();
+    PrefStore::get().set("general", "/nodeEditor/greyWiresInMonotone", true);
+    pump();
+    CHECK(wireColours().size() == 1);
+    PrefStore::get().set("general", "/nodeEditor/greyWiresInMonotone", false);
+    PrefStore::get().set("general", ui::themes::kMonotonePref, false);
+    ui::themes::invalidate();
     pump();
 
     json info = run("gnGroupInfo", {{"args", {"G"}}});

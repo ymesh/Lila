@@ -15,10 +15,21 @@ inline constexpr const char* kBlockBegin = "<!-- lila:begin (managed by Lila: He
 inline constexpr const char* kBlockEnd = "<!-- lila:end -->";
 
 /**
- * The "lila" server entry merged into a workspace's .mcp.json. The URL and token come from the environment Lila's terminal
- * sets (LILA_MCP_URL, LILA_MCP_TOKEN), so the file holds no secret and is safe under source control.
+ * The "lila" server entry merged into a workspace's .mcp.json. The URL comes from LILA_MCP_URL when Lila's terminal sets it;
+ * the token is read at connect time by tokenHelperCommand() from Lila's mcp.json, so the file holds no secret, is safe under
+ * source control and works from any terminal.
  */
 LILA_SCENE_API std::string mergeMcpJson(const std::string& existing, int port);
+
+/** Shell command for .mcp.json's headersHelper: prints {"Authorization": "Bearer <token>"} from <config dir>/mcp.json. */
+LILA_SCENE_API std::string tokenHelperCommand();
+
+/**
+ * Where setup writes for a workspace: the project around it (the nearest folder up with .git or a .uproject, else the
+ * workspace). Agents look for .mcp.json, CLAUDE.md and skills from their start folder upward, so one copy there serves
+ * an agent started anywhere in the project, the workspace included.
+ */
+LILA_SCENE_API fs::path setupRoot(const fs::path& workspace);
 
 /** existing with the delimited Lila block replaced by block, or appended when it has none. User text is never touched. */
 LILA_SCENE_API std::string upsertBlock(const std::string& existing, const std::string& block);
@@ -27,7 +38,7 @@ struct SetupOptions
 {
     bool mcpJson = true;      // <root>/.mcp.json
     bool instructions = true; // Lila block in <root>/CLAUDE.md and <root>/AGENTS.md
-    bool skill = true;        // <root>/.claude/skills/lila-modeling/SKILL.md
+    bool skill = true;        // <root>/.claude/skills/lila-*/SKILL.md
     int port = 8740;
 };
 

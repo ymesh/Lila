@@ -6,12 +6,17 @@
 
 #include <lila/Math.h>
 #include <lila/Prefs.h>
+#include <lila/Profile.h>
 #include <lila/Curves.h>
 #include <lila/Ghosts.h>
+#include <lila/IkSolver.h>
 #include <lila/OptionBox.h>
 #include <lila/Paths.h>
+#include <lila/Poses.h>
 #include <lila/SplineChain.h>
 #include <lila/Strings.h>
+#include <lila/Tasks.h>
+#include <lila/Transform.h>
 #include <lila/UI.h>
 #include <lila/ViewportTool.h>
 
@@ -21,10 +26,12 @@
 #include <lila/Anim.h>
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <map>
+#include <set>
 
 using namespace lila;
 using namespace lila::scene;
@@ -64,6 +71,40 @@ bool& contactsRef()
     return on;
 }
 
+bool& isolateRef()
+{
+    static bool on = PrefStore::get().value<bool>(kPrefs, "/strings/isolate", false);
+    return on;
+}
+
+/** How a turn across a time range lands on each frame: "local" about the joint where it is then, "pivot" about where it is now. */
+std::string& rotationTypeRef()
+{
+    static std::string t = PrefStore::get().value<std::string>(kPrefs, "/strings/rotationType", "local");
+    return t;
+}
+
+/** The mode names, for flags and messages. */
+std::vector<std::string> modeChoices()
+{
+    std::vector<std::string> out;
+    for (strings::Mode m : strings::kModes)
+        out.push_back(strings::modeName(m));
+    return out;
+}
+
+/** Whether a breakdown or tween in this mode keeps the contacts in world: the plain modes blend every joint locally. */
+bool holdsInWorld(strings::Mode m) { return m != strings::Mode::ForwardAll && m != strings::Mode::All && m != strings::Mode::Free; }
+
+std::string modeList()
+{
+    std::string out;
+    const std::vector<std::string> names = modeChoices();
+    for (size_t i = 0; i < names.size(); ++i)
+        out += (i == 0 ? "" : i + 1 == names.size() ? " or " : ", ") + names[i];
+    return out;
+}
+
 std::string bareJoint(const std::string& name) { return name.substr(name.find_last_of("|:") + 1); }
 
 /** A character's rule web: the limbs its rig declares and the joints that hold by default (its contacts, feet). */
@@ -73,9 +114,52 @@ struct CharacterRules
     std::vector<std::string> contacts;
     /** Lines of action: body paths a stroke may bind to, by name, each [top joint, end joint]. */
     std::map<std::string, std::vector<std::string>> lines;
-    /** Where each came from: "character", "template", "rig elements" or "none". */
-    std::string chainsFrom = "none", contactsFrom = "none", linesFrom = "none";
+    /** Joints that keep their world rotation while Isolate Rotation is on (the head, the hands). */
+    std::vector<std::string> isolate;
+    /** Default mode: the mode a joint poses in, by joint name. */
+    std::map<std::string, std::string> modes;
+    /** Where each came from: "character", "template", "rig elements", "inferred" or "none". */
+    std::string chainsFrom = "none", contactsFrom = "none", linesFrom = "none", isolateFrom = "none", modesFrom = "none";
 };
+
+/**
+ * Isolation when nothing declares it: the head, and the end of each limb that isn't a contact and doesn't hang off
+ * another limb's end or a contact (the hands, not the fingers or the balls of the feet).
+ */
+void inferIsolate(Graph& g, NodeId character, CharacterRules& r)
+{
+    r.isolate.clear();
+    r.isolateFrom = "inferred";
+    const NodeId root = characterRoot(g, character);
+    if (!root)
+        return;
+    std::map<std::string, NodeId> joint;
+    for (NodeId d : g.descendants(root))
+        joint[bareJoint(g.node(d)->name())] = d;
+    joint[bareJoint(g.node(root)->name())] = root;
+    std::vector<NodeId> ends;
+    for (const auto& chain : r.chains)
+        if (const auto it = joint.find(bareJoint(chain.back())); it != joint.end())
+            ends.push_back(it->second);
+    for (const std::string& c : r.contacts)
+        if (const auto it = joint.find(bareJoint(c)); it != joint.end())
+            ends.push_back(it->second);
+    auto keep = [&](const std::string& name) {
+        if (std::find(r.isolate.begin(), r.isolate.end(), name) == r.isolate.end())
+            r.isolate.push_back(name);
+    };
+    for (const auto& chain : r.chains)
+    {
+        const auto it = joint.find(bareJoint(chain.back()));
+        if (it == joint.end() || std::find(r.contacts.begin(), r.contacts.end(), chain.back()) != r.contacts.end())
+            continue;
+        const bool below = std::any_of(ends.begin(), ends.end(), [&](NodeId e) { return e != it->second && isUnder(g, it->second, e); });
+        if (!below)
+            keep(chain.back());
+    }
+    if (joint.contains("head"))
+        keep("head");
+}
 
 /** Lines when nothing declares them: each limb, and the hips to the head when there is one. */
 void inferLines(Graph& g, NodeId character, CharacterRules& r)
@@ -136,6 +220,20 @@ CharacterRules inheritedRules(Graph& g, NodeId character)
             }
             else
                 inferLines(g, character, out);
+            if (c.contains("isolate"))
+            {
+                for (const json& m : c["isolate"])
+                    out.isolate.push_back(jointOf(m.get<std::string>()));
+                out.isolateFrom = "template";
+            }
+            else
+                inferIsolate(g, character, out);
+            if (c.contains("modes"))
+            {
+                for (const auto& [marker, mode] : c["modes"].items())
+                    out.modes[jointOf(marker)] = mode.get<std::string>();
+                out.modesFrom = "template";
+            }
             return out;
         }
         catch (const std::exception&)
@@ -154,6 +252,7 @@ CharacterRules inheritedRules(Graph& g, NodeId character)
             out.chainsFrom = out.contactsFrom = "rig elements";
         }
     inferLines(g, character, out);
+    inferIsolate(g, character, out);
     return out;
 }
 
@@ -182,6 +281,16 @@ CharacterRules rulesOf(Graph& g, NodeId character)
         out.lines = own["lines"].get<std::map<std::string, std::vector<std::string>>>();
         out.linesFrom = "character";
     }
+    if (own.contains("isolate") && own["isolate"].is_array())
+    {
+        out.isolate = own["isolate"].get<std::vector<std::string>>();
+        out.isolateFrom = "character";
+    }
+    if (own.contains("modes") && own["modes"].is_object())
+    {
+        out.modes = own["modes"].get<std::map<std::string, std::string>>();
+        out.modesFrom = "character";
+    }
     return out;
 }
 
@@ -201,6 +310,23 @@ strings::Rules bonesOf(const strings::Skeleton& k, Graph& g, const CharacterRule
         if (chain.size() >= 2)
             out.chains.push_back(chain);
     }
+    for (const auto& [joint, name] : r.modes)
+        if (const auto it = bone.find(bareJoint(joint)); it != bone.end())
+            if (const auto m = strings::modeFromName(name))
+                out.defaults.push_back({it->second, *m});
+    return out;
+}
+
+/** The rules' isolated joints as bones, when Isolate Rotation is on. */
+std::vector<int> isolatedBones(const strings::Skeleton& k, Graph& g, const CharacterRules& r)
+{
+    std::vector<int> out;
+    if (!isolateRef())
+        return out;
+    for (const std::string& n : r.isolate)
+        for (size_t i = 0; i < k.joints.size(); ++i)
+            if (bareJoint(g.node(k.joints[i])->name()) == bareJoint(n))
+                out.push_back(int(i));
     return out;
 }
 
@@ -446,56 +572,112 @@ glm::dquat turnTo(const fbik::Problem& p, int bone, const glm::dquat& r)
     return glm::normalize(glm::quat_cast(after * glm::transpose(before)));
 }
 
-json poseJoint(Graph& g, NodeId joint, strings::Mode mode, const PoseInput& in)
+/** While one lives, rulesOf reads each character's rules once: a pose across many frames asks for them on every frame. */
+std::map<NodeId, CharacterRules>* gRulesCache = nullptr;
+
+struct RulesCacheScope
+{
+    std::map<NodeId, CharacterRules> cache;
+    std::map<NodeId, CharacterRules>* was = gRulesCache;
+    RulesCacheScope() { gRulesCache = gRulesCache ? gRulesCache : &cache; }
+    ~RulesCacheScope() { gRulesCache = was; }
+    RulesCacheScope(const RulesCacheScope&) = delete;
+    RulesCacheScope& operator=(const RulesCacheScope&) = delete;
+};
+
+const CharacterRules& cachedRules(Graph& g, NodeId character, CharacterRules& local)
+{
+    if (!gRulesCache)
+        return local = rulesOf(g, character);
+    const auto it = gRulesCache->find(character);
+    return it != gRulesCache->end() ? it->second : gRulesCache->emplace(character, rulesOf(g, character)).first->second;
+}
+
+/** A joint's interaction set up: its skeleton as it is now and the request, ready to solve with any drag. */
+struct Prepared
+{
+    strings::Skeleton k;
+    strings::Request r;
+    int bone = -1;
+    NodeId joint = kNoNode;
+    strings::Mode mode = strings::Mode::Forward;
+};
+
+Prepared prepareJoint(Graph& g, NodeId joint, strings::Mode mode, const PoseInput& in)
 {
     const std::string path = g.node(joint)->path();
     const NodeId character = characterFor(g, joint);
     const NodeId root = characterRoot(g, character);
     if (!root)
         throw CommandError("stringsPose: " + path + " is not in a character");
+    Prepared p;
+    p.joint = joint;
+    p.mode = mode;
+    p.k = strings::snapshot(g, root, stiffnessOf(g, character, fullBodyJoints(g, joint)));
+    p.bone = p.k.boneOf(joint);
+    if (p.bone < 0)
+        throw CommandError("stringsPose: " + path + " is not a deform joint of its character");
+    CharacterRules local;
+    const CharacterRules& rules = cachedRules(g, character, local);
+    p.k.rules = bonesOf(p.k, g, rules);
+    p.r = {.mode = mode,
+           .grabbed = p.bone,
+           .turn = in.rotation ? std::optional(turnTo(p.k.problem, p.bone, *in.rotation)) : in.turn,
+           .move = in.move,
+           .holds = in.holds ? holdsFor(g, character, p.k, in.anchors, in.contacts ? rules.contacts : std::vector<std::string>{})
+                             : std::vector<strings::Hold>{},
+           .hips = p.k.hips,
+           .chainLength = in.chainLength,
+           .maxStretch = in.stretch,
+           .isolate = isolatedBones(p.k, g, rules)};
+    std::erase_if(p.r.holds, [&](const strings::Hold& h) { return h.bone == p.bone; });
+    return p;
+}
+
+/** Solves a prepared joint with the drag in r; sets fellBack when the mode couldn't move it and Forward did. Thread safe. */
+strings::Result solvePrepared(const Prepared& p, strings::Request r, bool& fellBack)
+{
+    r.rules = &p.k.rules;
+    // Full Body turning with nothing held is a plain turn: no solve has anything to keep.
+    if (r.mode == strings::Mode::FullBody && !r.move && r.holds.empty())
+        r.mode = strings::Mode::ForwardAll;
+    strings::Result res = strings::solve(p.k.problem, r);
+    fellBack = false;
+    if (!res.handled)
+    {
+        r.mode = strings::Mode::Forward;
+        res = strings::solve(p.k.problem, r);
+        fellBack = true;
+    }
+    return res;
+}
+
+json poseJoint(Graph& g, NodeId joint, strings::Mode mode, const PoseInput& in)
+{
+    const std::string path = g.node(joint)->path();
+    if (!characterRoot(g, characterFor(g, joint)))
+        throw CommandError("stringsPose: " + path + " is not in a character");
     json out = {{"joint", path}, {"mode", strings::modeName(mode)}};
-    const std::optional<glm::dvec3> move = in.move;
-    std::optional<glm::dquat> turn = in.turn;
 
     // The auto-poser runs inside full-body moves only; the rest of Full Body goes through the same solve as the others.
-    if (mode == strings::Mode::FullBody && move && !turn && !in.rotation && in.autoPose)
+    if (mode == strings::Mode::FullBody && in.move && !in.turn && !in.rotation && in.autoPose)
     {
-        const std::vector<NodeId> posed = fullBodyMove(g, {joint}, *move, true);
+        const std::vector<NodeId> posed = fullBodyMove(g, {joint}, *in.move, true);
         if (posed.empty())
             throw CommandError("stringsPose: " + path + " cannot be posed full body (a root above the hips moves the ordinary way)");
         return out;
     }
 
-    strings::Skeleton k = strings::snapshot(g, root, stiffnessOf(g, character, fullBodyJoints(g, joint)));
-    const int bone = k.boneOf(joint);
-    if (bone < 0)
-        throw CommandError("stringsPose: " + path + " is not a deform joint of its character");
-    if (in.rotation)
-        turn = turnTo(k.problem, bone, *in.rotation);
-    const CharacterRules rules = rulesOf(g, character);
-    k.rules = bonesOf(k, g, rules);
-    strings::Request r{.mode = mode,
-                       .grabbed = bone,
-                       .turn = turn,
-                       .move = move,
-                       .holds = in.holds ? holdsFor(g, character, k, in.anchors, in.contacts ? rules.contacts : std::vector<std::string>{})
-                                         : std::vector<strings::Hold>{},
-                       .hips = k.hips,
-                       .chainLength = in.chainLength,
-                       .maxStretch = in.stretch,
-                       .rules = &k.rules};
-    std::erase_if(r.holds, [&](const strings::Hold& h) { return h.bone == bone; });
-    // Full Body turning with nothing held is a plain turn: no solve has anything to keep.
-    if (mode == strings::Mode::FullBody && !move && r.holds.empty())
-        r.mode = strings::Mode::Forward;
-
-    strings::Result res = strings::solve(k.problem, r);
-    if (!res.handled)
+    Prepared p = prepareJoint(g, joint, mode, in);
+    const strings::Skeleton& k = p.k;
+    const int bone = p.bone;
+    const strings::Request& r = p.r;
+    bool fellBack = false;
+    strings::Result res = solvePrepared(p, r, fellBack);
+    if (fellBack)
     {
         // A joint above the hips has no body to swing or limb to bend: it turns and moves the plain way, and says so.
-        r.mode = strings::Mode::Forward;
-        res = strings::solve(k.problem, r);
-        out["fallback"] = std::string(strings::modeName(mode)) + " needs a joint at or below the hips; posed Forward";
+        out["fallback"] = std::string(strings::modeName(mode)) + " needs a joint at or below the hips; posed forward";
         log::write(LogLevel::Info, "stringsPose: " + bareName(path) + " is above the hips, so it was posed Forward");
     }
     // Glue and attach: what follows a joint of this skeleton bends its limb there, holding the anchors; the rest is placed after.
@@ -530,7 +712,9 @@ json poseJoint(Graph& g, NodeId joint, strings::Mode mode, const PoseInput& in)
             out["followed"].push_back(m);
     }
     out["error"] = res.error;
-    if (r.mode == strings::Mode::Ik)
+    if (mode == strings::Mode::Default)
+        out["resolved"] = strings::modeName(res.resolved);
+    if (res.resolved == strings::Mode::Ik)
     {
         json chain = json::array();
         for (int b : strings::limbOf(k.problem, bone, k.hips, -1, r.chainLength, &k.rules))
@@ -552,7 +736,7 @@ strings::Mode modeArg(const Args& a, const char* command)
         return stringsMode();
     const auto m = strings::modeFromName(a.get<std::string>("mode"));
     if (!m)
-        throw CommandError(std::string(command) + ": mode is forward, backward, ik or fullBody");
+        throw CommandError(std::string(command) + ": mode is " + modeList());
     return *m;
 }
 
@@ -596,10 +780,10 @@ json stringsZero(const Args& a)
     {
         in.anchors = relative;
         in.holds = true;
-        if (mode == strings::Mode::Forward)
+        if (mode == strings::Mode::Forward || mode == strings::Mode::ForwardAll || mode == strings::Mode::Free)
         {
+            fallback = std::string(strings::modeName(mode)) + " moves nothing to keep what it is relative to still; zeroed backward";
             mode = strings::Mode::Backward;
-            fallback = "forward moves nothing to keep what it is relative to still; zeroed backward";
             log::write(LogLevel::Info, "stringsZero: " + fallback);
         }
     }
@@ -628,8 +812,10 @@ NodeId stringsCharacterArg(Graph& g, const Args& a, const char* command)
 
 json rulesJson(const CharacterRules& r)
 {
-    return {{"contacts", r.contacts}, {"chains", r.chains},       {"lines", r.lines},
-            {"contactsFrom", r.contactsFrom}, {"chainsFrom", r.chainsFrom}, {"linesFrom", r.linesFrom}};
+    return {{"contacts", r.contacts},         {"chains", r.chains},         {"lines", r.lines},
+            {"isolate", r.isolate},           {"modes", r.modes},           {"contactsFrom", r.contactsFrom},
+            {"chainsFrom", r.chainsFrom},     {"linesFrom", r.linesFrom},   {"isolateFrom", r.isolateFrom},
+            {"modesFrom", r.modesFrom}};
 }
 
 /** The joints from top down to end, both included; empty when end is not under top. */
@@ -722,6 +908,31 @@ json stringsRules(const Args& a)
         own["lines"].erase(a.get<std::string>("removeLine"));
         changed = true;
     }
+    if (a.has("isolate"))
+    {
+        json isolate = json::array();
+        for (const json& j : a.flags["isolate"])
+            isolate.push_back(bareJoint(jointNamed(g, j.get<std::string>(), "stringsRules").name()));
+        own["isolate"] = isolate;
+        changed = true;
+    }
+    if (a.has("defaultMode"))
+    {
+        const json& d = a.flags["defaultMode"];
+        if (!d.is_array() || d.size() != 2)
+            throw CommandError("stringsRules: defaultMode is [joint, mode]");
+        const std::string joint = bareJoint(jointNamed(g, d[0].get<std::string>(), "stringsRules").name());
+        const std::string mode = d[1].get<std::string>();
+        if (!own.contains("modes"))
+            own["modes"] = rulesOf(g, character).modes;
+        if (mode.empty() || mode == "default")
+            own["modes"].erase(joint);
+        else if (!strings::modeFromName(mode))
+            throw CommandError("stringsRules: the mode is " + modeList());
+        else
+            own["modes"][joint] = mode;
+        changed = true;
+    }
     if (changed)
         g.setValue(plug, own.dump());
     return rulesJson(rulesOf(g, character));
@@ -768,9 +979,162 @@ json unrealLimit(const ik::JointLimit& l)
     return out;
 }
 
+/** How heavy a member is for leading glue in Unreal: its character's skeleton length (cm), a prop nothing. */
+double heftOf(Graph& g, NodeId member)
+{
+    const NodeId character = rig::isJoint(*g.node(member)) ? characterFor(g, member) : kNoNode;
+    const NodeId root = character ? characterRoot(g, character) : kNoNode;
+    if (!root)
+        return 0.0;
+    double length = 0.0;
+    for (NodeId d : g.descendants(root))
+        if (rig::isJoint(*g.node(d)))
+            length += glm::length(vecOf(g, d, Transform::kTranslate));
+    return length;
+}
+
+/**
+ * Which member leads a set once it is bound in Unreal, where a binding runs one way: an attach's last member, as in Lila;
+ * a glue's heaviest (a character over a prop, the larger skeleton over the smaller), the first on a tie.
+ */
+int leadOf(Graph& g, const Relation& rel, const std::vector<NodeId>& members)
+{
+    if (rel.attach)
+        return int(members.size()) - 1;
+    int lead = 0;
+    double best = -1.0;
+    for (size_t i = 0; i < members.size(); ++i)
+        if (const double h = heftOf(g, members[i]); h > best + 1e-9)
+            best = h, lead = int(i);
+    return lead;
+}
+
+/**
+ * An IK chain for the rule web: its end bone, whether it is locked now, and everything Lila's ikHandle solves it from,
+ * carried into Unreal space: solver (twoBone, fabrik, spline), pole (from the start joint), pole angle and roll (radians,
+ * signed for Unreal's handedness), softness, stretch, the spline's curve, per joint its rest local, orient, rotate axis,
+ * limit and preferred angle, and how far the end follows the controller (alignWeight). "unsolved" only when a joint of
+ * the chain isn't a bone of the skeleton.
+ */
+template <class BoneName, class UeVec>
+json unrealLock(Graph& g, NodeId chain, const std::vector<NodeId>& joints, const BoneName& boneName, const UeVec& ueVec, const glm::dmat3& basis)
+{
+    json out = {{"bone", boneName(joints.back())}, {"locked", chainLocked(g, chain, g.time())}};
+    // The lock as Unreal's Lock channel steps through it: a key wherever it turns on or off, frame by frame across its keys.
+    const json times = ops::execute("keyframe", {{"args", {g.node(chain)->path()}}, {"attribute", "lock"}, {"query", true}});
+    if (times.is_array() && !times.empty())
+    {
+        const double fps = ops::execute("playbackOptions", {{"query", true}}).value("fps", 30.0);
+        const int64_t first = int64_t(std::floor(times.front().get<double>() * fps + 1e-6));
+        const int64_t last = int64_t(std::ceil(times.back().get<double>() * fps - 1e-6));
+        json keys = json::array();
+        for (int64_t f = first; f <= last; ++f)
+        {
+            const double t = double(f) / fps;
+            const bool on = chainLocked(g, chain, t);
+            if (keys.empty() || keys.back()[1].get<bool>() != on)
+                keys.push_back({t, on});
+        }
+        out["keys"] = keys;
+    }
+    const NodeId h = lila::scene::rigel::handleOf(g, chain);
+    const Node* handle = h ? g.node(h) : nullptr;
+    if (!handle)
+        return out;
+    json names = json::array();
+    for (NodeId j : joints)
+    {
+        if (boneName(j).empty())
+            return out["unsolved"] = g.node(j)->name() + " isn't a deform joint, so Unreal's skeleton has no bone for it", out;
+        names.push_back(boneName(j));
+    }
+    const double handed = glm::determinant(basis) < 0.0 ? -1.0 : 1.0;
+    auto value = [&](int attr) { return g.value({h, attr, -1}); };
+    auto number = [&](const char* attr) { return std::get<double>(value(attrOf(*handle, attr))); };
+    // A rotation carried into Unreal's local-rotation space, as the rest locals are.
+    auto ueQuat = [&](const glm::dmat3& m) {
+        const glm::dquat q = glm::normalize(glm::quat_cast(basis * m * glm::inverse(basis)));
+        return json::array({q.x, q.y, q.z, q.w});
+    };
+    const int count = int(joints.size());
+    std::string solver = std::get<std::string>(value(attrOf(*handle, "ikSolver")));
+    if (solver.empty())
+        solver = count == 3 ? "ik2BoneSolver" : "ikFabrikSolver";
+    // As the handle does: a solver it can't run on this many joints falls to FABRIK.
+    if (solver == "ik2BoneSolver" && count == 3)
+        out["solver"] = "twoBone";
+    else if (solver == "ikSplineSolver" && count >= 2)
+        out["solver"] = "spline";
+    else
+        out["solver"] = "fabrik";
+    const bool stretch = std::get<bool>(value(attrOf(*handle, "stretch")));
+    out["maxStretch"] = stretch && out["solver"] != "spline" ? std::max(1.0, number("maxStretch")) : 1.0;
+    out["fitCurve"] = stretch;
+    out["softness"] = std::max(0.0, number("softness"));
+    out["twist"] = glm::radians(number("poleAngle")) * handed;
+    out["roll"] = glm::radians(number("roll")) * handed;
+    if (const glm::dvec3 pv = vecOf(g, h, attrOf(*handle, "poleVector")); glm::length(pv) > 1e-12)
+        out["pole"] = ueVec(pv);
+    if (const auto* c = dynamic_cast<const ik::CurvePoints*>(std::get<DataPtr>(value(attrOf(*handle, "inCurve"))).get()))
+    {
+        json curve = json::array();
+        for (const glm::dvec3& p : c->points)
+            curve.push_back(ueVec(p));
+        out["curve"] = curve;
+    }
+    // The handle's slots: each joint's rest local (what the solve starts from), its orient and rotate axis, its limit.
+    const int base = attrOf(*handle, "restLocal0");
+    auto slot = [&](int i, int k) { return value(base + i * 13 + k); };
+    json slots = json::array();
+    for (int i = 0; i < count; ++i)
+    {
+        const glm::dmat4 local = std::get<glm::dmat4>(slot(i, 0));
+        const glm::dmat3 orient(std::get<glm::dmat4>(slot(i, 1))), axis(std::get<glm::dmat4>(slot(i, 2)));
+        const glm::dvec3 t = basis * glm::dvec3(local[3]);
+        json s = {{"rest", {t.x, t.y, t.z}}, {"restRotation", ueQuat(glm::dmat3(local))}, {"orient", ueQuat(orient)}, {"axis", ueQuat(axis)}};
+        if (i + 1 < count)
+        {
+            const int kind = int(std::clamp<int64_t>(std::get<int64_t>(slot(i, 6)), 0, 2));
+            const double stiffness = std::clamp(std::get<double>(slot(i, 11)), 0.0, 1.0);
+            if (kind != 0 || stiffness > 0.0)
+            {
+                const glm::dvec3 a = std::get<glm::dvec3>(slot(i, 7));
+                glm::dvec3 bone(1.0, 0.0, 0.0);
+                if (const glm::dvec3 child(std::get<glm::dmat4>(slot(i + 1, 0))[3]); glm::length(child) > 1e-12)
+                    bone = glm::normalize(axis * child);
+                const glm::dvec3 ua = (glm::length(a) > 1e-12 ? glm::normalize(a) : glm::dvec3(0, 0, 1));
+                s["limit"] = {{"kind", kind == 1 ? "hinge" : kind == 2 ? "cone" : "none"},
+                              {"axis", ueVec(ua * handed)},
+                              {"min", glm::radians(std::get<double>(slot(i, 8)))},
+                              {"max", glm::radians(std::get<double>(slot(i, 9)))},
+                              {"cone", glm::radians(std::get<double>(slot(i, 10)))},
+                              {"bone", ueVec(bone)},
+                              {"stiffness", stiffness}};
+            }
+            if (const glm::dvec3 pref = std::get<glm::dvec3>(slot(i, 12)); pref != glm::dvec3(0.0))
+            {
+                const auto order = RotateOrder(std::clamp<int64_t>(std::get<int64_t>(slot(i, 3)), 0, 5));
+                // Lila's preferred local: frame * preferred * post, where frame and post are the orient and rotate axis.
+                s["preferred"] = ueQuat(orient * glm::dmat3(eulerToMatrix(pref, order)) * axis);
+            }
+        }
+        slots.push_back(s);
+    }
+    out["slots"] = slots;
+    // The end turns with the controller through its align node, by the node's weight.
+    double align = 0.0;
+    if (const Node& c = *g.node(chain); attrOf(c, "align") >= 0)
+        if (const Node* al = g.find(std::get<std::string>(g.value({chain, attrOf(c, "align"), -1}))))
+            align = std::clamp(std::get<double>(g.value({al->id(), attrOf(*al, "weight"), -1})), 0.0, 1.0);
+    out["alignWeight"] = align;
+    out["chain"] = names;
+    return out;
+}
+
 /**
  * The rule web as plain data for Unreal: bone names as the skeleton has them (the joints' names), the hips, contacts,
- * limbs, lines of action, each bone's full-body stiffness and joint limits (in Unreal's local-rotation space). Nothing
+ * limbs, lines of action, each bone's full-body stiffness and joint limits (in Unreal's local-rotation space), the pins,
+ * every IK chain end with whether it is locked now, and the glue and attach sets among the skeleton's bones. Nothing
  * positional: the Rig Units read the skeleton itself.
  */
 json ruleWeb(Graph& g, NodeId character)
@@ -795,7 +1159,52 @@ json ruleWeb(Graph& g, NodeId character)
         if (b.limit.kind != ik::JointLimit::Kind::None)
             limits[name] = unrealLimit(b.limit);
     }
-    return {{"version", 1},
+    auto boneName = [&](NodeId j) { return k.boneOf(j) >= 0 ? bareJoint(g.node(j)->name()) : std::string(); };
+    json pins = json::array(), locks = json::array(), glue = json::array();
+    for (NodeId p : pinsOf(g, character))
+        if (const std::string n = boneName(p); !n.empty() && std::find(pins.begin(), pins.end(), n) == pins.end())
+            pins.push_back(n);
+    const glm::dmat3 basis = unrealBasis();
+    auto ueVec = [&](const glm::dvec3& v) {
+        const glm::dvec3 u = basis * v;
+        return json::array({u.x, u.y, u.z});
+    };
+    for (NodeId chain : lila::scene::rigel::chains(g))
+        if (const auto js = lila::scene::rigel::chainJoints(g, chain); !js.empty())
+            if (const std::string n = boneName(js.back()); !n.empty())
+                locks.push_back(unrealLock(g, chain, js, boneName, ueVec, basis));
+    // Glue and attach: this skeleton's bones by name; props and other characters' joints as frames in this character's
+    // Unreal space (where they are now), which the rig carries as controls of their own.
+    const NodeId rootParent = g.parent(root);
+    const glm::dmat4 space = glm::inverse(rootParent ? worldOf(g, rootParent) : glm::dmat4(1.0));
+    for (const Relation& rel : relations())
+    {
+        const std::vector<NodeId> members = membersOf(g, rel);
+        json list = json::array();
+        int skeletal = 0;
+        for (NodeId m : members)
+        {
+            if (const std::string n = boneName(m); !n.empty())
+            {
+                list.push_back(n);
+                ++skeletal;
+                continue;
+            }
+            const glm::dmat4 w = space * worldOf(g, m);
+            const glm::dquat q = glm::normalize(glm::quat_cast(basis * math::rotationOf(w) * glm::inverse(basis)));
+            const glm::dvec3 t = basis * glm::dvec3(w[3]);
+            json ext = {{"name", bareName(g.node(m)->path())}, {"location", {t.x, t.y, t.z}}, {"rotation", {q.x, q.y, q.z, q.w}}};
+            const NodeId other = rig::isJoint(*g.node(m)) ? characterFor(g, m) : kNoNode;
+            if (other && other != character)
+                ext["character"] = g.node(other)->name(), ext["bone"] = bareJoint(g.node(m)->name());
+            else
+                ext["prop"] = g.node(m)->path();
+            list.push_back(ext);
+        }
+        if (skeletal >= 1 && list.size() >= 2)
+            glue.push_back({{"members", list}, {"attach", rel.attach}, {"lead", leadOf(g, rel, members)}});
+    }
+    return {{"version", 2},
             {"character", g.node(character)->name()},
             {"root", bareJoint(g.node(root)->name())},
             {"hips", k.hips >= 0 ? bareJoint(g.node(k.joints[size_t(k.hips)])->name()) : ""},
@@ -803,8 +1212,14 @@ json ruleWeb(Graph& g, NodeId character)
             {"contacts", r.contacts},
             {"chains", r.chains},
             {"lines", r.lines},
+            {"isolate", r.isolate},
+            {"modes", r.modes},
             {"stiffness", stiffness},
             {"limits", limits},
+            {"pins", pins},
+            {"locks", locks},
+            {"glue", glue},
+            {"basis", {{"up", ueVec(glm::dvec3(0.0, 1.0, 0.0))}, {"side", ueVec(glm::dvec3(1.0, 0.0, 0.0))}}},
             {"lengthScale", k.problem.lengthScale}};
 }
 
@@ -825,7 +1240,9 @@ json stringsRuleWeb(const Args& a)
 
 /**
  * The rule web sent to Unreal: LilaLink makes or updates a Control Rig on the skeletal mesh with a control on each hand,
- * foot, head and the hips, each posing its bone through a Lila Strings Full Body unit given the web.
+ * foot, head and the hips and each pinned, locked or glued joint, each posing its bone through a Lila Strings unit given
+ * the web, its Mode and Isolate Rotation channels starting at the mode and setting given, its Pin and Lock channels at
+ * the joint's pin and lock, and a Glue or Attach channel per set.
  */
 json unrealStringsRig(const Args& a)
 {
@@ -870,7 +1287,22 @@ json unrealStringsRig(const Args& a)
             addControl(chain.back());
     for (const json& c : web["contacts"])
         addControl(c);
-    const json payload = {{"skeletalMesh", mesh}, {"rig", rig}, {"ruleWeb", web}, {"controls", controls}};
+    for (const json& p : web["pins"])
+        addControl(p);
+    for (const json& l : web["locks"])
+        addControl(l["bone"]);
+    for (const json& rel : web["glue"])
+        for (const json& m : rel["members"])
+            addControl(m);
+    const strings::Mode mode = modeArg(a, "unrealStringsRig");
+    const json payload = {{"skeletalMesh", mesh},
+                          {"rig", rig},
+                          {"ruleWeb", web},
+                          {"controls", controls},
+                          {"mode", strings::modeName(mode)},
+                          {"isolate", a.get<bool>("isolate", isolateRef())},
+                          {"sequence", a.get<std::string>("sequence", "")},
+                          {"fps", ops::execute("playbackOptions", {{"query", true}}).value("fps", 30.0)}};
     if (a.get<bool>("dryRun", false))
         return {{"rig", rig}, {"skeletalMesh", mesh}, {"payload", payload}};
     // Reloaded so a LilaLink update takes effect without restarting the editor.
@@ -893,7 +1325,16 @@ json unrealStringsRig(const Args& a)
         throw CommandError("unrealStringsRig: Unreal didn't build the rig" + (log.empty() ? std::string() : ":\n" + log));
     if (const json errors = result.value("errors", json::array()); !errors.empty())
         throw CommandError("unrealStringsRig: " + errors[0].get<std::string>());
-    return {{"rig", result.value("rig", rig)}, {"skeletalMesh", mesh}, {"unreal", result}};
+    json out = {{"rig", result.value("rig", rig)}, {"skeletalMesh", mesh}, {"unreal", result}};
+    for (const json& l : web["locks"])
+        if (l.contains("unsolved"))
+        {
+            const std::string w = "the IK chain to " + l["bone"].get<std::string>() + " isn't solved as Lila solves it (" +
+                                  l["unsolved"].get<std::string>() + "); Unreal holds its end where it is while locked";
+            out["warnings"].push_back(w);
+            log::write(LogLevel::Warning, "unrealStringsRig: " + w);
+        }
+    return out;
 }
 
 json stringsRestoreLengths(const Args& a)
@@ -1021,15 +1462,458 @@ void restorePoseValues(Graph& g, const std::vector<PoseValues>& saved)
     g.evaluate();
 }
 
+/** The range a pose across frames acts on, from its flags, held the way the time slider holds its selection. */
+lila::scene::anim::TimeSelection selectionArg(const Args& a, const char* command)
+{
+    namespace an = lila::scene::anim;
+    an::TimeSelection sel;
+    sel.active = true;
+    const json& r = a.flags["range"];
+    if (!r.is_array() || r.size() != 2)
+        throw CommandError(std::string(command) + ": range is [start, end] in seconds");
+    sel.start = std::min(r[0].get<double>(), r[1].get<double>());
+    sel.end = std::max(r[0].get<double>(), r[1].get<double>());
+    sel.falloff = std::max(0.0, a.get<double>("falloff", 0.0));
+    if (a.has("falloffBefore"))
+        sel.falloff = std::max(0.0, a.get<double>("falloffBefore"));
+    if (a.has("falloffAfter"))
+        sel.falloffAfter = std::max(0.0, a.get<double>("falloffAfter"));
+    else if (a.has("falloffBefore"))
+        sel.falloffAfter = std::max(0.0, a.get<double>("falloff", 0.0));
+    if (a.has("falloffType"))
+    {
+        const auto shape = an::rangeFalloffFromName(a.get<std::string>("falloffType"));
+        if (!shape)
+            throw CommandError(std::string(command) + ": falloffType is smooth, linear, sharp, soft or constant");
+        sel.shape = *shape;
+    }
+    sel.every = a.get<bool>("dense", false) ? 1 : std::clamp(a.get<int>("every", 0), 0, 100);
+    return sel;
+}
+
+/** Bumped by any change to curves, connections or nodes: what a range preview was built from is stale once it moves. */
+uint64_t& keysVersion()
+{
+    static uint64_t v = 0;
+    return v;
+}
+
+void watchKeys(Graph& g)
+{
+    static Graph* watched = nullptr;
+    if (watched == &g)
+        return;
+    watched = &g;
+    g.addListener([&g](Change c, NodeId id) {
+        if (c == Change::Selection || c == Change::Renamed)
+            return;
+        if (c == Change::Value)
+            if (const Node* n = g.node(id); n && n->type().dag)
+                return;
+        ++keysVersion();
+    });
+}
+
+/** What one frame of a pose across frames asks of a node: the drag as it lands there. */
+PoseInput frameInput(const PoseInput& in, bool relative, double w, const glm::dmat3& carry, const glm::dmat4& start, const glm::dmat4& here,
+                     bool pivot)
+{
+    PoseInput p = in;
+    if (relative)
+    {
+        if (in.move)
+            p.move = carry * *in.move * w;
+        if (in.turn)
+        {
+            p.turn = partOf(glm::quat_cast(carry) * *in.turn * glm::inverse(glm::quat_cast(carry)), w);
+            // Pivot: the frame swings about where the joint is now, so its path turns with the drag.
+            if (pivot)
+            {
+                const glm::dvec3 c(start[3]), at(here[3]);
+                p.move = p.move.value_or(glm::dvec3(0.0)) + (c + glm::dmat3(glm::mat3_cast(*p.turn)) * (at - c) - at);
+            }
+        }
+    }
+    else
+    {
+        if (in.move)
+            p.move = (glm::dvec3(start[3]) + *in.move - glm::dvec3(here[3])) * w;
+        if (in.turn)
+        {
+            const glm::dquat want = *in.turn * glm::quat_cast(math::rotationOf(start));
+            p.turn = partOf(glm::normalize(want * glm::inverse(glm::quat_cast(math::rotationOf(here)))), w);
+        }
+    }
+    return p;
+}
+
+/**
+ * A drag across frames solved in memory: every frame's skeleton, holds, starting place and channel values, read from
+ * the scene once, then solved on each update in parallel. A preview keeps it while the drag goes on.
+ */
+struct RangePreview
+{
+    struct Item
+    {
+        std::shared_ptr<Prepared> prep;
+        glm::dmat4 here{1.0};
+        glm::dmat3 carry{1.0};
+        bool pivot = false;
+        /** Keying only: each joint's rotate, translate and rotate order at the frame, to turn solved rotations back into its channels. */
+        std::vector<glm::dvec3> rotate, translate;
+        std::vector<RotateOrder> order;
+    };
+    struct Frame
+    {
+        double t = 0.0, w = 0.0;
+        bool ghost = false;
+        std::vector<Item> items;
+    };
+    Graph* graph = nullptr;
+    std::string key;
+    uint64_t keys = 0;
+    std::vector<Frame> frames;
+    std::vector<glm::dmat4> start;
+    std::vector<PoseValues> unkeyed;
+    bool pivotInPlace = false;
+    /** Mesh ghosts recapture a few per update, round the ghosts in turn, so a long range stays interactive. */
+    size_t nextMeshGhost = 0;
+    std::map<double, std::shared_ptr<const ghosts::Frame>> meshGhosts;
+};
+
+std::unique_ptr<RangePreview>& rangePreview()
+{
+    static std::unique_ptr<RangePreview> p;
+    return p;
+}
+
+/** The call as a cache key: everything but the drag itself, and the prefs a pose reads. */
+std::string previewKey(const std::vector<NodeId>& nodes, const Args& a, strings::Mode mode, const std::vector<double>& times)
+{
+    json k = a.flags;
+    for (const char* drag : {"by", "axis", "angle", "preview"})
+        k.erase(drag);
+    k["#nodes"] = nodes;
+    k["#mode"] = strings::modeName(mode);
+    k["#times"] = times;
+    k["#prefs"] = {contactsRef(), isolateRef(), rotationTypeRef(), relations().size()};
+    return k.dump();
+}
+
+/** The in-memory path: character joints only, nothing glued, no auto-pose. */
+bool solvesInMemory(Graph& g, const std::vector<NodeId>& nodes, const PoseInput& in)
+{
+    if (!relations().empty() || in.autoPose)
+        return false;
+    for (NodeId n : nodes)
+        if (const Node* node = g.node(n); !node || !rig::isJoint(*node) || !characterRoot(g, characterFor(g, n)))
+            return false;
+    return true;
+}
+
+std::unique_ptr<RangePreview> buildAcross(Graph& g, const std::vector<NodeId>& nodes, const PoseInput& in, strings::Mode mode,
+                                          const std::vector<double>& times, const std::vector<double>& ghostTimes,
+                                          const lila::scene::anim::TimeSelection& sel, const std::string& space, bool pivot, bool values)
+{
+    LILA_ZONE_N("strings range build");
+    auto p = std::make_unique<RangePreview>();
+    p->graph = &g;
+    const double now = g.time();
+    g.evaluate();
+    p->unkeyed = savePoseValues(g, nodes);
+    std::vector<glm::dmat3> space0;
+    for (NodeId n : nodes)
+    {
+        p->start.push_back(worldOf(g, n));
+        space0.push_back(spaceAt(g, n, space));
+    }
+    {
+        RulesCacheScope rules;
+        Graph::DeferMeshes defer;
+        for (double t : times)
+        {
+            const double w = lila::scene::anim::timeSelectionWeight(sel, t);
+            if (w <= 0.0)
+                continue;
+            g.setTime(t, false);
+            g.evaluate();
+            RangePreview::Frame f{.t = t, .w = w};
+            f.ghost = std::any_of(ghostTimes.begin(), ghostTimes.end(), [&](double x) { return std::abs(x - t) < 1e-9; });
+            for (size_t i = 0; i < nodes.size(); ++i)
+            {
+                RangePreview::Item item;
+                item.prep = std::make_shared<Prepared>(prepareJoint(g, nodes[i], mode, in));
+                item.here = worldOf(g, nodes[i]);
+                item.carry = spaceAt(g, nodes[i], space) * glm::transpose(space0[i]);
+                const Prepared& pr = *item.prep;
+                item.pivot = pivot && strings::movesOrigin(mode, pr.bone == pr.k.hips);
+                if (pivot && !item.pivot)
+                    p->pivotInPlace = true;
+                for (NodeId j : values ? pr.k.joints : std::vector<NodeId>{})
+                {
+                    item.rotate.push_back(vecOf(g, j, Transform::kRotate));
+                    item.translate.push_back(vecOf(g, j, Transform::kTranslate));
+                    item.order.push_back(rotateOrderOf(g, j));
+                }
+                f.items.push_back(std::move(item));
+            }
+            p->frames.push_back(std::move(f));
+        }
+        g.setTime(now, false);
+    }
+    restorePoseValues(g, p->unkeyed);
+    p->keys = keysVersion();
+    return p;
+}
+
+/** Every frame's poses for the drag in, solved in parallel: the snapshots are plain data. */
+std::vector<std::vector<strings::Result>> solveAcross(const RangePreview& p, const PoseInput& in, bool relative)
+{
+    LILA_ZONE_N("strings range solve");
+    std::vector<std::vector<strings::Result>> solved(p.frames.size());
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, p.frames.size()), [&](const tbb::blocked_range<size_t>& range) {
+        for (size_t fi = range.begin(); fi != range.end(); ++fi)
+        {
+            const RangePreview::Frame& f = p.frames[fi];
+            for (size_t i = 0; i < f.items.size(); ++i)
+            {
+                const RangePreview::Item& item = f.items[i];
+                const PoseInput fin = frameInput(in, relative, f.w, item.carry, p.start[i], item.here, item.pivot);
+                strings::Request r = item.prep->r;
+                r.move = fin.move;
+                r.turn = fin.turn;
+                bool fellBack = false;
+                solved[fi].push_back(solvePrepared(*item.prep, r, fellBack));
+            }
+        }
+    });
+    return solved;
+}
+
+/** A ghost of a solved frame drawn from the solve itself: each joint to its parent, as the skeleton ghosts draw. */
+std::shared_ptr<const ghosts::Frame> skeletonGhost(const RangePreview::Frame& f, const std::vector<strings::Result>& solved)
+{
+    auto out = std::make_shared<ghosts::Frame>();
+    out->time = f.t;
+    for (size_t i = 0; i < f.items.size(); ++i)
+    {
+        const strings::Skeleton& k = f.items[i].prep->k;
+        const std::vector<glm::dmat4> w = strings::worlds(k.problem, solved[i].pose);
+        for (size_t b = 0; b < w.size(); ++b)
+            if (const int parent = k.problem.bones[b].parent; parent >= 0)
+                out->bones.push_back({glm::dvec3(w[size_t(parent)][3]), glm::dvec3(w[b][3])});
+    }
+    return out;
+}
+
+/** Whether a cached build serves this call: the same call, keys and scene. */
+bool reusable(const RangePreview* p, Graph& g, const std::string& key)
+{
+    return p && p->graph == &g && p->key == key && p->keys == keysVersion();
+}
+
+json previewAcross(Graph& g, const std::vector<NodeId>& nodes, const Args& a, const PoseInput& in, strings::Mode mode, const std::vector<double>& times,
+                   const std::vector<double>& ghostTimes, const lila::scene::anim::TimeSelection& sel, bool relative, const std::string& space, bool pivot)
+{
+    LILA_ZONE();
+    watchKeys(g);
+    std::unique_ptr<RangePreview>& cached = rangePreview();
+    const std::string key = previewKey(nodes, a, mode, times);
+    if (!reusable(cached.get(), g, key))
+    {
+        cached = buildAcross(g, nodes, in, mode, times, ghostTimes, sel, space, pivot, false);
+        cached->key = key;
+    }
+    RangePreview& p = *cached;
+    const std::vector<std::vector<strings::Result>> solved = solveAcross(p, in, relative);
+
+    json out = json::array();
+    for (size_t fi = 0; fi < p.frames.size(); ++fi)
+    {
+        json at = json::array();
+        for (size_t i = 0; i < p.frames[fi].items.size(); ++i)
+        {
+            const RangePreview::Item& item = p.frames[fi].items[i];
+            at.push_back(vecJson(glm::dvec3(strings::worlds(item.prep->k.problem, solved[fi][i].pose)[size_t(item.prep->bone)][3])));
+        }
+        json entry = {{"time", p.frames[fi].t}, {"weight", p.frames[fi].w}, {"at", at}};
+        if (p.pivotInPlace)
+            entry["pivot"] = "in place";
+        out.push_back(std::move(entry));
+    }
+
+    // Skeleton ghosts come straight from the solve. Mesh ghosts need the scene at their frame: a few per update, in turn,
+    // within a time budget, the rest keeping their last capture.
+    const ghosts::Settings gs = ghosts::Settings::fromPrefs();
+    std::vector<size_t> ghostFrames;
+    for (size_t fi = 0; fi < p.frames.size(); ++fi)
+        if (p.frames[fi].ghost)
+            ghostFrames.push_back(fi);
+    std::vector<std::shared_ptr<const ghosts::Frame>> frames;
+    if (!gs.mesh)
+        for (size_t fi : ghostFrames)
+            frames.push_back(skeletonGhost(p.frames[fi], solved[fi]));
+    else if (!ghostFrames.empty())
+    {
+        const double now = g.time();
+        const auto t0 = std::chrono::steady_clock::now();
+        bool stepped = false;
+        for (size_t n = 0; n < ghostFrames.size(); ++n)
+        {
+            if (n > 0 && std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() > 24.0)
+                break;
+            const size_t fi = ghostFrames[(p.nextMeshGhost + n) % ghostFrames.size()];
+            const RangePreview::Frame& f = p.frames[fi];
+            g.setTime(f.t, false);
+            g.evaluate();
+            stepped = true;
+            for (size_t i = 0; i < f.items.size(); ++i)
+                strings::apply(g, f.items[i].prep->k, solved[fi][i].pose);
+            g.evaluate();
+            p.meshGhosts[f.t] = ghosts::cache().captureNow(f.t);
+            p.nextMeshGhost = (p.nextMeshGhost + n + 1) % ghostFrames.size();
+        }
+        if (stepped)
+        {
+            g.setTime(now, false);
+            restorePoseValues(g, p.unkeyed);
+        }
+        for (size_t fi : ghostFrames)
+            if (const auto it = p.meshGhosts.find(p.frames[fi].t); it != p.meshGhosts.end())
+                frames.push_back(it->second);
+            else
+                frames.push_back(skeletonGhost(p.frames[fi], solved[fi]));
+    }
+    ghosts::cache().setPreview(std::move(frames));
+    return out;
+}
+
+/**
+ * Keys v on node.attr at t straight onto its curves, which is what makes keying a long range quick; on a layer, or a
+ * channel something other than a curve drives, the slower keyVec way that works out what to key there.
+ */
+void keyChannels(Graph& g, NodeId id, int attr, const glm::dvec3& v, double t)
+{
+    namespace an = lila::scene::anim;
+    if (an::activeLayer(g) == kNoNode)
+        try
+        {
+            if (attr == Transform::kRotate && an::keysAsRotation(g, {id, attr, -1}))
+                an::setRotationKey(g, {id, attr, -1}, t, v);
+            else
+                for (int c = 0; c < 3; ++c)
+                    an::setKey(g, {id, attr, c}, t, v[c]);
+            return;
+        }
+        catch (const std::invalid_argument&)
+        {
+        }
+    keyVec(g.node(id)->path(), attr == Transform::kRotate ? "rotate" : attr == Transform::kScale ? "scale" : "translate", v, t);
+}
+
+/** The same solve keyed: each frame's changed channels, from the values it held, keyed once all are solved. */
+json commitAcross(Graph& g, const std::vector<NodeId>& nodes, const Args& a, const PoseInput& in, strings::Mode mode, const std::vector<double>& times,
+                  const lila::scene::anim::TimeSelection& sel, bool relative, const std::string& space, bool pivot)
+{
+    LILA_ZONE();
+    namespace an = lila::scene::anim;
+    const std::unique_ptr<RangePreview> built = buildAcross(g, nodes, in, mode, times, {}, sel, space, pivot, true);
+    const RangePreview& p = *built;
+    const std::vector<std::vector<strings::Result>> solved = solveAcross(p, in, relative);
+
+    struct Keyed
+    {
+        double t;
+        std::vector<std::tuple<NodeId, int, glm::dvec3>> values;
+    };
+    std::vector<Keyed> keyed;
+    std::set<std::pair<NodeId, int>> plugs;
+    json out = json::array();
+    for (size_t fi = 0; fi < p.frames.size(); ++fi)
+    {
+        const RangePreview::Frame& f = p.frames[fi];
+        Keyed k{f.t, {}};
+        json poses = json::array();
+        for (size_t i = 0; i < f.items.size(); ++i)
+        {
+            const RangePreview::Item& item = f.items[i];
+            const strings::Skeleton& sk = item.prep->k;
+            const strings::Pose& s = solved[fi][i].pose;
+            for (size_t j = 0; j < sk.joints.size(); ++j)
+            {
+                const fbik::Bone& b = sk.problem.bones[j];
+                if (glm::abs(glm::dot(s.rotation[j], b.rotation)) < 1.0 - 1e-14)
+                {
+                    const glm::dvec3 r = xformops::closestEuler(glm::mat3_cast(s.rotation[j]), item.order[j], item.rotate[j]);
+                    if (glm::length(r - item.rotate[j]) > 1e-9)
+                    {
+                        k.values.push_back({sk.joints[j], int(Transform::kRotate), r});
+                        plugs.insert({sk.joints[j], int(Transform::kRotate)});
+                    }
+                }
+                const glm::dvec3 move = s.offset[j] + (s.stretch[j] - 1.0) * glm::dvec3(b.before[3]);
+                if (glm::length(move) > 1e-9)
+                {
+                    k.values.push_back({sk.joints[j], int(Transform::kTranslate), item.translate[j] + move});
+                    plugs.insert({sk.joints[j], int(Transform::kTranslate)});
+                }
+            }
+            json pose = {{"joint", g.node(nodes[i])->path()}, {"mode", strings::modeName(mode)}, {"error", solved[fi][i].error}};
+            if (mode == strings::Mode::Default)
+                pose["resolved"] = strings::modeName(solved[fi][i].resolved);
+            poses.push_back(std::move(pose));
+        }
+        keyed.push_back(std::move(k));
+        json entry = {{"time", f.t}, {"weight", f.w}, {"poses", poses}};
+        if (p.pivotInPlace)
+            entry["pivot"] = "in place";
+        out.push_back(std::move(entry));
+    }
+    // Keying every n frames: the frames just past the edit keep their pose, so the frames beyond them don't change.
+    const double now = g.time();
+    if (sel.every > 0 && !p.frames.empty())
+    {
+        for (double t : {an::secondsOf(an::frameOf(p.frames.front().t) - 1.0), an::secondsOf(an::frameOf(p.frames.back().t) + 1.0)})
+        {
+            g.setTime(t, false);
+            g.evaluate();
+            Keyed edge{t, {}};
+            for (const auto& [id, attr] : plugs)
+                edge.values.push_back({id, attr, vecOf(g, id, attr)});
+            keyed.push_back(std::move(edge));
+        }
+        g.setTime(now, false);
+        restorePoseValues(g, p.unkeyed);
+    }
+    if (p.pivotInPlace)
+        log::write(LogLevel::Info, std::string("stringsPose: pivot swings only joints the ") + strings::modeName(mode) +
+                                       " mode can move; the rest turned in place");
+    // Auto key would key each value as it is set.
+    const bool autoKeyWas = an::autoKey();
+    an::setAutoKey(false);
+    {
+        LayerScope onLayer(g, a.get<std::string>("layer", ""));
+        LILA_ZONE_N("strings range keys");
+        for (const Keyed& k : keyed)
+            for (const auto& [id, attr, v] : k.values)
+                keyChannels(g, id, attr, v, k.t);
+    }
+    an::setAutoKey(autoKeyWas);
+    g.setTime(now, false);
+    g.evaluate();
+    return out;
+}
+
 /**
  * The same pose at every frame of a set, each solved on that frame's own pose so holds and contacts keep per frame, and
  * keyed there. Relative offsets each frame by the drag (in space), scaled by the falloff weight; absolute brings each
- * frame to where the drag put the joint now.
+ * frame to where the drag put the joint now. Rotation type pivot swings each frame about where the joint is now.
  */
-json poseAcrossFrames(Graph& g, const std::vector<NodeId>& nodes, const Args& a, const PoseInput& in,
+json poseAcrossFrames(Graph& g, const std::vector<NodeId>& nodes, const Args& a, const PoseInput& in, strings::Mode mode,
                       const std::function<json(NodeId, const PoseInput&)>& poseOne)
 {
-    lila::scene::anim::TimeSelection sel;
+    namespace an = lila::scene::anim;
+    an::TimeSelection sel;
     sel.active = true;
     std::vector<double> times;
     if (a.has("frames"))
@@ -1037,38 +1921,30 @@ json poseAcrossFrames(Graph& g, const std::vector<NodeId>& nodes, const Args& a,
             times.push_back(t.get<double>());
     if (a.has("range"))
     {
-        const json& r = a.flags["range"];
-        if (!r.is_array() || r.size() != 2)
-            throw CommandError("stringsPose: range is [start, end] in seconds");
-        sel.start = std::min(r[0].get<double>(), r[1].get<double>());
-        sel.end = std::max(r[0].get<double>(), r[1].get<double>());
-        sel.falloff = std::max(0.0, a.get<double>("falloff", 0.0));
-        const double from = lila::scene::anim::frameOf(sel.start) - sel.falloff, to = lila::scene::anim::frameOf(sel.end) + sel.falloff;
-        if (a.get<bool>("dense", false))
-            for (double f = std::ceil(from - 1e-6); f <= to + 1e-6; f += 1.0)
-                times.push_back(lila::scene::anim::secondsOf(f));
-        else
-        {
-            std::vector<NodeId> keyed;
-            for (NodeId n : nodes)
-                if (const NodeId c = characterFor(g, n))
-                {
-                    const std::vector<NodeId> js = fullBodyJoints(g, n);
-                    keyed.insert(keyed.end(), js.begin(), js.end());
-                    (void)c;
-                }
-                else
-                    keyed.push_back(n);
-            for (double t : lila::scene::anim::keyTimes(g, keyed))
-                if (lila::scene::anim::frameOf(t) >= from - 1e-6 && lila::scene::anim::frameOf(t) <= to + 1e-6)
-                    times.push_back(t);
-        }
+        sel = selectionArg(a, "stringsPose");
+        std::vector<NodeId> keyed;
+        for (NodeId n : nodes)
+            if (characterFor(g, n))
+            {
+                const std::vector<NodeId> js = fullBodyJoints(g, n);
+                keyed.insert(keyed.end(), js.begin(), js.end());
+            }
+            else
+                keyed.push_back(n);
+        for (double t : an::timeSelectionFrames(sel, an::keyTimes(g, keyed)))
+            times.push_back(t);
     }
     else if (!times.empty())
     {
         sel.start = *std::min_element(times.begin(), times.end());
         sel.end = *std::max_element(times.begin(), times.end());
     }
+    const std::string rotationType = a.get<std::string>("rotationType", rotationTypeRef());
+    if (rotationType != "local" && rotationType != "pivot")
+        throw CommandError("stringsPose: rotationType is local or pivot");
+    const bool relative = a.get<bool>("relative", true);
+    const bool pivot = relative && rotationType == "pivot" && in.turn;
+    const std::string space = a.get<std::string>("space", "world");
     // A preview also solves the frames the ghosts and a trail show, so they follow the drag; between keys that is
     // the solve of the interpolated pose, close to what the keys will give.
     const bool preview = a.get<bool>("preview", false);
@@ -1082,13 +1958,16 @@ json poseAcrossFrames(Graph& g, const std::vector<NodeId>& nodes, const Args& a,
             for (const json& t : a.flags["show"])
                 times.push_back(t.get<double>());
     }
+    else
+        rangePreview().reset();
     std::sort(times.begin(), times.end());
     times.erase(std::unique(times.begin(), times.end(), [](double x, double y) { return std::abs(x - y) < 1e-9; }), times.end());
     if (times.empty())
-        throw CommandError("stringsPose: no frames to pose in the range (no keys there; dense poses every frame)");
+        throw CommandError("stringsPose: no frames to pose in the range (no keys there; every or dense poses frames without keys)");
+    if (solvesInMemory(g, nodes, in))
+        return preview ? previewAcross(g, nodes, a, in, mode, times, ghostTimes, sel, relative, space, pivot)
+                       : commitAcross(g, nodes, a, in, mode, times, sel, relative, space, pivot);
 
-    const bool relative = a.get<bool>("relative", true);
-    const std::string space = a.get<std::string>("space", "world");
     const double now = g.time();
     g.evaluate();
     struct Start
@@ -1110,22 +1989,24 @@ json poseAcrossFrames(Graph& g, const std::vector<NodeId>& nodes, const Args& a,
         std::vector<std::pair<std::string, glm::dvec3>> values;
     };
     std::vector<Solved> solved;
-    const bool autoKeyWas = lila::scene::anim::autoKey();
-    lila::scene::anim::setAutoKey(false);
+    const bool autoKeyWas = an::autoKey();
+    an::setAutoKey(false);
     auto finish = [&] {
         gWritten = nullptr;
-        lila::scene::anim::setAutoKey(autoKeyWas);
+        an::setAutoKey(autoKeyWas);
         g.setTime(now, false);
         g.evaluate();
     };
     json out = json::array();
     std::vector<std::string> plugs;
     gWritten = &plugs;
+    bool inPlace = false;
     try
     {
+        RulesCacheScope rules;
         for (double t : times)
         {
-            const double w = lila::scene::anim::timeSelectionWeight(sel, t);
+            const double w = an::timeSelectionWeight(sel, t);
             if (w <= 0.0)
                 continue;
             g.setTime(t, false);
@@ -1136,26 +2017,14 @@ json poseAcrossFrames(Graph& g, const std::vector<NodeId>& nodes, const Args& a,
             {
                 const Start& s0 = start[n];
                 const glm::dmat4 here = worldOf(g, n);
-                PoseInput p = in;
-                if (relative)
+                bool swing = pivot;
+                if (pivot && rig::isJoint(*g.node(n)) && characterRoot(g, characterFor(g, n)))
                 {
-                    const glm::dmat3 carry = spaceAt(g, n, space) * glm::transpose(s0.space);
-                    if (in.move)
-                        p.move = carry * *in.move * w;
-                    if (in.turn)
-                        p.turn = partOf(glm::quat_cast(carry) * *in.turn * glm::inverse(glm::quat_cast(carry)), w);
+                    const strings::Skeleton k = strings::snapshot(g, characterRoot(g, characterFor(g, n)));
+                    swing = strings::movesOrigin(mode, k.boneOf(n) == k.hips);
+                    inPlace = inPlace || !swing;
                 }
-                else
-                {
-                    if (in.move)
-                        p.move = (glm::dvec3(s0.world[3]) + *in.move - glm::dvec3(here[3])) * w;
-                    if (in.turn)
-                    {
-                        const glm::dquat want = *in.turn * glm::quat_cast(math::rotationOf(s0.world));
-                        p.turn = partOf(glm::normalize(want * glm::inverse(glm::quat_cast(math::rotationOf(here)))), w);
-                    }
-                }
-                frame.push_back(poseOne(n, p));
+                frame.push_back(poseOne(n, frameInput(in, relative, w, spaceAt(g, n, space) * glm::transpose(s0.space), s0.world, here, swing)));
             }
             if (preview)
             {
@@ -1179,7 +2048,8 @@ json poseAcrossFrames(Graph& g, const std::vector<NodeId>& nodes, const Args& a,
                 here.values.push_back({plug, vecOf(g, id, attr)});
             }
             solved.push_back(std::move(here));
-            out.push_back({{"time", t}, {"weight", w}, {"poses", frame}});
+            json entry = {{"time", t}, {"weight", w}, {"poses", frame}};
+            out.push_back(std::move(entry));
         }
     }
     catch (...)
@@ -1189,6 +2059,13 @@ json poseAcrossFrames(Graph& g, const std::vector<NodeId>& nodes, const Args& a,
             restorePoseValues(g, unkeyed);
         throw;
     }
+    if (inPlace)
+    {
+        log::write(LogLevel::Info, std::string("stringsPose: pivot swings only joints the ") + strings::modeName(mode) +
+                                       " mode can move; the rest turned in place");
+        for (json& f : out)
+            f["pivot"] = "in place";
+    }
     if (preview)
     {
         finish();
@@ -1196,8 +2073,8 @@ json poseAcrossFrames(Graph& g, const std::vector<NodeId>& nodes, const Args& a,
         ghosts::cache().setPreview(std::move(ghostFrames));
         return out;
     }
-    // Dense: the frames just past the edit keep their pose, so the frames beyond them don't change.
-    if (a.get<bool>("dense", false) && !solved.empty())
+    // Keying every n frames: the frames just past the edit keep their pose, so the frames beyond them don't change.
+    if (sel.every > 0 && !solved.empty())
     {
         std::vector<std::string> all;
         for (const Solved& f : solved)
@@ -1205,8 +2082,7 @@ json poseAcrossFrames(Graph& g, const std::vector<NodeId>& nodes, const Args& a,
                 all.push_back(v.first);
         std::sort(all.begin(), all.end());
         all.erase(std::unique(all.begin(), all.end()), all.end());
-        for (double t : {lila::scene::anim::secondsOf(lila::scene::anim::frameOf(times.front()) - 1.0),
-                         lila::scene::anim::secondsOf(lila::scene::anim::frameOf(times.back()) + 1.0)})
+        for (double t : {an::secondsOf(an::frameOf(times.front()) - 1.0), an::secondsOf(an::frameOf(times.back()) + 1.0)})
         {
             g.setTime(t, false);
             g.evaluate();
@@ -1294,7 +2170,7 @@ struct FrameKeys
             for (const auto& [plug, v] : values)
             {
                 const size_t dot = plug.rfind('.');
-                keyVec(plug.substr(0, dot), plug.substr(dot + 1), v, t);
+                keyChannels(g, g.find(plug.substr(0, dot))->id(), plug.substr(dot + 1) == "rotate" ? int(Transform::kRotate) : int(Transform::kTranslate), v, t);
             }
     }
 };
@@ -2013,6 +2889,45 @@ std::function<double(NodeId, double)> breakdownWeights(Graph& g, NodeId characte
     };
 }
 
+/** With Isolate Rotation on, the rules' isolated joints turn to their blended world rotation after an inbetween. */
+void isolateInbetween(Graph& g, NodeId character, const std::vector<std::pair<NodeId, std::pair<glm::dmat4, glm::dmat4>>>& isolated, double f)
+{
+    if (isolated.empty())
+        return;
+    g.evaluate();
+    for (const auto& [j, ends] : isolated)
+    {
+        setWorldRotation(g, j, math::rotationOf(blendWorld(ends.first, ends.second, f)));
+        g.evaluate();
+    }
+    (void)character;
+}
+
+/** The joints Isolate Rotation keeps, with their worlds at two times. */
+std::vector<std::pair<NodeId, std::pair<glm::dmat4, glm::dmat4>>> isolatedAt(Graph& g, NodeId character, strings::Mode mode, double a, double b)
+{
+    std::vector<std::pair<NodeId, std::pair<glm::dmat4, glm::dmat4>>> out;
+    if (!isolateRef() || !holdsInWorld(mode))
+        return out;
+    const CharacterRules rules = rulesOf(g, character);
+    std::vector<NodeId> joints;
+    for (NodeId j : fullBodyJoints(g, characterRoot(g, character)))
+        if (std::find(rules.isolate.begin(), rules.isolate.end(), bareJoint(g.node(j)->name())) != rules.isolate.end())
+            joints.push_back(j);
+    std::vector<glm::dmat4> wa, wb;
+    atTime(g, a, [&] {
+        for (NodeId j : joints)
+            wa.push_back(worldOf(g, j));
+    });
+    atTime(g, b, [&] {
+        for (NodeId j : joints)
+            wb.push_back(worldOf(g, j));
+    });
+    for (size_t i = 0; i < joints.size(); ++i)
+        out.push_back({joints[i], {wa[i], wb[i]}});
+    return out;
+}
+
 /**
  * Breakdown in space: weight -1 is the previous key's pose, 0 now, 1 the next key's, past either overshoots. Rotations
  * blend in their parents' space (arcs), the feet in world, so planted feet stay planted between two planted keys.
@@ -2028,12 +2943,15 @@ json stringsBreakdown(const Args& a)
     const std::optional<double> other = w < 0.0 ? before : after;
     if (!other)
         throw CommandError(std::string("stringsBreakdown: no ") + (w < 0.0 ? "previous" : "next") + " key to blend toward");
-    const std::vector<NodeId> parts = worldParts(g, character, a);
+    const strings::Mode mode = modeArg(a, "stringsBreakdown");
+    const std::vector<NodeId> parts = holdsInWorld(mode) ? worldParts(g, character, a) : std::vector<NodeId>{};
+    const auto isolated = isolatedAt(g, character, mode, g.time(), *other);
     g.evaluate();
     const Keyframe now = keyframeNow(g, joints, parts);
     const Keyframe target = keyframeAt(g, joints, parts, *other);
     inbetween(g, character, joints, parts, now, target, std::abs(w), breakdownWeights(g, character, a));
-    return {{"from", g.time()}, {"toward", *other}, {"joints", joints.size()}};
+    isolateInbetween(g, character, isolated, std::abs(w));
+    return {{"from", g.time()}, {"toward", *other}, {"joints", joints.size()}, {"mode", strings::modeName(mode)}};
 }
 
 /** Spacing from 0 to 1 over an inbetween: linear, slow in, slow out or both. */
@@ -2088,6 +3006,288 @@ json stringsFill(const Args& a)
     }
     out.key(a.get<std::string>("layer", ""));
     return {{"filled", filled}, {"between", keys.size() - 1}};
+}
+
+/** The range a range command acts on: its flags, else the time slider's selection with its falloff and every. */
+lila::scene::anim::TimeSelection rangeSelection(const Args& a, const char* command)
+{
+    if (a.has("range"))
+        return selectionArg(a, command);
+    const lila::scene::anim::TimeSelection& sel = lila::scene::anim::timeSelection();
+    if (!sel.active)
+        throw CommandError(std::string(command) + ": give a range, or Shift + drag one on the time slider");
+    return sel;
+}
+
+/**
+ * Tween a range: each frame of it blends toward the inbetween of the poses just outside the range and its falloff,
+ * space-aware (rotations on arcs, contacts in world), by amount times the frame's falloff weight. 1 replaces the motion
+ * with the inbetween, past 1 overshoots it, below 0 pushes the motion further from it.
+ */
+json stringsTween(const Args& a)
+{
+    namespace an = lila::scene::anim;
+    Graph& g = graph();
+    const std::vector<NodeId> picked = poseJoints(g, a, "stringsTween");
+    const NodeId character = onlyCharacter(g, picked, "stringsTween");
+    const std::vector<NodeId> joints = a.get<bool>("all", true) ? fullBodyJoints(g, characterRoot(g, character)) : picked;
+    const an::TimeSelection sel = rangeSelection(a, "stringsTween");
+    const strings::Mode mode = modeArg(a, "stringsTween");
+    const double amount = std::clamp(a.get<double>("amount", 1.0), -1.0, 2.0);
+    const std::string curve = a.get<std::string>("spacing", "linear");
+    const double f0 = std::round(an::frameOf(sel.start) - sel.before() - 1.0), f1 = std::round(an::frameOf(sel.end) + sel.after() + 1.0);
+    const std::vector<NodeId> parts = holdsInWorld(mode) ? worldParts(g, character, a) : std::vector<NodeId>{};
+    const Keyframe from = keyframeAt(g, joints, parts, an::secondsOf(f0)), to = keyframeAt(g, joints, parts, an::secondsOf(f1));
+    const auto isolated = isolatedAt(g, character, mode, an::secondsOf(f0), an::secondsOf(f1));
+    const bool preview = a.get<bool>("preview", false);
+    std::vector<double> frames = an::timeSelectionFrames(sel, an::keyTimes(g, joints));
+    if (preview)
+    {
+        // A drag on the slider: only the frame shown and the ghosts' frames are solved, each frame stands alone.
+        std::vector<double> shown{g.time()};
+        for (const auto& [t, offset] : ghosts::cache().shownTimes(ghosts::Settings::fromPrefs()))
+            shown.push_back(t);
+        frames = shown;
+    }
+    if (frames.empty())
+        throw CommandError("stringsTween: no keys in the range; set the range to key every n frames");
+
+    auto tweenAt = [&](double t) {
+        g.evaluate();
+        const Keyframe self = keyframeNow(g, joints, parts);
+        const double x = (an::frameOf(t) - f0) / (f1 - f0);
+        inbetween(g, character, joints, parts, from, to, spacing(curve, x));
+        isolateInbetween(g, character, isolated, spacing(curve, x));
+        g.evaluate();
+        const Keyframe target = keyframeNow(g, joints, parts);
+        inbetween(g, character, joints, parts, self, target, amount * an::timeSelectionWeight(sel, t));
+        g.evaluate();
+    };
+
+    const double now = g.time();
+    if (preview)
+    {
+        const std::vector<PoseValues> unkeyed = savePoseValues(g, joints);
+        std::vector<std::shared_ptr<const ghosts::Frame>> ghostFrames;
+        {
+            Graph::DeferMeshes defer;
+            for (double t : frames)
+            {
+                if (std::abs(t - now) < 1e-9 || an::timeSelectionWeight(sel, t) <= 0.0)
+                    continue;
+                g.setTime(t, false);
+                tweenAt(t);
+                ghostFrames.push_back(ghosts::cache().captureNow(t));
+            }
+            g.setTime(now, false);
+            restorePoseValues(g, unkeyed);
+        }
+        if (an::timeSelectionWeight(sel, now) > 0.0)
+            tweenAt(now);
+        ghosts::cache().setPreview(std::move(ghostFrames));
+        return {{"frames", frames.size()}, {"preview", true}};
+    }
+
+    FrameKeys out(g);
+    int tweened = 0;
+    {
+        Graph::DeferMeshes defer;
+        for (double t : frames)
+        {
+            if (an::timeSelectionWeight(sel, t) <= 0.0)
+                continue;
+            g.setTime(t, false);
+            tweenAt(t);
+            out.record(t, joints);
+            ++tweened;
+        }
+        // Keyed every n frames, the frames just outside keep their pose, so nothing beyond them changes.
+        if (sel.every > 0)
+            for (double f : {f0, f1})
+            {
+                g.setTime(an::secondsOf(f), false);
+                g.evaluate();
+                out.record(an::secondsOf(f), joints);
+            }
+    }
+    out.key(a.get<std::string>("layer", ""));
+    return {{"tweened", tweened}, {"from", an::secondsOf(f0)}, {"to", an::secondsOf(f1)}};
+}
+
+/**
+ * Mirror in a mode: the selected joints take the pose of their other side (left arm onto right), posed through the
+ * Strings mode so what holds stays: in Backward the feet keep planted while the body mirrors around them.
+ */
+json stringsMirror(const Args& a)
+{
+    Graph& g = graph();
+    const std::vector<NodeId> joints = poseJoints(g, a, "stringsMirror");
+    const NodeId character = onlyCharacter(g, joints, "stringsMirror");
+    const NodeId root = characterRoot(g, character);
+    const std::string axis = a.get<std::string>("mirrorAxis", "x");
+    g.evaluate();
+    const std::vector<NodeId> all = fullBodyJoints(g, root);
+    const poses::Pose mirrored = poses::mirrored(g, poses::capture(g, all, {"rotate", "translate"}), all, axis.empty() ? 'x' : axis[0]);
+    std::vector<NodeId> posed;
+    std::vector<glm::dquat> target;
+    json skipped = json::array();
+    for (NodeId j : joints)
+    {
+        const std::string name = poses::stripNamespace(g.node(j)->name());
+        const json& entry = mirrored.nodes.contains(name) ? mirrored.nodes[name] : json();
+        if (!entry.is_object() || !entry.contains("rotate"))
+        {
+            skipped.push_back(g.node(j)->path());
+            continue;
+        }
+        const json& q = entry["rotate"];
+        posed.push_back(j);
+        target.push_back(glm::normalize(glm::dquat(q[3].get<double>(), q[0].get<double>(), q[1].get<double>(), q[2].get<double>())));
+    }
+    // The hips carry the body: their place mirrors too, before the mode poses the rest around what holds.
+    const strings::Skeleton k = strings::snapshot(g, root);
+    if (const NodeId hips = k.hips >= 0 ? k.joints[size_t(k.hips)] : kNoNode; hips && std::find(joints.begin(), joints.end(), hips) != joints.end())
+        if (const std::string name = poses::stripNamespace(g.node(hips)->name()); mirrored.nodes.contains(name) && mirrored.nodes[name].contains("translate"))
+        {
+            const json& t = mirrored.nodes[name]["translate"];
+            g.setValue({hips, Transform::kTranslate, -1}, glm::dvec3(t[0].get<double>(), t[1].get<double>(), t[2].get<double>()));
+        }
+    const strings::Mode mode = modeArg(a, "stringsMirror");
+    json out = {{"mode", strings::modeName(mode)}, {"poses", poseToRotations(g, posed, target, mode, a)}};
+    if (!skipped.empty())
+        out["skipped"] = skipped;
+    return out;
+}
+
+/** A channel a curve range edit writes: the node, its vec3 attr and the component, from a plug like "hips.translateY". */
+struct RangeChannel
+{
+    NodeId node = kNoNode;
+    std::string attr; // "translate", "rotate", "scale"
+    int component = 0;
+    std::string plug;
+};
+
+RangeChannel rangeChannel(Graph& g, const std::string& name)
+{
+    PlugRef p;
+    try
+    {
+        p = g.plug(name);
+    }
+    catch (const std::invalid_argument& e)
+    {
+        throw CommandError(std::string("curveRangeEdit: ") + e.what());
+    }
+    const std::string& attr = g.attr(p).name;
+    if ((attr != "translate" && attr != "rotate" && attr != "scale") || p.component < 0)
+        throw CommandError("curveRangeEdit: " + name + " is not one axis of a translate, rotate or scale");
+    return {p.node, attr, p.component, g.plugName(p)};
+}
+
+/**
+ * The Curve Overlay's edits across a time range, in channel space: offset adds to every frame of the range (falloff
+ * weighted), tween blends every frame toward the line between the values just outside the range and its falloff. Keys
+ * the range's keys, or every n frames as the range says, and the frames just outside when it keys every n. Pivot turns
+ * a rotate channel of the joint that carries a character (its hips) through stringsPose, so the body's path swings too.
+ */
+json curveRangeEdit(const Args& a)
+{
+    namespace an = lila::scene::anim;
+    Graph& g = graph();
+    if (!a.has("channels") || a.flags["channels"].empty())
+        throw CommandError("curveRangeEdit: give channels, plugs such as hips.translateY");
+    const bool tween = a.has("tween");
+    if (tween == a.has("offset"))
+        throw CommandError("curveRangeEdit: give offset or tween");
+    const an::TimeSelection sel = rangeSelection(a, "curveRangeEdit");
+    const double offset = a.get<double>("offset", 0.0), amount = std::clamp(a.get<double>("tween", 0.0), -1.0, 2.0);
+    const std::string rotationType = a.get<std::string>("rotationType", rotationTypeRef());
+    std::vector<RangeChannel> channels;
+    json pivoted = json::array();
+    for (const json& c : a.flags["channels"])
+    {
+        RangeChannel ch = rangeChannel(g, c.get<std::string>());
+        // Pivot: a turn of the joint that carries the body swings its whole path about where it is now.
+        if (!tween && rotationType == "pivot" && ch.attr == "rotate" && rig::isJoint(*g.node(ch.node)))
+            if (const NodeId root = characterRoot(g, characterFor(g, ch.node)))
+                if (const strings::Skeleton k = strings::snapshot(g, root); k.hips >= 0 && k.joints[size_t(k.hips)] == ch.node)
+                {
+                    g.evaluate();
+                    const glm::dvec3 axis = glm::normalize(glm::dvec3(worldOf(g, ch.node)[ch.component]));
+                    json call = {{"args", {g.node(ch.node)->path()}}, {"mode", "forwardAll"}, {"axis", vecJson(axis)}, {"angle", offset},
+                                 {"rotationType", "pivot"}, {"holds", false}};
+                    addRangeFlags(call, sel);
+                    if (a.has("layer"))
+                        call["layer"] = a.get<std::string>("layer");
+                    ops::execute("stringsPose", call);
+                    pivoted.push_back(ch.plug);
+                    continue;
+                }
+        channels.push_back(std::move(ch));
+    }
+    json out = {{"channels", json::array()}, {"pivot", pivoted}};
+    if (channels.empty())
+        return out;
+
+    std::vector<NodeId> nodes;
+    for (const RangeChannel& ch : channels)
+        if (std::find(nodes.begin(), nodes.end(), ch.node) == nodes.end())
+            nodes.push_back(ch.node);
+    std::vector<double> frames = an::timeSelectionFrames(sel, an::keyTimes(g, nodes));
+    if (frames.empty())
+        throw CommandError("curveRangeEdit: no keys in the range; set the range to key every n frames");
+    const double f0 = std::round(an::frameOf(sel.start) - sel.before() - 1.0), f1 = std::round(an::frameOf(sel.end) + sel.after() + 1.0);
+    auto attrIndex = [](const std::string& attr) {
+        return attr == "translate" ? int(Transform::kTranslate) : attr == "rotate" ? int(Transform::kRotate) : int(Transform::kScale);
+    };
+    // Every (node, attr) the edit keys, read whole so each key carries its other axes as they were at that frame.
+    std::vector<std::pair<NodeId, std::string>> groups;
+    for (const RangeChannel& ch : channels)
+        if (std::find(groups.begin(), groups.end(), std::pair{ch.node, ch.attr}) == groups.end())
+            groups.push_back({ch.node, ch.attr});
+    auto read = [&](double t) {
+        std::vector<glm::dvec3> v;
+        atTime(g, t, [&] {
+            for (const auto& [n, attr] : groups)
+                v.push_back(vecOf(g, n, attrIndex(attr)));
+        });
+        return v;
+    };
+    const std::vector<glm::dvec3> before = read(an::secondsOf(f0)), after = read(an::secondsOf(f1));
+    std::vector<std::pair<double, std::vector<glm::dvec3>>> keyed;
+    for (double t : frames)
+    {
+        const double w = an::timeSelectionWeight(sel, t);
+        if (w <= 0.0)
+            continue;
+        std::vector<glm::dvec3> v = read(t);
+        const double x = (an::frameOf(t) - f0) / (f1 - f0);
+        for (const RangeChannel& ch : channels)
+        {
+            const size_t gi = size_t(std::find(groups.begin(), groups.end(), std::pair{ch.node, ch.attr}) - groups.begin());
+            double& value = v[gi][ch.component];
+            if (tween)
+                value += amount * w * (glm::mix(before[gi][ch.component], after[gi][ch.component], x) - value);
+            else
+                value += offset * w;
+        }
+        keyed.push_back({t, std::move(v)});
+    }
+    if (sel.every > 0)
+        for (double f : {an::frameOf(frames.front()) - 1.0, an::frameOf(frames.back()) + 1.0})
+            keyed.push_back({an::secondsOf(f), read(an::secondsOf(f))});
+    FrameKeys hold(g);
+    {
+        LayerScope onLayer(g, a.get<std::string>("layer", ""));
+        for (const auto& [t, values] : keyed)
+            for (size_t gi = 0; gi < groups.size(); ++gi)
+                keyChannels(g, groups[gi].first, attrIndex(groups[gi].second), values[gi], t);
+    }
+    for (const RangeChannel& ch : channels)
+        out["channels"].push_back(ch.plug);
+    out["frames"] = keyed.size();
+    return out;
 }
 
 /**
@@ -2270,7 +3470,7 @@ json stringsPose(const Args& a)
     json out = json::array();
     if (a.has("range") || a.has("frames"))
     {
-        out = poseAcrossFrames(g, nodes, a, in, poseOne);
+        out = poseAcrossFrames(g, nodes, a, in, mode, poseOne);
         return out;
     }
     for (NodeId n : nodes)
@@ -2287,11 +3487,24 @@ struct ModeInfo
     const char* doc;
 };
 
-constexpr ModeInfo kModes[] = {
+constexpr ModeInfo kModeInfo[] = {
+    {strings::Mode::Default, "puppeteer.strings.default", "Default", "wand",
+     "The rules pick: each joint poses the way its character's rules say; without a rule, moves bend the limb (IK) and turns are Forward."},
+    {strings::Mode::Free, "puppeteer.strings.free", "Free", "feather",
+     "Drags turn or move the joint alone: its children keep their world rotation (and on a move their place), nothing above it moves."},
     {strings::Mode::Forward, "puppeteer.strings.forward", "Forward", "arrow-down-tail",
-     "Drags turn the joint and its children follow (FK). Pins and locks don't hold."},
+     "Drags turn the joint and its children follow (FK), except what is pinned or a contact below it outside its own limb."},
+    {strings::Mode::ForwardAll, "puppeteer.strings.forwardAll", "Forward All", "arrow-down-tail",
+     "Plain FK: everything below the joint follows, pins, contacts and Isolate Rotation ignored."},
     {strings::Mode::Backward, "puppeteer.strings.backward", "Backward", "arrow-up-tail",
      "Drags turn the hierarchy the other way: what is pinned or locked below stays, or the joint itself, and the body swings around it."},
+    {strings::Mode::BackwardAll, "puppeteer.strings.backwardAll", "Backward All", "arrow-up-tail",
+     "Backward with nothing else held: the whole body swings rigidly around the anchor."},
+    {strings::Mode::Bidirectional, "puppeteer.strings.bidirectional", "Bidirectional", "arrows-down-up",
+     "Both sides give: a turn swings the parts below and the body above half each about the joint; a move carries the body half way "
+     "and bends the limb for the rest. Pins outside the parts below hold."},
+    {strings::Mode::All, "puppeteer.strings.all", "All", "arrows-down-up",
+     "Bidirectional with nothing held: both sides turn rigidly about the joint, and a move carries the whole body."},
     {strings::Mode::Ik, "puppeteer.strings.ik", "IK", "hand-grab",
      "Drags put the joint where you drag it by bending its limb; on the hips, the body moves and pinned feet stay."},
     {strings::Mode::FullBody, "puppeteer.strings.fullBody", "Full Body", "man",
@@ -2301,7 +3514,7 @@ constexpr ModeInfo kModes[] = {
 void registerActions(ext::Context& ctx)
 {
     const char* cat = "Puppeteer Strings";
-    for (const ModeInfo& m : kModes)
+    for (const ModeInfo& m : kModeInfo)
     {
         const strings::Mode mode = m.mode;
         actions::add(ctx, {.id = m.id,
@@ -2311,14 +3524,79 @@ void registerActions(ext::Context& ctx)
                            .doc = m.doc,
                            .checked = [mode] { return stringsMode() == mode; },
                            .icon = m.icon,
-                           .keywords = {"strings", "ephemeral", "mode"}});
+                           .keywords = {"strings", "ephemeral", "mode", "manipulation mode", "fk", "ik"}});
     }
     actions::add(ctx, {.id = "puppeteer.strings.next",
                        .label = "Next Strings Mode",
                        .category = cat,
-                       .run = [] { setStringsMode(strings::Mode((int(stringsMode()) + 1) % 4)); },
-                       .doc = "Forward, Backward, IK, Full Body, in turn.",
+                       .run =
+                           [] {
+                               const auto at = std::find(std::begin(strings::kModes), std::end(strings::kModes), stringsMode());
+                               const size_t i = size_t(at - std::begin(strings::kModes));
+                               setStringsMode(strings::kModes[(i + 1) % std::size(strings::kModes)]);
+                           },
+                       .doc = "Each Strings mode in turn, Default to Full Body.",
                        .icon = "arrows-right-left"});
+    actions::add(ctx, {.id = "puppeteer.strings.allVariant",
+                       .label = "All Variant",
+                       .category = cat,
+                       .run = [] { setStringsMode(strings::allVariant(stringsMode(), !strings::isAllVariant(stringsMode()))); },
+                       .enabled = [] { return strings::allVariant(stringsMode(), true) != strings::allVariant(stringsMode(), false); },
+                       .doc = "Forward, Backward or Bidirectional to its All variant and back: the All variants move rigidly, "
+                              "nothing held, nothing isolated. Right-click the mode on the Spinner does the same.",
+                       .checked = [] { return strings::isAllVariant(stringsMode()); },
+                       .icon = "arrows-maximize",
+                       .keywords = {"strings", "forward all", "backward all", "rigid"}});
+    actions::add(ctx, {.id = "puppeteer.strings.isolate",
+                       .label = "Isolate Rotation",
+                       .category = cat,
+                       .run =
+                           [] {
+                               isolateRef() = !isolateRef();
+                               PrefStore::get().set(kPrefs, "/strings/isolate", isolateRef());
+                               viewportTools::requestRedraw();
+                           },
+                       .doc = "The isolated joints (the head and hands, or what the character's rules say) keep their world "
+                              "rotation while a drag carries them, in Default, Forward, Backward and Bidirectional.",
+                       .checked = [] { return isolateRef(); },
+                       .icon = "compass",
+                       .keywords = {"strings", "isolate", "orient", "world orient", "head", "keep orientation"}});
+    for (const auto& [type, label, doc] : {std::tuple{"local", "Rotation Type: Local", "A turn across a time range turns each frame about the joint where it is on that frame."},
+                                           std::tuple{"pivot", "Rotation Type: Pivot",
+                                                      "A turn across a time range swings each frame about where the joint is now, so its path "
+                                                      "turns with it (turn a walk's direction from the hips)."}})
+    {
+        const std::string t = type;
+        actions::add(ctx, {.id = std::string("puppeteer.strings.rotation.") + type,
+                           .label = label,
+                           .category = cat,
+                           .run =
+                               [t] {
+                                   rotationTypeRef() = t;
+                                   PrefStore::get().set(kPrefs, "/strings/rotationType", t);
+                                   viewportTools::requestRedraw();
+                               },
+                           .doc = doc,
+                           .checked = [t] { return rotationTypeRef() == t; },
+                           .icon = t == "pivot" ? "rotate-clockwise-2" : "rotate",
+                           .keywords = {"strings", "range", "rotation type", "pivot", "time range"}});
+    }
+    actions::add(ctx, {.id = "puppeteer.strings.tween",
+                       .label = "Tween Range",
+                       .category = cat,
+                       .doc = "Blend the time slider's range toward the inbetween of the poses either side of it, easing out "
+                              "across its falloff. With a range selected, the Spinner's breakdown slider tweens it live.",
+                       .command = "stringsTween",
+                       .icon = "chart-line",
+                       .keywords = {"tween", "tween machine", "inbetween", "range", "blend"}});
+    actions::add(ctx, {.id = "puppeteer.strings.mirror",
+                       .label = "Mirror Pose",
+                       .category = cat,
+                       .doc = "The selected joints take their other side's pose, posed through the current Strings mode so pins "
+                              "and contacts hold.",
+                       .command = "stringsMirror",
+                       .icon = "flip-vertical",
+                       .keywords = {"mirror", "flip", "symmetry", "opposite side"}});
     actions::add(ctx, {.id = "puppeteer.strings.stretch",
                        .label = "Stretch",
                        .category = cat,
@@ -2423,7 +3701,13 @@ void registerActions(ext::Context& ctx)
                        {"W", {{"label", "Contacts Hold"}, {"action", "puppeteer.strings.contacts"}}},
                        {"E", {{"label", "Stretch"}, {"action", "puppeteer.strings.stretch"}}},
                        {"S", {{"label", "Zero Pose"}, {"action", "puppeteer.strings.zero"}}},
-                       {"overflow", json::array({{{"label", "Glue"}, {"action", "puppeteer.strings.glue"}},
+                       {"NE", {{"label", "Isolate Rotation"}, {"action", "puppeteer.strings.isolate"}}},
+                       {"NW", {{"label", "Glue"}, {"action", "puppeteer.strings.glue"}}},
+                       {"SW", {{"label", "Mirror Pose"}, {"action", "puppeteer.strings.mirror"}}},
+                       {"SE", {{"label", "Tween Range"}, {"action", "puppeteer.strings.tween"}}},
+                       {"overflow", json::array({{{"label", "Rotation Type: Local"}, {"action", "puppeteer.strings.rotation.local"}},
+                                                 {{"label", "Rotation Type: Pivot"}, {"action", "puppeteer.strings.rotation.pivot"}},
+                                                 {{"separator", true}},
                                                  {{"label", "Attach to Last Selected"}, {"action", "puppeteer.strings.attach"}},
                                                  {{"label", "Unglue"}, {"action", "puppeteer.strings.unglue"}},
                                                  {{"separator", true}},
@@ -2431,10 +3715,42 @@ void registerActions(ext::Context& ctx)
                                                  {{"label", "Line of Action"}, {"action", "puppeteer.strings.lineOfAction"}},
                                                  {{"label", "Breakdown Parts"}, {"action", "puppeteer.strings.breakdownParts"}},
                                                  {{"label", "Restore Bone Lengths"}, {"action", "puppeteer.strings.restoreLengths"}}})}});
+    // The modes by direction: up the hierarchy is north, down it south.
+    markingMenus::add(ctx, "puppeteerStringsModes",
+                      {{"N", {{"label", "Backward"}, {"action", "puppeteer.strings.backward"}}},
+                       {"NE", {{"label", "Backward All"}, {"action", "puppeteer.strings.backwardAll"}}},
+                       {"S", {{"label", "Forward"}, {"action", "puppeteer.strings.forward"}}},
+                       {"SE", {{"label", "Forward All"}, {"action", "puppeteer.strings.forwardAll"}}},
+                       {"E", {{"label", "IK"}, {"action", "puppeteer.strings.ik"}}},
+                       {"W", {{"label", "Full Body"}, {"action", "puppeteer.strings.fullBody"}}},
+                       {"NW", {{"label", "Default"}, {"action", "puppeteer.strings.default"}}},
+                       {"SW", {{"label", "Free"}, {"action", "puppeteer.strings.free"}}},
+                       {"overflow", json::array({{{"label", "Bidirectional"}, {"action", "puppeteer.strings.bidirectional"}},
+                                                 {{"label", "All"}, {"action", "puppeteer.strings.all"}},
+                                                 {{"separator", true}},
+                                                 {{"label", "Isolate Rotation"}, {"action", "puppeteer.strings.isolate"}}})}});
 }
 } // namespace
 
 strings::Mode stringsMode() { return modeRef(); }
+
+const char* stringsModeLabel(strings::Mode m)
+{
+    switch (m)
+    {
+    case strings::Mode::Default: return "Default";
+    case strings::Mode::Free: return "Free";
+    case strings::Mode::Forward: return "Forward";
+    case strings::Mode::ForwardAll: return "Forward All";
+    case strings::Mode::Backward: return "Backward";
+    case strings::Mode::BackwardAll: return "Backward All";
+    case strings::Mode::Bidirectional: return "Bidirectional";
+    case strings::Mode::All: return "All";
+    case strings::Mode::Ik: return "IK";
+    case strings::Mode::FullBody: return "Full Body";
+    }
+    return "";
+}
 
 void setStringsMode(strings::Mode m)
 {
@@ -2444,6 +3760,15 @@ void setStringsMode(strings::Mode m)
 }
 
 double stringsStretch() { return stretchRef() ? kStretchLimit : 1.0; }
+
+void addRangeFlags(json& call, const lila::scene::anim::TimeSelection& sel)
+{
+    call["range"] = json::array({sel.start, sel.end});
+    call["falloffBefore"] = sel.before();
+    call["falloffAfter"] = sel.after();
+    call["falloffType"] = lila::scene::anim::rangeFalloffName(sel.shape);
+    call["every"] = sel.every;
+}
 
 std::string stringsLayer() { return onLayerRef() ? kStringsLayer : std::string(); }
 
@@ -2510,8 +3835,7 @@ void registerStrings(ext::Context& ctx)
         .positionalDoc = "joints (default the selection)",
         .flags = {
             {"layer", "ly", T::String, nullptr, "Key the edit onto this additive animation layer (made if missing) instead of the base."},
-            {"mode", "m", T::String, nullptr, "forward, backward, ik or fullBody; default the current Strings mode.",
-             {"forward", "backward", "ik", "fullBody"}},
+            {"mode", "m", T::String, nullptr, "The Strings mode; default the current one.", modeChoices()},
             {"by", "by", T::Vec3, nullptr, "World offset, cm."},
             {"axis", "ax", T::Vec3, nullptr, "World axis to turn about."},
             {"angle", "a", T::Float, 0.0, "Degrees about axis."},
@@ -2525,6 +3849,15 @@ void registerStrings(ext::Context& ctx)
             {"frames", "fr", T::List, nullptr, "Seconds to pose at, keying each, instead of a range."},
             {"dense", "dn", T::Bool, false, "With range: every frame, not only the keyed ones."},
             {"falloff", "fo", T::Float, 0.0, "With range: frames either side the pose eases out over."},
+            {"falloffBefore", "fob", T::Float, nullptr, "With range: frames before it the pose eases out over, instead of falloff."},
+            {"falloffAfter", "foa", T::Float, nullptr, "With range: frames after it the pose eases out over, instead of falloff."},
+            {"falloffType", "fot", T::String, "smooth", "With range: how the pose eases out across the falloff.",
+             {"smooth", "linear", "sharp", "soft", "constant"}},
+            {"every", "ev", T::Int, 0, "With range: key every this many frames across it and its falloff, besides its keys; 0 only its keys.",
+             {}, {}, 0.0, 100.0},
+            {"rotationType", "rt", T::String, nullptr, "Across frames, relative: local turns each frame about the joint where it is then; "
+             "pivot swings each frame about where the joint is now, so its path turns too. Default the Rotation Type setting.",
+             {"local", "pivot"}},
             {"preview", "pv", T::Bool, false, "With range or frames: solve without keying, for a drag in progress. Ghosts show the result; returns each frame's joint positions."},
             {"show", "sw", T::List, nullptr, "With preview: more seconds to solve, such as a motion trail's frames."},
             {"relative", "rel", T::Bool, true, "Across frames: offset each frame by the drag. False brings each to where the drag put it now."},
@@ -2552,8 +3885,7 @@ void registerStrings(ext::Context& ctx)
                "Parents first. Returns what each pose did.",
         .positionalDoc = "joints (default the selection)",
         .flags = {
-            {"mode", "m", T::String, nullptr, "forward, backward, ik or fullBody; default the current Strings mode.",
-             {"forward", "backward", "ik", "fullBody"}},
+            {"mode", "m", T::String, nullptr, "The Strings mode; default the current one.", modeChoices()},
             {"holds", "h", T::Bool, true, "False ignores pins and locks."},
             {"stretch", "st", T::Float, 1.0, "Above 1 lets bones lengthen up to this multiple."},
             {"relativeTo", "rt", T::List, nullptr, "Joints that keep their place in the world while the others zero (relative zero)."},
@@ -2562,10 +3894,11 @@ void registerStrings(ext::Context& ctx)
     });
     ctx.registerCommand({
         .name = "stringsRules",
-        .doc = "A character's Strings rules: its contacts (joints that hold still while you pose the rest, its feet) and its "
-               "limbs (what bends together when IK or a hold reaches). They come from its rig template or rig elements; "
-               "contacts and addChain set them on this character instead, reset goes back. Returns the rules and where "
-               "each came from.",
+        .doc = "A character's Strings rules: its contacts (joints that hold still while you pose the rest, its feet), its "
+               "limbs (what bends together when IK or a hold reaches), its isolated joints (what Isolate Rotation keeps "
+               "level) and the modes Default poses joints in. They come from its rig template or rig elements; contacts, "
+               "addChain, isolate and defaultMode set them on this character instead, reset goes back. Returns the rules "
+               "and where each came from.",
         .positionalDoc = "character or one of its joints (default the selection)",
         .flags = {
             {"contacts", "ct", T::List, nullptr, "Joints that hold by default, replacing the inherited ones."},
@@ -2573,6 +3906,8 @@ void registerStrings(ext::Context& ctx)
             {"addLine", "al", T::List, nullptr, "[name, top joint, end joint]: a line of action a stroke may bind to."},
             {"removeChain", "rc", T::String, nullptr, "A joint: the limb it is in goes."},
             {"removeLine", "rl", T::String, nullptr, "The line of action with this name goes."},
+            {"isolate", "iso", T::List, nullptr, "Joints that keep their world rotation while Isolate Rotation is on, replacing the inherited ones."},
+            {"defaultMode", "dm", T::List, nullptr, "[joint, mode]: the mode the joint poses in under Default; mode default (or empty) removes it."},
             {"reset", "rs", T::Bool, false, "Forget this character's own rules first."},
         },
         .run = stringsRules,
@@ -2623,8 +3958,7 @@ void registerStrings(ext::Context& ctx)
         .flags = {
             {"amount", "a", T::Float, 0.25, "Fraction of the motion since the previous key to carry on by."},
             {"from", "f", T::Float, nullptr, "Seconds to measure the motion from; default the previous key."},
-            {"mode", "m", T::String, nullptr, "forward, backward, ik or fullBody; default the current Strings mode.",
-             {"forward", "backward", "ik", "fullBody"}},
+            {"mode", "m", T::String, nullptr, "The Strings mode; default the current one.", modeChoices()},
             {"holds", "h", T::Bool, true, "False ignores pins and locks."},
         },
         .run = stringsOvershoot,
@@ -2638,8 +3972,7 @@ void registerStrings(ext::Context& ctx)
             {"time", "t", T::Float, nullptr, "Seconds whose pose to blend toward; leave out for zero."},
             {"weight", "w", T::Float, 1.0, "How far: 1 all the way, 0 not at all, past 1 overshoots."},
             {"channels", "ch", T::String, "rotate", "rotate, translate or both.", {"rotate", "translate", "both"}},
-            {"mode", "m", T::String, nullptr, "forward, backward, ik or fullBody; default the current Strings mode.",
-             {"forward", "backward", "ik", "fullBody"}},
+            {"mode", "m", T::String, nullptr, "The Strings mode; default the current one.", modeChoices()},
             {"holds", "h", T::Bool, true, "False ignores pins and locks."},
         },
         .run = stringsBlend,
@@ -2655,6 +3988,9 @@ void registerStrings(ext::Context& ctx)
             {"favour", "fv", T::Float, 0.0, "Above 0 the hands, feet and head lag behind the body; below 0 they lead.", {}, {}, -1.0, 1.0},
             {"parts", "pt", T::Any, nullptr, "{joint: weight}: those joints and their children take that weight instead."},
             {"brushed", "br", T::Bool, true, "Parts brushed with the Breakdown Parts tool take their fraction of the weight; False ignores them."},
+            {"mode", "m", T::String, nullptr, "The Strings mode: forwardAll, all and free blend every joint in its parent's space, the "
+             "others keep the contacts in world and, with Isolate Rotation on, the isolated joints' world rotation. Default the current one.",
+             modeChoices()},
             {"all", "al", T::Bool, true, "The whole character; False only the given joints."},
             nodeFlag({"world", "wo", T::List, nullptr, "Joints that blend in world space; default the character's contacts."}, "joint"),
         },
@@ -2707,6 +4043,63 @@ void registerStrings(ext::Context& ctx)
     });
     ops::options::setOverride("stringsRetime", {.order = {"easeIn", "easeOut"}, .hidden = {"range", "warp"}});
     ctx.registerCommand({
+        .name = "stringsTween",
+        .doc = "Tween a range: every frame of it blends toward the inbetween of the poses just outside the range and its "
+               "falloff, rotations on arcs and contacts in world, by amount times the frame's falloff weight. Keys the "
+               "range's keys, or every n frames as the range says. Acts on the time slider's range without one.",
+        .positionalDoc = "joints or a character (default the selection)",
+        .flags = {
+            {"layer", "ly", T::String, nullptr, "Key the edit onto this additive animation layer (made if missing) instead of the base."},
+            {"range", "r", T::List, nullptr, "[start, end] seconds; default the time slider's range."},
+            {"falloff", "fo", T::Float, 0.0, "With range: frames either side the tween eases out over."},
+            {"falloffType", "fot", T::String, "smooth", "With range: how it eases out.", {"smooth", "linear", "sharp", "soft", "constant"}},
+            {"every", "ev", T::Int, 0, "With range: key every this many frames; 0 only its keys.", {}, {}, 0.0, 100.0},
+            {"amount", "a", T::Float, 1.0, "1 takes the inbetween, 0 leaves the motion, past 1 overshoots, below 0 exaggerates.", {}, {}, -1.0, 2.0},
+            {"spacing", "sp", T::String, "linear", "How the inbetween runs across the range.", {"linear", "easeIn", "easeOut", "easeInOut"}},
+            {"mode", "m", T::String, nullptr, "The Strings mode: forwardAll, all and free blend every joint locally. Default the current one.", modeChoices()},
+            {"all", "al", T::Bool, true, "The whole character; False only the given joints."},
+            {"preview", "pv", T::Bool, false, "Tween the current frame and the ghosts' frames without keying, for a drag in progress."},
+            nodeFlag({"world", "wo", T::List, nullptr, "Joints that blend in world space; default the character's contacts."}, "joint"),
+        },
+        .run = stringsTween,
+    });
+    ops::options::setOverride("stringsTween", {.order = {"amount", "spacing"}, .hidden = {"range", "preview", "world", "layer"}});
+    ctx.registerCommand({
+        .name = "curveRangeEdit",
+        .doc = "Edit curves across a time range, as the Curve Overlay's drags do: offset adds to every frame of the range "
+               "(eased out across its falloff), tween blends every frame toward the line between the values just outside it. "
+               "Keys the range's keys, or every n frames as the range says. With rotationType pivot, a rotate channel of the "
+               "joint that carries a character turns through stringsPose so its path swings about where it is now. Acts on "
+               "the time slider's range without one. Returns {channels, pivot, frames}.",
+        .flags = {
+            {"channels", "ch", T::List, nullptr, "Plugs, one axis each: hips.translateY, spine_01.rotateX."},
+            {"offset", "o", T::Float, nullptr, "Added to every frame, in the channel's units (cm, degrees)."},
+            {"tween", "tw", T::Float, nullptr, "1 takes the line between the values either side, past 1 overshoots, below 0 exaggerates.", {}, {}, -1.0, 2.0},
+            {"range", "r", T::List, nullptr, "[start, end] seconds; default the time slider's range."},
+            {"falloff", "fo", T::Float, 0.0, "With range: frames either side the edit eases out over."},
+            {"falloffBefore", "fob", T::Float, nullptr, "With range: frames before it the edit eases out over."},
+            {"falloffAfter", "foa", T::Float, nullptr, "With range: frames after it the edit eases out over."},
+            {"falloffType", "fot", T::String, "smooth", "With range: how the edit eases out.", {"smooth", "linear", "sharp", "soft", "constant"}},
+            {"every", "ev", T::Int, 0, "With range: key every this many frames; 0 only its keys.", {}, {}, 0.0, 100.0},
+            {"rotationType", "rt", T::String, nullptr, "local or pivot; default the Rotation Type setting.", {"local", "pivot"}},
+            {"layer", "ly", T::String, nullptr, "Key the edit onto this additive animation layer (made if missing) instead of the base."},
+        },
+        .run = curveRangeEdit,
+    });
+    ctx.registerCommand({
+        .name = "stringsMirror",
+        .doc = "Mirror in a Strings mode: the joints take their other side's pose (left onto right, centre joints reflected), "
+               "posed through the mode so what holds stays put: in Backward the planted feet stay while the body mirrors. "
+               "Parents first. Returns what each pose did.",
+        .positionalDoc = "joints or a character (default the selection)",
+        .flags = {
+            {"mode", "m", T::String, nullptr, "The Strings mode; default the current one.", modeChoices()},
+            {"mirrorAxis", "ma", T::String, "x", "Axis the mirror plane faces.", {"x", "y", "z"}},
+            {"holds", "h", T::Bool, true, "False ignores pins and locks."},
+        },
+        .run = stringsMirror,
+    });
+    ctx.registerCommand({
         .name = "stringsRuleWeb",
         .doc = "The character's rule web as data for Unreal: its hips, contacts, limbs, lines of action and full-body stiffness, "
                "by bone name, plus the bones and their parents. Writes it to file as JSON when given. Returns the web.",
@@ -2719,11 +4112,17 @@ void registerStrings(ext::Context& ctx)
         .name = "unrealStringsRig",
         .doc = "Pose the character in Unreal the way Strings poses it here: LilaLink makes or updates a Control Rig on its skeletal "
                "mesh: a control on the hips and the end of each line of action and limb (hands, feet, head) and each contact, each posing its bone through a Lila "
-               "Strings Full Body unit given the character's rule web; swap a unit for Forward, Backward or IK to change how it poses. "
+               "Strings unit given the character's rule web. Each control's Mode and Isolate Rotation channels pick how it poses; Pin, "
+               "Lock and Glue/Attach channels carry pins, locked IK chains and glue, and keyed locks go into a Level Sequence. "
                "Returns {rig, skeletalMesh, unreal}, or {rig, skeletalMesh, payload} with dryRun.",
         .positionalDoc = "character or one of its joints (default the selection)",
         .flags = {{"skeletalMesh", "sm", T::String, nullptr, "The skeletal mesh asset. Default: the root's skeletal mapping."},
                   {"rig", "r", T::String, nullptr, "The Control Rig asset to make or update. Default: CR_<mesh>_Strings beside the mesh."},
+                  {"mode", "m", T::String, nullptr, "The mode the controls start in; default the current one.", modeChoices()},
+                  {"isolate", "iso", T::Bool, nullptr, "The controls start with Isolate Rotation on; default the Isolate Rotation setting."},
+                  {"sequence", "sq", T::String, nullptr,
+                   "Level Sequence for the IK chains' lock keys, keyed on the rig's Lock channels. Default: LS_<mesh>_Strings beside the "
+                   "rig when a chain's lock is keyed."},
                   {"dryRun", "dry", T::Bool, false, "Return what would be sent without connecting to Unreal."}},
         .undoable = false,
         .run = unrealStringsRig,

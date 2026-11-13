@@ -43,6 +43,8 @@ lila_module(lila_ui UI
     SketchTool.cpp SketchUi.cpp SketchUi.h CurveSculptTool.cpp GroomBrushTool.cpp GroomGpu.cpp GroomGpu.h GroomTool.cpp
     DisplayLayersPanel.cpp DisplayLayersPanel.h
     AnimLayersPanel.cpp AnimLayersPanel.h
+    SceneSettingsPanel.cpp SceneSettingsPanel.h
+    PointCloudDisplay.cpp PointCloudDisplay.h
     OffsetsPanel.cpp OffsetsPanel.h
     RenamePanel.cpp RenamePanel.h
     RetargetUi.cpp RetargetUi.h
@@ -77,6 +79,7 @@ lila_module(lila_ui UI
     ImagePlaneUi.cpp ImagePlaneUi.h
     VideoTextures.cpp VideoTextures.h
     AudioUi.cpp AudioUi.h
+    MediaLane.cpp MediaLane.h
     LicensesDialog.cpp LicensesDialog.h
     PaintColor.cpp PaintColor.h
     ReferenceSet.cpp ReferenceSet.h ReferenceWindow.cpp ReferenceWindow.h ReferenceOverlay.cpp ReferenceOverlay.h
@@ -138,6 +141,7 @@ lila_module(lila_ui UI
     SpacesUi.cpp SpacesUi.h
     InstancingUi.cpp InstancingUi.h
     TurntableUi.cpp TurntableUi.h
+    DroneCamera.cpp DroneCamera.h
     UnrealMappingUi.cpp UnrealMappingUi.h
     DeformUi.cpp DeformUi.h
     DeformHandles.cpp DeformHandles.h

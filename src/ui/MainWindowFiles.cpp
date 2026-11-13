@@ -7,6 +7,7 @@
 
 #include <QDragEnterEvent>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QMimeData>
 
 namespace lila::ui
@@ -210,6 +211,17 @@ void MainWindow::startup(const std::vector<io::recovery::Session>& stale, bool s
     io::recovery::forget(stale);
     io::recovery::prune(PrefStore::get().value<int>("general", "/recovery/keepDays", 30));
     std::filesystem::path crashReport = pendingCrashReport(stale, !candidates.empty());
+    // Offscreen or scripted runs (test instances, agents) have nobody to answer a modal dialog, which would stall
+    // startup and every call queued behind it.
+    const char* noUi = std::getenv("LILA_CRASH_NO_UI");
+    if (QGuiApplication::platformName() == "offscreen" || (noUi && *noUi && *noUi != '0'))
+    {
+        if (!candidates.empty() || !crashReport.empty())
+            log::info("recovery: {} recoverable scene(s) kept, no dialog in a non-interactive run; File > Recovered Scenes opens them",
+                      candidates.size());
+        candidates.clear();
+        crashReport.clear();
+    }
     if (!crashReport.empty() && candidates.empty())
     {
         RecoveryDialog dialog(candidates, crashReport, this);

@@ -10,6 +10,7 @@
 class QLabel;
 class QTabBar;
 class QToolButton;
+class QSpinBox;
 
 namespace lila::ui::references
 {
@@ -69,6 +70,10 @@ private:
     QToolButton* mGray = nullptr;
     QToolButton* mPick = nullptr;
     QToolButton* mMore = nullptr;
+    /** Shown while the current tab is a video: pause, frame steps, offset. */
+    QWidget* mVideoBar = nullptr;
+    QToolButton* mPause = nullptr;
+    QSpinBox* mVideoOffset = nullptr;
     QLabel* mEmpty = nullptr;
 };
 

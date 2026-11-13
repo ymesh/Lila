@@ -1,0 +1,14 @@
+{
+    "id": "Crowds",
+    "name": "Crowds",
+    "version": "0.1.0",
+    "vendor": "Lila",
+    "description": "Crowds of generated characters: spawn groups with behaviours, avoidance, cached simulation, viewport drawing, bake to characters and send to Unreal.",
+    "sdk": "1.0",
+    "entry": {
+        "windows": "Crowds.dll",
+        "linux": "Crowds.so",
+        "macos": "Crowds.dylib"
+    },
+    "enabledByDefault": true
+}

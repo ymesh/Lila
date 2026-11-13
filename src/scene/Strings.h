@@ -29,7 +29,10 @@ namespace lila::scene::strings
 {
 enum class Mode
 {
-    /** FK: the grabbed joint turns and its children follow. */
+    /**
+     * FK: the grabbed joint turns and its children follow, except what holds below it outside its own limb (a pinned
+     * hand stays while the chest turns, planted feet while the hips turn), and isolated joints keep their world rotation.
+     */
     Forward,
     /** The hierarchy reverses at the grabbed joint: what holds still stays, and the rest of the body swings. */
     Backward,
@@ -37,10 +40,30 @@ enum class Mode
     Ik,
     /** The whole body moves to put the grabbed joint where it is dragged, the holds staying put. */
     FullBody,
+    /** The rule web picks per joint; without a rule, moves are IK and turns are Forward. */
+    Default,
+    /** The grabbed joint alone: its children keep their world rotation (and on a move their place), its parent stays. */
+    Free,
+    /** Plain FK: everything below the grabbed joint follows, holds and isolation ignored. */
+    ForwardAll,
+    /** Backward without holds: the whole body swings rigidly about the anchor; nothing bends to keep other holds. */
+    BackwardAll,
+    /** Both sides give: a turn swings the parts below by half and the body above by half the other way about the joint,
+     *  and a move carries the body half way while the limb bends for the rest. Holds outside the parts below stay. */
+    Bidirectional,
+    /** Bidirectional without holds or isolation: both sides turn rigidly about the joint, and a move carries the whole body. */
+    All,
 };
+
+/** Every mode, in the order the Spinner arc and the menus show them. */
+inline constexpr Mode kModes[] = {Mode::Default, Mode::Free,          Mode::Forward, Mode::ForwardAll, Mode::Backward,
+                                  Mode::BackwardAll, Mode::Bidirectional, Mode::All,     Mode::Ik,         Mode::FullBody};
 
 LILA_SCENE_API const char* modeName(Mode m);
 LILA_SCENE_API std::optional<Mode> modeFromName(std::string_view name);
+/** The "All" variant of Forward, Backward and Bidirectional, and back; other modes have none and come back unchanged. */
+LILA_SCENE_API Mode allVariant(Mode m, bool all);
+LILA_SCENE_API bool isAllVariant(Mode m);
 
 /** A joint that has to end at a world matrix: an anchor where it is, or where glue or attach puts it. */
 struct Hold
@@ -56,6 +79,8 @@ struct Rules
 {
     /** Limbs, each top to end: a bone in one bends with the bones above it in the same limb. */
     std::vector<std::vector<int>> chains;
+    /** Default mode: the mode each listed bone poses in; bones not listed follow the move-IK, turn-Forward rule. */
+    std::vector<std::pair<int, Mode>> defaults;
 };
 
 /** One interaction: the grabbed joint and what is done to it. */
@@ -77,6 +102,12 @@ struct Request
     double maxStretch = 1.0;
     /** The rig's declared limbs; without them limbs run to the next branch. */
     const Rules* rules = nullptr;
+    /**
+     * Bones that keep their world rotation while the interaction carries them (Isolate Rotation): a head that stays
+     * level as the chest turns. Forward, Backward, Bidirectional and Default honour it; the All variants, IK and Full
+     * Body don't. The grabbed bone is never isolated.
+     */
+    std::vector<int> isolate;
 };
 
 /** A pose of the problem's skeleton: what fbik::forward takes. */
@@ -96,6 +127,8 @@ struct Result
     int anchor = -1;
     /** False when the request cannot move the grabbed joint (above the hips in Backward or IK); the pose is unchanged. */
     bool handled = true;
+    /** The mode the solve ran in: Default's pick, else the request's. */
+    Mode resolved = Mode::Forward;
 };
 
 /** The problem's own pose: its rotations, no offsets, nothing stretched. */
@@ -111,6 +144,12 @@ LILA_SCENE_API bool isUnder(const fbik::Problem& p, int bone, int ancestor);
  * that many bones up from bone whatever the rules and branches say, still stopping at the hips or stop.
  */
 LILA_SCENE_API std::vector<int> limbOf(const fbik::Problem& p, int bone, int hips, int stop = -1, int length = 0, const Rules* rules = nullptr);
+
+/** The mode Default poses r's grabbed joint in: its rule, else IK for a move of a joint with a limb or the hips, else Forward. */
+LILA_SCENE_API Mode resolveDefault(const fbik::Problem& p, const Request& r);
+
+/** Whether a mode can move the grabbed joint's origin (put it somewhere), rather than only turn it in place. */
+LILA_SCENE_API bool movesOrigin(Mode m, bool grabbedIsHips);
 
 /** Solves one interaction from the problem's pose. */
 LILA_SCENE_API Result solve(const fbik::Problem& p, const Request& r);

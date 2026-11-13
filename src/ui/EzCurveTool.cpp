@@ -146,8 +146,8 @@ public:
             dot(p, view, mStart->point);
             if (mHover && view.camera == mHoverView)
             {
-                f.linesOnTop.push_back({glm::vec3(mStart->point), kGhost});
-                f.linesOnTop.push_back({glm::vec3(*mHover), kGhost});
+                f.linesOnTop.push_back({glm::dvec3(mStart->point), kGhost});
+                f.linesOnTop.push_back({glm::dvec3(*mHover), kGhost});
             }
         }
         if (mHover && view.camera == mHoverView)

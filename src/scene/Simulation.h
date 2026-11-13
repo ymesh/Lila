@@ -92,6 +92,8 @@ struct Setup
      * skinned mesh the solver never reads isn't recomputed at every sampled step. Empty evaluates the whole scene.
      */
     std::vector<NodeId> reads;
+    /** False for a simulation whose state cannot carry across a loop's wrap (a crowd): it never loops. */
+    bool loops = true;
 };
 
 /** Where a step sits in time; seconds = (startFrame * substeps + index) / (substeps * fps), from integers. */

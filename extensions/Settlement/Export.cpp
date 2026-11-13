@@ -348,7 +348,13 @@ std::string roadKey(const StreetLine& s)
 {
     if (s.surface || s.street == 0)
         return "path:" + std::to_string(s.path);
-    return "street:" + hex(s.street);
+    if (s.pts.empty())
+        return "street:" + hex(s.street);
+    // A street runs through junctions as several lines; its ends name the line.
+    auto q = [](const glm::dvec3& p) { return std::pair{std::llround(p.x / 10.0), std::llround(p.z / 10.0)}; };
+    const auto [a, b] = std::minmax(q(s.pts.front()), q(s.pts.back()));
+    const uint64_t ends = hash64(hash64(hash64(hash64(uint64_t(a.first)) ^ uint64_t(a.second)) ^ uint64_t(b.first)) ^ uint64_t(b.second));
+    return "street:" + hex(s.street) + "." + hex(ends & 0xffffffffull);
 }
 
 std::string junctionKey(const Junction& j)

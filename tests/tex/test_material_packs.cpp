@@ -1,15 +1,20 @@
 #include "TexTest.h"
 
+#include "core/ExtensionContext.h"
 #include "core/Paths.h"
 #include "ops/Command.h"
 #include "tex/Library.h"
 #include "tex/Lint.h"
+#include "tex/NodeDef.h"
 #include "tex/TextureSet.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <set>
 #include <sstream>
 
@@ -33,6 +38,22 @@ std::vector<fs::path> shippedMaterials()
             if (e.path().extension() == ".lilamat")
                 out.push_back(e.path());
     std::sort(out.begin(), out.end());
+    return out;
+}
+
+/**
+ * The share of files this run checks: LILA_MATERIAL_SHARD="i/n" keeps every n-th file from the i-th, so ctest runs the
+ * pack in parallel processes (each compiles its own CPU kernels, the slow part); unset keeps them all.
+ */
+std::vector<fs::path> shard(std::vector<fs::path> files)
+{
+    const char* env = std::getenv("LILA_MATERIAL_SHARD");
+    int i = 0, n = 1;
+    if (!env || std::sscanf(env, "%d/%d", &i, &n) != 2 || n < 1 || i < 0 || i >= n)
+        return files;
+    std::vector<fs::path> out;
+    for (size_t k = size_t(i); k < files.size(); k += size_t(n))
+        out.push_back(files[k]);
     return out;
 }
 
@@ -84,10 +105,12 @@ void checkMeta(const json& doc, const Graph& g)
 TEST_CASE("material packs: every shipped material loads, evaluates on the CPU and passes materialLint")
 {
     reloadLibrary();
-    std::vector<fs::path> files = shippedMaterials();
-    REQUIRE(files.size() >= 80);
+    const std::vector<fs::path> all = shippedMaterials();
+    REQUIRE(all.size() >= 80);
     std::set<std::string> names;
-    for (const fs::path& f : files)
+    for (const fs::path& f : all)
+        CHECK_MESSAGE(names.insert(readJson(f)["meta"].value("name", std::string())).second, f.string());
+    for (const fs::path& f : shard(all))
     {
         CAPTURE(f.string());
         json doc = readJson(f);
@@ -95,7 +118,6 @@ TEST_CASE("material packs: every shipped material loads, evaluates on the CPU an
         Graph g = Graph::fromJson(doc["graph"]);
         SetSettings s = doc.contains("settings") ? SetSettings::fromJson(doc["settings"]) : SetSettings::makeDefault();
         checkMeta(doc, g);
-        CHECK(names.insert(doc["meta"]["name"].get<std::string>()).second);
 
         PlanRequest req;
         req.width = req.height = 64;
@@ -120,7 +142,7 @@ TEST_CASE("material packs: every shipped material loads, evaluates on the CPU an
     }
 }
 
-TEST_CASE("material packs: every shipped smart mask applies to a layer and evaluates")
+TEST_CASE("material packs: every shipped smart material and mask applies and evaluates")
 {
     std::vector<fs::path> files;
     std::error_code ec;
@@ -129,17 +151,34 @@ TEST_CASE("material packs: every shipped smart mask applies to a layer and evalu
             if (f.path().extension() == ".lilasmart")
                 files.push_back(f.path());
     REQUIRE(files.size() >= 5);
+    // The node types each extension ships, registered as loading it does, so its smart materials find them.
+    std::vector<std::unique_ptr<ext::Context>> owners;
+    for (const auto& e : fs::directory_iterator(paths::resourcesDir().parent_path() / "extensions", ec))
+        if (fs::is_directory(e.path() / "resources" / "texnodes", ec))
+        {
+            owners.push_back(std::make_unique<ext::Context>(paths::toUtf8(e.path().filename())));
+            tex::registerExtensionDir(*owners.back(), e.path() / "resources" / "texnodes");
+        }
     for (const fs::path& f : files)
     {
         CAPTURE(f.string());
+        const bool mask = readJson(f).value("kind", std::string()) == "mask";
         ops::execute("newScene", json::object());
         ops::execute("texCreateSet", {{"args", {"Masked"}}, {"resolution", 16}});
         json layer = ops::execute("texAddLayer", {{"args", {"Masked", "fill"}}});
-        json r = ops::execute("texApplySmartMaterial", {{"args", {"Masked", f.generic_string()}}, {"layer", layer["id"]}, {"addMaps", false}});
-        CHECK_FALSE(r.contains("warnings"));
-        CHECK(r["masks"].size() >= 1);
+        json call = {{"args", {"Masked", f.generic_string()}}, {"addMaps", false}};
+        if (mask)
+            call["layer"] = layer["id"];
+        json r = ops::execute("texApplySmartMaterial", call);
+        CHECK_MESSAGE(!r.contains("warnings"), r.value("warnings", json()).dump());
+        if (mask)
+            CHECK(r.value("masks", json::array()).size() >= 1);
+        else
+            CHECK(r.contains("layer"));
         json out = ops::execute("texEvaluate", {{"args", {"Masked"}}, {"backend", "cpu"}, {"channels", {"baseColor"}},
                                                 {"folder", (fs::temp_directory_path() / "lila_material_pack_masks").generic_string()}});
         CHECK(out["files"].size() == 1);
     }
+    for (const std::unique_ptr<ext::Context>& c : owners)
+        c->unloadAll();
 }

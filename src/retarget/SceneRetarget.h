@@ -114,6 +114,12 @@ struct LILA_SCENE_API RunReport
     json toJson() const;
 };
 
+/**
+ * Keys a solved clip onto a skeleton from start at fps (one key per pose), into opts.take when it names one (replacing a
+ * take of that name), and keys the lock channel of its IK chains where res.planted says (opts.lockChains). Undoable.
+ */
+LILA_SCENE_API RunReport keyResult(Graph& g, const SceneSkeleton& target, const Rig& targetRig, const Pose& targetNow, const Result& res,
+                                   double start, double fps, const RunOptions& opts);
 /** Retargets the source's motion onto the target with the retargeter's settings, keying the target. Undoable. */
 LILA_SCENE_API RunReport run(Graph& g, NodeId retargeter, const RunOptions& opts);
 /** A skeleton's motion as a body-independent clip (characterising it first when needed), over opts' range and fps. */

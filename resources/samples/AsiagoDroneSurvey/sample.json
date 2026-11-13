@@ -1,0 +1,18 @@
+{
+    "name": "Asiago Drone Survey",
+    "description": "A drone photogrammetry scan of a forest stand near Asiago, Italy: 2 million coloured points over 220 × 130 m, at their real UTM zone 32N coordinates.",
+    "files": [
+        {
+            "url": "https://zenodo.org/records/7421524/files/Asiago_postTaglio_nuvola-densa-drone-UTM32.laz?download=1",
+            "path": "Asiago_postTaglio_nuvola-densa-drone-UTM32.laz"
+        }
+    ],
+    "size": 11443269,
+    "diskSize": 39000000,
+    "license": "CC BY 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+    "credit": "Asiago drone survey from \"LiDAR and Photogrammetry Point Clouds\" by Francesco Pirotti (doi:10.5281/zenodo.7421524), licensed CC BY 4.0.",
+    "source": "https://zenodo.org/records/7421524",
+    "scene": "asiago.lila",
+    "after": "HouseOfChores"
+}

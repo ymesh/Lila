@@ -18,6 +18,11 @@ namespace lila::scene
 class Graph;
 }
 
+namespace lila::scene::anim
+{
+struct TimeSelection;
+}
+
 /**
  * Animation ghosting: the selected characters' evaluated meshes and skeletons at other times, drawn faintly around the
  * current frame. Frames are captured by stepping the graph's time on the main thread and restoring it, cached per time,
@@ -35,6 +40,7 @@ inline constexpr const char* kOpacity = "/anim/ghost/opacity";
 inline constexpr const char* kShow = "/anim/ghost/show";     // "mesh", "skeleton" or "both"
 inline constexpr const char* kBeforeColor = "/anim/ghost/beforeColor"; // sRGB "#rrggbb"
 inline constexpr const char* kAfterColor = "/anim/ghost/afterColor";
+inline constexpr const char* kRange = "/anim/ghost/range"; // spread across the time slider's range while one is selected
 inline constexpr const char* kDefaultBeforeColor = "#d9645a";
 inline constexpr const char* kDefaultAfterColor = "#5a9bd9";
 
@@ -48,14 +54,25 @@ struct Settings
     double opacity = 0.3;
     bool mesh = true;
     bool skeleton = false;
+    /** While the time slider has a range selected, ghosts spread across it (and its falloff) instead of around now. */
+    bool range = true;
 
     LILA_SCENE_API static Settings fromPrefs();
 };
+
+/** The most ghosts a range spreads, so a long range stays light to draw and to preview. */
+inline constexpr int kMaxRangeGhosts = 16;
 
 /** {time, offset}: offset -1 is the nearest ghost before now, 1 the nearest after. */
 using GhostTime = std::pair<double, int>;
 /** keys must be sorted. Times within half a frame of now are skipped. */
 LILA_SCENE_API std::vector<GhostTime> ghostTimes(const Settings& s, double now, const std::vector<double>& keys, double fps);
+/**
+ * Ghosts across a time range: its keys (or every step frames) from the falloff's start to its end, at most
+ * kMaxRangeGhosts of them evenly picked, offsets counting out from now on each side. Empty when the range is inactive.
+ */
+LILA_SCENE_API std::vector<GhostTime> rangeGhostTimes(const Settings& s, double now, const std::vector<double>& keys, double fps,
+                                                      const anim::TimeSelection& range);
 
 struct MeshGhost
 {
@@ -75,6 +92,10 @@ struct Ghost
 {
     std::shared_ptr<const Frame> frame;
     int offset = 0;
+    /** Ghosts on this ghost's side of now, for fading the farther ones. */
+    int count = 1;
+    /** The range's falloff weight at the ghost's time (1 without a range): how much a range edit moves this frame. */
+    double weight = 1.0;
 };
 
 class LILA_SCENE_API Cache
@@ -114,6 +135,8 @@ public:
 
 private:
     void refreshTargets();
+    /** The times shown now: across the time slider's range while one is selected and s.range, else around now. */
+    std::vector<GhostTime> timesNow(const Settings& s) const;
     std::shared_ptr<const Frame> capture(double t);
     bool anyHeld() const;
 

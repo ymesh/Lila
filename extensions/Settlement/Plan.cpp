@@ -553,6 +553,7 @@ Layout buildPlanned(const Site& site, const Ground& ground, const Options& o, co
         {
             applySnapshot(l, *site.plan);
             reseatEnvelopes(l, site, ground);
+            applyBuildingRoutes(l, site);
             l.plan = "pinned";
         }
         else
@@ -725,7 +726,7 @@ void applyTerrainEdits(Site& site, const json& edits)
     if (edits.contains("plan") && !edits["plan"].is_null())
         site.plan = planFromJson(edits["plan"]);
     json rest = edits;
-    for (const char* k : {"plan", "terrain", "terrainRoutes", "siting"})
+    for (const char* k : {"plan", "terrain", "terrainRoutes", "siting", "buildingRoutes", "libraryPicks"})
         rest.erase(k);
     site.editsKey = fnv(rest.dump());
 }

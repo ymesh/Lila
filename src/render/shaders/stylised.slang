@@ -177,13 +177,15 @@ Stroke painterlyStroke(VSOut i, float3 ng, bool front)
         s.n = normalize(mul(normalMatrix(i.instance), s.n));
         return s;
     }
+    // The frame is camera-relative: strokes sit on world positions, wrapped so they stay exact far from the origin.
+    const float3 world = i.worldPos + (pc.lights != nullptr ? ((GpuFrame*)pc.lights)->worldOffset.xyz : float3(0.0));
     if (mapping == kMapWorld)
-        return triplanarStroke(i.worldPos, ng, scale, tilt);
+        return triplanarStroke(world, ng, scale, tilt);
     // Screen: the tile size follows camera distance in octaves, so strokes keep their size on screen without swimming.
     float lod = log2(max(distance(pc.eye.xyz, i.worldPos), 1e-3) / 300.0);
     float octave = floor(lod);
     float k = scale * exp2(-octave);
-    Stroke a = triplanarStroke(i.worldPos, ng, k, tilt), b = triplanarStroke(i.worldPos, ng, k * 0.5, tilt);
+    Stroke a = triplanarStroke(world, ng, k, tilt), b = triplanarStroke(world, ng, k * 0.5, tilt);
     float f = lod - octave;
     s.n = normalize(lerp(a.n, b.n, f));
     s.shade = lerp(a.shade, b.shade, f);

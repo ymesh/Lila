@@ -72,7 +72,7 @@ template <class F> void forEachPlacement(const MeshDraw& d, F&& f)
         return;
     }
     for (const glm::mat4& m : *d.instances)
-        f(d.world * m);
+        f(d.world * glm::dmat4(m));
 }
 
 size_t placements(const MeshDraw& d) { return d.instances && !d.instances->empty() ? d.instances->size() : 1; }
@@ -178,6 +178,11 @@ DrawBatches batchDraws(const FrameState& s, bool shaderWire)
         for (const MeshDraw* d : members)
             total += placements(*d);
     out.instances.reserve(total);
+    out.translations.reserve(total);
+    auto place = [&out](const glm::dmat4& world, const glm::vec4& color) {
+        out.instances.push_back({glm::mat4(world), color});
+        out.translations.push_back(glm::dvec3(world[3]));
+    };
 
     for (const auto& members : shadedMembers)
     {
@@ -187,7 +192,7 @@ DrawBatches batchDraws(const FrameState& s, bool shaderWire)
             const bool wire = shaderWire && wireInShader(*d);
             b.wire = b.wire || wire;
             const glm::vec4 color = wire ? wireColor(s, *d) : glm::vec4(0.0f);
-            forEachPlacement(*d, [&](const glm::mat4& world) { out.instances.push_back({world, color}); });
+            forEachPlacement(*d, [&](const glm::dmat4& world) { place(world, color); });
         }
         b.count = uint32_t(out.instances.size()) - b.first;
         out.shaded.push_back(b);
@@ -199,11 +204,20 @@ DrawBatches batchDraws(const FrameState& s, bool shaderWire)
         for (const MeshDraw* d : members)
         {
             const glm::vec4 color = wireColor(s, *d);
-            forEachPlacement(*d, [&](const glm::mat4& world) { out.instances.push_back({world, color}); });
+            forEachPlacement(*d, [&](const glm::dmat4& world) { place(world, color); });
         }
         b.count = uint32_t(out.instances.size()) - b.first;
         out.wire.push_back(b);
     }
     return out;
+}
+
+void rebaseInstances(DrawBatches& batches, const glm::dvec3& origin)
+{
+    for (size_t i = 0; i < batches.instances.size(); ++i)
+    {
+        glm::vec4& t = batches.instances[i].world[3];
+        t = glm::vec4(glm::vec3(batches.translations[i] - origin), t.w);
+    }
 }
 } // namespace lila::render

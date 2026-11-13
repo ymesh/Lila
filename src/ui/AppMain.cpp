@@ -1,3 +1,4 @@
+#include "ui/PointCloudDisplay.h"
 #include "ui/AppMain.h"
 
 #include "bake/Bake.h"
@@ -168,6 +169,7 @@ void registerUi()
     registerTargetWeldActions();
     registerArrayToolActions();
     registerCurveUi();
+    pointCloudDisplay::registerUi();
     registerConformActions();
     registerClayUi();
     registerLayoutPencil();
@@ -285,6 +287,7 @@ int runApp(int argc, char** argv, const host::Options& opts, const fs::path& sta
     registerDebugDrawUi();
     registerPlacePrimitiveUi();
     tearoff::registerDropHandler();
+    mcp::Server::get().holdUntilReady();
     mcp::startFromPrefs();
     stream::startFromPrefs();
     crash::addSecret(mcp::Server::get().token());
@@ -319,6 +322,7 @@ int runApp(int argc, char** argv, const host::Options& opts, const fs::path& sta
                 window.openFile(startupScene);
             if (!opts.command.empty())
                 python::run(opts.command, "<command>");
+            mcp::Server::get().setReady();
         });
         QTimer::singleShot(3000, &window, [] { docs::startAutoUpdate(); });
         QTimer::singleShot(2000, &window, [] { io::fileTypes::applyPrefs(); });

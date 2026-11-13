@@ -127,6 +127,18 @@ TEST_CASE("mcp: guides as resources, model_asset as a prompt")
     CHECK(api.find("findComponents") != std::string::npos); // the generated command index
     CHECK(call("resources/read", {{"uri", "lila://nope"}}).contains("error"));
 
+    auto guideText = [](json args) {
+        return call("tools/call", {{"name", "read_guide"}, {"arguments", args}})["result"]["content"][0]["text"].get<std::string>();
+    };
+    const std::string materials = guideText({{"topic", "materials"}});
+    CHECK(materials.find("texBuildGraph") != std::string::npos);
+    CHECK(materials.find("`materialBlend`") != std::string::npos); // the generated texture node catalogue
+    CHECK(guideText({{"topic", "geometry-nodes"}}).find("gnBuildGroup") != std::string::npos);
+    const std::string list = guideText(json::object());
+    for (const char* g : {"modeling", "materials", "geometry-nodes", "settlement", "masonry", "foliage", "terrain"})
+        CHECK_MESSAGE(list.find(std::string("- ") + g + ":") != std::string::npos, g);
+    CHECK(guideText({{"topic", "nope"}}).starts_with("No guide 'nope'"));
+
     json prompts = call("prompts/list")["result"]["prompts"];
     REQUIRE(prompts.size() >= 2);
     std::set<std::string> names;

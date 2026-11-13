@@ -5,7 +5,6 @@
 #include "core/Registry.h"
 
 #include "render/FrameState.h"
-#include "render/GpuImage.h"
 #include "scene/Graph.h"
 #include "ui/ViewInfo.h"
 
@@ -19,6 +18,13 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+// Declared here rather than included: GpuImage.h pulls in Vulkan, which the SDK's extension headers don't carry.
+namespace lila::render
+{
+class GpuImage;
+using GpuImageRef = std::shared_ptr<GpuImage>;
+} // namespace lila::render
 
 /**
  * Viewport renderers (Maya's renderer override): an external renderer draws a viewport's image in place of Lila's own,

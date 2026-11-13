@@ -215,11 +215,11 @@ void drawTurntableRing(drawOverrides::DrawContext& c)
     const std::vector<glm::dvec3> pts = turntableRingPoints(c.node, c.world);
     for (size_t i = 0; i + 1 < pts.size() - 2; ++i)
     {
-        c.frame.lines.push_back({glm::vec3(pts[i]), c.color});
-        c.frame.lines.push_back({glm::vec3(pts[i + 1]), c.color});
+        c.frame.lines.push_back({glm::dvec3(pts[i]), c.color});
+        c.frame.lines.push_back({glm::dvec3(pts[i + 1]), c.color});
     }
-    c.frame.lines.push_back({glm::vec3(pts[pts.size() - 2]), c.color});
-    c.frame.lines.push_back({glm::vec3(pts.back()), c.color});
+    c.frame.lines.push_back({glm::dvec3(pts[pts.size() - 2]), c.color});
+    c.frame.lines.push_back({glm::dvec3(pts.back()), c.color});
 }
 
 std::optional<double> pickTurntableRing(const drawOverrides::PickContext& c)

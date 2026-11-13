@@ -74,6 +74,11 @@ std::vector<Polygon> cutBlock(const Block& b, const Layout& l, const Options& o,
 Envelope parcelEnvelope(const Lot& lot, const Block& block, const Layout& l, const Ground& g, const Options& o, const Site& site);
 /** The footprint's size along the street (width) and into the lot (depth), and its centre on those axes. */
 void frontageFit(const Envelope& env, double& width, double& depth, Vec2& centre);
+/**
+ * Each lot and envelope takes the route the buildingRoutes edits give it, and library picks become placements again. Routes
+ * change only how envelopes are built, so a pinned plan takes them without re-planning.
+ */
+void applyBuildingRoutes(Layout& l, const Site& site);
 /** A library building on its lot as an engine placement: centred on the footprint at the ground, turned to the street. */
 Placement libraryPlacement(const Envelope& env, const LibraryPick& pick);
 /** Two touching polygons as one (both counter-clockwise, sharing part of their boundary). Empty when they do not join into one ring. */

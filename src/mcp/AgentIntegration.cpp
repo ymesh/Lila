@@ -55,9 +55,53 @@ std::string mergeMcpJson(const std::string& existing, int port)
     doc["mcpServers"]["lila"] = {
         {"type", "http"},
         {"url", "${LILA_MCP_URL:-http://127.0.0.1:" + std::to_string(port) + "/mcp}"},
-        {"headers", {{"Authorization", "Bearer ${LILA_MCP_TOKEN}"}}},
+        {"headersHelper", tokenHelperCommand()},
     };
     return doc.dump(2) + "\n";
+}
+
+std::string tokenHelperCommand()
+{
+    // Claude Code runs it through the platform shell (cmd.exe on Windows) and expands ${...} in .mcp.json, so the PowerShell
+    // form has no double quotes inside and the sh form no ${...}.
+#ifdef _WIN32
+    return "powershell -NoProfile -NonInteractive -Command \"$d=$env:LILA_CONFIG_DIR; if (!$d) { $d=Join-Path $env:APPDATA 'Lila' }; "
+           "$t=(Get-Content -Raw (Join-Path $d 'mcp.json') | ConvertFrom-Json).token; @{Authorization='Bearer '+$t} | "
+           "ConvertTo-Json -Compress\"";
+#else
+#ifdef __APPLE__
+    const char* fallback = "$HOME/Library/Application Support/Lila";
+#else
+    const char* fallback = "$HOME/.config/Lila";
+#endif
+    return std::string("d=\"$LILA_CONFIG_DIR\"; [ -n \"$d\" ] || d=\"") + fallback +
+           "\"; printf '{\"Authorization\":\"Bearer %s\"}' \"$(sed -n 's/.*\"token\": *\"\\([^\"]*\\)\".*/\\1/p' \"$d/mcp.json\")\"";
+#endif
+}
+
+fs::path setupRoot(const fs::path& workspace)
+{
+    std::error_code ec;
+    fs::path ws = fs::weakly_canonical(workspace, ec);
+    if (ec)
+        ws = workspace;
+    auto isProject = [](const fs::path& dir) {
+        std::error_code e;
+        if (fs::exists(dir / ".git", e))
+            return true;
+        for (const auto& entry : fs::directory_iterator(dir, e))
+            if (entry.path().extension() == ".uproject")
+                return true;
+        return false;
+    };
+    for (fs::path p = ws;; p = p.parent_path())
+    {
+        if (isProject(p))
+            return p;
+        if (p == p.parent_path())
+            break;
+    }
+    return ws;
 }
 
 std::string upsertBlock(const std::string& existing, const std::string& block)
@@ -124,10 +168,16 @@ SetupResult setUp(const fs::path& root, const SetupOptions& o)
     }
     if (o.skill)
     {
-        for (const char* skill : {"lila-modeling", "lila-geometry-nodes"})
+        std::error_code dirEc;
+        std::vector<fs::path> skills;
+        for (const auto& entry : fs::directory_iterator(agents / "skills", dirEc))
+            if (entry.is_directory())
+                skills.push_back(entry.path());
+        if (skills.empty())
+            r.errors.push_back("missing " + utf8(agents / "skills"));
+        for (const fs::path& src : skills)
         {
-            fs::path src = agents / "skills" / skill;
-            fs::path dst = root / ".claude" / "skills" / skill;
+            fs::path dst = root / ".claude" / "skills" / src.filename();
             std::error_code ec;
             for (const auto& entry : fs::recursive_directory_iterator(src, ec))
             {

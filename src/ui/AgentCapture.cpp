@@ -21,7 +21,13 @@
 #include "ui/HeightfieldDisplay.h"
 #include "ui/Environments.h"
 #include "ui/ImagePlaneUi.h"
+#include "ui/PointCloudDisplay.h"
 #include "ui/ViewInfo.h"
+#include "scene/Georef.h"
+#include "ui/ViewportHud.h"
+#include "ui/DroneCamera.h"
+#include "ui/SurfaceSnap.h"
+#include "ui/GizmoMath.h"
 #include "ui/MaterialDraw.h"
 #include "ui/MeshCache.h"
 #include "ui/Overlay.h"
@@ -146,7 +152,7 @@ void addSelection(render::FrameState& s, scene::NodeId id)
         return;
     const geo::Mesh& m = *cage;
     glm::dmat4 world = g.node(id)->as<glm::dmat4>(scene::Transform::kWorldMatrix);
-    auto wp = [&](uint32_t p) { return glm::vec3(world * glm::dvec4(m.position(p), 1.0)); };
+    auto wp = [&](uint32_t p) { return glm::dvec3(world * glm::dvec4(m.position(p), 1.0)); };
     // Linear colors; the viewport's own selection colors would vanish on the light default material.
     const glm::vec4 fill(0.9f, 0.9f, 0.9f, 0.45f), hot(1.0f, 1.0f, 1.0f, 1.0f);
     for (uint32_t f : scene::components::selected(id, scene::ComponentMode::Face))
@@ -174,11 +180,36 @@ void addSelection(render::FrameState& s, scene::NodeId id)
         if (m.pointValid(p))
             for (int axis = 0; axis < 3; ++axis)
             {
-                glm::vec3 d(0.0f);
-                d[axis] = float(tick);
+                glm::dvec3 d(0.0);
+                d[axis] = tick;
                 s.linesOnTop.push_back({wp(p) - d, hot});
                 s.linesOnTop.push_back({wp(p) + d, hot});
             }
+}
+
+/** The HUD readouts with the cursor at the view's centre (on the surface there, else the ground), and the Drone Camera banner. */
+void drawHud(OverlayPainter& painter, const ViewInfo& view, scene::Graph& g, ViewportWidget* widget)
+{
+    hud::Context ctx;
+    ctx.view = view;
+    const QPointF centre(view.width * 0.5, view.height * 0.5);
+    if (const std::optional<surfaceSnap::Hit> hit = surfaceSnap::underCursor(centre, view))
+    {
+        ctx.cursorWorld = hit->position;
+        ctx.cursorOnSurface = true;
+    }
+    else
+    {
+        glm::dvec3 o, d;
+        view.ray(centre, o, d);
+        const glm::dvec3 up = scene::georef::sceneZUp() ? glm::dvec3(0, 0, 1) : glm::dvec3(0, 1, 0);
+        if (glm::dvec3 ground; gizmo::rayPlane(o, d, glm::dvec3(0.0), up, ground) && glm::dot(ground - o, d) > 0.0)
+            ctx.cursorWorld = ground;
+    }
+    ctx.shownNode = [&g](scene::NodeId id) { return scene::effectivelyVisible(g, id); };
+    hud::draw(painter, ctx);
+    if (widget)
+        drone::draw(painter, widget);
 }
 
 /** The viewport's draw overrides (selected last, as it draws them) and extension drawers, into a capture's frame. */
@@ -395,7 +426,7 @@ QImage render(const Options& o, Timing* timing, int repeat)
         if (terrain.drawsHeightfields())
             if (std::optional<render::HeightfieldDraw> hd = heightfieldDisplay::drawFor(g, id, terrain, showMaterials))
             {
-                hd->world = glm::mat4(n->as<glm::dmat4>(scene::Transform::kWorldMatrix));
+                hd->world = n->as<glm::dmat4>(scene::Transform::kWorldMatrix);
                 hd->flags = (o.display != "wireframe" ? render::DrawShaded : 0u) | (o.display != "shaded" ? render::DrawWire : 0u);
                 if (o.showSelection && selected.contains(id))
                     hd->flags |= render::DrawSelected;
@@ -412,7 +443,7 @@ QImage render(const Options& o, Timing* timing, int repeat)
         d.mesh = std::move(rm);
         if (textured)
             d.materials = drawMaterials(*shown);
-        d.world = glm::mat4(n->as<glm::dmat4>(scene::Transform::kWorldMatrix));
+        d.world = n->as<glm::dmat4>(scene::Transform::kWorldMatrix);
         if (viewportDisplay::vertexColorMode() != render::VertexColorMode::Off && !geo::colors::current(*shown).empty())
         {
             d.vertexColors = viewportDisplay::vertexColorMode();
@@ -433,7 +464,7 @@ QImage render(const Options& o, Timing* timing, int repeat)
                 {
                     render::MeshDraw c;
                     c.mesh = std::move(crm);
-                    c.world = glm::mat4(n->as<glm::dmat4>(scene::Transform::kWorldMatrix));
+                    c.world = n->as<glm::dmat4>(scene::Transform::kWorldMatrix);
                     c.flags = render::DrawWire;
                     s.meshes.push_back(std::move(c));
                 }
@@ -456,6 +487,9 @@ QImage render(const Options& o, Timing* timing, int repeat)
         for (scene::NodeId id : g.nodes())
             if (scene::Node* n = g.node(id); n && n->type().isA("curve") && scene::effectivelyVisible(g, id))
                 drawStrandsFor(s, *n, n->as<glm::dmat4>(scene::Transform::kWorldMatrix), view);
+        // Point clouds at the detail this view needs, waiting for it to load.
+        pointCloudDisplay::draw(
+            s, view, double(h), g, [&](scene::NodeId id) { return scene::effectivelyVisible(g, id); }, [](scene::NodeId) { return glm::vec3(0.0f); }, true);
         // The first pass asks for the planes' pictures; the second draws them once they have loaded.
         imagePlanes::drawInto(s, view);
         textures::waitForLoads(30.0);
@@ -463,6 +497,12 @@ QImage render(const Options& o, Timing* timing, int repeat)
         imagePlanes::drawInto(s, view);
         if (o.overlays && qobject_cast<QGuiApplication*>(QCoreApplication::instance()))
             drawOverlays(s, view, g);
+        if (o.hud && qobject_cast<QGuiApplication*>(QCoreApplication::instance()))
+        {
+            OverlayPainter painter(s.overlayTris, 1.0);
+            drawHud(painter, view, g, o.view == "active" ? activeViewport() : nullptr);
+            s.atlas = overlayAtlas();
+        }
     }
     if (o.label && qobject_cast<QGuiApplication*>(QCoreApplication::instance()))
     {
@@ -569,6 +609,7 @@ std::vector<FlagDef> optionFlags()
         {"samples", "", T::Int, 1, "Jittered frames averaged into the image: 16 or more gives a supersampled still.", {}, {}, 1.0, 1024.0},
         {"label", "", T::Bool, true, "Write the view's name in the top-left corner."},
         {"overlays", "ov", T::Bool, false, "Draw what the viewport draws over the scene too: locators, curves' draw overrides, Soft Net lines and knots, extension drawers."},
+        {"hud", "", T::Bool, false, "Draw the heads-up readouts the view shows (the cursor taken at the view's centre) and the Drone Camera banner."},
     };
 }
 
@@ -609,6 +650,7 @@ Options optionsFrom(const json& j)
     flag({"showSelection", "show_selection"}, o.showSelection);
     flag({"label"}, o.label);
     flag({"overlays"}, o.overlays);
+    flag({"hud"}, o.hud);
     return o;
 }
 

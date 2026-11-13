@@ -51,6 +51,28 @@ glm::dmat4 turnedAbout(const glm::dmat4& world, const glm::dquat& q)
 
 glm::dmat4 shifted(const glm::dmat4& world, const glm::dvec3& by) { return glm::translate(glm::dmat4(1.0), by) * world; }
 
+glm::dmat4 turnedAround(const glm::dmat4& world, const glm::dvec3& c, const glm::dquat& q)
+{
+    return glm::translate(glm::dmat4(1.0), c) * glm::dmat4(glm::mat3_cast(q)) * glm::translate(glm::dmat4(1.0), -c) * world;
+}
+
+/** Puts each isolated bone (parents first) back to its world rotation from start, where the pose has carried it now. */
+void isolateRotations(const fbik::Problem& p, Pose& s, const std::vector<glm::dmat4>& start, const std::vector<int>& isolate, int grabbed)
+{
+    std::vector<int> bones;
+    for (int b : isolate)
+        if (b >= 0 && size_t(b) < p.bones.size() && b != grabbed && p.bones[size_t(b)].solve)
+            bones.push_back(b);
+    std::sort(bones.begin(), bones.end());
+    for (int b : bones)
+    {
+        const std::vector<glm::dmat4> w = worlds(p, s);
+        glm::dmat4 target = start[size_t(b)];
+        target[3] = w[size_t(b)][3];
+        place(p, s, w, b, target, false);
+    }
+}
+
 double holdError(const std::vector<glm::dmat4>& w, const std::vector<Hold>& holds)
 {
     double e = 0.0;
@@ -156,16 +178,53 @@ const char* modeName(Mode m)
     case Mode::Backward: return "backward";
     case Mode::Ik: return "ik";
     case Mode::FullBody: return "fullBody";
+    case Mode::Default: return "default";
+    case Mode::Free: return "free";
+    case Mode::ForwardAll: return "forwardAll";
+    case Mode::BackwardAll: return "backwardAll";
+    case Mode::Bidirectional: return "bidirectional";
+    case Mode::All: return "all";
     }
     return "forward";
 }
 
 std::optional<Mode> modeFromName(std::string_view name)
 {
-    for (Mode m : {Mode::Forward, Mode::Backward, Mode::Ik, Mode::FullBody})
+    for (Mode m : kModes)
         if (name == modeName(m))
             return m;
     return std::nullopt;
+}
+
+Mode allVariant(Mode m, bool all)
+{
+    switch (m)
+    {
+    case Mode::Forward:
+    case Mode::ForwardAll: return all ? Mode::ForwardAll : Mode::Forward;
+    case Mode::Backward:
+    case Mode::BackwardAll: return all ? Mode::BackwardAll : Mode::Backward;
+    case Mode::Bidirectional:
+    case Mode::All: return all ? Mode::All : Mode::Bidirectional;
+    default: return m;
+    }
+}
+
+bool isAllVariant(Mode m) { return m == Mode::ForwardAll || m == Mode::BackwardAll || m == Mode::All; }
+
+bool movesOrigin(Mode m, bool grabbedIsHips)
+{
+    switch (m)
+    {
+    case Mode::Ik:
+    case Mode::FullBody:
+    case Mode::Default:
+    case Mode::Bidirectional:
+    case Mode::All:
+    case Mode::Backward:
+    case Mode::BackwardAll: return true;
+    default: return grabbedIsHips;
+    }
 }
 
 Pose startPose(const fbik::Problem& p)
@@ -283,38 +342,167 @@ double holdLimbs(const fbik::Problem& p, Pose& s, const std::vector<Hold>& holds
     return holdError(worlds(p, s), holds);
 }
 
+Mode resolveDefault(const fbik::Problem& p, const Request& r)
+{
+    if (r.rules)
+        for (const auto& [bone, mode] : r.rules->defaults)
+            if (bone == r.grabbed && mode != Mode::Default)
+                return mode;
+    if (r.move && (r.grabbed == r.hips || limbOf(p, r.grabbed, r.hips, -1, 0, r.rules).size() >= 2))
+        return Mode::Ik;
+    return Mode::Forward;
+}
+
+namespace
+{
+/** Holds below the grabbed joint outside its own limb: what Forward keeps while the joint above them turns. */
+std::vector<Hold> heldBelow(const fbik::Problem& p, const Request& r)
+{
+    std::vector<Hold> out;
+    for (const Hold& h : r.holds)
+    {
+        if (h.bone == r.grabbed || !isUnder(p, h.bone, r.grabbed))
+            continue;
+        const std::vector<int> limb = limbOf(p, h.bone, r.hips, -1, 0, r.rules);
+        if (std::find(limb.begin(), limb.end(), r.grabbed) == limb.end())
+            out.push_back(h);
+    }
+    return out;
+}
+
+/** Free: the joint turns or moves alone, its children keeping their world rotation (and, on a move, their place). */
+void freePose(const fbik::Problem& p, Pose& s, const Request& r, const std::vector<glm::dmat4>& start)
+{
+    const int g = r.grabbed;
+    if (r.turn)
+        forwardTurn(p, s, g, *r.turn);
+    if (r.move)
+    {
+        const std::vector<glm::dmat4> w = worlds(p, s);
+        place(p, s, w, g, shifted(w[size_t(g)], *r.move), true);
+    }
+    for (size_t i = 0; i < p.bones.size(); ++i)
+        if (p.bones[i].parent == g && p.bones[i].solve)
+        {
+            const std::vector<glm::dmat4> w = worlds(p, s);
+            glm::dmat4 target = start[i];
+            if (!r.move)
+                target[3] = w[i][3];
+            place(p, s, w, int(i), target, bool(r.move));
+        }
+}
+
+/**
+ * Bidirectional and All: a turn takes the parts below the joint half way and the body above half the other way, both
+ * about the joint; a move carries the body half way and bends the limb for the rest (All: the whole body all the way).
+ */
+double bothWays(const fbik::Problem& p, Pose& s, const Request& r, const std::vector<glm::dmat4>& start, bool rigid)
+{
+    const int g = r.grabbed;
+    const glm::dvec3 c(start[size_t(g)][3]);
+    std::vector<Hold> outside;
+    if (!rigid)
+        for (const Hold& h : r.holds)
+            if (!isUnder(p, h.bone, g))
+                outside.push_back(h);
+    if (r.turn)
+    {
+        const glm::dquat id(1.0, 0.0, 0.0, 0.0);
+        const glm::dquat half = glm::slerp(id, glm::dot(*r.turn, id) < 0.0 ? -*r.turn : *r.turn, 0.5);
+        const std::vector<glm::dmat4> w = worlds(p, s);
+        place(p, s, w, r.hips, turnedAround(w[size_t(r.hips)], c, glm::inverse(half)), true);
+        forwardTurn(p, s, g, *r.turn);
+    }
+    if (r.move)
+    {
+        const std::vector<glm::dmat4> w = worlds(p, s);
+        if (rigid)
+        {
+            place(p, s, w, r.hips, shifted(w[size_t(r.hips)], *r.move), true);
+            return 0.0;
+        }
+        place(p, s, w, r.hips, shifted(w[size_t(r.hips)], *r.move * 0.5), true);
+        std::vector<Hold> holds = {{.bone = g, .world = shifted(start[size_t(g)], *r.move)}};
+        holds.insert(holds.end(), outside.begin(), outside.end());
+        return holdLimbs(p, s, holds, r.hips, r.maxStretch, {}, r.rules);
+    }
+    return outside.empty() ? 0.0 : holdLimbs(p, s, outside, r.hips, r.maxStretch, {}, r.rules);
+}
+} // namespace
+
 Result solve(const fbik::Problem& p, const Request& r)
 {
     LILA_ZONE();
     if (r.grabbed < 0 || size_t(r.grabbed) >= p.bones.size())
         throw std::invalid_argument("strings: the grabbed joint is not in the skeleton");
+    if (r.mode == Mode::Default)
+    {
+        Request picked = r;
+        picked.mode = resolveDefault(p, r);
+        return solve(p, picked);
+    }
     if (r.mode == Mode::FullBody)
-        return fullBody(p, r);
+    {
+        Result out = fullBody(p, r);
+        out.resolved = Mode::FullBody;
+        return out;
+    }
 
     Result out;
+    out.resolved = r.mode;
     out.pose = startPose(p);
     Pose& s = out.pose;
     const int g = r.grabbed;
     const std::vector<glm::dmat4> start = worlds(p, s);
     const bool belowHips = r.hips >= 0 && isUnder(p, g, r.hips) && g != r.hips;
 
-    if (r.mode == Mode::Forward)
+    if (r.mode == Mode::Forward || r.mode == Mode::ForwardAll)
     {
         if (r.turn)
             forwardTurn(p, s, g, *r.turn);
         if (r.move)
             place(p, s, start, g, shifted(start[size_t(g)], *r.move), true);
+        if (r.mode == Mode::Forward)
+        {
+            if (const std::vector<Hold> held = heldBelow(p, r); !held.empty())
+                out.error = holdLimbs(p, s, held, r.hips, r.maxStretch, {}, r.rules);
+            isolateRotations(p, s, start, r.isolate, g);
+        }
         return out;
     }
 
-    if (r.mode == Mode::Backward)
+    if (r.mode == Mode::Free)
+    {
+        freePose(p, s, r, start);
+        return out;
+    }
+
+    if (r.mode == Mode::Bidirectional || r.mode == Mode::All)
+    {
+        if (!belowHips)
+        {
+            // The hips have nothing above them to give: both ways is Forward there.
+            Request forward = r;
+            forward.mode = r.mode == Mode::All ? Mode::ForwardAll : Mode::Forward;
+            Result f = solve(p, forward);
+            f.resolved = r.mode;
+            return f;
+        }
+        out.error = bothWays(p, s, r, start, r.mode == Mode::All);
+        if (r.mode == Mode::Bidirectional)
+            isolateRotations(p, s, start, r.isolate, g);
+        return out;
+    }
+
+    if (r.mode == Mode::Backward || r.mode == Mode::BackwardAll)
     {
         if (r.hips >= 0 && !isUnder(p, g, r.hips))
         {
             out.handled = false;
             return out;
         }
-        std::vector<Hold> others = r.holds;
+        const bool rigid = r.mode == Mode::BackwardAll;
+        std::vector<Hold> others = rigid ? std::vector<Hold>{} : r.holds;
         if (r.turn)
         {
             forwardTurn(p, s, g, *r.turn);
@@ -335,13 +523,19 @@ Result solve(const fbik::Problem& p, const Request& r)
             // The body is carried by the grabbed joint; the limbs that hold bend under it.
             const std::vector<glm::dmat4> w = worlds(p, s);
             place(p, s, w, r.hips, shifted(w[size_t(r.hips)], *r.move), true);
-            soft.push_back({g, glm::dvec3(start[size_t(g)][3]) + *r.move});
+            if (!rigid)
+                soft.push_back({g, glm::dvec3(start[size_t(g)][3]) + *r.move});
         }
-        out.error = holdLimbs(p, s, others, r.hips, r.maxStretch, soft, r.rules);
+        if (!rigid)
+        {
+            out.error = holdLimbs(p, s, others, r.hips, r.maxStretch, soft, r.rules);
+            isolateRotations(p, s, start, r.isolate, g);
+        }
         return out;
     }
 
     // IK.
+    out.resolved = Mode::Ik;
     if (r.hips >= 0 && !isUnder(p, g, r.hips))
     {
         out.handled = false;

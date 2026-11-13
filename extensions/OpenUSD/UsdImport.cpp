@@ -3,6 +3,7 @@
 #include "UsdAttributes.h"
 
 #include <lila/Anim.h>
+#include <lila/Command.h>
 #include <lila/Deformer.h>
 #include <lila/LightingChannels.h>
 #include <lila/Lights.h>
@@ -12,6 +13,8 @@
 #include <lila/Rig.h>
 #include <lila/Tasks.h>
 
+#include <pxr/base/vt/dictionary.h>
+#include <pxr/usd/sdf/layer.h>
 #include <pxr/base/gf/vec2d.h>
 #include <pxr/base/gf/vec2f.h>
 #include <pxr/base/gf/vec3f.h>
@@ -62,6 +65,9 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <lila/Command.h>
+#include <pxr/base/vt/dictionary.h>
+#include <pxr/usd/sdf/layer.h>
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
@@ -1879,6 +1885,74 @@ void keyChannels(Importer& im, NodeId node, const std::vector<double>& times, co
     }
 }
 
+/**
+ * Where the stage says it is on the Earth: the CRS and projected origin Lila wrote in customLayerData, else a Cesium
+ * georeference prim's WGS 84 origin taken in the scene's CRS (or the UTM zone around it when the scene has none).
+ */
+std::optional<json> stageGeoreference(const UsdStageRefPtr& stage)
+{
+    const VtDictionary layerData = stage->GetRootLayer()->GetCustomLayerData();
+    if (auto it = layerData.find("lilaGeoreference"); it != layerData.end() && it->second.IsHolding<VtDictionary>())
+    {
+        const VtDictionary& d = it->second.UncheckedGet<VtDictionary>();
+        auto crs = d.find("crs");
+        auto origin = d.find("origin");
+        if (crs != d.end() && origin != d.end() && crs->second.IsHolding<std::string>() && origin->second.IsHolding<GfVec3d>())
+        {
+            const GfVec3d o = origin->second.UncheckedGet<GfVec3d>();
+            return json{{"crs", crs->second.UncheckedGet<std::string>()}, {"origin", {o[0], o[1], o[2]}}};
+        }
+    }
+    for (const UsdPrim& p : stage->Traverse())
+    {
+        if (p.GetTypeName() != TfToken("CesiumGeoreferencePrim"))
+            continue;
+        double lat = 0.0, lon = 0.0, h = 0.0;
+        if (!p.GetAttribute(TfToken("cesium:georeferenceOrigin:latitude")).Get(&lat) ||
+            !p.GetAttribute(TfToken("cesium:georeferenceOrigin:longitude")).Get(&lon))
+            return std::nullopt;
+        p.GetAttribute(TfToken("cesium:georeferenceOrigin:height")).Get(&h);
+        std::string crs;
+        try
+        {
+            const json scene = ops::execute("georeference", json::object());
+            if (scene.is_object())
+                crs = scene.value("authority", scene.value("crs", std::string()));
+        }
+        catch (const std::exception&)
+        {
+        }
+        if (crs.empty())
+        {
+            // No scene georeference yet: the UTM zone around the prim's origin, which becomes the scene origin.
+            crs = std::format("EPSG:{}", (lat >= 0.0 ? 32600 : 32700) + std::clamp(int(std::floor((lon + 180.0) / 6.0)) + 1, 1, 60));
+            ops::execute("setGeoreference", {{"crs", crs}, {"latLonHeight", {lat, lon, h}}});
+        }
+        const json projected = ops::execute("georeferenceConvert", {{"points", {{lat, lon, h}}}, {"from", "geographic"}, {"to", crs}});
+        return json{{"crs", crs}, {"origin", projected[0]}};
+    }
+    return std::nullopt;
+}
+
+void placeByStageGeoreference(scene::Graph& graph, const UsdStageRefPtr& stage, ImportResult& r)
+{
+    const std::optional<json> geo = stageGeoreference(stage);
+    if (!geo)
+        return;
+    json names = json::array();
+    for (scene::NodeId id : r.roots)
+        if (const auto* n = graph.node(id))
+            names.push_back(n->name());
+    try
+    {
+        ops::execute("georeferencePlace", {{"args", names}, {"crs", (*geo)["crs"]}, {"origin", (*geo)["origin"]}});
+    }
+    catch (const std::exception& e)
+    {
+        r.warnings.push_back(std::string("georeference not applied: ") + e.what());
+    }
+}
+
 ImportResult importUsd(scene::Graph& graph, const fs::path& path, const ImportOptions& opts)
 {
     LILA_ZONE();
@@ -1925,6 +1999,8 @@ ImportResult importUsd(scene::Graph& graph, const fs::path& path, const ImportOp
             opening.push_back("OpenUSD: " + w);
     }
     importStage(graph, stage, path, opts, r);
+    if (opts.georeference && r.ok)
+        placeByStageGeoreference(graph, stage, r);
     r.warnings.insert(r.warnings.end(), opening.begin(), opening.end());
     return r;
 }

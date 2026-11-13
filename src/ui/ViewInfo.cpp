@@ -1,5 +1,7 @@
 #include "ui/ViewInfo.h"
 
+#include <glm/gtc/matrix_transform.hpp>
+
 #include <cmath>
 
 namespace lila::ui
@@ -15,11 +17,13 @@ std::optional<QPointF> ViewInfo::project(const glm::dvec3& world) const
 void ViewInfo::ray(QPointF px, glm::dvec3& origin, glm::dvec3& dir) const
 {
     // Two depths along the pixel; works for perspective and orthographic alike. Reversed-Z: 1 is the near plane.
-    glm::dmat4 inv = glm::inverse(viewProj());
+    // Unprojected relative to the eye: the two points are a fraction of a cm apart, which far from the origin would
+    // leave the direction to rounding.
+    const glm::dmat4 inv = glm::inverse(proj * view * glm::translate(glm::dmat4(1.0), eye));
     double x = px.x() / width * 2.0 - 1.0, y = px.y() / height * 2.0 - 1.0;
     glm::dvec4 a = inv * glm::dvec4(x, y, 1.0, 1.0), b = inv * glm::dvec4(x, y, 0.5, 1.0);
     glm::dvec3 nearPoint = glm::dvec3(a) / a.w, midPoint = glm::dvec3(b) / b.w;
-    origin = nearPoint;
+    origin = eye + nearPoint;
     dir = glm::normalize(midPoint - nearPoint);
 }
 

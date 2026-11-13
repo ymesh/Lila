@@ -3,6 +3,7 @@
 
 #include "Seamwork.h"
 
+#include <lila/Relocate.h>
 #include <lila/Command.h>
 #include <lila/Deformer.h>
 #include <lila/Events.h>
@@ -150,7 +151,11 @@ bool registerFieldModifier(ext::Context& ctx)
         n->outAttr = out;
         return n;
     };
-    return types::registerType(ctx, std::move(t)) != nullptr;
+    if (!types::registerType(ctx, std::move(t)))
+        return false;
+    // Its weights come from the seam's fields, read against the mesh as it now is.
+    lila::scene::relocate::registerNeutral(kFieldModifier);
+    return true;
 }
 
 using gn::ExecContext;

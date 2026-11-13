@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <complex>
 #include <cstdlib>
 #include <functional>
 #include <limits>
@@ -19,6 +20,7 @@
 #include <queue>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace lila::retopo::detail
 {
@@ -59,6 +61,7 @@ struct Layout
     std::vector<uint8_t> singular;             // per vertex
     std::vector<int> quarters;                 // per vertex: how many quarter turns the field makes round it
     std::vector<glm::dvec3> creaseEnd;         // per vertex: where a crease stops inside the surface, the way it runs on
+    bool seamless = false;                     // traced in the continuous seamless charts, quantized globally
 
     Index other(Index e, Index t) const { return s.edgeTris[e][0] == t ? s.edgeTris[e][1] : s.edgeTris[e][0]; }
     int cornerOf(Index t, Index v) const
@@ -124,9 +127,445 @@ void cancelDipoles(Layout& lay, const std::vector<double>& scale)
         std::fprintf(stderr, "patch layout: %d close pole pairs cancelled\n", cancelled);
 }
 
-Layout makeLayout(const Surface& s, const std::vector<glm::dvec3>& q, const std::vector<double>& scale)
+/** Per vertex, the field's quarter-wrapped jumps round its fan plus its angle defect: a whole number of quarters at a pole. */
+std::vector<double> vertexTurns(const Layout& lay)
+{
+    const Surface& s = lay.s;
+    std::vector<double> turn(s.vertexCount(), glm::two_pi<double>());
+    for (Index t = 0; t < Index(s.tris.size()); ++t)
+        for (int k = 0; k < 3; ++k)
+        {
+            const Index v = s.tris[t][k], next = s.tris[t][(k + 1) % 3], prev = s.tris[t][(k + 2) % 3];
+            const glm::dvec3 toNext = glm::normalize(s.pos[next] - s.pos[v]), toPrev = glm::normalize(s.pos[prev] - s.pos[v]);
+            const double gamma = angleAbout(toNext, toPrev, s.triNormal[t]);
+            turn[v] -= gamma;
+            const Index e = lay.triEdge[t][(k + 2) % 3];
+            if (e == kInvalid || s.edgeTriCount[e] != 2)
+                continue;
+            const Index o = lay.other(e, t);
+            const double leaving = angleAbout(toNext, lay.dir[t], s.triNormal[t]) - gamma;
+            const double entering = angleAbout(toPrev, lay.dir[o], s.triNormal[o]);
+            turn[v] += std::remainder(entering - leaving, kQuarter);
+        }
+    return turn;
+}
+
+/**
+ * Per region vertex, 1 on the region's edge falling to 0 at band lattice steps inside it (distance along region edges):
+ * the share of the continuous chart where a cone map hands over to it.
+ */
+std::unordered_map<Index, double> regionEdgeWeights(const Layout& lay, const std::vector<double>& scale, const std::vector<Index>& region, double band)
+{
+    const Surface& s = lay.s;
+    const std::unordered_set<Index> in(region.begin(), region.end());
+    std::unordered_map<Index, double> dist;
+    using Item = std::pair<double, Index>;
+    std::priority_queue<Item, std::vector<Item>, std::greater<Item>> heap;
+    for (Index t : region)
+        for (int k = 0; k < 3; ++k)
+        {
+            dist.try_emplace(s.tris[t][k], std::numeric_limits<double>::infinity());
+            const Index e = lay.triEdge[t][k];
+            if (e == kInvalid || !in.count(lay.other(e, t)))
+                for (Index v : {s.tris[t][k], s.tris[t][(k + 1) % 3]})
+                    if (dist[v] > 0.0)
+                    {
+                        dist[v] = 0.0;
+                        heap.push({0.0, v});
+                    }
+        }
+    while (!heap.empty())
+    {
+        const auto [d, v] = heap.top();
+        heap.pop();
+        if (d > dist[v] || d > band)
+            continue;
+        for (Index k = s.adjStart[v]; k < s.adjStart[v + 1]; ++k)
+        {
+            const Index w = s.adj[k];
+            auto it = dist.find(w);
+            if (it == dist.end())
+                continue;
+            const double nd = d + glm::length(s.pos[w] - s.pos[v]) / scale[v];
+            if (nd < it->second)
+            {
+                it->second = nd;
+                heap.push({nd, w});
+            }
+        }
+    }
+    std::unordered_map<Index, double> weight;
+    for (const auto& [v, d] : dist)
+        weight[v] = 1.0 - std::clamp(d / band, 0.0, 1.0);
+    return weight;
+}
+
+/**
+ * The continuous seamless charts fold in the fans round cones. Each cone's region (its 2-ring and every triangle round a
+ * vertex within a lattice step) takes an exact map instead; cones whose regions overlap share one. The region is unfolded
+ * into a developed plane z and mapped by w = integral of prod (z - z_i)^(alpha_i - 1) dz, so each cone's fan spans
+ * 4 - quarters quarter turns and a close +1/-1 pair is the identity away from it. The map is turned (mod a quarter) and
+ * scaled to fit the region's unfolded continuous charts, and hands over to them over the region's outer half step.
+ * seamChart marks triangles whose chart is the continuous one.
+ */
+void coneChartsConformal(Layout& lay, const std::vector<double>& scale, const std::vector<uint8_t>& seamChart)
+{
+    constexpr double latR = 1.0, blendBand = 0.5;
+    using Cx = std::complex<double>;
+    const Surface& s = lay.s;
+    const Index nt = Index(s.tris.size()), nv = s.vertexCount();
+    const bool debug = std::getenv("LILA_PATCH_DEBUG") != nullptr, list = std::getenv("LILA_PATCH_LIST") != nullptr;
+    std::vector<std::vector<Index>> vertTris(nv);
+    for (Index t = 0; t < nt; ++t)
+        for (Index v : s.tris[t])
+            vertTris[v].push_back(t);
+    // Regions (triangles round the cone and its 1-ring) of the cones clear of walls and borders.
+    std::vector<Index> cones;
+    std::vector<std::vector<Index>> regions;
+    for (Index c = 0; c < nv; ++c)
+    {
+        if (!lay.singular[c] || lay.quarters[c] >= 4)
+            continue;
+        std::set<Index> region;
+        for (Index t : vertTris[c])
+            for (Index v : s.tris[t])
+                region.insert(vertTris[v].begin(), vertTris[v].end());
+        // Also every triangle round a vertex within a lattice step of the cone.
+        {
+            std::vector<Index> stack{c};
+            std::set<Index> seen{c};
+            while (!stack.empty())
+            {
+                const Index v = stack.back();
+                stack.pop_back();
+                region.insert(vertTris[v].begin(), vertTris[v].end());
+                for (Index k = s.adjStart[v]; k < s.adjStart[v + 1]; ++k)
+                    if (const Index w = s.adj[k]; !seen.count(w) && glm::length(s.pos[w] - s.pos[c]) < latR * scale[c])
+                    {
+                        seen.insert(w);
+                        stack.push_back(w);
+                    }
+            }
+        }
+        bool clear = true;
+        for (Index t : region)
+            for (Index e : lay.triEdge[t])
+                clear = clear && e != kInvalid && !lay.wall[e];
+        if (!clear)
+            continue;
+        cones.push_back(c);
+        regions.emplace_back(region.begin(), region.end());
+    }
+    // Clusters: cones whose regions share a triangle.
+    std::vector<int> root(cones.size());
+    std::iota(root.begin(), root.end(), 0);
+    std::function<int(int)> find = [&](int i) { return root[i] == i ? i : root[i] = find(root[i]); };
+    std::unordered_map<Index, int> firstCone;
+    for (int i = 0; i < int(cones.size()); ++i)
+        for (Index t : regions[i])
+            if (auto [it, fresh] = firstCone.try_emplace(t, i); !fresh)
+                root[find(i)] = find(it->second);
+    std::map<int, std::vector<int>> clusters;
+    for (int i = 0; i < int(cones.size()); ++i)
+        clusters[find(i)].push_back(i);
+
+    int mapped = 0, replaced = 0, unfolded = 0, folded = 0, multi = 0;
+    for (const auto& [r, members] : clusters)
+    {
+        std::set<Index> regionSet;
+        for (int i : members)
+            regionSet.insert(regions[i].begin(), regions[i].end());
+        const int nc = int(members.size());
+        multi += nc > 1;
+        std::vector<Index> cv(nc);
+        std::vector<double> theta(nc, 0.0);
+        for (int i = 0; i < nc; ++i)
+        {
+            cv[i] = cones[members[i]];
+            for (Index t : vertTris[cv[i]])
+            {
+                const int k = lay.cornerOf(t, cv[i]);
+                const glm::dvec3 a = s.pos[s.tris[t][(k + 1) % 3]] - s.pos[cv[i]], b = s.pos[s.tris[t][(k + 2) % 3]] - s.pos[cv[i]];
+                theta[i] += std::atan2(glm::length(glm::cross(a, b)), glm::dot(a, b));
+            }
+        }
+        // Developed plane by unfolding, triangle by triangle from the first cone's fan.
+        std::unordered_map<Index, std::array<Cx, 3>> plane;
+        std::unordered_map<Index, Index> parent;
+        std::vector<Index> order;
+        {
+            const Index t0 = vertTris[cv[0]].front();
+            const int k0 = lay.cornerOf(t0, cv[0]);
+            const Index a = s.tris[t0][(k0 + 1) % 3], b = s.tris[t0][(k0 + 2) % 3];
+            const double la = glm::length(s.pos[a] - s.pos[cv[0]]), lb = glm::length(s.pos[b] - s.pos[cv[0]]);
+            const double g = angleAbout(s.pos[a] - s.pos[cv[0]], s.pos[b] - s.pos[cv[0]], s.triNormal[t0]);
+            std::array<Cx, 3> p;
+            p[k0] = 0.0;
+            p[(k0 + 1) % 3] = la;
+            p[(k0 + 2) % 3] = std::polar(lb, g);
+            plane[t0] = p;
+            order.push_back(t0);
+        }
+        for (size_t qi = 0; qi < order.size(); ++qi)
+        {
+            const Index t = order[qi];
+            const auto pt = plane[t];
+            for (int k = 0; k < 3; ++k)
+            {
+                const Index e = lay.triEdge[t][k];
+                const Index o = lay.other(e, t);
+                if (plane.count(o) || !regionSet.count(o))
+                    continue;
+                const Index u = s.tris[t][k], w = s.tris[t][(k + 1) % 3];
+                const int ou = lay.cornerOf(o, u), ow = lay.cornerOf(o, w), ox = 3 - ou - ow;
+                const glm::dvec3 dx = s.pos[s.tris[o][ox]] - s.pos[w], dwu = s.pos[u] - s.pos[w];
+                const double lwu = glm::length(dwu), along = glm::dot(dx, dwu) / lwu, side = glm::length(glm::cross(dx, dwu)) / lwu;
+                const Cx pw = pt[(k + 1) % 3], ex = (pt[k] - pw) / std::max(std::abs(pt[k] - pw), 1e-30);
+                std::array<Cx, 3> po;
+                po[ou] = pt[k];
+                po[ow] = pw;
+                po[ox] = pw + ex * Cx(along, side);
+                plane[o] = po;
+                parent[o] = t;
+                order.push_back(o);
+            }
+        }
+        // Cone positions in the plane, from the first triangle that holds each.
+        std::vector<Cx> zc(nc);
+        std::vector<double> expo(nc);
+        for (int i = 0; i < nc; ++i)
+        {
+            for (Index t : order)
+                if (const int k = lay.cornerOf(t, cv[i]); k >= 0)
+                {
+                    zc[i] = plane[t][k];
+                    break;
+                }
+            expo[i] = (4 - lay.quarters[cv[i]]) * kQuarter / theta[i] - 1.0;
+        }
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        using Args = std::vector<double>;
+        // w and each factor's unwrapped arg at zb, integrating from za along the segment; a NaN start arg (za is that cone)
+        // unwraps from ref instead.
+        std::vector<Cx> zcT;
+        auto integrate = [&](Cx za, const Args& aa, const Args& ref, Cx zb, Cx& dw) {
+            constexpr int n = 16;
+            Args cur(nc);
+            for (int i = 0; i < nc; ++i)
+                cur[i] = std::isnan(aa[i]) ? ref[i] : aa[i];
+            dw = 0.0;
+            for (int j = 0; j <= n; ++j)
+            {
+                const Cx z = j == n ? zb : za + (zb - za) * ((j + 0.5) / n);
+                Cx f = 1.0;
+                for (int i = 0; i < nc; ++i)
+                {
+                    const Cx d = z - zcT[i];
+                    if (std::abs(d) < 1e-12)
+                    {
+                        if (j == n)
+                            cur[i] = nan;
+                        continue;
+                    }
+                    cur[i] += std::remainder(std::arg(d) - cur[i], glm::two_pi<double>());
+                    f *= std::polar(std::pow(std::abs(d), expo[i]), expo[i] * cur[i]);
+                }
+                if (j < n)
+                    dw += f * (zb - za) / double(n);
+            }
+            return cur;
+        };
+        std::unordered_map<Index, std::array<Cx, 3>> W;
+        std::unordered_map<Index, std::array<Args, 3>> A;
+        for (size_t qi = 0; qi < order.size(); ++qi)
+        {
+            const Index t = order[qi];
+            const auto& p = plane[t];
+            std::array<Cx, 3> wt;
+            std::array<Args, 3> at;
+            int known = 0;
+            // A cone at a corner sits where this triangle's own unfolding puts it.
+            zcT = zc;
+            for (int i = 0; i < nc; ++i)
+                if (const int k = lay.cornerOf(t, cv[i]); k >= 0)
+                    zcT[i] = p[k];
+            if (qi == 0)
+            {
+                const int k0 = (lay.cornerOf(t, cv[0]) + 1) % 3;
+                wt[k0] = 0.0;
+                at[k0].resize(nc);
+                for (int i = 0; i < nc; ++i)
+                    at[k0][i] = std::abs(p[k0] - zcT[i]) < 1e-12 ? nan : std::arg(p[k0] - zcT[i]);
+                known = 1 << k0;
+            }
+            else
+            {
+                // Copy the corners shared with the neighbour it was unfolded from.
+                for (int k = 0; k < 3; ++k)
+                {
+                    const Index o = lay.other(lay.triEdge[t][k], t);
+                    if (o != parent[t])
+                        continue;
+                    auto it = W.find(o);
+                    for (int c2 : {k, (k + 1) % 3})
+                    {
+                        const int oc = lay.cornerOf(o, s.tris[t][c2]);
+                        wt[c2] = it->second[oc];
+                        at[c2] = A[o][oc];
+                        known |= 1 << c2;
+                    }
+                    break;
+                }
+            }
+            // Integrate to the rest from a known corner whose args are all defined, or from any with the other's as ref.
+            for (int k = 0; k < 3; ++k)
+            {
+                if (known & (1 << k))
+                    continue;
+                int from = -1, refFrom = -1;
+                for (int j = 0; j < 3; ++j)
+                    if (known & (1 << j))
+                    {
+                        const bool clean = std::none_of(at[j].begin(), at[j].end(), [](double x) { return std::isnan(x); });
+                        if (clean && from < 0)
+                            from = j;
+                        refFrom = j;
+                    }
+                if (from < 0)
+                {
+                    // Only a cone corner is known: unwrap its NaN factor from the direction to the new corner.
+                    from = refFrom;
+                    Args ref = at[from];
+                    for (int i = 0; i < nc; ++i)
+                        if (std::isnan(ref[i]))
+                            ref[i] = std::arg(p[k] - zcT[i]);
+                    Cx dw;
+                    at[k] = integrate(p[from], at[from], ref, p[k], dw);
+                    wt[k] = wt[from] + dw;
+                }
+                else
+                {
+                    Cx dw;
+                    at[k] = integrate(p[from], at[from], at[from], p[k], dw);
+                    wt[k] = wt[from] + dw;
+                }
+                known |= 1 << k;
+            }
+            W[t] = wt;
+            A[t] = at;
+        }
+        // Fit a turn (mod a quarter) and a scale to the continuous charts.
+        glm::dvec2 four(0.0);
+        double lenC = 0.0, lenE = 0.0, wsum = 0.0;
+        auto asChart = [&](Index t, double beta, double rho) {
+            Chart q;
+            const Cx rot = std::polar(rho, beta);
+            for (int k = 0; k < 3; ++k)
+            {
+                const Cx z = rot * W[t][k];
+                q[k] = {z.real(), z.imag()};
+            }
+            return q;
+        };
+        for (Index t : order)
+        {
+            if (!seamChart[t])
+                continue;
+            const Chart e = asChart(t, 0.0, 1.0), cc = lay.chart[t];
+            glm::dvec2 z(0.0);
+            for (int k = 1; k < 3; ++k)
+            {
+                const glm::dvec2 a = e[k] - e[0], b = cc[k] - cc[0];
+                z += glm::dvec2(glm::dot(a, b), cross2(a, b));
+                lenE += glm::length(a);
+                lenC += glm::length(b);
+            }
+            const double ang = std::atan2(z.y, z.x), w = glm::length(z);
+            four += w * glm::dvec2(std::cos(4.0 * ang), std::sin(4.0 * ang));
+            wsum += w;
+        }
+        if (lenE <= 0.0 || glm::length(four) == 0.0)
+            continue;
+        const double beta = 0.25 * std::atan2(four.y, four.x), rho = lenC / lenE;
+        ++mapped;
+        if (list)
+        {
+            std::fprintf(stderr, "cone cluster of %d:", nc);
+            for (int i = 0; i < nc; ++i)
+                std::fprintf(stderr, " %d(q %d)", int(cv[i]), lay.quarters[cv[i]]);
+            std::fprintf(stderr, ", %zu tris, rho %.3f, coherence %.3f, at %.2f %.2f %.2f\n", order.size(), rho, glm::length(four) / std::max(wsum, 1e-30),
+                         s.pos[cv[0]].x, s.pos[cv[0]].y, s.pos[cv[0]].z);
+        }
+        const std::unordered_map<Index, double> edgeWeight = regionEdgeWeights(lay, scale, order, blendBand);
+        for (Index t : order)
+        {
+            const Chart cone = asChart(t, beta, rho);
+            if (!(cross2(cone[1] - cone[0], cone[2] - cone[0]) > 0.0))
+            {
+                ++folded;
+                continue;
+            }
+            const auto& tri = s.tris[t];
+            const glm::dvec3 x = lay.dir[t], y = glm::cross(s.triNormal[t], x);
+            auto rigid = [&](int k) { return glm::dvec2(glm::dot(s.pos[tri[k]] - s.pos[tri[0]], x), glm::dot(s.pos[tri[k]] - s.pos[tri[0]], y)); };
+            const glm::dmat2 rm(rigid(1), rigid(2));
+            auto dirOf = [&](const Chart& c) {
+                const glm::dvec2 d = rm * glm::inverse(glm::dmat2(c[1] - c[0], c[2] - c[0])) * glm::dvec2(1.0, 0.0);
+                return glm::normalize(x * d.x + y * d.y);
+            };
+            int bestK = 0;
+            double bestDot = -2.0;
+            for (int k = 0; k < 4; ++k)
+            {
+                const glm::dvec3 d3 = dirOf({turn2(cone[0] - cone[0], k), turn2(cone[1] - cone[0], k), turn2(cone[2] - cone[0], k)});
+                if (glm::dot(d3, x) > bestDot)
+                {
+                    bestDot = glm::dot(d3, x);
+                    bestK = k;
+                }
+            }
+            Chart out;
+            for (int k = 0; k < 3; ++k)
+                out[k] = turn2(cone[k] - cone[0], bestK);
+            // Near the region's edge the map hands over to the continuous chart, so the two meet without a jump.
+            if (seamChart[t])
+            {
+                double w = 0.0;
+                for (Index v : tri)
+                    w += edgeWeight.at(v) / 3.0;
+                Chart mix;
+                for (int k = 0; k < 3; ++k)
+                    mix[k] = (1.0 - w) * out[k] + w * lay.chart[t][k];
+                if (cross2(mix[1] - mix[0], mix[2] - mix[0]) > 0.0)
+                    out = mix;
+            }
+            unfolded += !seamChart[t];
+            ++replaced;
+            lay.dir[t] = dirOf(out);
+            lay.chart[t] = out;
+        }
+    }
+    if (debug)
+    {
+        const std::vector<double> turn = vertexTurns(lay);
+        int changed = 0;
+        for (Index v = 0; v < nv; ++v)
+            if (std::lround(turn[v] / kQuarter) != lay.quarters[v])
+            {
+                ++changed;
+                if (list)
+                    std::fprintf(stderr, "cone charts: vertex %d quarters %d -> %d, singular %d at %.2f %.2f %.2f\n", int(v), lay.quarters[v],
+                                 int(std::lround(turn[v] / kQuarter)), int(lay.singular[v]), s.pos[v].x, s.pos[v].y, s.pos[v].z);
+            }
+        std::fprintf(stderr, "cone charts (conformal): %d clusters mapped (%d with several cones), %d triangles replaced, %d rigid made unfolded, %d folded, %d vertex quarters changed\n",
+                     mapped, multi, replaced, unfolded, folded, changed);
+    }
+}
+
+Layout makeLayout(const Surface& s, const std::vector<glm::dvec3>& q, const std::vector<double>& scale, bool seamless)
 {
     Layout lay{s};
+    lay.seamless = seamless;
     const Index nt = Index(s.tris.size()), ne = Index(s.edges.size()), nv = s.vertexCount();
     lay.dir.resize(nt);
     std::unordered_map<Index, glm::dvec3> atJunction;
@@ -158,7 +597,25 @@ Layout makeLayout(const Surface& s, const std::vector<glm::dvec3>& q, const std:
         }
         lay.dir[t] = glm::length(sum) > 1e-12 ? glm::normalize(sum) : anyTangent(n);
     }
+    // Seamless: trace in the continuous seamless parametrization's charts, where iso-lines meet up across triangles and
+    // opposite sides of a traced patch come out equal.
+    ContinuousCharts seam;
+    if (seamless)
+    {
+        std::string why;
+        solveSeamlessPositions(s, q, scale, &why, nullptr, nullptr, 0, nullptr, &seam);
+        const bool usable = seam.chart.size() == size_t(nt) && seam.folded <= nt / 50;
+        if (std::getenv("LILA_PATCH_DEBUG"))
+            std::fprintf(stderr, "patch layout: seamless charts %s (%d folded of %d)%s%s\n", usable ? "used" : "not used", int(seam.folded),
+                         int(nt), why.empty() ? "" : ": ", why.c_str());
+        if (usable)
+            lay.dir = seam.dir;
+        else
+            seam.chart.clear();
+    }
     lay.chart.resize(nt);
+    std::vector<uint8_t> seamChart(nt, 0);
+    Index rigidKept = 0;
     for (Index t = 0; t < nt; ++t)
     {
         const auto& tri = s.tris[t];
@@ -169,7 +626,28 @@ Layout makeLayout(const Surface& s, const std::vector<glm::dvec3>& q, const std:
             const glm::dvec3 d = s.pos[tri[k]] - s.pos[tri[0]];
             lay.chart[t][k] = glm::dvec2(glm::dot(d, x), glm::dot(d, y)) / h;
         }
+        if (seam.chart.empty())
+            continue;
+        // A folded or flat seamless triangle keeps its rigid chart: the trace bends there as it does in the field.
+        const Chart& c = seam.chart[t];
+        const double rigid = cross2(lay.chart[t][1] - lay.chart[t][0], lay.chart[t][2] - lay.chart[t][0]);
+        if (cross2(c[1] - c[0], c[2] - c[0]) <= 0.01 * std::abs(rigid))
+        {
+            ++rigidKept;
+            if (std::getenv("LILA_PATCH_LIST"))
+            {
+                const glm::dvec3 m = (s.pos[tri[0]] + s.pos[tri[1]] + s.pos[tri[2]]) / 3.0;
+                std::fprintf(stderr, "rigid chart tri %d at %.2f %.2f %.2f\n", int(t), m.x, m.y, m.z);
+            }
+            continue;
+        }
+        for (int k = 0; k < 3; ++k)
+            lay.chart[t][k] = c[k] - c[0];
+        seamChart[t] = 1;
     }
+    const bool seamCones = !seam.chart.empty();
+    if (!seam.chart.empty() && std::getenv("LILA_PATCH_DEBUG"))
+        std::fprintf(stderr, "patch layout: %d triangles keep a rigid chart\n", int(rigidKept));
     lay.triEdge.resize(nt);
     for (Index t = 0; t < nt; ++t)
         for (int k = 0; k < 3; ++k)
@@ -185,26 +663,11 @@ Layout makeLayout(const Surface& s, const std::vector<glm::dvec3>& q, const std:
         lay.wall[e] = s.edgeTriCount[e] != 2 || s.edgeFeature[e] || s.edgeBoundary[e];
 
     // Singular vertices: the field's quarter-wrapped jumps round the fan plus the angle defect make a whole turn.
-    std::vector<double> turn(nv, glm::two_pi<double>());
+    const std::vector<double> turn = vertexTurns(lay);
     std::vector<uint8_t> border(nv, 0);
     for (Index e = 0; e < ne; ++e)
         if (s.edgeTriCount[e] != 2)
             border[s.edges[e][0]] = border[s.edges[e][1]] = 1;
-    for (Index t = 0; t < nt; ++t)
-        for (int k = 0; k < 3; ++k)
-        {
-            const Index v = s.tris[t][k], next = s.tris[t][(k + 1) % 3], prev = s.tris[t][(k + 2) % 3];
-            const glm::dvec3 toNext = glm::normalize(s.pos[next] - s.pos[v]), toPrev = glm::normalize(s.pos[prev] - s.pos[v]);
-            const double gamma = angleAbout(toNext, toPrev, s.triNormal[t]);
-            turn[v] -= gamma;
-            const Index e = lay.triEdge[t][(k + 2) % 3];
-            if (e == kInvalid || s.edgeTriCount[e] != 2)
-                continue;
-            const Index o = lay.other(e, t);
-            const double leaving = angleAbout(toNext, lay.dir[t], s.triNormal[t]) - gamma;
-            const double entering = angleAbout(toPrev, lay.dir[o], s.triNormal[o]);
-            turn[v] += std::remainder(entering - leaving, kQuarter);
-        }
     // A saddle the feature pass called a corner (a web, an armpit) is no tip to start lines from: the field's own poles
     // say how the layout turns there.
     std::vector<double> deficit(nv, glm::two_pi<double>());
@@ -230,12 +693,46 @@ Layout makeLayout(const Surface& s, const std::vector<glm::dvec3>& q, const std:
     lay.source.assign(nv, 0);
     for (Index v = 0; v < nv; ++v)
     {
-        lay.singular[v] = !border[v] && std::lround(turn[v] / kQuarter) != 0 && !needle(v);
+        lay.singular[v] = !border[v] && std::lround(turn[v] / kQuarter) != 0 && (seamCones || !needle(v));
         lay.quarters.push_back(int(std::lround(turn[v] / kQuarter)));
         const bool saddle = !onWall[v] && !s.pinned[v] && deficit[v] < 0.0;
         lay.source[v] = lay.singular[v] || (s.feature[v] == FeatureKind::Corner && !saddle);
     }
-    cancelDipoles(lay, scale);
+    // Every cone of the seamless charts turns the iso-lines, so each one sends lines or the patches round it can't close.
+    if (!seamCones)
+        cancelDipoles(lay, scale);
+    if (!seam.chart.empty())
+    {
+        const std::vector<glm::dvec3> dirBefore = lay.dir;
+        const std::vector<Chart> chartBefore = lay.chart;
+        coneChartsConformal(lay, scale, seamChart);
+        // A vertex the cone charts give a quarter turn it didn't have would be an unmarked pole that lines spiral into:
+        // its triangles go back to the continuous charts until none is left.
+        for (int pass = 0; pass < 8; ++pass)
+        {
+            const std::vector<double> turnNow = vertexTurns(lay);
+            std::vector<uint8_t> changed(nv, 0);
+            int count = 0;
+            for (Index v = 0; v < nv; ++v)
+                if (!border[v] && std::lround(turnNow[v] / kQuarter) != lay.quarters[v])
+                {
+                    changed[v] = 1;
+                    ++count;
+                }
+            int reverted = 0;
+            for (Index t = 0; t < nt; ++t)
+                if ((changed[s.tris[t][0]] || changed[s.tris[t][1]] || changed[s.tris[t][2]]) && lay.dir[t] != dirBefore[t])
+                {
+                    lay.dir[t] = dirBefore[t];
+                    lay.chart[t] = chartBefore[t];
+                    ++reverted;
+                }
+            if (std::getenv("LILA_PATCH_DEBUG"))
+                std::fprintf(stderr, "cone charts: revert pass %d, %d vertices changed, %d triangles reverted\n", pass, count, reverted);
+            if (reverted == 0)
+                break;
+        }
+    }
     // A crease that stops inside a patch would leave a wall ending in it; a line carries it on to the next line instead.
     std::vector<int> walls(nv, 0);
     std::vector<Index> wallTo(nv, kInvalid);
@@ -421,6 +918,7 @@ Traces trace(const Layout& lay, const std::vector<ExtraStart>& extras = {}, cons
         int steps = 0;
         bool alive = true;
         glm::dvec2 free{0.0};
+        double checkTime = 0.0; // time at the last progress check
     };
     std::vector<Tracer> tracers;
     Traces out;
@@ -621,6 +1119,16 @@ Traces trace(const Layout& lay, const std::vector<ExtraStart>& extras = {}, cons
             stop(ai, A.time, 4);
             continue;
         }
+        // A line bouncing between two triangles without moving on (charts that disagree across an edge) is lost.
+        if (A.steps % 4096 == 0)
+        {
+            if (A.time - A.checkTime < 1.0)
+            {
+                stop(ai, A.time, 4);
+                continue;
+            }
+            A.checkTime = A.time;
+        }
         const Index t = A.tri;
         const glm::dvec2 d = A.free != glm::dvec2(0.0) ? A.free : axis(A.dirK);
         A.free = glm::dvec2(0.0);
@@ -799,6 +1307,17 @@ Traces trace(const Layout& lay, const std::vector<ExtraStart>& extras = {}, cons
         queued[ai] = 1;
         queue.push({A.time, ai});
     }
+    if (std::getenv("LILA_PATCH_LIST"))
+        for (Index i = 0; i < Index(tracers.size()); ++i)
+            if (tracers[i].steps > 20000)
+            {
+                const Tracer& A = tracers[i];
+                const glm::dvec3 m = (s.pos[s.tris[A.tri][0]] + s.pos[s.tris[A.tri][1]] + s.pos[s.tris[A.tri][2]]) / 3.0;
+                const Index src = out.sourceOf[i];
+                std::fprintf(stderr, "long trace %d: %d steps, time %.3f, from %d (q %d) at %.2f %.2f %.2f, now tri %d at %.2f %.2f %.2f\n", int(i), A.steps,
+                             A.time, int(src), src == kInvalid ? 0 : lay.quarters[src], src == kInvalid ? 0.0 : s.pos[src].x,
+                             src == kInvalid ? 0.0 : s.pos[src].y, src == kInvalid ? 0.0 : s.pos[src].z, int(A.tri), m.x, m.y, m.z);
+            }
     // Clip each segment to its trace's end.
     for (Segment& g : out.segments)
     {
@@ -1120,7 +1639,8 @@ Extracted buildPatchMesh(const Layout& lay, const std::vector<uint8_t>& blocked,
         const Index e = lay.triEdge[P.tri][side];
         return e == kInvalid || blocked[e] ? kInvalid : e;
     };
-    Welder weld(s.meanEdgeLength() * 4e-6);
+    // Seamless line ends meet a little less exactly (cone maps beside continuous charts).
+    Welder weld(s.meanEdgeLength() * (lay.seamless ? 4e-5 : 4e-6));
     const Index npieces = Index(pieces.size());
     std::vector<std::vector<Index>> pid(npieces);
     for (Index pi = 0; pi < npieces; ++pi)
@@ -1471,8 +1991,18 @@ Extracted buildPatchMesh(const Layout& lay, const std::vector<uint8_t>& blocked,
         {
             std::fprintf(stderr, "settle %d patch %d: %zu corners at", settle, int(p), c.size());
             for (size_t i : c)
-                std::fprintf(stderr, " %zu(pid %d%s)", i, int(edges[loopOf[p][i]].from), virtualCorner.count({p, edges[loopOf[p][i]].from}) ? " v" : "");
-            std::fprintf(stderr, " of %zu\n", loopOf[p].size());
+            {
+                const Index v = edges[loopOf[p][i]].from;
+                const auto it = angleAt.find({p, v});
+                std::fprintf(stderr, " %zu(pid %d%s %.0f deg at %.2f %.2f %.2f)", i, int(v), virtualCorner.count({p, v}) ? " v" : "",
+                             it == angleAt.end() ? 0.0 : glm::degrees(it->second), weld.pos(v).x, weld.pos(v).y, weld.pos(v).z);
+            }
+            std::fprintf(stderr, " of %zu, length %.2f\n", loopOf[p].size(), [&] {
+                double l = 0.0;
+                for (Index ei : loopOf[p])
+                    l += edges[ei].length;
+                return l;
+            }());
         }
         if (c.size() > 4)
         {
@@ -1661,6 +2191,41 @@ Extracted buildPatchMesh(const Layout& lay, const std::vector<uint8_t>& blocked,
     }
 
     matchSplitArcs(arcs, shapes, debug);
+    // Patches whose four corners aren't all their own turns: given corners to make four, or passed over some.
+    std::set<Index> forced;
+    for (const auto& [p, v] : virtualCorner)
+        forced.insert(p);
+    for (const auto& [p, v] : dropped)
+        forced.insert(p);
+    if (debug)
+    {
+        // How far opposite sides differ in the traced layout, for patches whose four corners are their own turns and for
+        // those given or denied corners to make four.
+        double sum[2] = {}, worst[2] = {};
+        int count[2] = {}, off[2] = {};
+        for (Index p = 0; p < np; ++p)
+        {
+            if (shapes[p].sides.size() != 4)
+                continue;
+            const int f = forced.count(p) ? 1 : 0;
+            double r = 0.0;
+            for (int k = 0; k < 2; ++k)
+            {
+                double a = 0.0, b = 0.0;
+                for (const auto& [arc, fwd] : shapes[p].sides[k].arcs)
+                    a += arcs[arc].length;
+                for (const auto& [arc, fwd] : shapes[p].sides[k + 2].arcs)
+                    b += arcs[arc].length;
+                r += std::abs(a - b);
+            }
+            sum[f] += r;
+            worst[f] = std::max(worst[f], r);
+            ++count[f];
+            off[f] += r > 0.1;
+        }
+        std::fprintf(stderr, "patch residuals: own corners %d (sum %.2f, max %.2f, %d over 0.1), forced %d (sum %.2f, max %.2f, %d over 0.1)\n", count[0], sum[0],
+                     worst[0], off[0], count[1], sum[1], worst[1], off[1]);
+    }
 
     // Quantize: whole steps per arc, close to its lattice length times a scale that meets the target count, with
     // opposite sides of every four-sided patch equal. An arc may get none: a sliver between near-parallel lines collapses. Patches with other corner counts stay holes for the hole filler,
@@ -1681,10 +2246,13 @@ Extracted buildPatchMesh(const Layout& lay, const std::vector<uint8_t>& blocked,
         return l;
     };
     std::vector<uint8_t> unequal(np, 0);
+    // Seamless charts make opposite sides equal already, so every four-sided patch is held and the quantizer settles the
+    // whole layout at once.
+    const bool quant = lay.seamless;
     for (Index p = 0; p < np; ++p)
     {
         const PatchShape& shape = shapes[p];
-        if (shape.sides.size() != 4)
+        if (shape.sides.size() != 4 || quant)
             continue;
         for (int k = 0; k < 2; ++k)
         {
@@ -1734,12 +2302,60 @@ Extracted buildPatchMesh(const Layout& lay, const std::vector<uint8_t>& blocked,
             l += arcs[arc].length;
         return l;
     };
+    // Relative error per arc: a short arc off by a step costs more than a long one.
+    std::vector<double> weight(na, 1.0);
+    std::vector<Index> poleLower;
+    if (quant)
+    {
+        double cellsNow = 0.0;
+        for (const PatchShape& shape : shapes)
+        {
+            if (shape.sides.size() == 4)
+                cellsNow += latticeLength(shape.sides[0]) * latticeLength(shape.sides[1]);
+            else
+            {
+                double per = 0.0;
+                for (const Side& side : shape.sides)
+                    per += latticeLength(side);
+                cellsNow += per * per / 16.0;
+            }
+        }
+        const double a0 = targetCells > 0.0 && cellsNow > 0.0 ? std::sqrt(targetCells / cellsNow) : 1.0;
+        for (Index i = 0; i < na; ++i)
+            weight[i] = 1.0 / std::max(1.0, a0 * arcs[i].length);
+        // A side whose two corners are both poles keeps a step: none would weld the poles together.
+        std::vector<glm::dvec3> poles;
+        for (Index v = 0; v < s.vertexCount(); ++v)
+            if (lay.singular[v])
+                poles.push_back(s.pos[v]);
+        const double near = s.meanEdgeLength() * 1e-5;
+        auto isPole = [&](Index node) {
+            for (const glm::dvec3& q : poles)
+                if (glm::length(q - weld.pos(node)) <= near)
+                    return true;
+            return false;
+        };
+        for (const PatchShape& shape : shapes)
+            if (shape.sides.size() == 4)
+                for (const Side& side : shape.sides)
+                {
+                    const auto [fa, ffwd] = side.arcs.front();
+                    const auto [la, lfwd] = side.arcs.back();
+                    if (!isPole(ffwd ? arcs[fa].a : arcs[fa].b) || !isPole(lfwd ? arcs[la].b : arcs[la].a))
+                        continue;
+                    Index longest = fa;
+                    for (const auto& [ai, fwd] : side.arcs)
+                        if (arcs[ai].length > arcs[longest].length)
+                            longest = ai;
+                    poleLower.push_back(longest);
+                }
+    }
     const double stiff = 1e6;
     Eigen::SparseMatrix<double> base(na, na);
     {
         std::vector<Eigen::Triplet<double>> trip;
         for (Index i = 0; i < na; ++i)
-            trip.emplace_back(i, i, 1.0);
+            trip.emplace_back(i, i, weight[i]);
         for (const Row& row : rows)
             for (auto [vi, ci] : row.terms)
                 for (auto [vj, cj] : row.terms)
@@ -1755,7 +2371,7 @@ Extracted buildPatchMesh(const Layout& lay, const std::vector<uint8_t>& blocked,
         Eigen::SparseMatrix<double> a = base;
         Eigen::VectorXd b(na);
         for (Index i = 0; i < na; ++i)
-            b[i] = target[i];
+            b[i] = weight[i] * target[i];
         for (auto [var, value] : fixed)
         {
             a.coeffRef(var, var) += stiff;
@@ -1806,6 +2422,8 @@ Extracted buildPatchMesh(const Layout& lay, const std::vector<uint8_t>& blocked,
     // short sides' lattice length says (its corners sit wrong), those sides keep at least a step, or the collapse would
     // weld points from opposite sides of a tube together.
     std::vector<int> lower(na, std::getenv("LILA_PATCH_MIN1") ? 1 : 0);
+    for (Index ai : poleLower)
+        lower[ai] = 1;
     {
         auto midpoint = [&](const Side& side) {
             double total = 0.0;
@@ -3028,7 +3646,7 @@ struct PatchStats
 } // namespace
 
 Extracted layoutPatches(const Surface& s, const std::vector<glm::dvec3>& q, const std::vector<double>& scale, double targetCells, std::string* error,
-                        const std::vector<glm::dvec3>& crosses)
+                        const std::vector<glm::dvec3>& crosses, bool seamless)
 {
     LILA_ZONE();
     auto fail = [&](const std::string& why) {
@@ -3037,7 +3655,7 @@ Extracted layoutPatches(const Surface& s, const std::vector<glm::dvec3>& q, cons
         return Extracted{};
     };
     const bool debug = std::getenv("LILA_PATCH_DEBUG") != nullptr;
-    const Layout lay = makeLayout(s, q, scale);
+    const Layout lay = makeLayout(s, q, scale, seamless);
     if (const char* at = std::getenv("LILA_PATCH_AT"))
     {
         glm::dvec3 c(0.0);
@@ -3294,8 +3912,12 @@ Extracted layoutPatches(const Surface& s, const std::vector<glm::dvec3>& q, cons
             st.tracers = int(tr.end.size());
             st.segments = int(tr.segments.size());
             blocked = lay.wall;
+            if (debug)
+                std::fprintf(stderr, "patch stage: traced %zu segments\n", tr.segments.size());
             pieces = cutPieces(lay, tr, st.mismatched, blocked);
             st.pieces = int(pieces.size());
+            if (debug)
+                std::fprintf(stderr, "patch stage: cut %zu pieces\n", pieces.size());
 
             // Patches: pieces joined across inner, non-wall triangle edges where their sides overlap.
             std::vector<Index> parent(pieces.size());
@@ -3596,7 +4218,7 @@ Extracted layoutPatches(const Surface& s, const std::vector<glm::dvec3>& q, cons
                 p = renumber.try_emplace(root(p), Index(renumber.size())).first->second;
             np = Index(renumber.size());
         }
-        if (wedges.empty() || wedgePass >= 2)
+        if (wedges.empty() || wedgePass >= 2 || lay.seamless)
             break;
         std::vector<uint8_t> want(np, 0);
         for (Index p : wedges)

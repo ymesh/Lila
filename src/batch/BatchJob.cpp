@@ -361,13 +361,12 @@ std::string normalizeExtension(std::string_view ext)
 
 std::vector<std::string> openableExtensions()
 {
-    std::vector<std::string> out;
+    // Lila's own scenes always open, whatever translators are registered.
+    std::vector<std::string> out = {".lila", ".lilaa"};
     for (const io::translators::FileTranslator* t : io::translators::supporting(io::translators::Op::Open))
         for (const std::string& e : t->extensions)
             if (std::find(out.begin(), out.end(), e) == out.end())
                 out.push_back(e);
-    if (out.empty())
-        out = {".lila", ".lilaa"};
     return out;
 }
 

@@ -53,6 +53,14 @@ inline constexpr double kDefaultRigTilt = 45.0;
 inline constexpr const char* kLightingBeforeSculpt = "/viewport/lightingBeforeSculpt";
 inline constexpr const char* kSceneLights = "/viewport/sceneLights"; // false: lights and domes light nothing in the viewport
 inline constexpr const char* kShadows = "/viewport/shadows";
+/** Draw camera-relative far from the origin, so large worlds don't jitter. */
+inline constexpr const char* kCameraRelative = "/viewport/cameraRelative";
+/**
+ * How long the drawn view takes to catch up with navigation, 0 (off) to 1, eased at the display's refresh: look for turning
+ * (tumble, the Drone Camera's mouse look), move for travel and zoom. The Drone Camera already eases its own travel.
+ */
+inline constexpr const char* kCameraLookSmoothing = "/viewport/camera/lookSmoothing";
+inline constexpr const char* kCameraMoveSmoothing = "/viewport/camera/moveSmoothing";
 inline constexpr const char* kDefaultMaterial = "/viewport/defaultMaterial";
 /** Materials keep everything but their base colour, which shades 50% grey. */
 inline constexpr const char* kGreyBaseColor = "/viewport/greyBaseColor";

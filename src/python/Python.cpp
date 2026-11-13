@@ -129,7 +129,12 @@ bool init(const std::vector<std::string>& argv)
     // An installed build carries its own interpreter; dev builds use the one they were configured against.
 #ifdef _WIN32
     std::filesystem::path home = paths::executableDir() / "python-runtime";
-    if (!std::filesystem::exists(home / "Lib"))
+#ifdef _WIN32
+    const std::filesystem::path stdlib = home / "Lib";
+#else
+    const std::filesystem::path stdlib = home / "lib" / ("python" + std::to_string(PY_MAJOR_VERSION) + "." + std::to_string(PY_MINOR_VERSION));
+#endif
+    if (!std::filesystem::exists(stdlib))
         home = LILA_PYTHON_HOME;
 #else
     // The POSIX layout keeps the standard library in lib/python3.x, not Lib.

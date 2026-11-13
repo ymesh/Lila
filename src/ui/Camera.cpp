@@ -110,10 +110,10 @@ void Camera::dolly(double factor)
 {
     if (ortho)
     {
-        orthoWidth = std::clamp(orthoWidth * factor, 0.01, 1e7);
+        orthoWidth = std::clamp(orthoWidth * factor, 0.01, kMaxCameraDistance);
         return;
     }
-    distance = std::clamp(distance * factor, 0.01, 1e7);
+    distance = std::clamp(distance * factor, 0.01, kMaxCameraDistance);
 }
 
 void Camera::frame(const glm::dvec3& center, double radius, double aspect)
@@ -126,7 +126,7 @@ void Camera::frame(const glm::dvec3& center, double radius, double aspect)
         if (free)
             distance = std::max(distance, std::max(radius, 0.5) * 2.0);
         // View extents scale linearly with orthoWidth.
-        orthoWidth = std::clamp(orthoWidth * std::max(radius, 0.5) * 1.1 / std::max(tanHalf, 1e-12), 0.01, 1e7);
+        orthoWidth = std::clamp(orthoWidth * std::max(radius, 0.5) * 1.1 / std::max(tanHalf, 1e-12), 0.01, kMaxCameraDistance);
         return;
     }
     distance = std::max(radius, 0.5) / tanHalf * 1.1;

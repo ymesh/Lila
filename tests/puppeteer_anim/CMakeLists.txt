@@ -1,5 +1,5 @@
 # Puppeteer's animation tools: the key maths and walk solver directly, the commands through the loaded package.
-add_executable(lila_puppeteer_anim_tests main.cpp test_key_math.cpp test_walk.cpp test_anim_commands.cpp)
+add_executable(lila_puppeteer_anim_tests main.cpp test_key_math.cpp test_walk.cpp test_anim_commands.cpp test_tracks.cpp)
 target_link_libraries(lila_puppeteer_anim_tests PRIVATE LilaUI doctest::doctest)
 add_dependencies(lila_puppeteer_anim_tests lila_puppeteer_extension)
 target_compile_definitions(lila_puppeteer_anim_tests PRIVATE

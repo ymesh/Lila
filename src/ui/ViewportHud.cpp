@@ -5,6 +5,7 @@
 #include "geo/Mesh.h"
 #include "scene/Anim.h"
 #include "scene/Components.h"
+#include "scene/Georef.h"
 #include "scene/HudStats.h"
 #include "scene/Isolation.h"
 #include "scene/MeshNodes.h"
@@ -427,6 +428,40 @@ Block softSelectBlock(const PartOn& on)
     return b;
 }
 
+/** "42.123456° N" / "15.123456° E": a geographic coordinate with its hemisphere. */
+QString degrees(double v, char positive, char negative)
+{
+    return fixed(std::abs(v), 6) + QString::fromUtf8("° ") + QChar(v < 0.0 ? negative : positive);
+}
+
+/** Where the cursor and the lead selected object are on the Earth: projected grid and latitude/longitude. */
+Block georefBlock(scene::Graph& g, const Context& ctx, const PartOn& on)
+{
+    Block b;
+    const std::optional<scene::georef::Georeference> geo = scene::georef::current();
+    if (!geo)
+    {
+        b.push_back({"Georeference:", {"None"}});
+        return b;
+    }
+    const bool zUp = scene::georef::sceneZUp();
+    static const double wide = OverlayPainter::textWidth("00000000.00 N");
+    auto add = [&](const QString& label, const glm::dvec3& world) {
+        const glm::dvec3 p = scene::georef::toProjected(*geo, world, zUp);
+        if (on("projected"))
+            b.push_back({label, {fixed(p.x) + " E", fixed(p.y) + " N", fixed(p.z) + " H"}, wide, kCountGap});
+        if (on("geographic"))
+            if (const std::optional<glm::dvec3> ll = scene::georef::toGeographic(geo->crs, p))
+                b.push_back({on("projected") ? QString() : label, {degrees(ll->x, 'N', 'S'), degrees(ll->y, 'E', 'W'), fixed(ll->z) + " H"}, wide, kCountGap});
+    };
+    if (ctx.cursorWorld && on("cursor"))
+        add(ctx.cursorOnSurface ? "Cursor:" : "Ground:", *ctx.cursorWorld);
+    const std::vector<scene::NodeId>& sel = g.selection();
+    if (scene::Node* n = sel.empty() ? nullptr : g.node(sel.back()); n && n->type().dag && on("selection"))
+        add("Selection:", glm::dvec3(n->as<glm::dmat4>(scene::Transform::kWorldMatrix)[3]));
+    return b;
+}
+
 Block frameBlock(scene::Graph& g)
 {
     double frame = scene::anim::frameOf(g.time());
@@ -485,6 +520,8 @@ const std::vector<Item>& items()
         {"frameRate", "Frame Rate", "How many frames per second the view draws, with the GPU time of the last frame and its ambient occlusion share.",
          {{"fps", "Frame Rate"}, {"gpu", "GPU Time"}, {"ao", "AO Time"}}},
         {"currentFrame", "Current Frame", "The current frame of the time slider."},
+        {"georeference", "Georeference", "Where the cursor and the selected object are on the Earth: projected grid coordinates and latitude, longitude and height, from the scene's georeference.",
+         {{"cursor", "Cursor"}, {"selection", "Selection"}, {"projected", "Projected"}, {"geographic", "Latitude and Longitude"}}},
         {"viewAxis", "View Axis", "The axis triad in the bottom-left corner."},
         {"viewCube", "View Cube", "A cube in the top-right corner turning with the view; click a face to look at that side."},
         {"viewSwitcher", "View Switcher", "Persp, Front, Side and Top buttons under the view cube, with the scene's cameras. Click the current view again for its opposite side."},
@@ -723,6 +760,8 @@ bool draw(OverlayPainter& p, const Context& ctx)
             drawSelectionSymmetry(*sym);
     if (on("softSelect"))
         rightBlocks.push_back(softSelectBlock(parts("softSelect")));
+    if (on("georeference"))
+        rightBlocks.push_back(georefBlock(g, ctx, parts("georeference")));
     // Shown whenever it is set, so nobody reads display-relative numbers as world ones.
     if (scene::relocate::hasDisplayOrigin())
     {
@@ -815,8 +854,8 @@ void drawOriginAxis(render::FrameState& s, OverlayPainter& p, const ViewInfo& vi
     {
         glm::dvec3 tip = origin;
         tip[axis] += length;
-        s.lines.push_back({glm::vec3(origin), line});
-        s.lines.push_back({glm::vec3(tip), line});
+        s.lines.push_back({glm::dvec3(origin), line});
+        s.lines.push_back({glm::dvec3(tip), line});
         if (auto at = view.project(origin + (tip - origin) * 1.15))
             p.text(*at + QPointF(0, 4), QString(QChar('X' + axis)), p.ink(kText, kAlpha, QRectF(*at - QPointF(6, 8), QSizeF(12, 16))),
                    OverlayPainter::Center);

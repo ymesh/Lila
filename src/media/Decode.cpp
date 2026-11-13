@@ -19,6 +19,7 @@ extern "C"
 #include <chrono>
 #include <cmath>
 #include <cctype>
+#include <map>
 
 namespace lila::media
 {
@@ -71,15 +72,30 @@ struct Input
         avformat_close_input(&fmt);
     }
 
-    /** Opens the container and finds its best stream of type, without a decoder. */
-    bool probe(const fs::path& path, AVMediaType type, std::string* err)
+    /**
+     * Opens the container and finds a stream of type without a decoder: the best one, or with track >= 0 the track-th
+     * stream of that type in file order.
+     */
+    bool probe(const fs::path& path, AVMediaType type, std::string* err, int track = -1)
     {
         const std::string utf8 = paths::toUtf8(path);
         if (int r = avformat_open_input(&fmt, utf8.c_str(), nullptr, nullptr); r < 0)
             return fail(err, utf8 + ": " + avError(r));
         if (int r = avformat_find_stream_info(fmt, nullptr); r < 0)
             return fail(err, utf8 + ": " + avError(r));
-        stream = av_find_best_stream(fmt, type, -1, -1, nullptr, 0);
+        if (track >= 0)
+        {
+            int seen = 0;
+            stream = -1;
+            for (unsigned i = 0; i < fmt->nb_streams && stream < 0; ++i)
+                if (fmt->streams[i]->codecpar->codec_type == type && seen++ == track)
+                    stream = int(i);
+            if (stream < 0 && seen > 0)
+                return fail(err, utf8 + ": no " + (type == AVMEDIA_TYPE_VIDEO ? "video" : "audio") + " track " + std::to_string(track + 1) +
+                                     " (it has " + std::to_string(seen) + ")");
+        }
+        else
+            stream = av_find_best_stream(fmt, type, -1, -1, nullptr, 0);
         if (stream < 0)
             return fail(err, utf8 + (type == AVMEDIA_TYPE_VIDEO ? ": no video stream" : ": no audio stream"));
         return true;
@@ -89,8 +105,11 @@ struct Input
     {
         const AVCodecID id = fmt->streams[stream]->codecpar->codec_id;
         const AVCodec* codec = avcodec_find_decoder(id);
+        if (!codec && (id == AV_CODEC_ID_H264 || id == AV_CODEC_ID_HEVC))
+            return fail(err, paths::toUtf8(path) + ": " + (id == AV_CODEC_ID_H264 ? "H.264" : "HEVC") +
+                                 " video is not supported on this platform yet; convert it to VP9, AV1, ProRes or MPEG-4");
         if (!codec)
-            return fail(err, paths::toUtf8(path) + ": no " + avcodec_get_name(id) + " decoder");
+            return fail(err, paths::toUtf8(path) + ": unsupported codec (" + avcodec_get_name(id) + ")");
         dec = avcodec_alloc_context3(codec);
         if (!dec || avcodec_parameters_to_context(dec, fmt->streams[stream]->codecpar) < 0)
             return fail(err, paths::toUtf8(path) + ": unsupported codec");
@@ -100,7 +119,10 @@ struct Input
         return true;
     }
 
-    bool open(const fs::path& path, AVMediaType type, std::string* err) { return probe(path, type, err) && openDecoder(path, err); }
+    bool open(const fs::path& path, AVMediaType type, std::string* err, int track = -1)
+    {
+        return probe(path, type, err, track) && openDecoder(path, err);
+    }
 
     AVStream* st() const { return fmt->streams[stream]; }
 
@@ -543,13 +565,11 @@ void VideoStream::run()
 
 // ---------------------------------------------------------------- audio
 
-AudioBufferPtr decodeAudio(const fs::path& path, int rate, std::string* err)
+namespace
 {
-    LILA_ZONE();
-
-    Input in;
-    if (!in.open(path, AVMEDIA_TYPE_AUDIO, err))
-        return nullptr;
+/** Resamples the input's decoder output to stereo float at rate; null when the layout can't be converted. */
+SwrContext* makeResampler(const Input& in, int rate)
+{
     AVChannelLayout stereo = AV_CHANNEL_LAYOUT_STEREO;
     AVChannelLayout source{};
     if (av_channel_layout_check(&in.dec->ch_layout) && in.dec->ch_layout.nb_channels > 0)
@@ -557,11 +577,92 @@ AudioBufferPtr decodeAudio(const fs::path& path, int rate, std::string* err)
     else
         av_channel_layout_default(&source, std::max(1, in.dec->ch_layout.nb_channels));
     SwrContext* swr = nullptr;
-    int r = swr_alloc_set_opts2(&swr, &stereo, AV_SAMPLE_FMT_FLT, rate, &source, in.dec->sample_fmt, in.dec->sample_rate, 0, nullptr);
+    const int r = swr_alloc_set_opts2(&swr, &stereo, AV_SAMPLE_FMT_FLT, rate, &source, in.dec->sample_fmt, in.dec->sample_rate, 0, nullptr);
     av_channel_layout_uninit(&source);
     if (r < 0 || swr_init(swr) < 0)
     {
         swr_free(&swr);
+        return nullptr;
+    }
+    return swr;
+}
+
+/** Appends count source samples, resampled, to out; null data drains what the resampler holds. */
+void resampleInto(SwrContext* swr, const uint8_t** data, int count, std::vector<float>& out)
+{
+    const int room = swr_get_out_samples(swr, count);
+    if (room <= 0)
+        return;
+    const size_t at = out.size();
+    out.resize(at + size_t(room) * 2);
+    uint8_t* dst = reinterpret_cast<uint8_t*>(out.data() + at);
+    const int got = swr_convert(swr, &dst, room, data, count);
+    out.resize(at + size_t(std::max(got, 0)) * 2);
+}
+
+const uint8_t** samplesOf(const AVFrame* f)
+{
+    return const_cast<const uint8_t**>(f->extended_data);
+}
+
+double streamDuration(const Input& in)
+{
+    const AVStream* st = in.st();
+    if (st->duration != AV_NOPTS_VALUE && st->duration > 0)
+        return double(st->duration) * av_q2d(st->time_base);
+    if (in.fmt->duration != AV_NOPTS_VALUE && in.fmt->duration > 0)
+        return double(in.fmt->duration) / AV_TIME_BASE;
+    return 0.0;
+}
+
+std::string tagOf(const AVStream* st, const char* key)
+{
+    const AVDictionaryEntry* e = av_dict_get(st->metadata, key, nullptr, 0);
+    return e && e->value ? std::string(e->value) : std::string();
+}
+} // namespace
+
+std::vector<AudioTrack> audioTracks(const fs::path& path, std::string* err)
+{
+    std::vector<AudioTrack> out;
+    Input in;
+    std::string why;
+    if (!in.probe(path, AVMEDIA_TYPE_AUDIO, &why))
+    {
+        // A readable file without sound has no tracks; only an unreadable one is an error.
+        if (!in.fmt || !in.fmt->nb_streams)
+            fail(err, why);
+        return out;
+    }
+    for (unsigned i = 0; i < in.fmt->nb_streams; ++i)
+    {
+        const AVStream* st = in.fmt->streams[i];
+        if (st->codecpar->codec_type != AVMEDIA_TYPE_AUDIO)
+            continue;
+        AudioTrack t;
+        t.index = int(out.size());
+        t.codec = avcodec_get_name(st->codecpar->codec_id);
+        t.channels = st->codecpar->ch_layout.nb_channels;
+        t.rate = st->codecpar->sample_rate;
+        in.stream = int(i);
+        t.duration = streamDuration(in);
+        t.language = tagOf(st, "language");
+        t.title = tagOf(st, "title");
+        out.push_back(std::move(t));
+    }
+    return out;
+}
+
+AudioBufferPtr decodeAudio(const fs::path& path, int rate, std::string* err, int track)
+{
+    LILA_ZONE();
+
+    Input in;
+    if (!in.open(path, AVMEDIA_TYPE_AUDIO, err, track))
+        return nullptr;
+    SwrContext* swr = makeResampler(in, rate);
+    if (!swr)
+    {
         fail(err, paths::toUtf8(path) + ": can't resample the audio");
         return nullptr;
     }
@@ -570,19 +671,9 @@ AudioBufferPtr decodeAudio(const fs::path& path, int rate, std::string* err)
     out->channels = 2;
     Packet pkt;
     Frame frame;
-    auto append = [&](const uint8_t** data, int count) {
-        const int room = swr_get_out_samples(swr, count);
-        if (room <= 0)
-            return;
-        const size_t at = out->samples.size();
-        out->samples.resize(at + size_t(room) * 2);
-        uint8_t* dst = reinterpret_cast<uint8_t*>(out->samples.data() + at);
-        const int got = swr_convert(swr, &dst, room, data, count);
-        out->samples.resize(at + size_t(std::max(got, 0)) * 2);
-    };
     for (;;)
     {
-        r = in.receive(frame.f, pkt.p);
+        const int r = in.receive(frame.f, pkt.p);
         if (r == AVERROR_EOF)
             break;
         if (r < 0)
@@ -591,12 +682,400 @@ AudioBufferPtr decodeAudio(const fs::path& path, int rate, std::string* err)
             fail(err, paths::toUtf8(path) + ": " + avError(r));
             return nullptr;
         }
-        append(const_cast<const uint8_t**>(frame.f->extended_data), frame.f->nb_samples);
+        resampleInto(swr, samplesOf(frame.f), frame.f->nb_samples, out->samples);
         av_frame_unref(frame.f);
     }
-    append(nullptr, 0);
+    resampleInto(swr, nullptr, 0, out->samples);
     swr_free(&swr);
     return out;
+}
+
+// ---------------------------------------------------------------- AudioStream
+
+struct AudioStream::Impl
+{
+    Options o;
+    fs::path path;
+
+    // Decode thread only.
+    Input in;
+    SwrContext* swr = nullptr;
+    Packet pkt;
+    Frame frame;
+    AVRational tb{1, 1};
+    int64_t startPts = 0;
+    /** Resampled samples from output frame carryStart on; carryStart < 0 after a seek until a frame lands. */
+    std::vector<float> carry;
+    int64_t carryStart = 0;
+    bool eof = false;
+
+    mutable std::mutex m;
+    std::condition_variable wake;
+    mutable std::condition_variable landed;
+    std::map<int64_t, Block> cache;
+    size_t bytes = 0;
+    int64_t wanted = -1;
+    int64_t last = -1;
+    int dir = 1;
+    double lastPrefetch = -1.0;
+    std::atomic<bool> quit{false};
+    std::atomic<int64_t> frames{0};
+    std::atomic<int64_t> seeks{0};
+    std::shared_ptr<const Peaks> peaks = std::make_shared<const Peaks>();
+    std::atomic<bool> scanned{false};
+    std::thread decodeThread;
+    std::thread scanThread;
+
+    ~Impl() { swr_free(&swr); }
+
+    int64_t carryFrames() const { return int64_t(carry.size()) / 2; }
+
+    void seekTo(int64_t at)
+    {
+        const double seconds = double(at) / o.rate;
+        av_seek_frame(in.fmt, in.stream, startPts + int64_t(seconds / av_q2d(tb)), AVSEEK_FLAG_BACKWARD);
+        avcodec_flush_buffers(in.dec);
+        in.flushed = false;
+        eof = false;
+        swr_free(&swr);
+        swr = makeResampler(in, o.rate);
+        carry.clear();
+        carryStart = -1;
+        ++seeks;
+    }
+
+    void decodeOne(int64_t fallbackStart)
+    {
+        const int r = swr ? in.receive(frame.f, pkt.p) : AVERROR_EOF;
+        if (r < 0)
+        {
+            if (swr)
+                resampleInto(swr, nullptr, 0, carry);
+            if (carryStart < 0)
+                carryStart = fallbackStart;
+            eof = true;
+            return;
+        }
+        if (carryStart < 0)
+        {
+            const AVFrame* f = frame.f;
+            const int64_t pts = f->best_effort_timestamp != AV_NOPTS_VALUE ? f->best_effort_timestamp : f->pts;
+            carryStart = pts == AV_NOPTS_VALUE ? fallbackStart : std::llround(double(pts - startPts) * av_q2d(tb) * o.rate);
+        }
+        resampleInto(swr, samplesOf(frame.f), frame.f->nb_samples, carry);
+        av_frame_unref(frame.f);
+    }
+
+    std::vector<float> decodeBlock(int64_t index)
+    {
+        LILA_ZONE();
+
+        const int64_t want = index * o.blockFrames, end = want + o.blockFrames;
+        if (carryStart < 0 || want < carryStart || want > carryStart + carryFrames())
+            seekTo(want);
+        while (!eof && !quit && (carryStart < 0 || carryStart + carryFrames() < end))
+            decodeOne(want);
+        std::vector<float> out;
+        if (carryStart < 0)
+            return out;
+        if (carryStart > want)
+        {
+            carry.insert(carry.begin(), size_t(carryStart - want) * 2, 0.0f);
+            carryStart = want;
+        }
+        const size_t from = size_t(want - carryStart) * 2;
+        const size_t to = std::min(carry.size(), size_t(end - carryStart) * 2);
+        if (from < to)
+            out.assign(carry.begin() + std::ptrdiff_t(from), carry.begin() + std::ptrdiff_t(to));
+        const size_t used = std::min(carry.size(), std::max(from, to));
+        carry.erase(carry.begin(), carry.begin() + std::ptrdiff_t(used));
+        carryStart += int64_t(used) / 2;
+        return out;
+    }
+
+    void store(int64_t index, Block b)
+    {
+        auto [it, added] = cache.try_emplace(index, std::move(b));
+        if (!added)
+            return;
+        bytes += it->second->size() * sizeof(float);
+        while (bytes > o.cacheBytes && cache.size() > 1)
+        {
+            auto front = cache.begin(), back = std::prev(cache.end());
+            auto victim = std::abs(front->first - last) >= std::abs(back->first - last) ? front : back;
+            bytes -= victim->second->size() * sizeof(float);
+            cache.erase(victim);
+        }
+    }
+
+    int64_t blockCount() const { return (frames.load() + o.blockFrames - 1) / o.blockFrames; }
+
+    /** The first block not decoded yet among last + step * k for k in [from, to]; -1 when all are in. */
+    int64_t firstMissing(int step, int from, int to) const
+    {
+        for (int k = from; k <= to; ++k)
+        {
+            const int64_t i = last + int64_t(step) * k;
+            if (i < 0 || i >= blockCount())
+                break;
+            if (!cache.contains(i))
+                return i;
+        }
+        return -1;
+    }
+
+    void runDecode()
+    {
+        // Both windows fit the cache with a block to spare, or filling one would evict the other forever.
+        const size_t blockBytes = size_t(o.blockFrames) * 2 * sizeof(float);
+        const int room = std::max(1, int(o.cacheBytes / blockBytes) - 1);
+        const int ahead = std::clamp(int(std::ceil(o.readAheadSeconds * o.rate / o.blockFrames)), 1, room);
+        const int behind = std::clamp(int(std::ceil(o.readBehindSeconds * o.rate / o.blockFrames)), 0, room - ahead);
+        std::unique_lock lk(m);
+        while (!quit)
+        {
+            int64_t job = -1;
+            if (wanted >= 0)
+            {
+                job = std::exchange(wanted, -1);
+                if (cache.contains(job))
+                    job = -1;
+            }
+            if (job < 0 && last >= 0)
+                job = firstMissing(dir, 0, ahead);
+            if (job < 0 && last >= 0)
+                job = firstMissing(-dir, 1, behind);
+            if (job < 0)
+            {
+                wake.wait(lk);
+                continue;
+            }
+            lk.unlock();
+            auto b = std::make_shared<const std::vector<float>>(decodeBlock(job));
+            lk.lock();
+            store(job, std::move(b));
+            landed.notify_all();
+        }
+    }
+
+    void runScan()
+    {
+        LILA_ZONE();
+
+        Input scan;
+        SwrContext* r = scan.open(path, AVMEDIA_TYPE_AUDIO, nullptr, o.track) ? makeResampler(scan, o.rate) : nullptr;
+        if (!r)
+        {
+            scanned = true;
+            landed.notify_all();
+            return;
+        }
+        const int64_t per = std::max<int64_t>(1, std::llround(o.peakSeconds * o.rate));
+        Peaks p;
+        p.secondsPerBucket = double(per) / o.rate;
+        float lo = 0.0f, hi = 0.0f;
+        int64_t inBucket = 0, total = 0;
+        size_t published = 0;
+        std::vector<float> chunk;
+        Packet sp;
+        Frame sf;
+        auto fold = [&] {
+            for (size_t i = 0; i + 1 < chunk.size(); i += 2)
+            {
+                lo = std::min({lo, chunk[i], chunk[i + 1]});
+                hi = std::max({hi, chunk[i], chunk[i + 1]});
+                if (++inBucket == per)
+                {
+                    p.low.push_back(lo);
+                    p.high.push_back(hi);
+                    lo = hi = 0.0f;
+                    inBucket = 0;
+                }
+            }
+            total += int64_t(chunk.size()) / 2;
+            chunk.clear();
+        };
+        auto publish = [&] {
+            std::lock_guard lk(m);
+            peaks = std::make_shared<const Peaks>(p);
+            published = p.low.size();
+        };
+        while (!quit)
+        {
+            if (scan.receive(sf.f, sp.p) < 0)
+                break;
+            resampleInto(r, samplesOf(sf.f), sf.f->nb_samples, chunk);
+            av_frame_unref(sf.f);
+            fold();
+            // A snapshot every few seconds of sound, so the waveform fills in while the scan runs.
+            if (p.low.size() - published >= size_t(4.0 / p.secondsPerBucket))
+                publish();
+        }
+        resampleInto(r, nullptr, 0, chunk);
+        fold();
+        swr_free(&r);
+        if (quit)
+            return;
+        if (inBucket > 0)
+        {
+            p.low.push_back(lo);
+            p.high.push_back(hi);
+        }
+        publish();
+        {
+            std::lock_guard lk(m);
+            frames = std::max<int64_t>(1, total);
+            scanned = true;
+        }
+        wake.notify_all();
+        landed.notify_all();
+    }
+};
+
+AudioStream::AudioStream() : mImpl(std::make_unique<Impl>()) {}
+
+AudioStream::~AudioStream()
+{
+    {
+        std::lock_guard lk(mImpl->m);
+        mImpl->quit = true;
+    }
+    mImpl->wake.notify_all();
+    mImpl->landed.notify_all();
+    if (mImpl->decodeThread.joinable())
+        mImpl->decodeThread.join();
+    if (mImpl->scanThread.joinable())
+        mImpl->scanThread.join();
+}
+
+std::shared_ptr<AudioStream> AudioStream::open(const fs::path& path, const Options& options, std::string* err)
+{
+    LILA_ZONE();
+
+    std::shared_ptr<AudioStream> s(new AudioStream());
+    Impl& d = *s->mImpl;
+    d.o = options;
+    d.o.blockFrames = std::max(256, d.o.blockFrames);
+    d.path = path;
+    if (!d.in.open(path, AVMEDIA_TYPE_AUDIO, err, options.track))
+        return nullptr;
+    d.swr = makeResampler(d.in, d.o.rate);
+    if (!d.swr)
+    {
+        fail(err, paths::toUtf8(path) + ": can't resample the audio");
+        return nullptr;
+    }
+    d.tb = d.in.st()->time_base;
+    d.startPts = d.in.st()->start_time != AV_NOPTS_VALUE ? d.in.st()->start_time : 0;
+    d.frames = std::max<int64_t>(1, std::llround(streamDuration(d.in) * d.o.rate));
+    d.decodeThread = std::thread([&d] { d.runDecode(); });
+    d.scanThread = std::thread([&d] { d.runScan(); });
+    return s;
+}
+
+int AudioStream::rate() const
+{
+    return mImpl->o.rate;
+}
+
+int AudioStream::blockFrames() const
+{
+    return mImpl->o.blockFrames;
+}
+
+int64_t AudioStream::frames() const
+{
+    return mImpl->frames.load();
+}
+
+AudioStream::Block AudioStream::block(int64_t index)
+{
+    Impl& d = *mImpl;
+    std::lock_guard lk(d.m);
+    const bool moved = index != d.last;
+    d.last = index;
+    if (auto it = d.cache.find(index); it != d.cache.end())
+    {
+        if (moved)
+            d.wake.notify_one();
+        return it->second;
+    }
+    d.wanted = index;
+    d.wake.notify_one();
+    return nullptr;
+}
+
+void AudioStream::prefetch(double seconds, int direction)
+{
+    {
+        std::lock_guard lk(mImpl->m);
+        Impl& d = *mImpl;
+        if (direction != 0)
+            d.dir = direction > 0 ? 1 : -1;
+        else if (d.lastPrefetch >= 0.0 && seconds != d.lastPrefetch)
+            d.dir = seconds < d.lastPrefetch ? -1 : 1;
+        // A play start is no reference for the next scrub's direction: the first scrub after it keeps the play's.
+        d.lastPrefetch = direction != 0 ? -1.0 : seconds;
+    }
+    mImpl->wake.notify_one();
+    block(std::max<int64_t>(0, int64_t(seconds * rate()) / blockFrames()));
+}
+
+int AudioStream::direction() const
+{
+    std::lock_guard lk(mImpl->m);
+    return mImpl->dir;
+}
+
+bool AudioStream::ready(int64_t index) const
+{
+    std::lock_guard lk(mImpl->m);
+    return mImpl->cache.contains(index);
+}
+
+bool AudioStream::waitFor(double seconds, double timeoutSeconds)
+{
+    const auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(timeoutSeconds);
+    const int64_t index = std::max<int64_t>(0, int64_t(seconds * rate()) / blockFrames());
+    if (block(index))
+        return true;
+    std::unique_lock lk(mImpl->m);
+    while (!mImpl->cache.contains(index))
+        if (mImpl->landed.wait_until(lk, until) == std::cv_status::timeout)
+            return false;
+    return true;
+}
+
+std::shared_ptr<const Peaks> AudioStream::peaks() const
+{
+    std::lock_guard lk(mImpl->m);
+    return mImpl->peaks;
+}
+
+bool AudioStream::scanned() const
+{
+    return mImpl->scanned.load();
+}
+
+bool AudioStream::waitScanned(double timeoutSeconds) const
+{
+    const auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(timeoutSeconds);
+    std::unique_lock lk(mImpl->m);
+    while (!mImpl->scanned)
+        if (mImpl->landed.wait_until(lk, until) == std::cv_status::timeout)
+            return mImpl->scanned.load();
+    return true;
+}
+
+size_t AudioStream::cachedBytes() const
+{
+    std::lock_guard lk(mImpl->m);
+    return mImpl->bytes;
+}
+
+int64_t AudioStream::seeks() const
+{
+    return mImpl->seeks.load();
 }
 
 Peaks peaks(const AudioBuffer& buffer, double secondsPerBucket)

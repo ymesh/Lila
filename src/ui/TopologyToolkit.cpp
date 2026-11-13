@@ -117,7 +117,7 @@ std::vector<Field> fieldsFor(ConstructKind k)
 }
 
 /** The value a construct's field shows: the spec's, else its generated count while the spec leaves it on auto. */
-double fieldValue(const retopo::ConstructRecord& r, const Field& f)
+double toolkitFieldValue(const retopo::ConstructRecord& r, const Field& f)
 {
     double value = f.fallback;
     if (r.spec.contains(f.key) && r.spec[f.key].is_number())
@@ -522,9 +522,9 @@ void TopologyToolkit::rebuildConstructPanel()
                     continue;
                 QSignalBlocker block(w);
                 if (auto* c = qobject_cast<QCheckBox*>(w))
-                    c->setChecked(fieldValue(*active, f) != 0.0);
+                    c->setChecked(toolkitFieldValue(*active, f) != 0.0);
                 else if (auto* sp = qobject_cast<QDoubleSpinBox*>(w))
-                    sp->setValue(fieldValue(*active, f));
+                    sp->setValue(toolkitFieldValue(*active, f));
             }
         return;
     }
@@ -546,7 +546,7 @@ void TopologyToolkit::rebuildConstructPanel()
     for (const Field& f : fieldsFor(active->kind))
     {
         std::string fieldKey = f.key;
-        const double value = fieldValue(*active, f);
+        const double value = toolkitFieldValue(*active, f);
         auto edit = [id, fieldKey](json v) {
             if (TopologyTool* t = activeTopologyTool())
                 t->editConstruct(id, [&](json& spec) {

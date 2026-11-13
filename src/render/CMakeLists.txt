@@ -9,6 +9,7 @@ lila_module(lila_render UI
     CubeLut.cpp
     ClayGpu.cpp
     DeformGpu.cpp
+    CameraRelative.cpp
     DrawBatches.cpp
     Environment.cpp
     GpuImage.cpp
@@ -32,7 +33,6 @@ lila_module(lila_render UI
 
 target_link_libraries(lila_render PUBLIC lila_core volk::volk Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
 if(NOT WIN32)
-    # Vulkan window surfaces through xcb (Surface.cpp), the X11 connection Qt's xcb platform uses too.
     find_package(X11 REQUIRED COMPONENTS xcb)
     target_link_libraries(lila_render PRIVATE X11::xcb)
 endif()
@@ -69,6 +69,8 @@ lila_add_shaders(lila_render FILES
     shaders/rtshadow.slang
     shaders/points.slang
     shaders/strands.slang
+    shaders/pointcloud.slang
+    shaders/edl.slang
     shaders/points_cull.slang
     shaders/mesh.slang
     shaders/mesh_bindless.slang

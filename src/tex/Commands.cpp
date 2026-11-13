@@ -3,6 +3,7 @@
 #include "core/Profile.h"
 #include "gn/Routing.h"
 #include "ops/Command.h"
+#include "scene/Materials.h"
 #include "scene/Node.h"
 #include "tex/Evaluate.h"
 #include "tex/Interop.h"
@@ -225,6 +226,222 @@ json mergeSettings(const SetSettings& base, const json& changes, const char* cmd
 }
 
 constexpr const char* kClipFormat = "lila.textureNodes";
+
+std::string joinIds(const std::vector<std::string>& ids)
+{
+    std::string out;
+    for (const std::string& id : ids)
+        out += (out.empty() ? "" : ", ") + id;
+    return out.empty() ? "none" : out;
+}
+
+template <class Decl> std::vector<std::string> idsOf(const std::vector<Decl>& decls)
+{
+    std::vector<std::string> out;
+    for (const Decl& d : decls)
+        out.push_back(d.id);
+    return out;
+}
+
+/** "A.out -> B.in", [from, to] or [fromNode, fromSocket, toNode, toSocket], as node/socket pairs. */
+bool parseSpecLink(const json& l, GLink& out)
+{
+    auto split = [](std::string s, std::string& node, std::string& socket) {
+        s.erase(0, s.find_first_not_of(" \t"));
+        s.erase(s.find_last_not_of(" \t") + 1);
+        auto dot = s.find('.');
+        if (dot == std::string::npos || dot == 0 || dot + 1 == s.size())
+            return false;
+        node = s.substr(0, dot);
+        socket = s.substr(dot + 1);
+        return true;
+    };
+    if (l.is_string())
+    {
+        std::string s = l.get<std::string>();
+        auto arrow = s.find("->");
+        return arrow != std::string::npos && split(s.substr(0, arrow), out.fromNode, out.fromSocket) &&
+               split(s.substr(arrow + 2), out.toNode, out.toSocket);
+    }
+    if (l.is_array() && l.size() == 2 && l[0].is_string() && l[1].is_string())
+        return split(l[0].get<std::string>(), out.fromNode, out.fromSocket) && split(l[1].get<std::string>(), out.toNode, out.toSocket);
+    if (l.is_array() && l.size() == 4 && std::all_of(l.begin(), l.end(), [](const json& x) { return x.is_string(); }))
+    {
+        out = {l[0].get<std::string>(), l[1].get<std::string>(), l[2].get<std::string>(), l[3].get<std::string>()};
+        return true;
+    }
+    return false;
+}
+
+/** Columns by longest path from a source, for nodes the spec gave no position. */
+void layoutColumns(Graph& g, const std::set<std::string>& placed)
+{
+    std::map<std::string, int> depth;
+    std::function<int(const std::string&, int)> d = [&](const std::string& n, int guard) -> int {
+        if (auto it = depth.find(n); it != depth.end())
+            return it->second;
+        int best = 0;
+        if (guard < 256)
+            for (const GLink& l : g.links)
+                if (l.toNode == n)
+                    best = std::max(best, d(l.fromNode, guard + 1) + 1);
+        return depth[n] = best;
+    };
+    std::map<int, int> rows;
+    for (GNode& n : g.nodes)
+        if (!placed.contains(n.name))
+        {
+            int col = d(n.name, 0);
+            n.position = {double(col) * 240.0 - 600.0, double(rows[col]++) * 170.0};
+        }
+}
+
+/**
+ * A set's graph from a compact spec ({nodes, links}), with a Material Output named Output added when the spec has none.
+ * Every problem goes to errors, each naming the valid choices, so one call reports them all.
+ */
+Graph graphFromSpec(const json& spec, const std::string& setName, const SetSettings& s, std::vector<std::string>& errors)
+{
+    Graph g;
+    g.name = setName;
+    g.description = spec.value("description", std::string());
+    const ChannelList extra = extraChannels(s);
+    std::set<std::string> placed;
+    const json nodes = spec.value("nodes", json::array());
+    if (!nodes.is_array())
+        errors.push_back("nodes must be a list");
+    for (const json& nj : nodes.is_array() ? nodes : json::array())
+    {
+        if (!nj.is_object())
+        {
+            errors.push_back("node " + nj.dump() + " must be an object with name, type and values");
+            continue;
+        }
+        GNode n{nj.value("name", std::string()), nj.value("type", std::string()), {0.0, 0.0}, json::object()};
+        if (n.name.empty())
+            n.name = n.type;
+        if (!gn::validIdentifier(n.name))
+        {
+            errors.push_back("node name '" + n.name + "' isn't valid (letters, digits, underscores)");
+            continue;
+        }
+        if (g.node(n.name))
+        {
+            errors.push_back("node " + n.name + " is listed twice");
+            continue;
+        }
+        if (!findNode(n.type))
+        {
+            std::vector<std::string> close;
+            std::string want = n.type;
+            std::transform(want.begin(), want.end(), want.begin(), ::tolower);
+            for (const NodeDef* d : allNodes())
+            {
+                std::string have = d->type;
+                std::transform(have.begin(), have.end(), have.begin(), ::tolower);
+                if (!want.empty() && (have.find(want) != std::string::npos || want.find(have) != std::string::npos))
+                    close.push_back(d->type);
+            }
+            errors.push_back("node " + n.name + ": unknown type '" + n.type + "'" +
+                             (close.empty() ? "; texNodeTypes lists them" : "; did you mean " + joinIds(close) + "?"));
+            continue;
+        }
+        if (auto p = nj.find("position"); p != nj.end() && p->is_array() && p->size() == 2)
+        {
+            n.position = {(*p)[0].get<double>(), (*p)[1].get<double>()};
+            placed.insert(n.name);
+        }
+        g.nodes.push_back(n);
+        GNode& stored = g.nodes.back();
+        json values = json::object();
+        for (const char* key : {"params", "values"})
+            if (auto v = nj.find(key); v != nj.end() && v->is_object())
+                values.update(*v);
+        // Parameters first: some decide which ports exist.
+        NodePorts p = portsOf(g, stored, &extra);
+        for (auto& [id, v] : values.items())
+            if (const ParamDecl* prm = p.param(id))
+            {
+                if (paramValueValid(prm->type, v, prm->options))
+                    stored.values[id] = v;
+                else
+                    errors.push_back(n.name + "." + id + " takes a " + paramTypeName(prm->type) +
+                                     (prm->options.empty() ? "" : " (one of " + joinIds(prm->options) + ")") + ", got " + v.dump());
+            }
+        p = portsOf(g, stored, &extra);
+        if (!p.error.empty())
+            errors.push_back(n.name + ": " + p.error);
+        for (auto& [id, v] : values.items())
+        {
+            if (p.param(id))
+                continue;
+            if (const PortDecl* in = p.input(id))
+            {
+                float tmp[4];
+                if (in->type != PortType::Material && valueToFloat4(v, in->type, tmp))
+                    stored.values[id] = v;
+                else
+                    errors.push_back(n.name + "." + id + " takes a " + portTypeName(in->type) + ", got " + v.dump());
+            }
+            else if ((stored.type == kGroupType && id == "group") || (gn::isRoutingType(stored.type) && id == "name"))
+                stored.values[id] = v;
+            else
+                errors.push_back(n.name + " (" + n.type + ") has no parameter or input '" + id + "'; parameters: " + joinIds(idsOf(p.params)) +
+                                 "; inputs: " + joinIds(idsOf(p.inputs)));
+        }
+    }
+    if (!g.firstOfType(kMaterialOutputType))
+    {
+        if (g.node("Output"))
+            errors.push_back("a node named Output must be the materialOutput (or add one of type materialOutput)");
+        else
+            g.nodes.push_back({"Output", kMaterialOutputType, {300.0, 0.0}, json::object()});
+    }
+
+    const json links = spec.value("links", json::array());
+    if (!links.is_array())
+        errors.push_back("links must be a list");
+    for (const json& lj : links.is_array() ? links : json::array())
+    {
+        GLink l;
+        if (!parseSpecLink(lj, l))
+        {
+            errors.push_back("link " + lj.dump() + " isn't 'A.out -> B.in', [from, to] or [fromNode, fromSocket, toNode, toSocket]");
+            continue;
+        }
+        const GNode* from = g.node(l.fromNode);
+        const GNode* to = g.node(l.toNode);
+        if (!from || !to)
+        {
+            errors.push_back("link " + lj.dump() + ": no node '" + (from ? l.toNode : l.fromNode) + "'");
+            continue;
+        }
+        NodePorts fp = portsOf(g, *from, &extra), tp = portsOf(g, *to, &extra);
+        const PortDecl* o = fp.output(l.fromSocket);
+        const PortDecl* i = tp.input(l.toSocket);
+        if (!o)
+            errors.push_back("link " + lj.dump() + ": " + l.fromNode + " has no output '" + l.fromSocket + "'; outputs: " + joinIds(idsOf(fp.outputs)));
+        if (!i)
+            errors.push_back("link " + lj.dump() + ": " + l.toNode + " has no input '" + l.toSocket + "'; inputs: " + joinIds(idsOf(tp.inputs)));
+        if (!o || !i)
+            continue;
+        if (!gn::isRoutingType(to->type) && !linkable(o->type, i->type))
+        {
+            errors.push_back("link " + lj.dump() + ": can't link " + portTypeName(o->type) + " to " + portTypeName(i->type));
+            continue;
+        }
+        if (!g.linksInto(l.toNode, l.toSocket).empty())
+        {
+            errors.push_back("link " + lj.dump() + ": " + l.toNode + "." + l.toSocket + " is already linked");
+            continue;
+        }
+        g.links.push_back(l);
+    }
+    if (gn::hasCycle(gn::withPortalLinks(g.nodes, g.links)))
+        errors.push_back("the links make a cycle");
+    layoutColumns(g, placed);
+    return g;
+}
 } // namespace
 
 void registerCommands()
@@ -686,6 +903,88 @@ void registerCommands()
                 }
                 return nullptr;
             });
+        },
+    });
+
+    ops::registerCommand({
+        .name = "texBuildGraph",
+        .doc = "Build a material's texture graph from a compact spec, creating its texture set when it doesn't exist: {material, "
+               "set, settings, description, nodes: [{name, type, params: {...}, values: {...}, position}], links: "
+               "['A.out -> Output.baseColor', ...]}. The set defaults to <material>Tex. A Material Output named Output is added "
+               "when missing; positions are laid out when omitted. Nothing changes unless the whole spec is valid; the error lists "
+               "every problem with the valid names. Returns the set, the material, the channels the graph drives and any compile "
+               "error.",
+        .positionalDoc = "spec",
+        .flags = {{"assign", "", T::List, nullptr, "Meshes to give the material (created when missing)."}},
+        .run = [](const Args& a) -> json {
+            if (a.positional.empty())
+                throw CommandError("texBuildGraph: spec required");
+            json spec = a.positional[0];
+            if (spec.is_string())
+            {
+                spec = json::parse(spec.get<std::string>(), nullptr, false);
+                if (spec.is_discarded())
+                    throw CommandError("texBuildGraph: spec isn't valid JSON");
+            }
+            if (!spec.is_object())
+                throw CommandError("texBuildGraph: the spec must be an object with material, nodes and links");
+            std::string material = spec.value("material", std::string());
+            if (material.empty() && spec.contains("settings") && spec["settings"].is_object())
+                material = spec["settings"].value("material", std::string());
+            const std::string name = spec.contains("set") ? spec.value("set", std::string()) : material.empty() ? std::string() : material + "Tex";
+            if (!gn::validIdentifier(name))
+                throw CommandError("texBuildGraph: set '" + name + "' isn't a valid name (letters, digits, underscores); give material or set");
+            // Nodes share one namespace, so a set can't be named like its material.
+            if (material == name)
+                throw CommandError("texBuildGraph: the set and its material can't both be named " + name + "; leave set out to get " + name + "Tex");
+
+            Node* existing = findSet(graph(), name);
+            if (!existing && graph().find(name))
+                throw CommandError("texBuildGraph: a node named " + name + " already exists and isn't a texture set");
+            SetSettings settings = existing ? readSettings(*existing) : SetSettings::makeDefault();
+            if (spec.contains("settings"))
+                settings = SetSettings::fromJson(mergeSettings(settings, spec["settings"], "texBuildGraph"));
+            if (!material.empty())
+                settings.material = material;
+            if (a.has("assign") && (settings.material.empty() || settings.material == name))
+                throw CommandError("texBuildGraph: assign needs a material name other than the set's; add \"material\" to the spec");
+
+            std::vector<std::string> errors;
+            Graph g = graphFromSpec(spec, name, settings, errors);
+            if (!errors.empty())
+            {
+                std::string msg = "texBuildGraph: " + std::to_string(errors.size()) + " problem" + (errors.size() == 1 ? "" : "s");
+                for (const std::string& e : errors)
+                    msg += "\n  " + e;
+                throw CommandError(msg);
+            }
+
+            Node* n = existing ? existing : graph().createNode(*scene::types::find(kTextureSetType), name, scene::kNoNode, false);
+            writeSettings(graph(), *n, settings);
+            writeGraph(graph(), *n, g);
+
+            const std::string slot = settings.material.empty() ? name : settings.material;
+            if (a.has("assign"))
+            {
+                if (!scene::materials::find(graph(), slot))
+                    ops::execute("createMaterial", {{"args", {slot}}});
+                json call = {{"args", json::array({slot})}};
+                for (const json& m : a.flags["assign"])
+                    call["args"].push_back(m);
+                ops::execute("assignMaterial", call);
+            }
+
+            json channels = json::array();
+            if (const GNode* out = g.firstOfType(kMaterialOutputType))
+                for (const GLink& l : g.links)
+                    if (l.toNode == out->name)
+                        channels.push_back(l.toSocket);
+            Plan plan = buildPlan(g, requestFor(g, settings, 0, 0));
+            json result = {{"set", name}, {"material", slot}, {"nodes", g.nodes.size()}, {"links", g.links.size()}, {"channels", channels},
+                           {"passes", plan.passes.size()}};
+            if (!plan.error.empty())
+                result["error"] = plan.error;
+            return result;
         },
     });
 

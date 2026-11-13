@@ -1,5 +1,5 @@
 # The Puppeteer extension's rig side: its maths directly, the rest loaded as the extension.
-add_executable(lila_puppeteer_tests main.cpp test_puppeteer_math.cpp test_puppeteer_rig.cpp test_spinner.cpp test_spinner_draw.cpp test_strings_pose.cpp)
+add_executable(lila_puppeteer_tests main.cpp test_puppeteer_math.cpp test_puppeteer_rig.cpp test_spinner.cpp test_spinner_draw.cpp test_strings_pose.cpp test_hands.cpp test_grapple_tool.cpp test_props.cpp)
 target_link_libraries(lila_puppeteer_tests PRIVATE LilaUI doctest::doctest)
 target_include_directories(lila_puppeteer_tests PRIVATE ${CMAKE_SOURCE_DIR}/extensions/Puppeteer)
 add_dependencies(lila_puppeteer_tests lila_puppeteer_extension lila_rig_templates_extension)

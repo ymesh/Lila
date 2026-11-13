@@ -6,6 +6,7 @@
 #include <tbb/parallel_for.h>
 
 #include <algorithm>
+#include <optional>
 #include <climits>
 #include <cmath>
 #include <map>
@@ -152,6 +153,42 @@ bool anyBlocks(std::span<const Object> objects, const Prepared& p, const Ground*
             return true;
     }
     return ground && heightfieldBlocks(*ground, p.groundInv, origin, dir, range);
+}
+
+/** The nearest object surface along a ray within range: its object and whether it was met from behind; nullopt for none. */
+std::optional<std::pair<size_t, lila::geo::BvhHit>> nearestHit(std::span<const Object> objects, const Prepared& p, const glm::dvec3& origin,
+                                                      const glm::dvec3& dir, double range, bool backfaces = true)
+{
+    std::optional<std::pair<size_t, lila::geo::BvhHit>> best;
+    for (size_t i = 0; i < objects.size(); ++i)
+    {
+        if (!rayBox(origin, dir, range, p.lo[i], p.hi[i]))
+            continue;
+        const Ray r = toLocal(p.inv[i], origin, dir);
+        lila::geo::BvhHit h;
+        if (objects[i].bvh->raycast(r.origin, r.dir, h, best ? best->second.t : range, backfaces))
+            best = {i, h};
+    }
+    return best;
+}
+
+/**
+ * A crease point buried in another object where the two meet, as the bake's AO sees it: the surface met along n is a
+ * back face of an object that also closes behind the point along -n. exit is just outside it on the nearer side.
+ */
+bool buriedAt(std::span<const Object> objects, const Prepared& p, const glm::dvec3& origin, const glm::dvec3& n, double range, double step,
+              glm::dvec3& exit)
+{
+    const auto up = nearestHit(objects, p, origin, n, range);
+    if (!up || up->second.frontFacing)
+        return false;
+    const size_t j = up->first;
+    const Ray r = toLocal(p.inv[j], origin, -n);
+    lila::geo::BvhHit down;
+    if (!objects[j].bvh->raycast(r.origin, r.dir, down, range, true) || down.frontFacing)
+        return false;
+    exit = up->second.t <= down.t ? origin + n * (up->second.t + step) : origin - n * (down.t + step);
+    return true;
 }
 
 /** n cosine-weighted directions around axis, the same every call. */
@@ -688,6 +725,15 @@ Result findSeams(std::span<const Object> objects, const Ground* ground, const Op
         if (!o.occluded)
             r.creaseBackend = gpu.empty() ? "cpu" : gpu;
         const SegmentIndex joins(r);
+        // A buried point leaves its cover by the bake AO's own step: 1e-4 of the objects' extent.
+        glm::dvec3 sceneLo(std::numeric_limits<double>::max()), sceneHi(std::numeric_limits<double>::lowest());
+        for (size_t i = 0; i < objects.size(); ++i)
+            if (!objects[i].ignore && objects[i].mesh)
+            {
+                sceneLo = glm::min(sceneLo, prep.lo[i]);
+                sceneHi = glm::max(sceneHi, prep.hi[i]);
+            }
+        const double lift = sceneLo.x <= sceneHi.x ? std::max(1e-4 * glm::length(sceneHi - sceneLo), 1e-4) : 1e-4;
         for (size_t i = 0; i < objects.size(); ++i)
         {
             const Object& ob = objects[i];
@@ -703,12 +749,33 @@ Result findSeams(std::span<const Object> objects, const Ground* ground, const Op
                         return;
                     const glm::dvec3 n = cnrm[i][p];
                     const glm::dvec3 origin = cpts[i][p] + n * 0.05;
-                    int blocked = 0;
+                    int blocked = 0, backs = 0;
                     const auto dirs = hemisphere(n, std::max(4, o.creaseRays));
                     for (const glm::dvec3& d : dirs)
                     {
-                        const bool hit = o.occluded ? o.occluded(origin, d, o.creaseRange) : anyBlocks(objects, prep, ground, origin, d, o.creaseRange);
-                        blocked += hit ? 1 : 0;
+                        if (o.occluded)
+                        {
+                            blocked += o.occluded(origin, d, o.creaseRange) ? 1 : 0;
+                            continue;
+                        }
+                        if (const auto h = nearestHit(objects, prep, origin, d, o.creaseRange))
+                        {
+                            ++blocked;
+                            backs += h->second.frontFacing ? 0 : 1;
+                        }
+                        else if (ground && heightfieldBlocks(*ground, prep.groundInv, origin, d, o.creaseRange))
+                            ++blocked;
+                    }
+                    // Resting on or sunk into another object: shaded from where it leaves that object, front faces only.
+                    glm::dvec3 exit;
+                    if (!o.occluded && backs * 4 >= int(dirs.size()) * 3 && buriedAt(objects, prep, cpts[i][p] + n * lift, n, o.creaseRange, lift, exit))
+                    {
+                        blocked = 0;
+                        for (const glm::dvec3& d : dirs)
+                            blocked += nearestHit(objects, prep, exit, d, o.creaseRange, false) ||
+                                               (ground && heightfieldBlocks(*ground, prep.groundInv, exit, d, o.creaseRange))
+                                           ? 1
+                                           : 0;
                     }
                     values[p] = float(double(blocked) / double(dirs.size()));
                 });

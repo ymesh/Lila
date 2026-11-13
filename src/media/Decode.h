@@ -148,8 +148,27 @@ struct AudioBuffer
 };
 using AudioBufferPtr = std::shared_ptr<const AudioBuffer>;
 
-/** A whole sound file decoded and resampled to stereo float at rate; null with err set on failure. */
-LILA_SCENE_API AudioBufferPtr decodeAudio(const fs::path& path, int rate = 48000, std::string* err = nullptr);
+/** One audio stream of a file, as a choice for audio nodes reading video files with several sound tracks. */
+struct AudioTrack
+{
+    /** 0-based among the file's audio tracks; what decodeAudio's and AudioStream's track take. */
+    int index = 0;
+    std::string codec;
+    int channels = 0;
+    int rate = 0;
+    double duration = 0.0; // seconds
+    /** From the container's tags, empty when it has none. */
+    std::string language;
+    std::string title;
+};
+/** The file's audio tracks in file order; empty with err set when it can't be read. A file without sound has none. */
+LILA_SCENE_API std::vector<AudioTrack> audioTracks(const fs::path& path, std::string* err = nullptr);
+
+/**
+ * A whole sound file (one audio track of it, 0-based; the first by default) decoded and resampled to stereo float at
+ * rate; null with err set on failure.
+ */
+LILA_SCENE_API AudioBufferPtr decodeAudio(const fs::path& path, int rate = 48000, std::string* err = nullptr, int track = 0);
 
 /** Waveform envelope: the lowest and highest sample (both channels) per bucket of `secondsPerBucket`. */
 struct Peaks
@@ -159,4 +178,68 @@ struct Peaks
     std::vector<float> high;
 };
 LILA_SCENE_API Peaks peaks(const AudioBuffer& buffer, double secondsPerBucket);
+
+/**
+ * A long sound decoded in blocks on a thread of its own instead of whole: music beds and long takes keep a window of
+ * blocks around where they are heard (stereo float at rate). block() never waits, so the audio callback can read it:
+ * a block not decoded yet is silence until it lands, and asking for it moves the read-ahead there. The read-ahead runs
+ * in the play or scrub direction (backwards too), and a shorter window is kept on the other side of the playhead, so
+ * turning around or scrubbing back finds its blocks decoded. Stepping to the next block decodes on; any other block
+ * seeks. A second thread scans the whole file once for the waveform and exact length.
+ */
+class LILA_SCENE_API AudioStream
+{
+public:
+    struct Options
+    {
+        int rate = 48000;
+        int track = 0;
+        int blockFrames = 1 << 15;
+        /** Decoded blocks kept; the ones furthest from the last request go first. */
+        size_t cacheBytes = size_t(48) << 20;
+        double readAheadSeconds = 6.0;
+        /** Decoded and kept behind the playhead (against the direction), after the read-ahead is in. */
+        double readBehindSeconds = 3.0;
+        double peakSeconds = 1.0 / 400.0;
+    };
+    using Block = std::shared_ptr<const std::vector<float>>;
+
+    /** Probes on the calling thread; null with err set when the file has no such audio track. */
+    static std::shared_ptr<AudioStream> open(const fs::path& path, const Options& options, std::string* err = nullptr);
+    ~AudioStream();
+    AudioStream(const AudioStream&) = delete;
+    AudioStream& operator=(const AudioStream&) = delete;
+
+    int rate() const;
+    int blockFrames() const;
+    /** Length in output frames: the container's estimate, exact once the scan is done. */
+    int64_t frames() const;
+    double duration() const { return rate() > 0 ? double(frames()) / rate() : 0.0; }
+    /** Any thread, never blocks: block index (frames index x blockFrames on), null while it decodes. */
+    Block block(int64_t index);
+    /**
+     * Starts decoding at seconds into the file, ahead of playing or scrubbing there. direction is +1 forwards, -1
+     * backwards, 0 to take it from the move since the previous prefetch (scrubbing); it holds until the next prefetch.
+     */
+    void prefetch(double seconds, int direction = 0);
+    /** +1 or -1: the way the read-ahead runs. */
+    int direction() const;
+    /** Whether block index has decoded, without asking for it or moving the read-ahead; for tests. */
+    bool ready(int64_t index) const;
+    /** Blocks until the block holding seconds has decoded or timeoutSeconds pass; for tests. */
+    bool waitFor(double seconds, double timeoutSeconds);
+    /** The waveform scanned so far; complete once scanned(). */
+    std::shared_ptr<const Peaks> peaks() const;
+    bool scanned() const;
+    /** Waits for the scan; for tests. */
+    bool waitScanned(double timeoutSeconds) const;
+    size_t cachedBytes() const;
+    int64_t seeks() const;
+
+    struct Impl;
+
+private:
+    AudioStream();
+    std::unique_ptr<Impl> mImpl;
+};
 } // namespace lila::media

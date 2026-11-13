@@ -77,9 +77,12 @@ double localAngle(const glm::dmat4& before, const glm::dmat4& after)
 
 TEST_CASE("strings: mode names round trip")
 {
-    for (strings::Mode m : {strings::Mode::Forward, strings::Mode::Backward, strings::Mode::Ik, strings::Mode::FullBody})
+    for (strings::Mode m : strings::kModes)
         CHECK(strings::modeFromName(strings::modeName(m)) == m);
     CHECK(!strings::modeFromName("sideways"));
+    CHECK(strings::allVariant(strings::Mode::Forward, true) == strings::Mode::ForwardAll);
+    CHECK(strings::allVariant(strings::Mode::All, false) == strings::Mode::Bidirectional);
+    CHECK(strings::allVariant(strings::Mode::Ik, true) == strings::Mode::Ik);
 }
 
 TEST_CASE("strings: limbs run up to the branch")
@@ -298,4 +301,188 @@ TEST_CASE("line of action: the spine takes a stroke's curve, scaled to its lengt
     CHECK(glm::length(along.front() - strings::conformAt(points, stroke, 10.0, 0.0)) < 1e-9);
     CHECK(strings::pathFraction(points, points.back()) == doctest::Approx(1.0));
     CHECK(strings::pathFraction(points, glm::dvec3(5.0, 122.0, 0.0)) == doctest::Approx(22.0 / 62.0).epsilon(1e-6));
+}
+
+namespace
+{
+double rotDiff(const glm::dmat4& a, const glm::dmat4& b)
+{
+    return glm::degrees(glm::angle(glm::normalize(glm::quat_cast(glm::dmat3(a) * glm::transpose(glm::dmat3(b))))));
+}
+} // namespace
+
+TEST_CASE("strings default: a move bends the limb, a turn is Forward, and a rule picks the mode")
+{
+    stringsRigBiped();
+    strings::Skeleton k = snap();
+    const glm::dvec3 target = pos("hand_l") + glm::dvec3(-8.0, 10.0, 6.0);
+    const glm::dmat4 spine = world("spine_03");
+    strings::Result r = pose({.mode = strings::Mode::Default, .grabbed = bone(k, "hand_l"), .move = target - pos("hand_l")});
+    CHECK(r.resolved == strings::Mode::Ik);
+    CHECK(glm::length(pos("hand_l") - target) < 1e-3);
+    checkStringsMatrix(world("spine_03"), spine);
+
+    stringsRigBiped();
+    k = snap();
+    const glm::dvec3 foot = pos("foot_l");
+    r = pose({.mode = strings::Mode::Default, .grabbed = bone(k, "calf_l"), .turn = turnX(20.0)});
+    CHECK(r.resolved == strings::Mode::Forward);
+    CHECK(glm::length(pos("foot_l") - foot) > 5.0);
+
+    // The rule web's pick wins: this knee poses Backward, so the planted foot stays.
+    stringsRigBiped();
+    k = snap();
+    k.rules.defaults = {{bone(k, "calf_l"), strings::Mode::Backward}};
+    const glm::dmat4 planted = world("foot_l");
+    strings::Request q{.mode = strings::Mode::Default, .grabbed = bone(k, "calf_l"), .turn = turnX(20.0), .holds = {holdAt(k, "foot_l")}, .hips = k.hips};
+    q.rules = &k.rules;
+    r = strings::solve(k.problem, q);
+    strings::apply(graph(), k, r.pose);
+    CHECK(r.resolved == strings::Mode::Backward);
+    checkStringsMatrix(world("foot_l"), planted);
+}
+
+TEST_CASE("strings free: the joint turns alone, its children keep their world rotation; a move keeps their place")
+{
+    stringsRigBiped();
+    strings::Skeleton k = snap();
+    const glm::dmat4 hips = world("hips"), foot = world("foot_l"), calf = world("calf_l");
+    pose({.mode = strings::Mode::Free, .grabbed = bone(k, "calf_l"), .turn = turnX(30.0)});
+    checkStringsMatrix(world("hips"), hips);
+    CHECK(rotDiff(world("foot_l"), foot) < 1e-6);
+    CHECK(rotDiff(world("calf_l"), calf) == doctest::Approx(30.0).epsilon(1e-6));
+    CHECK(glm::length(pos("foot_l") - glm::dvec3(foot[3])) > 1.0); // it rides the bone
+
+    stringsRigBiped();
+    k = snap();
+    const glm::dmat4 hand = world("hand_l"), upper = world("upperarm_l");
+    const glm::dvec3 elbow = pos("lowerarm_l");
+    pose({.mode = strings::Mode::Free, .grabbed = bone(k, "lowerarm_l"), .move = glm::dvec3(0.0, 6.0, -4.0)});
+    checkStringsMatrix(world("hand_l"), hand);
+    checkStringsMatrix(world("upperarm_l"), upper);
+    CHECK(glm::length(pos("lowerarm_l") - (elbow + glm::dvec3(0.0, 6.0, -4.0))) < 1e-6);
+}
+
+TEST_CASE("strings forward: what holds below stays unless it is in the turned joint's own limb; Forward All carries it")
+{
+    stringsRigBiped();
+    // A bent elbow, so the held hand stays in reach as the shoulder moves.
+    run("rotate", {{"args", {"lowerarm_l"}}, {"to", v3(0, 50, 0)}});
+    strings::Skeleton k = snap();
+    const glm::dvec3 held = pos("hand_l"), loose = pos("hand_r");
+    strings::Result r = pose({.mode = strings::Mode::Forward, .grabbed = bone(k, "spine_02"), .turn = turnX(20.0), .holds = {holdAt(k, "hand_l")}});
+    CHECK(r.error < 1e-3);
+    CHECK(glm::length(pos("hand_l") - held) < 1e-3);
+    CHECK(glm::length(pos("hand_r") - loose) > 5.0);
+
+    // The knee is in the foot's limb: Forward turns it and the foot follows.
+    stringsRigBiped();
+    k = snap();
+    const glm::dvec3 foot = pos("foot_l");
+    pose({.mode = strings::Mode::Forward, .grabbed = bone(k, "calf_l"), .turn = turnX(20.0), .holds = {holdAt(k, "foot_l")}});
+    CHECK(glm::length(pos("foot_l") - foot) > 5.0);
+
+    stringsRigBiped();
+    run("rotate", {{"args", {"lowerarm_l"}}, {"to", v3(0, 50, 0)}});
+    k = snap();
+    pose({.mode = strings::Mode::ForwardAll, .grabbed = bone(k, "spine_02"), .turn = turnX(20.0), .holds = {holdAt(k, "hand_l")}});
+    CHECK(glm::length(pos("hand_l") - held) > 5.0);
+
+    // Turning the hips Forward keeps planted feet: the legs bend. A crouch first, so they have the reach.
+    stringsRigBiped();
+    k = snap();
+    pose({.mode = strings::Mode::Ik, .grabbed = bone(k, "hips"), .move = glm::dvec3(0.0, -10.0, 0.0), .holds = {holdAt(k, "foot_l"), holdAt(k, "foot_r")}});
+    k = snap();
+    const glm::dvec3 l = pos("foot_l"), rf = pos("foot_r");
+    pose({.mode = strings::Mode::Forward,
+          .grabbed = bone(k, "hips"),
+          .turn = glm::angleAxis(glm::radians(15.0), glm::dvec3(0.0, 1.0, 0.0)),
+          .holds = {holdAt(k, "foot_l"), holdAt(k, "foot_r")}});
+    CHECK(glm::length(pos("foot_l") - l) < 1e-3);
+    CHECK(glm::length(pos("foot_r") - rf) < 1e-3);
+}
+
+TEST_CASE("strings backward all: the body swings rigidly about the anchor; the other foot is not held")
+{
+    stringsRigBiped();
+    const strings::Skeleton k = snap();
+    const glm::dmat4 foot = world("foot_l");
+    const glm::dvec3 other = pos("foot_r");
+    const glm::dmat4 thighR = node("thigh_r").as<glm::dmat4>(Transform::kMatrix);
+    const strings::Result r = pose({.mode = strings::Mode::BackwardAll,
+                                    .grabbed = bone(k, "calf_l"),
+                                    .turn = turnX(25.0),
+                                    .holds = {holdAt(k, "foot_l"), holdAt(k, "foot_r")}});
+    CHECK(r.anchor == bone(k, "foot_l"));
+    checkStringsMatrix(world("foot_l"), foot);
+    CHECK(glm::length(pos("foot_r") - other) > 5.0);
+    // Nothing bent to hold it: the right leg's own rotation is untouched.
+    checkStringsMatrix(node("thigh_r").as<glm::dmat4>(Transform::kMatrix), thighR, 1e-9);
+}
+
+TEST_CASE("strings bidirectional: both sides swing half about the joint, the joint stays, the far hold stays")
+{
+    stringsRigBiped();
+    strings::Skeleton k = snap();
+    const glm::dvec3 knee = pos("calf_l"), foot = pos("foot_l"), hips = pos("hips"), other = pos("foot_r");
+    const glm::dmat4 calfLocal = node("calf_l").as<glm::dmat4>(Transform::kMatrix);
+    const strings::Result r =
+        pose({.mode = strings::Mode::Bidirectional, .grabbed = bone(k, "calf_l"), .turn = turnX(30.0), .holds = {holdAt(k, "foot_r")}});
+    CHECK(r.error < 1e-3);
+    CHECK(glm::length(pos("calf_l") - knee) < 1e-6);
+    CHECK(glm::length(pos("foot_l") - foot) > 3.0);
+    CHECK(glm::length(pos("hips") - hips) > 3.0);
+    CHECK(glm::length(pos("foot_r") - other) < 1e-3);
+    // The knee bends by all of the turn, shared between the two sides.
+    CHECK(localAngle(calfLocal, node("calf_l").as<glm::dmat4>(Transform::kMatrix)) == doctest::Approx(30.0).epsilon(1e-6));
+    // The parts below swung half the turn about the knee: the foot keeps its distance and its direction turned 15 degrees.
+    const glm::dvec3 a = glm::normalize(foot - knee), b = glm::normalize(pos("foot_l") - knee);
+    CHECK(glm::degrees(std::acos(std::clamp(glm::dot(a, b), -1.0, 1.0))) == doctest::Approx(15.0).epsilon(1e-6));
+
+    // All: nothing held, both sides rigid; the right foot swings with the body.
+    stringsRigBiped();
+    k = snap();
+    pose({.mode = strings::Mode::All, .grabbed = bone(k, "calf_l"), .turn = turnX(30.0), .holds = {holdAt(k, "foot_r")}});
+    CHECK(glm::length(pos("calf_l") - knee) < 1e-6);
+    CHECK(glm::length(pos("foot_r") - other) > 3.0);
+}
+
+TEST_CASE("strings bidirectional move: the body comes half way and the limb reaches the rest")
+{
+    stringsRigBiped();
+    run("rotate", {{"args", {"lowerarm_l"}}, {"to", v3(0, 50, 0)}});
+    const strings::Skeleton k = snap();
+    const glm::dvec3 by(0.0, 8.0, 10.0), hand = pos("hand_l"), hips = pos("hips");
+    const strings::Result r = pose({.mode = strings::Mode::Bidirectional, .grabbed = bone(k, "hand_l"), .move = by});
+    CHECK(r.error < 1e-3);
+    CHECK(glm::length(pos("hand_l") - (hand + by)) < 1e-3);
+    CHECK(glm::length(pos("hips") - (hips + by * 0.5)) < 1e-6);
+}
+
+TEST_CASE("strings isolate rotation: the head keeps its world rotation as the spine turns, in Forward and Backward")
+{
+    stringsRigBiped();
+    strings::Skeleton k = snap();
+    const glm::dmat4 head = world("head");
+    pose({.mode = strings::Mode::Forward, .grabbed = bone(k, "spine_01"), .turn = turnX(25.0), .isolate = {bone(k, "head")}});
+    CHECK(rotDiff(world("head"), head) < 1e-6);
+    CHECK(glm::length(pos("head") - glm::dvec3(head[3])) > 3.0);
+
+    // Without isolation the head turns with the spine.
+    stringsRigBiped();
+    k = snap();
+    pose({.mode = strings::Mode::Forward, .grabbed = bone(k, "spine_01"), .turn = turnX(25.0)});
+    CHECK(rotDiff(world("head"), head) == doctest::Approx(25.0).epsilon(1e-6));
+
+    // Backward from the knee swings the whole body; the isolated head stays level.
+    stringsRigBiped();
+    k = snap();
+    pose({.mode = strings::Mode::Backward, .grabbed = bone(k, "calf_l"), .turn = turnX(20.0), .holds = {holdAt(k, "foot_l")}, .isolate = {bone(k, "head")}});
+    CHECK(rotDiff(world("head"), head) < 1e-6);
+
+    // The All variants ignore it.
+    stringsRigBiped();
+    k = snap();
+    pose({.mode = strings::Mode::ForwardAll, .grabbed = bone(k, "spine_01"), .turn = turnX(25.0), .isolate = {bone(k, "head")}});
+    CHECK(rotDiff(world("head"), head) == doctest::Approx(25.0).epsilon(1e-6));
 }

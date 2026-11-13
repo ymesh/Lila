@@ -32,6 +32,8 @@
 #include <QImageReader>
 #include <QInputDialog>
 #include <QLabel>
+#include <QSignalBlocker>
+#include <QSpinBox>
 #include <QMainWindow>
 #include <QMenu>
 #include <QMimeData>
@@ -72,10 +74,10 @@ json runCommand(const char* name, const json& call)
     }
 }
 
-QImage loadImage(const std::string& file)
+QImage loadImage(const Image& ref, const std::string& file)
 {
     if (media::isVideoFile(file))
-        return videoTextures::image(file, videoTextures::referenceFrame(file, scene::Graph::current().time()));
+        return videoTextures::image(file, videoFrame(ref, scene::Graph::current().time()));
     QImageReader reader(QString::fromStdString(file));
     reader.setAutoTransform(true);
     QImage img = reader.read();
@@ -181,7 +183,7 @@ QImage displayImage(const Image& img)
     // A video's raw picture changes with the scene time; a new frame redoes the grading.
     if (c.file != file || c.raw.isNull() || media::isVideoFile(file))
     {
-        QImage raw = loadImage(file);
+        QImage raw = loadImage(img, file);
         if (c.file != file || raw.cacheKey() != c.raw.cacheKey())
             c.key.clear();
         c.raw = std::move(raw);
@@ -553,6 +555,55 @@ ReferenceWindow::ReferenceWindow(std::string windowId, QWidget* parent) : QWidge
         if (std::string id = currentImage(); !id.empty())
             referenceOverlays::show(id);
     });
+    {
+        mVideoBar = new QWidget(mToolbar);
+        auto* vb = new QHBoxLayout(mVideoBar);
+        vb->setContentsMargins(8, 0, 0, 0);
+        vb->setSpacing(2);
+        auto videoButton = [this, vb](const char* iconName, const QString& tip, std::function<void()> fn, bool checkable = false) {
+            auto* b = new QToolButton(mVideoBar);
+            b->setIcon(icon(iconName));
+            b->setToolTip(tip);
+            b->setAutoRaise(true);
+            b->setCheckable(checkable);
+            connect(b, &QToolButton::clicked, this, [fn = std::move(fn)] { fn(); });
+            vb->addWidget(b);
+            return b;
+        };
+        // A step moves the held frame while paused, and nudges the sync with the scene otherwise.
+        auto step = [this](int by) {
+            const std::string id = currentImage();
+            const Image* i = current().image(id);
+            if (!i)
+                return;
+            if (i->paused)
+                runCommand("referenceImage", {{"edit", id}, {"pausedFrame", std::max<int64_t>(0, i->pausedFrame + by)}});
+            else
+                runCommand("referenceImage", {{"edit", id}, {"videoOffset", i->videoOffset + by}});
+        };
+        mPause = videoButton("player-pause", "Pause\nHold this frame instead of following the time slider", [this] {
+            if (const Image* i = current().image(currentImage()))
+                runCommand("referenceImage", {{"edit", i->id}, {"paused", !i->paused}});
+        }, true);
+        videoButton("chevron-left", "Previous Frame\nWhile paused, the held frame; while playing, moves the video's sync a frame", [step] { step(-1); });
+        videoButton("chevron-right", "Next Frame\nWhile paused, the held frame; while playing, moves the video's sync a frame", [step] { step(1); });
+        auto* label = new QLabel("Offset", mVideoBar);
+        label->setEnabled(false);
+        vb->addSpacing(4);
+        vb->addWidget(label);
+        mVideoOffset = new QSpinBox(mVideoBar);
+        mVideoOffset->setRange(-100000, 100000);
+        mVideoOffset->setSuffix(" f");
+        mVideoOffset->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        mVideoOffset->setKeyboardTracking(false);
+        mVideoOffset->setToolTip("Video Offset\nFrames added to the frame shown, to line the video up with the scene");
+        connect(mVideoOffset, &QSpinBox::valueChanged, this, [this](int v) {
+            if (const Image* i = current().image(currentImage()); i && i->videoOffset != v)
+                runCommand("referenceImage", {{"edit", i->id}, {"videoOffset", v}});
+        });
+        vb->addWidget(mVideoOffset);
+        bar->addWidget(mVideoBar);
+    }
     bar->addStretch(1);
     mMore = new QToolButton(mToolbar);
     mMore->setIcon(icon("dots"));
@@ -570,8 +621,23 @@ ReferenceWindow::ReferenceWindow(std::string windowId, QWidget* parent) : QWidge
             QAction* emb = menu->addAction("Embed in Set");
             emb->setCheckable(true);
             emb->setChecked(!img->data.empty());
-            emb->setToolTip("Keep the image's bytes in the set, so it travels without the file");
+            const bool video = isVideo(*img);
+            emb->setEnabled(!video || !img->data.empty());
+            emb->setToolTip(video ? "Videos stay linked to their file" : "Keep the image's bytes in the set, so it travels without the file");
             connect(emb, &QAction::triggered, this, [id](bool on) { runCommand("referenceImage", {{"edit", id}, {"embed", on}}); });
+            if (video)
+            {
+                QMenu* rate = menu->addMenu("Video Rate");
+                for (double fps : {0.0, 12.0, 24.0, 25.0, 30.0, 48.0, 50.0, 60.0})
+                {
+                    const media::VideoInfo* info = videoTextures::info(fileOf(*img));
+                    const QString text = fps > 0.0 ? QString("%1 fps").arg(fps)
+                                                   : info ? QString("File (%1 fps)").arg(info->fps, 0, 'g', 4) : QString("File");
+                    QAction* r = rate->addAction(text, this, [id, fps] { runCommand("referenceImage", {{"edit", id}, {"videoFps", fps}}); });
+                    r->setCheckable(true);
+                    r->setChecked(std::abs(img->videoFps - fps) < 1e-6);
+                }
+            }
             menu->addAction("Rename...", this, [this, id] {
                 const Image* i = current().image(id);
                 bool ok = false;
@@ -805,6 +871,16 @@ void ReferenceWindow::rebuild()
     mFlipH->setChecked(img && img->flipH);
     mFlipV->setChecked(img && img->flipV);
     mGray->setChecked(img && img->grayscale);
+    const bool video = img && isVideo(*img);
+    mVideoBar->setVisible(video);
+    if (video)
+    {
+        mPause->setChecked(img->paused);
+        mPause->setIcon(icon(img->paused ? "player-play" : "player-pause"));
+        mPause->setToolTip(img->paused ? "Play\nFollow the time slider again" : "Pause\nHold this frame instead of following the time slider");
+        QSignalBlocker block(mVideoOffset);
+        mVideoOffset->setValue(img->videoOffset);
+    }
     if (QDockWidget* dock = dockFor(mWindow); dock && mWindow != kMainWindow)
         dock->setWindowTitle(img ? QString::fromStdString(img->name) : QString("Reference Images"));
 }

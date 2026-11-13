@@ -13,12 +13,12 @@
 
 namespace lila::groom
 {
+using T = ArgType;
+
 namespace
 {
-using json = nlohmann::json;
 using scene::Graph;
 using scene::Node;
-using T = ArgType;
 
 /** The look nodes a groom's palette offers, in menu order. */
 const std::vector<std::string>& lookTypes()

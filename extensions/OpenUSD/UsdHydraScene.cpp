@@ -12,6 +12,7 @@
 #include <lila/Profile.h>
 #include <lila/Transform.h>
 
+#include <glm/gtc/matrix_transform.hpp>
 #include <pxr/base/gf/range3d.h>
 #include <pxr/base/gf/vec2f.h>
 #include <pxr/base/gf/vec3f.h>
@@ -490,7 +491,7 @@ std::shared_ptr<const LilaSceneIndex::CurveData> LilaSceneIndex::curveData(const
 HdContainerDataSourceHandle LilaSceneIndex::nodeSource(const Node& n) const
 {
     std::vector<std::pair<TfToken, HdDataSourceBaseHandle>> e = {
-        {HdXformSchema::GetSchemaToken(), xformSource(n.world)},
+        {HdXformSchema::GetSchemaToken(), xformSource(glm::translate(glm::dmat4(1.0), -mOrigin) * n.world)},
         {HdVisibilitySchema::GetSchemaToken(), HdVisibilitySchema::BuildRetained(retained(n.visible))},
     };
     if (n.mesh)
@@ -557,10 +558,29 @@ float LilaSceneIndex::curveWidth(const Node& n, const ViewContext& view, float w
     return was > 0.0f && std::abs(width / was - 1.0f) < 0.15f ? was : width;
 }
 
+void LilaSceneIndex::setOrigin(const glm::dvec3& origin)
+{
+    if (origin == mOrigin)
+        return;
+    LILA_ZONE();
+    mOrigin = origin;
+    HdSceneIndexObserver::DirtiedPrimEntries dirtied;
+    HdDataSourceLocatorSet locators;
+    locators.insert(HdXformSchema::GetDefaultLocator());
+    for (auto& [id, n] : mNodes)
+    {
+        put(n.path, {n.type, nodeSource(n)});
+        dirtied.emplace_back(n.path, locators);
+    }
+    if (!dirtied.empty())
+        _SendPrimsDirtied(dirtied);
+}
+
 void LilaSceneIndex::syncView(const ViewContext& view)
 {
     LILA_ZONE();
     mCounts = {};
+    setOrigin(view.origin);
     HdSceneIndexObserver::DirtiedPrimEntries dirtied;
     for (auto& [id, n] : mNodes)
     {
@@ -585,6 +605,7 @@ void LilaSceneIndex::sync(Graph& g, const ViewContext& view, const std::function
 {
     LILA_ZONE();
     mCounts = {};
+    setOrigin(view.origin);
     HdSceneIndexObserver::AddedPrimEntries added;
     HdSceneIndexObserver::RemovedPrimEntries removed;
     HdSceneIndexObserver::DirtiedPrimEntries dirtied;

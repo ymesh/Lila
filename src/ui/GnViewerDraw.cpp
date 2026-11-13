@@ -36,7 +36,7 @@ void drawViewers(render::FrameState& s, OverlayPainter&, const ViewInfo&)
                 return kPlain;
             return gn::viewerColor(*data, data->values[i]);
         };
-        auto wp = [&](geo::Index p) { return glm::vec3(world * glm::dvec4(m.position(p), 1.0)); };
+        auto wp = [&](geo::Index p) { return glm::dvec3(world * glm::dvec4(m.position(p), 1.0)); };
         // Per-element colour of a corner of a face, by the domain the values live on.
         auto cornerColor = [&](geo::Index f, geo::Index c) {
             switch (data->domain)
@@ -88,8 +88,8 @@ void drawViewers(render::FrameState& s, OverlayPainter&, const ViewInfo&)
             {
                 glm::dvec3 d(0.0);
                 d[axis] = r;
-                s.linesOnTop.push_back({glm::vec3(world * glm::dvec4(m.position(p) - d, 1.0)), col});
-                s.linesOnTop.push_back({glm::vec3(world * glm::dvec4(m.position(p) + d, 1.0)), col});
+                s.linesOnTop.push_back({glm::dvec3(world * glm::dvec4(m.position(p) - d, 1.0)), col});
+                s.linesOnTop.push_back({glm::dvec3(world * glm::dvec4(m.position(p) + d, 1.0)), col});
             }
         }
     }
@@ -127,7 +127,7 @@ void drawVolumes(render::FrameState& s, OverlayPainter&, const ViewInfo&)
         const gn::Volume& v = *geometry->volume;
         const glm::vec4 tint = v.isSdf() ? glm::vec4(0.55f, 0.75f, 0.95f, 0.45f) : glm::vec4(0.85f, 0.85f, 0.85f, 0.3f);
         const geo::Mesh& m = *volumePreview(geometry->volume);
-        auto wp = [&](const glm::dvec3& p) { return glm::vec3(world * glm::dvec4(p, 1.0)); };
+        auto wp = [&](const glm::dvec3& p) { return glm::dvec3(world * glm::dvec4(p, 1.0)); };
         for (geo::Index f = 0; f < m.faceCapacity(); ++f)
         {
             if (!m.faceValid(f))

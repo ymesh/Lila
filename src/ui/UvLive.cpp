@@ -282,8 +282,8 @@ void draw3d(render::FrameState& s, OverlayPainter&, const ViewInfo& view)
             for (size_t i = 0; i < lines.edges.size(); ++i)
                 if (vis->edge(lines.edges[i]))
                 {
-                    s.seamLines.push_back({glm::vec3(w * glm::vec4(lines.lines[2 * i], 1.0f)), color});
-                    s.seamLines.push_back({glm::vec3(w * glm::vec4(lines.lines[2 * i + 1], 1.0f)), color});
+                    s.seamLines.push_back({glm::dvec3(w * glm::vec4(lines.lines[2 * i], 1.0f)), color});
+                    s.seamLines.push_back({glm::dvec3(w * glm::vec4(lines.lines[2 * i + 1], 1.0f)), color});
                 }
         }
     }

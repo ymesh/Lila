@@ -1,0 +1,50 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "Lila Link Crowd",
+	"Description": "Receives Lila crowds as Mass crowds: the pedestrian lanes as ZoneGraph shapes, a lane-following StateTree, Mass entity configs and a spawner. Needs Lila Link.",
+	"Category": "Editor",
+	"CreatedBy": "Lila",
+	"CanContainContent": false,
+	"EnabledByDefault": false,
+	"Modules": [
+		{
+			"Name": "LilaLinkCrowdRuntime",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "LilaLinkCrowd",
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit",
+			"PlatformAllowList": [ "Win64", "Mac", "Linux" ]
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "LilaLink",
+			"Enabled": true
+		},
+		{
+			"Name": "ZoneGraph",
+			"Enabled": true
+		},
+		{
+			"Name": "MassGameplay",
+			"Enabled": true
+		},
+		{
+			"Name": "MassAI",
+			"Enabled": true
+		},
+		{
+			"Name": "MassCrowd",
+			"Enabled": true
+		},
+		{
+			"Name": "StateTree",
+			"Enabled": true
+		}
+	]
+}

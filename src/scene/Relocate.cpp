@@ -13,6 +13,7 @@
 #include "scene/AnimInterpolator.h"
 #include "scene/Components.h"
 #include "scene/Constraint.h"
+#include "scene/Georef.h"
 #include "scene/AnimLayer.h"
 #include "scene/Graph.h"
 #include "scene/Ik.h"
@@ -1498,6 +1499,23 @@ bool worldShaped(Graph& g, const Inputs& inputs, NodeId id)
     return false;
 }
 
+/**
+ * The georeference a whole-scene move leaves, so every point keeps its projected coordinates and place on the Earth:
+ * the origin takes the opposite of the move. nullopt when the scene has none or only chosen hierarchies move (those
+ * are meant to change place). The CRS grid's axes are fixed, so a whole-scene move that turns is refused.
+ */
+std::optional<georef::Georeference> georeferenceAfter(const Move& mv)
+{
+    std::optional<georef::Georeference> geo = georef::current();
+    if (!mv.wholeScene || !geo)
+        return std::nullopt;
+    if (matrixError(mv.rotation(), glm::dmat3(1.0)) > 1e-12)
+        refuse("the scene is georeferenced and its axes stay on the CRS grid (east, north, up), so the whole scene can't turn; "
+               "move it without rotation=, move chosen hierarchies with nodes=, or clear the georeference first");
+    geo->origin = georef::toProjected(*geo, -glm::dvec3(mv.matrix[3]), georef::sceneZUp());
+    return geo;
+}
+
 json relocate(const Args& a)
 {
     LILA_ZONE();
@@ -1560,6 +1578,8 @@ json relocate(const Args& a)
             list += (list.empty() ? "" : ", ") + type + " (" + example + ")";
         refuse("the scene has node types that may hold world-space data relocateScene doesn't know how to move: " + list);
     }
+
+    const std::optional<georef::Georeference> geoAfter = georeferenceAfter(mv);
 
     const std::vector<Sample> samples = samplesFor(g, tops);
     Snapshot before = capture(g, samples);
@@ -1697,6 +1717,11 @@ json relocate(const Args& a)
         }
     }
     edits.push_back(planScenePoses(g, roots, notes));
+    if (geoAfter)
+    {
+        edits.push_back([geo = *geoAfter] { georef::setCurrent(geo); });
+        notes.add("the georeference origin moved the other way, so everything keeps its place on the Earth");
+    }
     std::erase_if(edits, [](const Edit& e) { return !e; });
 
     json result = {
@@ -1707,6 +1732,8 @@ json relocate(const Args& a)
         {"roots", json::array()},
         {"handled", handled},
     };
+    if (geoAfter)
+        result["georeferenceOrigin"] = vecJson(geoAfter->origin);
     for (const Root& r : roots)
         result["roots"].push_back(g.node(r.id)->path());
     if (!followers.empty())
@@ -1894,7 +1921,10 @@ void registerCommands()
                "(skin bind matrices, deformer bind matrices, world spaces, world up vectors, measures) are rewritten to match. Every "
                "transform and deformed mesh point is then checked at several frames (and in every take) against M times where it was; "
                "if anything is off by more than 1e-6 cm, or the scene holds a node type relocateScene doesn't know, nothing changes "
-               "and the error says why. One undo step.",
+               "and the error says why. One undo step.\n\n"
+               "In a georeferenced scene a whole-scene move shifts the georeference origin the other way, so everything keeps its "
+               "projected coordinates and place on the Earth; it can't turn the whole scene, since the CRS grid's axes are fixed. "
+               "Moving chosen hierarchies (nodes=) moves them on the Earth too.",
         .positionalDoc = "objects the from= point is taken from (default: the selection)",
         .flags = {
             {"from", "", T::String, "bottom",

@@ -1,3 +1,4 @@
+#include "ui/PointCloudDisplay.h"
 #include "ui/GeometrySnap.h"
 
 #include "core/Profile.h"
@@ -55,6 +56,14 @@ bool isPointObject(scene::Graph& g, scene::NodeId id)
 
 bool addPointObject(Nearest& n, scene::Graph& g, scene::NodeId id, unsigned snaps)
 {
+    // A point cloud's loaded points are vertex targets, so meshes and curves snap onto a scan.
+    if (const scene::Node* node = g.node(id); node && node->type().isA("pointCloud"))
+    {
+        if ((snaps & SnapVertex) && scene::effectivelyVisible(g, id))
+            if (const std::optional<glm::dvec3> p = pointCloudDisplay::nearestPoint(g, id, n.view(), n.cursor(), n.radius()))
+                n.point(*p);
+        return true;
+    }
     if (!isPointObject(g, id))
         return false;
     if ((snaps & SnapVertex) && scene::effectivelyVisible(g, id) && isolate::shows(scene::isolation::active(), id))

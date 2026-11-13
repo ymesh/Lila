@@ -65,6 +65,13 @@
     },
     "miniaudio",
     {
+      "name": "proj",
+      "default-features": false
+    },
+    "libe57format",
+    "laszip",
+    "web-ifc",
+    {
       "name": "tracy",
       "default-features": false,
       "features": [
@@ -75,7 +82,8 @@
   ],
   "default-features": [
     "usd",
-    "volumes"
+    "volumes",
+    "cad"
   ],
   "features": {
     "usd": {
@@ -90,6 +98,15 @@
             "python",
             "vulkan"
           ]
+        }
+      ]
+    },
+    "cad": {
+      "description": "OpenCascade: STEP, IGES and BREP import (the CadImport extension)",
+      "dependencies": [
+        {
+          "name": "opencascade",
+          "default-features": false
         }
       ]
     },

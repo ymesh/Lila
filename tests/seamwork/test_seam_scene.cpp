@@ -4,6 +4,7 @@
 #include "ops/Command.h"
 #include "scene/Graph.h"
 #include "scene/MeshNodes.h"
+#include "scene/Transform.h"
 #include "scene/Overlap.h"
 #include "geo/Heightfield.h"
 
@@ -413,4 +414,44 @@ TEST_CASE("Seam Points and Distribute Along Seam: instances along the contact po
     for (geo::Index p = 0; p < m.pointCapacity(); ++p)
         if (m.pointValid(p))
             CHECK(std::abs(m.position(p).y) < 10.0);
+}
+
+TEST_CASE("relocateScene: a seam, its decal strip and fields move with the scene")
+{
+    load();
+    run("newScene");
+    const json t = run("terrainCreate", {{"flat", true}, {"size", json::array({4000, 4000})}, {"resolution", 81}, {"name", "Ground"}});
+    const std::string terrain = t["mesh"].get<std::string>();
+    const std::string wall = box("Wall", {-200, -20, -10}, {200, 280, 10}, 4);
+    const json r = run("seamFind", {{"args", {wall}}, {"terrain", terrain}});
+    const json strip = run("seamDecal", {{"args", {r["seam"]}}});
+    const std::string mesh = strip["mesh"].get<std::string>();
+    auto bounds = [&](const std::string& name) {
+        const geo::Mesh& m = evaluatedMesh(name);
+        const glm::dmat4 w = g().find(name)->as<glm::dmat4>(scene::Transform::kWorldMatrix);
+        glm::dvec3 lo(1e300), hi(-1e300);
+        for (geo::Index p = 0; p < m.pointCapacity(); ++p)
+            if (m.pointValid(p))
+            {
+                const glm::dvec3 q(w * glm::dvec4(m.position(p), 1.0));
+                lo = glm::min(lo, q);
+                hi = glm::max(hi, q);
+            }
+        return std::pair{lo, hi};
+    };
+    const auto before = bounds(mesh);
+    const double length = run("seamInfo", {{"args", {r["seam"]}}})["length"].get<double>();
+
+    json tops = json::array();
+    for (scene::NodeId id : g().nodes())
+        if (const scene::Node* n = g().node(id); n && n->type().isA("transform") && g().parent(id) == scene::kNoNode)
+            tops.push_back(n->path());
+    const glm::dvec3 offset(500000.0, 0.0, 300000.0);
+    run("relocateScene", {{"offset", json::array({offset.x, offset.y, offset.z})}, {"nodes", tops}});
+
+    // The strip follows once, not twice: built in world space from the moved wall and terrain.
+    const auto after = bounds(mesh);
+    CHECK(glm::length(after.first - (before.first + offset)) < 1e-3);
+    CHECK(glm::length(after.second - (before.second + offset)) < 1e-3);
+    CHECK(run("seamInfo", {{"args", {r["seam"]}}})["length"].get<double>() == doctest::Approx(length).epsilon(1e-6));
 }

@@ -4,6 +4,7 @@
 #include "core/Paths.h"
 #include "core/Profile.h"
 #include "render/Backdrop.h"
+#include "render/CameraRelative.h"
 #include "render/Compute.h"
 #include "render/DrawBatches.h"
 #include "render/Environment.h"
@@ -17,6 +18,7 @@
 #include "render/VirtualTexture.h"
 #include "render/VulkanContext.h"
 
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/packing.hpp>
 #include <tbb/parallel_for.h>
 #include <tbb/task_group.h>
@@ -59,7 +61,17 @@ struct GridPush
     glm::vec4 axisX;
     glm::vec4 axisZ;
     glm::vec4 origin;
+    glm::vec4 offset; // the eye's ground coordinates from the grid origin: xy as they are (axes), zw wrapped by a major cell (lines)
 };
+
+/** GridPush::offset for a rebased frame, worked out in double so the lines stay exact far from the grid origin. */
+glm::vec4 gridOffset(const FrameState& s)
+{
+    const glm::dvec3 d = s.eye - s.gridOrigin;
+    const glm::dvec2 g = s.zUp ? glm::dvec2(d.x, d.y) : glm::dvec2(d.x, d.z);
+    const double major = double(s.gridSpacing) * double(std::max(s.gridMajorEvery, 1));
+    return glm::vec4(float(g.x), float(g.y), float(wrapped(g.x, major)), float(wrapped(g.y, major)));
+}
 
 struct GpuMesh;
 
@@ -201,8 +213,12 @@ struct GpuFrame
     glm::vec4 fogParams; // height, falloff per cm, start, sun scatter
     glm::vec4 fogExtra;  // anisotropy, up axis (1 Y, 2 Z)
     glm::vec4 shadowing; // one past the light each traced shadow channel is for, 0 for none
-    glm::vec4 pad[7];
+    glm::vec4 worldOffset; // xyz: the render origin wrapped by kWorldPatternPeriod, for world-space patterns
+    glm::vec4 pad[6];
 };
+
+/** World-space shading patterns (stylised strokes) repeat every this many cm, so they stay exact far from the origin. */
+constexpr double kWorldPatternPeriod = 65536.0;
 static_assert(sizeof(GpuFrame) == sizeof(GpuLight), "the light buffer's header is one light long");
 
 /** A traced placement's mesh for rtbevel.slang: its buffers' addresses and world matrix rows. */
@@ -326,6 +342,30 @@ struct StrandsPush
 };
 static_assert(sizeof(StrandsPush) == 128, "matches StrandsPush in strands.slang");
 
+struct CloudPush
+{
+    glm::mat4 mvp{1.0f};
+    glm::mat4 toCloud{1.0f};
+    glm::vec4 color{0.8f, 0.8f, 0.8f, 2.0f};
+    glm::vec4 tint{0.0f};
+    glm::vec4 elevation{1.0f, 0.0f, 1.0f, 1.0f};
+    VkDeviceAddress clips = 0;
+    VkDeviceAddress points = 0;
+    uint32_t clipCount = 0;
+    uint32_t clipMode = 0;
+    uint32_t colorMode = 0;
+    float edl = 0.0f;
+};
+static_assert(sizeof(CloudPush) == 208, "matches CloudPush in pointcloud.slang");
+
+struct EdlPush
+{
+    glm::mat4 invProj{1.0f};
+    glm::vec4 params{1.5f, 8.0f, 0.0f, 0.0f}; // radius in pixels, samples
+};
+
+
+
 struct PointsCullPush
 {
     glm::mat4 viewProj;
@@ -354,17 +394,33 @@ glm::vec4 depthPull(const glm::dmat4& proj, uint32_t heightPx, double pixels)
     return {float(scale), float(a * (scale - 1.0)), 0.0f, 0.0f};
 }
 
+/** A line vertex as the line pipelines read it: float, relative to the frame's render origin. */
+struct GpuLineVertex
+{
+    glm::vec3 pos;
+    glm::vec4 color;
+};
+
+/** Copies count vertices into out as they are (overlay NDC) or, with an origin, rebased on it. */
+void writeLineVertices(const LineVertex* v, GpuLineVertex* out, size_t count, const glm::dvec3* origin)
+{
+    const glm::dvec3 o = origin ? *origin : glm::dvec3(0.0);
+    for (size_t i = 0; i < count; ++i)
+        out[i] = {glm::vec3(v[i].pos - o), v[i].color};
+}
+
 /**
  * Clips a world-space line list to the view volume, with x and y given twice the view's room. The rasterizer
  * clips only z exactly, so a wide line crossing the near plane otherwise reaches it with an end far outside its guard
- * band and floods the view. Reads v and writes only the moved ends into out, which already holds a copy (mapped memory
- * is slow to read). Lines wholly outside move to `behind`, a point behind the camera that every view clips.
+ * band and floods the view. Reads v (world, double) and writes only the moved ends into out, which already holds the
+ * rebased copy (mapped memory is slow to read). viewProj is relative to origin. Lines wholly outside move to `behind`, a
+ * point behind the camera that every view clips.
  */
-void clipLineList(const LineVertex* v, LineVertex* out, size_t count, const glm::dmat4& viewProj, const glm::vec3& behind)
+void clipLineList(const LineVertex* v, GpuLineVertex* out, size_t count, const glm::dmat4& viewProj, const glm::dvec3& origin, const glm::vec3& behind)
 {
     for (size_t i = 0; i + 1 < count; i += 2)
     {
-        const glm::dvec3 a(v[i].pos), b(v[i + 1].pos);
+        const glm::dvec3 a(v[i].pos - origin), b(v[i + 1].pos - origin);
         const glm::dvec4 ca = viewProj * glm::dvec4(a, 1.0), cb = viewProj * glm::dvec4(b, 1.0);
         // Inside where each is >= 0: the x and y guard planes, the far plane (reversed-Z z >= 0) and the near one (z <= w).
         auto planes = [](const glm::dvec4& c) {
@@ -438,6 +494,21 @@ struct GpuPoints
     uint64_t lastUsed = 0;
 };
 
+/** A point cloud node's points on the GPU. */
+struct GpuChunk
+{
+    AllocatedBuffer buffer;
+    VkDeviceAddress address = 0;
+    uint32_t count = 0;
+    size_t bytes = 0;
+    uint64_t lastUsed = 0;
+    std::shared_ptr<const PointChunk> keep;
+};
+
+/** Point cloud chunks kept on the GPU, least recently drawn evicted past this; a frame uploads at most kCloudUploadBytes. */
+constexpr size_t kCloudBytes = size_t(1536) << 20;
+constexpr size_t kCloudUploadBytes = size_t(96) << 20;
+
 /** A strand layout on the GPU and the points last uploaded on it; the header holds the three buffers' addresses. */
 struct GpuStrands
 {
@@ -469,6 +540,7 @@ struct Frame
     compute::Buffer table;       // bindless texture table, written before the frame is recorded
     compute::Buffer instances;   // GpuInstance per mesh placement, written before the frame is recorded
     compute::Buffer lights;      // GpuLight per light
+    compute::Buffer cloudClips;  // the frame's point cloud clip boxes, eye-relative world to box (mat4 each)
     compute::Buffer tlasInstances; // the scene's placements for its top-level acceleration structure
     compute::Buffer traceTable;    // TraceInstance per placement, by its custom index
     std::vector<compute::Buffer> scratch; // acceleration structure builds' scratch, freed with the staging
@@ -505,6 +577,9 @@ struct Viewport
     // Viewport post: the scene resolved here, then filtered into the frame with the prepass depth and normals.
     Image postColor;
     VkDescriptorSet postSet = VK_NULL_HANDLE;
+    /** Point clouds drawn on their own for eye-dome lighting, single-sampled; edlSet reads them in the shading pass. */
+    Image cloudColor, cloudDepth;
+    VkDescriptorSet edlSet = VK_NULL_HANDLE;
     // The scene target (MSAA, resolved into scene), its resolved depth, and the temporal history read by the compose pass.
     Image sceneMs, scene, sceneDepth;
     std::array<Image, 2> history;
@@ -515,6 +590,7 @@ struct Viewport
     /** Frames blended into the history since the view last changed, and the next sample of the jitter sequence. */
     uint32_t accumulated = 0, jitterIndex = 0;
     glm::dmat4 prevViewProj{1.0}, prevView{1.0}, prevProj{1.0};
+    glm::dvec3 prevOrigin{0.0}; // the render origin prevViewProj is relative to
     uint64_t submitted = 0, renderingSerial = 0, drawnSerial = 0; // submit count, the one being drawn, the one drawn last
     uint64_t uploadEpoch = 0;                                        // Impl::uploadEpoch when the last frame was drawn
     // Post: the bloom chains (half resolution, a view per level), the auto exposure histogram and its eased state.
@@ -562,7 +638,8 @@ struct Viewport
     std::vector<std::pair<TexturePtr, uint64_t>> keptMaps;
     std::vector<TexturePtr> keptTextures;
     bool keptMapsValid = false;
-    std::vector<ContactPush> keptContacts; // without viewProj
+    std::vector<ContactPush> keptContacts; // without viewProj; centers come from keptContactCenters
+    std::vector<glm::dvec3> keptContactCenters; // world
     glm::vec2 keptContactKey{-1.0f};
     bool keptContactsValid = false;
     RecordKey keptRecordKey;
@@ -680,6 +757,13 @@ struct Renderer::Impl
     std::unordered_map<uint64_t, GpuStrands> strandCache; // render thread only
     VkPipeline strandsPipeline = VK_NULL_HANDLE;
     VkPipelineLayout strandsLayout = VK_NULL_HANDLE;
+    VkPipeline cloudPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout cloudLayout = VK_NULL_HANDLE;
+    /** Point clouds into their own target, and the eye-dome lighting pass that shades them into the scene. */
+    VkPipeline cloudTargetPipeline = VK_NULL_HANDLE, edlPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout edlLayout = VK_NULL_HANDLE;
+    std::unordered_map<uint64_t, GpuChunk> chunkCache; // render thread only
+    size_t chunkBytes = 0;
     VkPipelineLayout pointsLayout = VK_NULL_HANDLE, pointsCullLayout = VK_NULL_HANDLE;
     VkPipeline pointsNearestPipeline = VK_NULL_HANDLE, pointsKeepPipeline = VK_NULL_HANDLE;
     /** By s.points index: where that cloud's thinned points went this frame (PointsCull), or none when it draws whole. */
@@ -909,7 +993,7 @@ struct Renderer::Impl
         v.images.clear();
         destroyImage(v.color);
         destroyImage(v.depth);
-        for (Image* img : {&v.aoDepth, &v.aoNormal, &v.aoRaw, &v.aoFinal, &v.bevel, &v.rtShadow, &v.postColor, &v.sceneMs, &v.scene, &v.sceneDepth, &v.history[0], &v.history[1],
+        for (Image* img : {&v.aoDepth, &v.aoNormal, &v.aoRaw, &v.aoFinal, &v.bevel, &v.rtShadow, &v.postColor, &v.cloudColor, &v.cloudDepth, &v.sceneMs, &v.scene, &v.sceneDepth, &v.history[0], &v.history[1],
                            &v.bloomDown, &v.bloomUp, &v.histogram, &v.exposureState})
             destroyImage(*img);
         for (std::vector<VkImageView>* views : {&v.bloomDownViews, &v.bloomUpViews})
@@ -1105,6 +1189,7 @@ struct Renderer::Impl
         v.denoiseSet = allocateSet(aoPool, aoComputeLayout);
         v.aoSampleSet = allocateSet(aoPool, aoSampleLayout);
         v.postSet = allocateSet(aoPool, aoSampleLayout);
+        v.edlSet = allocateSet(aoPool, aoSampleLayout);
         for (auto& sets : v.taaSets)
             for (VkDescriptorSet& set : sets)
                 set = allocateSet(aoPool, aoComputeLayout);
@@ -1132,6 +1217,7 @@ struct Renderer::Impl
             compute::destroy(vk, f.table);
             compute::destroy(vk, f.instances);
             compute::destroy(vk, f.lights);
+            compute::destroy(vk, f.cloudClips);
             compute::destroy(vk, f.pointCells);
             compute::destroy(vk, f.pointOut);
             compute::destroy(vk, f.pointArgs);
@@ -1713,8 +1799,34 @@ struct Renderer::Impl
     }
 
     /** Drops component dots no frame has drawn for a while: each selection change makes a new cloud. */
+    /** Point cloud chunks no frame drew for a while, then the least recently drawn while the cache is over budget. */
+    void evictChunks()
+    {
+        std::vector<std::pair<uint64_t, uint64_t>> byAge;
+        for (auto& [key, g] : chunkCache)
+            if (g.lastUsed + 240 < frameCounter || chunkBytes > kCloudBytes)
+                byAge.emplace_back(g.lastUsed, key);
+        if (byAge.empty())
+            return;
+        std::ranges::sort(byAge);
+        vkDeviceWaitIdle(vk.device);
+        for (const auto& [used, key] : byAge)
+        {
+            const bool stale = used + 240 < frameCounter;
+            // Never what the last frames drew; past the budget, oldest first until a tenth is free again.
+            if (used + 2 >= frameCounter || (!stale && chunkBytes <= kCloudBytes * 9 / 10))
+                continue;
+            GpuChunk& g = chunkCache[key];
+            chunkBytes -= g.bytes;
+            destroyBuffer(g.buffer);
+            chunkCache.erase(key);
+        }
+    }
+
     void evictPoints()
     {
+        if (frameCounter % 30 == 15)
+            evictChunks();
         if (frameCounter % 30 != 0)
             return;
         std::vector<uint64_t> stale;
@@ -1745,6 +1857,10 @@ struct Renderer::Impl
         for (auto& [key, g] : pointCache)
             destroyBuffer(g.buffer);
         pointCache.clear();
+        for (auto& [key, g] : chunkCache)
+            destroyBuffer(g.buffer);
+        chunkCache.clear();
+        chunkBytes = 0;
         for (auto& [key, g] : strandCache)
             destroyStrands(g);
         strandCache.clear();
@@ -2431,6 +2547,8 @@ struct Renderer::Impl
                 return;
             }
         }
+        if (s.renderOrigin != glm::dvec3(0.0))
+            rebaseInstances(frameBatches, s.renderOrigin);
         if (!frameBatches.instances.empty())
         {
             std::memcpy(f.instances.mapped, frameBatches.instances.data(), frameBatches.instances.size() * sizeof(GpuInstance));
@@ -2447,8 +2565,6 @@ struct Renderer::Impl
         frameShadows.clear();
         frameRtLights.clear();
         const bool flat = s.lighting == FrameState::Lighting::Flat;
-        if ((s.lights.empty() || flat) && !s.fog.on)
-            return;
         const size_t count = flat ? 0 : std::min<size_t>(s.lights.size(), kMaxLights);
         const size_t bytes = (count + 1) * sizeof(GpuLight);
         if (f.lights.size < bytes)
@@ -2465,6 +2581,9 @@ struct Renderer::Impl
             }
         }
         GpuFrame header{};
+        const glm::dvec3 o = s.renderOrigin + s.eye;
+        header.worldOffset = glm::vec4(float(wrapped(o.x, kWorldPatternPeriod)), float(wrapped(o.y, kWorldPatternPeriod)),
+                                       float(wrapped(o.z, kWorldPatternPeriod)), 0.0f);
         if (s.fog.on)
         {
             header.fogColor = glm::vec4(s.fog.color * s.envIntensity, s.fog.density);
@@ -2486,7 +2605,7 @@ struct Renderer::Impl
             const LightDraw& l = s.lights[i];
             GpuLight g{};
             // The kind in the low four bits, the lighting channels above: exact in a float up to 20 channels.
-            g.position = glm::vec4(l.position, float(uint32_t(l.kind) | ((l.lightingChannels & 0xFFFFFu) << 4)));
+            g.position = glm::vec4(glm::vec3(l.position), float(uint32_t(l.kind) | ((l.lightingChannels & 0xFFFFFu) << 4)));
             g.direction = glm::vec4(glm::normalize(l.direction), l.range);
             g.radiance = glm::vec4(l.radiance, l.radius);
             g.cone = glm::vec4(l.cosOuter, 1.0f / std::max(l.cosInner - l.cosOuter, 1e-4f), l.width, l.height);
@@ -2495,11 +2614,11 @@ struct Renderer::Impl
             const bool traced = std::ranges::find(frameRtLights, uint32_t(i) + 1) != frameRtLights.end();
             if (l.shadows && tile < tilesPerRow * tilesPerRow && shadowPipeline && (!traced || heightfieldCasters))
             {
-                g.shadow = l.shadowViewProj;
+                g.shadow = glm::mat4(l.shadowViewProj);
                 g.shadowDepth = l.shadowDepth;
                 const float scale = float(kShadowTile) / float(kShadowAtlas);
                 g.shadowRect = glm::vec4(float(tile % tilesPerRow) * scale, float(tile / tilesPerRow) * scale, scale, scale);
-                frameShadows.push_back({tile, l.shadowViewProj, traced});
+                frameShadows.push_back({tile, glm::mat4(l.shadowViewProj), traced});
             }
             out[i] = g;
         }
@@ -2630,6 +2749,7 @@ struct Renderer::Impl
         for (const StrandDraw& d : s.strands)
             if (d.cloud && d.cloud->layout && !d.cloud->layout->segments.empty())
                 uploadStrands(cmd, f, *d.cloud, d.cloud);
+        uploadChunks(cmd, f, s);
         if (f.staging.size() != staged)
             memoryBarrier(cmd, VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                           VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT | VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
@@ -3114,6 +3234,13 @@ struct Renderer::Impl
         writeImage(v.postSet, 0, sampler, v.postColor.view, shaderRead);
         writeImage(v.postSet, 1, sampler, v.aoDepth.view, depthRead);
         writeImage(v.postSet, 2, sampler, v.aoNormal.view, shaderRead);
+
+        v.cloudColor = createImage(sceneFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | sampled, extent, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        v.cloudDepth = createImage(kDepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | sampled, extent, VK_SAMPLE_COUNT_1_BIT,
+                                   VK_IMAGE_ASPECT_DEPTH_BIT);
+        writeImage(v.edlSet, 0, sampler, v.cloudColor.view, shaderRead);
+        writeImage(v.edlSet, 1, sampler, v.cloudDepth.view, depthRead);
+        writeImage(v.edlSet, 2, sampler, v.aoNormal.view, shaderRead);
     }
 
     /** The scene target, its resolved depth and the temporal history, with the sets the TAA and compose passes read them through. */
@@ -3738,7 +3865,7 @@ struct Renderer::Impl
             }
             else
             {
-                p.position[c] = glm::vec4(l.position, 1.0f);
+                p.position[c] = glm::vec4(glm::vec3(l.position), 1.0f);
                 p.size[c] = glm::vec4(std::max(l.radius, 0.5f), l.range, 0.0f, 0.0f);
             }
         }
@@ -3983,6 +4110,23 @@ struct Renderer::Impl
             strandsPipeline = buildPipeline(strandsLayout, strands, "strandsVS", "strandsPS", sceneFormat, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, svin, true, false);
             vkDestroyShaderModule(vk.device, strands, nullptr);
         }
+        cloudLayout = layoutFor(sizeof(CloudPush), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+        if (VkShaderModule cloud = module(loadSpirv("pointcloud.spv")))
+        {
+            // No vertex input: the shader reads each node's packed points through the push constants.
+            VkPipelineVertexInputStateCreateInfo cvin{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+            cloudPipeline = buildPipeline(cloudLayout, cloud, "cloudVS", "cloudPS", sceneFormat, VK_PRIMITIVE_TOPOLOGY_POINT_LIST, cvin, true, false);
+            cloudTargetPipeline = buildPipeline(cloudLayout, cloud, "cloudVS", "cloudEdlTargetPS", sceneFormat, VK_PRIMITIVE_TOPOLOGY_POINT_LIST, cvin,
+                                                true, false, true, 0.0f, false, true);
+            vkDestroyShaderModule(vk.device, cloud, nullptr);
+        }
+        edlLayout = layoutFor(sizeof(EdlPush), VK_SHADER_STAGE_FRAGMENT_BIT, aoSampleLayout);
+        if (VkShaderModule edl = module(loadSpirv("edl.spv")))
+        {
+            VkPipelineVertexInputStateCreateInfo evin{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+            edlPipeline = buildPipeline(edlLayout, edl, "edlVS", "edlPS", sceneFormat, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, evin, true, false);
+            vkDestroyShaderModule(vk.device, edl, nullptr);
+        }
         overlayTrisLayout = layoutFor(sizeof(glm::vec2), VK_SHADER_STAGE_VERTEX_BIT, atlasSetLayout);
 
         VkShaderModule grid = module(loadSpirv("grid.spv"));
@@ -3995,10 +4139,10 @@ struct Renderer::Impl
             gridFramePipeline = buildPipeline(gridLayout, grid, "gridVS", "gridPS", format, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, none, false, true);
         }
 
-        VkVertexInputBindingDescription binding{0, sizeof(LineVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+        VkVertexInputBindingDescription binding{0, sizeof(GpuLineVertex), VK_VERTEX_INPUT_RATE_VERTEX};
         VkVertexInputAttributeDescription attrs[2] = {
-            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(LineVertex, pos)},
-            {1, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(LineVertex, color)},
+            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuLineVertex, pos)},
+            {1, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(GpuLineVertex, color)},
         };
         VkPipelineVertexInputStateCreateInfo vin{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
         vin.vertexBindingDescriptionCount = 1;
@@ -4285,13 +4429,13 @@ struct Renderer::Impl
                               &heightfields.wire, &heightfields.prepass, &heightfields.shadow,
                               &composeOverPipeline, &postPipeline, &externalPipeline,
                               &taaPipeline, &composePipeline, &composeSinglePipeline,
-                              &bloomDownPipeline, &bloomUpPipeline, &histogramPipeline, &averagePipeline, &shadowPipeline, &rtaoPipeline, &bevelPipeline, &rtShadowPipeline, &strandsPipeline})
+                              &bloomDownPipeline, &bloomUpPipeline, &histogramPipeline, &averagePipeline, &shadowPipeline, &rtaoPipeline, &bevelPipeline, &rtShadowPipeline, &strandsPipeline, &cloudPipeline, &cloudTargetPipeline, &edlPipeline})
             if (*p)
             {
                 vkDestroyPipeline(vk.device, *p, nullptr);
                 *p = VK_NULL_HANDLE;
             }
-        for (VkPipelineLayout* l : {&gridLayout, &linesLayout, &overlayTrisLayout, &meshLayout, &wireLayout, &contactLayout, &aoLayout, &aoApplyLayout, &pointsLayout, &pointsCullLayout, &strandsLayout,
+        for (VkPipelineLayout* l : {&gridLayout, &linesLayout, &overlayTrisLayout, &meshLayout, &wireLayout, &contactLayout, &aoLayout, &aoApplyLayout, &pointsLayout, &pointsCullLayout, &strandsLayout, &cloudLayout, &edlLayout,
                                     &imagePlaneLayout, &postLayout, &externalLayout, &taaLayout, &composeLayout, &bloomLayout,
                                     &exposureLayout, &rtaoLayout, &bevelLayout, &rtShadowLayout})
             if (*l)
@@ -4488,13 +4632,15 @@ struct Renderer::Impl
         // Waiting above can take a whole vblank; draw what the user is doing now, not what they did before it.
         if (latch)
             latch(s);
+        if (s.cameraRelative && glm::length(s.eye) > kRebaseBeyond)
+            rebaseOnEye(s);
         if (s.externalScene)
             handOverScene(s);
 
         if (s.atlas && s.atlas.get() != uploadedAtlas)
             uploadAtlas(s.atlas);
 
-        // One buffer per frame: lines, linesOnTop, tris3d, overlay and linesXray share the LineVertex stride, overlayTris follow.
+        // One buffer per frame: lines, linesOnTop, tris3d, overlay and linesXray share the GpuLineVertex stride, overlayTris follow.
         const std::vector<LineVertex>* lineSets[] = {&s.lines, &s.linesOnTop, &s.tris3d, &s.overlay, &s.linesXray, &s.selectedEdges, &s.seamLines,
                                                      &s.symmetryLines, &s.highlightEdges, &s.curveHalo, &s.curveLines, &s.curveHaloBold, &s.curveLinesBold};
         constexpr int kLineSets = int(std::size(lineSets));
@@ -4502,38 +4648,38 @@ struct Renderer::Impl
         size_t lineBytes = 0;
         for (int i = 0; i < kLineSets; ++i)
         {
-            lineFirst[i] = uint32_t(lineBytes / sizeof(LineVertex));
-            lineBytes += lineSets[i]->size() * sizeof(LineVertex);
+            lineFirst[i] = uint32_t(lineBytes / sizeof(GpuLineVertex));
+            lineBytes += lineSets[i]->size() * sizeof(GpuLineVertex);
         }
         // Debug drawing follows the fixed sets: each line batch, then its triangles.
         const size_t debugBatches = s.debugLines ? s.debugLines->size() : 0;
         std::vector<uint32_t> debugFirst(debugBatches + 1);
         for (size_t i = 0; i <= debugBatches; ++i)
         {
-            debugFirst[i] = uint32_t(lineBytes / sizeof(LineVertex));
+            debugFirst[i] = uint32_t(lineBytes / sizeof(GpuLineVertex));
             const std::vector<LineVertex>* verts = i < debugBatches ? &(*s.debugLines)[i].vertices : s.debugTris.get();
-            lineBytes += verts ? verts->size() * sizeof(LineVertex) : 0;
+            lineBytes += verts ? verts->size() * sizeof(GpuLineVertex) : 0;
         }
         size_t trisBytes = s.overlayTris.size() * sizeof(OverlayVertex);
         if (lineBytes + trisBytes)
         {
             ensureLines(f, lineBytes + trisBytes);
-            LineVertex* mapped = static_cast<LineVertex*>(f.linesMapped);
+            GpuLineVertex* mapped = static_cast<GpuLineVertex*>(f.linesMapped);
             const glm::dmat4 clipViewProj = s.proj * s.view;
             const glm::vec3 behind(s.eye + glm::dvec3(s.view[0][2], s.view[1][2], s.view[2][2]));
             for (int i = 0; i < kLineSets; ++i)
             {
-                std::memcpy(mapped + lineFirst[i], lineSets[i]->data(), lineSets[i]->size() * sizeof(LineVertex));
-                // Every set but tris3d (triangles) and overlay (already in NDC) is a world-space line list.
+                // Overlay is already in NDC; every other set is world-space, and all but tris3d (triangles) are line lists.
+                writeLineVertices(lineSets[i]->data(), mapped + lineFirst[i], lineSets[i]->size(), i == 3 ? nullptr : &s.renderOrigin);
                 if (i != 2 && i != 3)
-                    clipLineList(lineSets[i]->data(), mapped + lineFirst[i], lineSets[i]->size(), clipViewProj, behind);
+                    clipLineList(lineSets[i]->data(), mapped + lineFirst[i], lineSets[i]->size(), clipViewProj, s.renderOrigin, behind);
             }
             for (size_t i = 0; i <= debugBatches; ++i)
                 if (const std::vector<LineVertex>* verts = i < debugBatches ? &(*s.debugLines)[i].vertices : s.debugTris.get())
                 {
-                    std::memcpy(mapped + debugFirst[i], verts->data(), verts->size() * sizeof(LineVertex));
+                    writeLineVertices(verts->data(), mapped + debugFirst[i], verts->size(), &s.renderOrigin);
                     if (i < debugBatches)
-                        clipLineList(verts->data(), mapped + debugFirst[i], verts->size(), clipViewProj, behind);
+                        clipLineList(verts->data(), mapped + debugFirst[i], verts->size(), clipViewProj, s.renderOrigin, behind);
                 }
             std::memcpy(static_cast<char*>(f.linesMapped) + lineBytes, s.overlayTris.data(), trisBytes);
         }
@@ -4595,7 +4741,7 @@ struct Renderer::Impl
         const bool taa = (s.taa || s.accumulateOnly) && taaPipeline && v.history[0].image && v.taaSets[0][0] && !s.externalScene;
         const bool unchanged = v.renderingSerial == v.drawnSerial;
         v.drawnSerial = v.renderingSerial;
-        const bool sameCamera = v.historyValid && s.view == v.prevView && s.proj == v.prevProj;
+        const bool sameCamera = v.historyValid && s.view == v.prevView && s.proj == v.prevProj && s.renderOrigin == v.prevOrigin;
         float taaWeight = 1.0f;
         bool taaClip = false;
         const bool taaReset = !v.historyValid;
@@ -4697,6 +4843,11 @@ struct Renderer::Impl
         constexpr auto sampledRead = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
         barrier(cmd, v.images[imageIndex], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, colorStage, 0, colorStage,
                 colorWrite, VK_IMAGE_ASPECT_COLOR_BIT);
+        // Eye-dome lighting: the clouds first into their own target, which the scene pass then shades from.
+        const bool edl = edlPipeline && cloudTargetPipeline && v.cloudColor.image &&
+                         std::ranges::any_of(s.pointClouds, [](const PointCloudDraw& d) { return d.edl > 0.0f && !d.chunks.empty(); });
+        if (edl)
+            recordCloudTarget(cmd, f, v, s, sceneViewProj);
         if (v.color.image)
             barrier(cmd, v.color.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, colorStage, colorWrite, colorStage,
                     colorWrite, VK_IMAGE_ASPECT_COLOR_BIT);
@@ -4810,6 +4961,7 @@ struct Renderer::Impl
             gp.axisX = glm::vec4(s.gridAxisX, 1.0f);
             gp.axisZ = glm::vec4(s.gridAxisZ, 1.0f);
             gp.origin = glm::vec4(glm::vec3(s.gridOrigin), 0.0f);
+            gp.offset = gridOffset(s);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gridPipeline);
             vkCmdPushConstants(cmd, gridLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(GridPush), &gp);
             vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -4820,6 +4972,10 @@ struct Renderer::Impl
         drawMeshes(cmd, s, vpScene, (ao && !aoFast) || frameBevel || frameRtShadow ? v.aoSampleSet : whiteAoSet, v.extent.height,
                    sceneChunks ? &f : nullptr, &ri);
         drawStrands(cmd, s, vpScene, v.extent.height);
+        if (edl)
+            drawEdl(cmd, v, s);
+        else
+            drawClouds(cmd, f, s, sceneViewProj, cloudPipeline);
         if (aoFast)
         {
             vkCmdEndRendering(cmd);
@@ -4858,7 +5014,8 @@ struct Renderer::Impl
                         VK_IMAGE_ASPECT_COLOR_BIT);
             TaaPush tp;
             tp.invViewProj = glm::mat4(glm::inverse(viewProj));
-            tp.prevViewProj = glm::mat4(v.prevViewProj);
+            // Last frame's view-projection, moved into this frame's camera-relative space by the eye's travel.
+            tp.prevViewProj = glm::mat4(v.prevViewProj * glm::translate(glm::dmat4(1.0), s.renderOrigin - v.prevOrigin));
             tp.size = glm::vec4(float(v.extent.width), float(v.extent.height), 1.0f / float(v.extent.width), 1.0f / float(v.extent.height));
             tp.params = glm::vec4(taaWeight, taaClip ? 1.0f : 0.0f, taaReset ? 1.0f : 0.0f, s.accumulateOnly ? 1.0f : 0.0f);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, taaPipeline);
@@ -4883,6 +5040,7 @@ struct Renderer::Impl
         v.prevViewProj = viewProj;
         v.prevView = s.view;
         v.prevProj = s.proj;
+        v.prevOrigin = s.renderOrigin;
         const PostResult postResult = recordPostStack(cmd, f, v, s, composeInput);
 
         // The frame: the composed scene, then lines and overlays depth tested against the scene's depth.
@@ -5501,6 +5659,7 @@ struct Renderer::Impl
         gp.axisX = glm::vec4(s.gridAxisX, 1.0f);
         gp.axisZ = glm::vec4(s.gridAxisZ, 1.0f);
         gp.origin = glm::vec4(glm::vec3(s.gridOrigin), 0.0f);
+        gp.offset = gridOffset(s);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gridFramePipeline);
         vkCmdPushConstants(cmd, gridLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(GridPush), &gp);
         vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -5579,7 +5738,7 @@ struct Renderer::Impl
             ImagePlanePush push;
             push.viewProj = viewProj;
             for (int i = 0; i < 4; ++i)
-                push.corners[i] = glm::vec4(p.corners[i], p.screen ? 0.0f : 1.0f);
+                push.corners[i] = glm::vec4(glm::vec3(p.corners[i]), p.screen ? 0.0f : 1.0f);
             const glm::vec2 rect[4] = {{p.uv.x, p.uv.y}, {p.uv.z, p.uv.y}, {p.uv.z, p.uv.w}, {p.uv.x, p.uv.w}};
             const glm::vec2* uv = p.cornerUvs ? p.cornerUv : rect;
             push.uv[0] = glm::vec4(uv[0], uv[1]);
@@ -5600,55 +5759,58 @@ struct Renderer::Impl
 
         int up = s.zUp ? 2 : 1;
         int a0 = 0, a1 = s.zUp ? 1 : 2;
-        if (!contactPipeline || s.groundShadow <= 0.0f || s.eye[up] <= 0.0)
+        if (!contactPipeline || s.groundShadow <= 0.0f || (s.renderOrigin + s.eye)[up] <= 0.0)
             return;
         // The blobs depend only on the draws: worked out once while the frame draws the same list.
         std::vector<ContactPush> scratch;
+        std::vector<glm::dvec3> scratchCenters;
         std::vector<ContactPush>& blobs = v ? v->keptContacts : scratch;
+        std::vector<glm::dvec3>& centers = v ? v->keptContactCenters : scratchCenters;
         const glm::vec2 key(s.groundShadow, s.zUp ? 1.0f : 0.0f);
         if (!v || !v->keptContactsValid || v->keptContactKey != key)
         {
             blobs.clear();
+            centers.clear();
             for (const MeshDraw& d : s.meshes)
             {
                 if (!(d.flags & DrawShaded) || !d.mesh || d.mesh->indices.empty())
                     continue;
-                glm::vec3 lo(FLT_MAX), hi(-FLT_MAX);
-                auto extend = [&](const glm::mat4& world) {
+                // One blob per instance: a blob over all of them would darken the whole area an array or crowd covers.
+                const size_t count = d.instances && !d.instances->empty() ? d.instances->size() : 1;
+                for (size_t k = 0; k < count && blobs.size() < 8192; ++k)
+                {
+                    const glm::dmat4 world = d.instances && !d.instances->empty() ? d.world * glm::dmat4((*d.instances)[k]) : d.world;
+                    glm::dvec3 lo(DBL_MAX), hi(-DBL_MAX);
                     for (int c = 0; c < 8; ++c)
                     {
-                        glm::vec3 corner((c & 1) ? d.mesh->boundsMax.x : d.mesh->boundsMin.x, (c & 2) ? d.mesh->boundsMax.y : d.mesh->boundsMin.y,
-                                         (c & 4) ? d.mesh->boundsMax.z : d.mesh->boundsMin.z);
-                        glm::vec3 w(world * glm::vec4(corner, 1.0f));
+                        glm::dvec3 corner((c & 1) ? d.mesh->boundsMax.x : d.mesh->boundsMin.x, (c & 2) ? d.mesh->boundsMax.y : d.mesh->boundsMin.y,
+                                          (c & 4) ? d.mesh->boundsMax.z : d.mesh->boundsMin.z);
+                        glm::dvec3 w(world * glm::dvec4(corner, 1.0));
                         lo = glm::min(lo, w);
                         hi = glm::max(hi, w);
                     }
-                };
-                if (d.instances && !d.instances->empty())
-                    for (const glm::mat4& placement : *d.instances)
-                        extend(d.world * placement);
-                else
-                    extend(d.world);
-                glm::vec3 half = (hi - lo) * 0.5f;
-                float size = std::max(half[a0], half[a1]);
-                float gap = lo[up];
-                if (size <= 0.0f || hi[up] <= 0.0f)
-                    continue;
-                float opacity = s.groundShadow * (1.0f - std::clamp(gap / size, 0.0f, 1.0f));
-                if (opacity <= 0.0f)
-                    continue;
+                    glm::vec3 half((hi - lo) * 0.5);
+                    float size = std::max(half[a0], half[a1]);
+                    float gap = float(lo[up]);
+                    if (size <= 0.0f || hi[up] <= 0.0)
+                        continue;
+                    float opacity = s.groundShadow * (1.0f - std::clamp(gap / size, 0.0f, 1.0f));
+                    if (opacity <= 0.0f)
+                        continue;
 
-                ContactPush& p = blobs.emplace_back();
-                glm::vec3 center = (lo + hi) * 0.5f;
-                center[up] = 0.0f;
-                p.center = glm::vec4(center, opacity);
-                // The blob reaches past the footprint by a fraction of the object's size so it reads as soft occlusion.
-                glm::vec3 axisA(0.0f), axisB(0.0f);
-                float spread = size * 0.6f;
-                axisA[a0] = half[a0] + spread;
-                axisB[a1] = half[a1] + spread;
-                p.axisA = glm::vec4(axisA, size / (size + spread));
-                p.axisB = glm::vec4(axisB, 0.0f);
+                    ContactPush& p = blobs.emplace_back();
+                    glm::dvec3 center = (lo + hi) * 0.5;
+                    center[up] = 0.0;
+                    centers.push_back(center);
+                    p.center = glm::vec4(0.0f, 0.0f, 0.0f, opacity);
+                    // The blob reaches past the footprint by a fraction of the object's size so it reads as soft occlusion.
+                    glm::vec3 axisA(0.0f), axisB(0.0f);
+                    float spread = size * 0.6f;
+                    axisA[a0] = half[a0] + spread;
+                    axisB[a1] = half[a1] + spread;
+                    p.axisA = glm::vec4(axisA, size / (size + spread));
+                    p.axisB = glm::vec4(axisB, 0.0f);
+                }
             }
             if (v)
             {
@@ -5659,9 +5821,11 @@ struct Renderer::Impl
         if (blobs.empty())
             return;
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, contactPipeline);
-        for (ContactPush& p : blobs)
+        for (size_t i = 0; i < blobs.size(); ++i)
         {
+            ContactPush& p = blobs[i];
             p.viewProj = viewProj;
+            p.center = glm::vec4(relativeTo(centers[i], s.renderOrigin), p.center.w);
             vkCmdPushConstants(cmd, contactLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(p), &p);
             vkCmdDraw(cmd, 6, 1, 0, 0);
         }
@@ -6148,6 +6312,12 @@ struct Renderer::Impl
      * Thins the frame's dense dot clouds to their nearest point per screen cell, ahead of the passes that draw them: a
      * dot covers its cell, so millions of points become about one per cell and draw in a fraction of the time.
      */
+    /** viewProj (relative to renderOrigin) for points relative to the cloud's own origin. */
+    static glm::mat4 cloudViewProj(const glm::mat4& viewProj, const PointCloud& cloud, const glm::dvec3& renderOrigin)
+    {
+        return glm::mat4(glm::dmat4(viewProj) * glm::translate(glm::dmat4(1.0), cloud.origin - renderOrigin));
+    }
+
     void cullPoints(VkCommandBuffer cmd, Frame& f, const FrameState& s, const glm::mat4& viewProj, VkExtent2D extent)
     {
         frameCulledPoints.assign(s.points.size(), -1);
@@ -6202,7 +6372,7 @@ struct Renderer::Impl
             for (size_t k = 0; k < clouds.size(); ++k)
             {
                 PointsCullPush p;
-                p.viewProj = viewProj;
+                p.viewProj = cloudViewProj(viewProj, *s.points[clouds[k].first].cloud, s.renderOrigin);
                 p.grid = glm::uvec4(across, down, cellPx, clouds[k].second->count);
                 p.viewport = glm::vec4(float(extent.width), float(extent.height), 0.0f, 0.0f);
                 p.points = clouds[k].second->address;
@@ -6263,6 +6433,149 @@ struct Renderer::Impl
         g.keep = keep;
     }
 
+    /** The frame's point cloud chunks not on the GPU yet, up to kCloudUploadBytes; the rest come in later frames. */
+    void uploadChunks(VkCommandBuffer cmd, Frame& f, const FrameState& s)
+    {
+        if (s.pointClouds.empty())
+            return;
+        LILA_ZONE();
+        size_t uploaded = 0;
+        constexpr VkBufferUsageFlags kRead = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+        for (const PointCloudDraw& d : s.pointClouds)
+            for (const PointCloudDraw::Chunk& c : d.chunks)
+            {
+                if (!c.points || !c.points->count || chunkCache.contains(c.points->key))
+                    continue;
+                const size_t bytes = c.points->words.size() * sizeof(uint32_t);
+                if (uploaded + bytes > kCloudUploadBytes && uploaded > 0)
+                    return;
+                GpuChunk g;
+                g.buffer = deviceBuffer(cmd, f, c.points->words.data(), bytes, kRead);
+                g.address = addressOf(g.buffer);
+                g.count = c.points->count;
+                g.bytes = bytes;
+                g.keep = c.points;
+                g.lastUsed = frameCounter;
+                chunkBytes += bytes;
+                uploaded += bytes;
+                chunkCache.emplace(c.points->key, std::move(g));
+            }
+    }
+
+    /** Streamed point clouds in the scene pass (pointcloud.slang): each resident chunk as points, through its cube. */
+    void drawClouds(VkCommandBuffer cmd, Frame& f, const FrameState& s, const glm::dmat4& viewProj, VkPipeline pipeline)
+    {
+        if (!pipeline || s.pointClouds.empty())
+            return;
+        LILA_ZONE();
+        size_t clipCount = 0;
+        for (const PointCloudDraw& d : s.pointClouds)
+            clipCount += std::min<size_t>(d.clips.size(), 8);
+        const size_t bytes = std::max<size_t>(clipCount, 1) * sizeof(glm::mat4);
+        if (f.cloudClips.size < bytes)
+        {
+            compute::destroy(vk, f.cloudClips);
+            f.cloudClips = compute::makeBuffer(vk, std::max<size_t>(bytes * 2, 64 * sizeof(glm::mat4)), 0, compute::Host::Write);
+        }
+        auto* clips = static_cast<glm::mat4*>(f.cloudClips.mapped);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        const float* range = vk.properties.limits.pointSizeRange;
+        const float maxSize = vk.largePoints ? range[1] : 1.0f;
+        const glm::dmat4 fromRelative = glm::translate(glm::dmat4(1.0), s.renderOrigin);
+        size_t clipAt = 0;
+        for (const PointCloudDraw& d : s.pointClouds)
+        {
+            // Clip boxes and elevation work on eye-relative world positions, which the shader has as toCloud's output.
+            const size_t n = std::min<size_t>(d.clips.size(), 8);
+            for (size_t k = 0; k < n; ++k)
+                clips[clipAt + k] = glm::mat4(d.clips[k] * fromRelative);
+            const double up = d.upAxis == 2 ? s.renderOrigin.z : s.renderOrigin.y;
+            CloudPush p;
+            p.color = glm::vec4(d.color, std::clamp(d.pointSize, range[0], maxSize));
+            p.tint = glm::vec4(d.tint, glm::any(glm::greaterThan(d.tint, glm::vec3(0.0f))) ? 0.35f : 0.0f);
+            p.elevation = glm::vec4(float(d.upAxis), float(double(d.elevation.x) - up), 1.0f / std::max(d.elevation.y - d.elevation.x, 1e-3f), s.exposure);
+            p.clips = n ? f.cloudClips.address + clipAt * sizeof(glm::mat4) : 0;
+            p.clipCount = uint32_t(n);
+            p.clipMode = uint32_t(d.clipMode);
+            p.colorMode = uint32_t(d.colorMode);
+            p.edl = d.edl;
+            clipAt += n;
+            for (const PointCloudDraw::Chunk& c : d.chunks)
+            {
+                auto it = c.points ? chunkCache.find(c.points->key) : chunkCache.end();
+                if (it == chunkCache.end())
+                    continue;
+                it->second.lastUsed = frameCounter;
+                // The chunk's cube in double, relative to the eye, then float: exact wherever the cloud is.
+                const glm::dmat4 cube = glm::translate(glm::dmat4(1.0), c.min) * glm::scale(glm::dmat4(1.0), glm::dvec3(c.size / 65535.0));
+                const glm::mat4 rel = relativeTo(d.world * cube, s.renderOrigin);
+                p.mvp = glm::mat4(viewProj * glm::dmat4(rel));
+                p.toCloud = rel;
+                p.points = it->second.address;
+                vkCmdPushConstants(cmd, cloudLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(p), &p);
+                vkCmdDraw(cmd, it->second.count, 1, 0, 0);
+            }
+        }
+        vmaFlushAllocation(vk.allocator, f.cloudClips.alloc, 0, VK_WHOLE_SIZE);
+    }
+
+    /** The clouds alone into v.cloudColor and v.cloudDepth (single-sampled), left readable for the eye-dome lighting pass. */
+    void recordCloudTarget(VkCommandBuffer cmd, Frame& f, Viewport& v, const FrameState& s, const glm::dmat4& viewProj)
+    {
+        LILA_ZONE();
+        constexpr auto colorStage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        constexpr auto colorWrite = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        constexpr auto depthStage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        constexpr auto depthAccess = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+        constexpr auto fragmentStage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        constexpr auto sampledRead = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        barrier(cmd, v.cloudColor.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, fragmentStage, 0, colorStage, colorWrite,
+                VK_IMAGE_ASPECT_COLOR_BIT);
+        barrier(cmd, v.cloudDepth.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, fragmentStage, 0, depthStage, depthAccess,
+                VK_IMAGE_ASPECT_DEPTH_BIT);
+        VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        color.imageView = v.cloudColor.view;
+        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        color.clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+        VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        depth.imageView = v.cloudDepth.view;
+        depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        depth.clearValue.depthStencil = {0.0f, 0}; // reversed-Z
+        VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+        ri.renderArea = {{0, 0}, v.extent};
+        ri.layerCount = 1;
+        ri.colorAttachmentCount = 1;
+        ri.pColorAttachments = &color;
+        ri.pDepthAttachment = &depth;
+        vkCmdBeginRendering(cmd, &ri);
+        const VkViewport viewport{0, 0, float(v.extent.width), float(v.extent.height), 0, 1};
+        const VkRect2D scissor{{0, 0}, v.extent};
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        drawClouds(cmd, f, s, viewProj, cloudTargetPipeline);
+        vkCmdEndRendering(cmd);
+        barrier(cmd, v.cloudColor.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, colorStage, colorWrite,
+                fragmentStage, sampledRead, VK_IMAGE_ASPECT_COLOR_BIT);
+        barrier(cmd, v.cloudDepth.image, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, depthStage, depthAccess,
+                fragmentStage, sampledRead, VK_IMAGE_ASPECT_DEPTH_BIT);
+    }
+
+    /** In the scene pass: the clouds from their own target, shaded by eye-dome lighting, at their own depth. */
+    void drawEdl(VkCommandBuffer cmd, Viewport& v, const FrameState& s)
+    {
+        LILA_ZONE();
+        EdlPush p;
+        p.invProj = glm::mat4(glm::inverse(s.proj));
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, edlPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, edlLayout, 0, 1, &v.edlSet, 0, nullptr);
+        vkCmdPushConstants(cmd, edlLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(p), &p);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+    }
+
     /** Hair strands as ribbons in the scene pass (strands.slang), lit by a key light over the camera. */
     void drawStrands(VkCommandBuffer cmd, const FrameState& s, const glm::mat4& viewProj, uint32_t heightPx)
     {
@@ -6280,9 +6593,10 @@ struct Renderer::Impl
             if (it == strandCache.end() || !it->second.count || it->second.pointsKey != d.cloud->key)
                 continue;
             it->second.lastUsed = frameCounter;
-            const glm::mat4 inv = glm::inverse(d.world);
+            const glm::mat4 world = relativeTo(d.world, s.renderOrigin);
+            const glm::mat4 inv = glm::inverse(world);
             StrandsPush p;
-            p.mvp = viewProj * d.world;
+            p.mvp = viewProj * world;
             p.eye = ortho ? glm::vec4(glm::normalize(glm::vec3(inv * glm::vec4(camForward, 0.0f))), 1.0f) : glm::vec4(glm::vec3(inv * glm::vec4(glm::vec3(s.eye), 1.0f)), 0.0f);
             p.params = glm::vec4(d.keep, d.widthScale, s.exposure, float(heightPx) * std::abs(float(s.proj[1][1])) * 0.5f);
             const glm::uvec3 t = glm::uvec3(glm::clamp(d.tint, 0.0f, 1.0f) * 255.0f + 0.5f);
@@ -6308,7 +6622,7 @@ struct Renderer::Impl
                 continue;
             it->second.lastUsed = frameCounter;
             PointsPush p;
-            p.viewProj = viewProj;
+            p.viewProj = cloudViewProj(viewProj, *d.cloud, s.renderOrigin);
             p.depthPull = depthPull(s.proj, heightPx, kLinePullPixels + 0.5 * std::max(d.size, d.selectedSize));
             for (int c = 0; c < 3; ++c)
                 p.colors[c] = d.colors[c];

@@ -36,7 +36,6 @@ using scene::PlugRef;
 using scene::PlugType;
 using scene::PlugValue;
 using scene::kNoNode;
-using json = nlohmann::json;
 
 constexpr double kDeg = std::numbers::pi / 180.0;
 

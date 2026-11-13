@@ -1654,13 +1654,13 @@ private:
     }
 
     /** World corners of an NDC rectangle just behind the near plane: top left, top right, bottom right, bottom left. */
-    static void screenQuad(const ViewInfo& view, const glm::vec2 (&ndc)[4], glm::vec3 (&out)[4])
+    static void screenQuad(const ViewInfo& view, const glm::vec2 (&ndc)[4], glm::dvec3 (&out)[4])
     {
         const glm::dmat4 inv = glm::inverse(view.viewProj());
         for (int k = 0; k < 4; ++k)
         {
             const glm::dvec4 p = inv * glm::dvec4(ndc[k].x, ndc[k].y, 0.99, 1.0);
-            out[k] = glm::vec3(glm::dvec3(p) / p.w);
+            out[k] = glm::dvec3(p) / p.w;
         }
     }
 

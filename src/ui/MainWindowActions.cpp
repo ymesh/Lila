@@ -2,9 +2,11 @@
 #include "core/Paths.h"
 #include "ui/ViewportHeaderConfig.h"
 #include "ui/CameraBookmarks.h"
+#include "ui/DroneCamera.h"
 #include "ui/CreditsDialog.h"
 #include "ui/LicensesDialog.h"
 #include "ui/AudioUi.h"
+#include "ui/MediaLane.h"
 #include "ui/RenderOutputDialog.h"
 #include "ui/PerfTrace.h"
 #include "ui/ReferenceOverlay.h"
@@ -298,6 +300,7 @@ void MainWindow::registerActions()
                   "Hides the selected objects or components in the active view's isolation."});
     imagePlanes::install([this] { return mViewports->active(); });
     audio::install();
+    mediaLane::install();
     references::install();
     references::windows::install();
     referenceOverlays::install([this] { return mViewports->active(); });
@@ -308,6 +311,7 @@ void MainWindow::registerActions()
     hud::registerActions([this] { return mViewports->active(); });
     displayAids::registerActions([this] { return mViewports->active(); });
     cameraBookmarks::install([this] { return mViewports->active(); });
+    drone::registerActions([this] { return mViewports->active(); });
     viewportToast::setActive([this] { return mViewports->active(); });
     lodDisplay::registerActions([this] { return mViewports->active(); });
     toolBox::registerItems([this] { return mViewports->active(); });

@@ -10,6 +10,7 @@
 #include "UsdHydraScene.h"
 #include "UsdStage.h"
 
+#include <lila/GpuImage.h>
 #include <lila/Log.h>
 #include <lila/Prefs.h>
 #include <lila/Profile.h>
@@ -439,7 +440,8 @@ public:
         finishLast();
         mLast = r;
         mRequested = std::chrono::steady_clock::now();
-        if (sceneCurrent(r))
+        // A new origin moves every prim, stages included: the full sync does that.
+        if (sceneCurrent(r) && hydraOrigin(r.view.eye) == mSyncedOrigin)
         {
             mLila->syncView(viewContext(r));
             // Stage edits made outside Lila's graph still arrive.
@@ -514,6 +516,7 @@ private:
         view.unitsPerPixel = [&r, device](const glm::dvec3& at) { return r.view.unitsPerPixel(at) / device; };
         view.curvePixels = float(2.0 * device);
         view.curveColor = ui::themeLinear("curve", view.curveColor);
+        view.origin = hydraOrigin(r.view.eye);
         return view;
     }
 
@@ -530,6 +533,7 @@ private:
         mHasLights = sceneHasLights();
         mSynced = true;
         mSyncedRevision = r.sceneRevision;
+        mSyncedOrigin = view.origin;
         mSyncedTime = r.time;
         mSyncedIsolation = r.view.isolation;
         mSyncedIsolationVersion = r.view.isolation ? r.view.isolation->version : 0;
@@ -575,7 +579,7 @@ private:
                 }
             if (c.overrides)
                 c.overrides->update(std::move(blank), std::set<SdfPath>(v.realized.begin(), v.realized.end()));
-            c.world->update(v.toWorld, std::move(placed));
+            c.world->update(glm::translate(glm::dmat4(1.0), -view.origin) * v.toWorld, std::move(placed));
         }
         for (auto it = mStages.begin(); it != mStages.end();)
         {
@@ -607,7 +611,7 @@ private:
         const glm::dmat4 proj = glProjection(r);
         mTasks->SetRenderBufferSize(GfVec2i(r.width, r.height));
         mTasks->SetFraming(CameraUtilFraming(GfRect2i(GfVec2i(0, 0), r.width, r.height)));
-        mTasks->SetFreeCameraMatrices(usd::toGf(r.view.view), usd::toGf(proj));
+        mTasks->SetFreeCameraMatrices(usd::toGf(r.view.view * glm::translate(glm::dmat4(1.0), mSyncedOrigin)), usd::toGf(proj));
         mTasks->SetLightingState(mHasLights ? mSceneLights : mEyeLight);
         HdTaskSharedPtrVector tasks = mTasks->GetRenderingTasks();
         // One frame for HgiVulkan, so it cleans up once rather than after every submit.
@@ -952,6 +956,7 @@ private:
 
     bool mSynced = false;
     uint64_t mSyncedRevision = 0;
+    glm::dvec3 mSyncedOrigin{0.0};
     double mSyncedTime = 0.0;
     const scene::isolation::Set* mSyncedIsolation = nullptr;
     uint64_t mSyncedIsolationVersion = 0;

@@ -25,7 +25,7 @@ using namespace terraintest;
 namespace
 {
 /** Rolling hills of nx by nz samples, 100 cm cells, centred on the origin. */
-std::shared_ptr<geo::Heightfield> hills(int n, double amplitude = 3000.0)
+std::shared_ptr<geo::Heightfield> drawHills(int n, double amplitude = 3000.0)
 {
     auto h = std::make_shared<geo::Heightfield>(geo::makeHeightfield(n, n, 100.0, glm::dvec2(-50.0 * (n - 1)), 0.0f));
     for (int z = 0; z < h->nz; ++z)
@@ -146,7 +146,7 @@ TEST_CASE("heightfield draw: the height pyramid holds each block's lowest and hi
 
 TEST_CASE("heightfield draw: patches cover a fully seen grid once, finer near the camera, never two levels apart")
 {
-    auto h = hills(2049);
+    auto h = drawHills(2049);
     const render::HeightfieldDraw d = drawOf(h);
     const render::HeightPyramid py = render::buildHeightPyramid(h->heights, h->nx, h->nz);
 
@@ -182,7 +182,7 @@ TEST_CASE("heightfield draw: patches cover a fully seen grid once, finer near th
 
 TEST_CASE("heightfield draw: an orthographic view draws the whole grid at one level")
 {
-    auto h = hills(1025);
+    auto h = drawHills(1025);
     const render::HeightfieldDraw d = drawOf(h);
     const render::HeightPyramid py = render::buildHeightPyramid(h->heights, h->nx, h->nz);
     render::HeightfieldView v;
@@ -287,7 +287,7 @@ TEST_CASE("heightfield draw: shades like the terrain's mesh, and draws its wire,
         MESSAGE("no GPU for the heightfield draw test");
         return;
     }
-    auto h = hills(257, 1500.0);
+    auto h = drawHills(257, 1500.0);
     h->mask("flow");
     for (size_t k = 0; k < h->size(); ++k)
         h->mask("flow")[k] = float(k % 257) / 256.0f;
@@ -371,7 +371,7 @@ TEST_CASE("heightfield draw: casts into the shadow map like the terrain's mesh")
         MESSAGE("no GPU for the heightfield shadow test");
         return;
     }
-    auto h = hills(257, 3000.0);
+    auto h = drawHills(257, 3000.0);
     ui::Camera cam;
     cam.distance = 30000.0;
     cam.pitch = -55.0;
@@ -439,7 +439,7 @@ TEST_CASE("heightfield draw: stylised shading models shade it like the terrain's
         MESSAGE("no GPU for the heightfield shading model test");
         return;
     }
-    auto h = hills(257, 3000.0);
+    auto h = drawHills(257, 3000.0);
     ui::Camera cam;
     cam.distance = 30000.0;
     cam.pitch = -55.0;
@@ -549,7 +549,7 @@ TEST_CASE("heightfield draw: an edited terrain draws the same patched as uploade
         MESSAGE("no GPU for the heightfield patch test");
         return;
     }
-    auto before = hills(513, 3000.0);
+    auto before = drawHills(513, 3000.0);
     ui::Camera cam;
     cam.distance = 60000.0;
     cam.pitch = -55.0;

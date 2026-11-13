@@ -36,6 +36,8 @@
 
 namespace lila::bake
 {
+using Clock = std::chrono::steady_clock;
+
 namespace
 {
 using detail::edgeFunction;
@@ -43,10 +45,9 @@ using detail::meshByName;
 using detail::mix3;
 using detail::worldOf;
 
-using Clock = std::chrono::steady_clock;
 
 /** Adds the seconds since t0 to timings[key]. */
-void addTiming(json& timings, const char* key, Clock::time_point t0)
+void addStageTiming(json& timings, const char* key, Clock::time_point t0)
 {
     timings[key] = timings.value(key, 0.0) + std::chrono::duration<double>(Clock::now() - t0).count();
 }
@@ -132,34 +133,24 @@ std::vector<uint32_t> soupShells(const MeshSoup& soup)
     return parent;
 }
 
+/** The shell of a self high a sample lies on: hits on that high's other shells are skipped. */
+struct SelfShell
+{
+    uint32_t high = kNoHit;
+    uint32_t shell = kNoHit;
+};
+
 class Walker
 {
 public:
     /** shells[h] holds high h's triangle shells when it is a low baking onto itself, else nothing. */
     Walker(const Tracer& tracer, size_t group, const std::vector<std::vector<uint32_t>>& shells) : mTracer(tracer), mGroup(group), mShells(shells) {}
 
-    /** The shell of a self high a sample lies on: hits on that high's other shells are skipped. */
-    struct Own
-    {
-        uint32_t high = kNoHit;
-        uint32_t shell = kNoHit;
-    };
-
     /**
      * cap bounds the walk: far layers of the same mesh would otherwise read as material the low starts inside. own is
      * the sample's shell when the low bakes onto itself: its other shells hide what they cross.
      */
-#ifdef _WIN32
-    Need at(uint32_t low, const glm::vec3& p, const glm::vec3& dir, float mCap, float mEps, const Own& own = {}) const
-#else
-    // GCC can't use Own's default member initializers in a default argument before Walker is complete (CWG 1397);
-    // a body can, so the no-own form forwards.
-    Need at(uint32_t low, const glm::vec3& p, const glm::vec3& dir, float mCap, float mEps) const
-    {
-        return at(low, p, dir, mCap, mEps, Own{});
-    }
-    Need at(uint32_t low, const glm::vec3& p, const glm::vec3& dir, float mCap, float mEps, const Own& own) const
-#endif
+    Need at(uint32_t low, const glm::vec3& p, const glm::vec3& dir, float mCap, float mEps, const SelfShell& own = {}) const
     {
         Need n;
         // A ray through a shared edge or vertex meets each triangle there: hits this close repeat one crossing.
@@ -217,7 +208,7 @@ private:
     static constexpr float kGrazing = 0.1f;
 
     /** The nearest hit within tMax, stepping past the own high's other shells and grazing hits; distance is from o. */
-    bool next(uint32_t low, const glm::vec3& o, const glm::vec3& dir, float tMax, float eps, const Own& own, TraceHit& h) const
+    bool next(uint32_t low, const glm::vec3& o, const glm::vec3& dir, float tMax, float eps, const SelfShell& own, TraceHit& h) const
     {
         float skipped = 0.0f;
         for (int k = 0; k < 32 && skipped < tMax; ++k)
@@ -290,7 +281,7 @@ struct LowState
     uint32_t selfHigh = kNoHit;
     std::vector<uint32_t> highShell;
 
-    Walker::Own own(size_t t) const { return t < highShell.size() ? Walker::Own{selfHigh, highShell[t]} : Walker::Own{}; }
+    SelfShell own(size_t t) const { return t < highShell.size() ? SelfShell{selfHigh, highShell[t]} : SelfShell{}; }
 };
 
 /**
@@ -469,7 +460,7 @@ std::unique_ptr<Prepared> prepare(scene::Graph& g, scene::NodeId group, json* ti
         p->inputs = buildInputs(g, project->id(), {group}, true);
     }
     if (timings)
-        addTiming(*timings, "prepare:inputs", t0);
+        addStageTiming(*timings, "prepare:inputs", t0);
     if (p->inputs.groups.size() != 1)
         throw std::runtime_error(grp->name() + ": nothing to bake");
     if (p->inputs.groups[0].highs.empty())
@@ -485,7 +476,7 @@ std::unique_ptr<Prepared> prepare(scene::Graph& g, scene::NodeId group, json* ti
         });
     }
     if (timings)
-        addTiming(*timings, "prepare:highs", t0);
+        addStageTiming(*timings, "prepare:highs", t0);
     return p;
 }
 } // namespace
@@ -624,7 +615,7 @@ CageEstimate estimateCage(std::span<const CageLow> lows, const GroupSettings& se
         if (const int32_t k = gi.highSelfLow[h]; k >= 0 && size_t(k) < states.size() && !shells[h].empty())
             matchShells(states[size_t(k)], uint32_t(h), gi.highs[h].soup, shells[h]);
     const Walker walk(*tracer, group, shells);
-    addTiming(est.timings, "lowInputs", t0);
+    addStageTiming(est.timings, "lowInputs", t0);
     t0 = Clock::now();
 
     // The other lows, for clearance: rays go into each one's own space, where t stays the world distance.
@@ -654,7 +645,7 @@ CageEstimate estimateCage(std::span<const CageLow> lows, const GroupSettings& se
         return float(best);
     };
 
-    addTiming(est.timings, "clearance", t0);
+    addStageTiming(est.timings, "clearance", t0);
     t0 = Clock::now();
     std::vector<float> inward;
     {
@@ -721,7 +712,7 @@ CageEstimate estimateCage(std::span<const CageLow> lows, const GroupSettings& se
         }
     }
 
-    addTiming(est.timings, "walk", t0);
+    addStageTiming(est.timings, "walk", t0);
     t0 = Clock::now();
     // Lone needs far above the rest (a stray high piece) are clamped; coverage passes put back any that were real.
     std::vector<float> all;
@@ -782,12 +773,12 @@ CageEstimate estimateCage(std::span<const CageLow> lows, const GroupSettings& se
             total.misses += c.misses;
             total.backfaces += c.backfaces;
         }
-        addTiming(est.timings, "cover", c0);
+        addStageTiming(est.timings, "cover", c0);
         return total;
     };
 
     fit();
-    addTiming(est.timings, "solve", t0);
+    addStageTiming(est.timings, "solve", t0);
     std::vector<std::vector<TexelSample>> missed(states.size());
     {
         progress::Scope pass("Checking coverage", double(states.size()));
@@ -857,7 +848,7 @@ CageEstimate estimateCage(std::span<const CageLow> lows, const GroupSettings& se
             clampToClearance(s);
         }
         fit();
-        addTiming(est.timings, "refine", t0);
+        addStageTiming(est.timings, "refine", t0);
         for (auto& m : missed)
             m.clear();
         est.after = cover(&missed);
@@ -1030,7 +1021,7 @@ json estimateGroupCage(scene::Graph& g, scene::NodeId group, const CageEstimateO
     scene::Node* grp = g.node(group);
     GroupSettings s = groupSettings(*grp);
     GroupInputs& gi = p->inputs.groups[0];
-    addTiming(timings, "prepare", t0);
+    addStageTiming(timings, "prepare", t0);
 
     t0 = Clock::now();
     CageCoverage before;
@@ -1039,7 +1030,7 @@ json estimateGroupCage(scene::Graph& g, scene::NodeId group, const CageEstimateO
         const CageParams cp{gi.frontal, gi.rear, float(s.cageOffset), float(s.skew)};
         progress::runOnWorker([&] { before = sumCoverage(gi, cp, *p->backend, options.resolution); });
     }
-    addTiming(timings, "before", t0);
+    addStageTiming(timings, "before", t0);
     root.checkCancel();
 
     t0 = Clock::now();
@@ -1061,14 +1052,14 @@ json estimateGroupCage(scene::Graph& g, scene::NodeId group, const CageEstimateO
         lowIds.push_back(n->id());
         bases.push_back(base);
     }
-    addTiming(timings, "export", t0);
+    addStageTiming(timings, "export", t0);
     t0 = Clock::now();
     CageEstimate est;
     {
         progress::Scope stage("", 1.0, progress::None, kEstimateSpan);
         progress::runOnWorker([&] { est = estimateCage(lows, s, p->inputs, 0, *p->backend, options); });
     }
-    addTiming(timings, "estimate", t0);
+    addStageTiming(timings, "estimate", t0);
     root.checkCancel();
 
     // Lows whose modifiers change their points get the estimate painted back onto their base points; bakeOffset rides
@@ -1104,11 +1095,11 @@ json estimateGroupCage(scene::Graph& g, scene::NodeId group, const CageEstimateO
         setGroupSettings(g, group, s);
         if (!s.cage.empty())
             cageFromPaint(g, group);
-        addTiming(timings, "apply", t0);
+        addStageTiming(timings, "apply", t0);
         t0 = Clock::now();
         if (!mapped.empty())
             est.after = remeasure(g, group, *p, options.resolution);
-        addTiming(timings, "remeasure", t0);
+        addStageTiming(timings, "remeasure", t0);
     }
     else
         for (size_t i = 0; i < lows.size(); ++i)

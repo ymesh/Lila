@@ -51,6 +51,7 @@ std::vector<Sample> list(const fs::path& dir)
         s.scene = j.value("scene", "");
         s.camera = j.value("camera", "");
         s.featured = j.value("featured", false);
+        s.after = j.value("after", "");
         s.converter = j.value("converter", "");
         s.folder = e.path();
         if (fs::is_regular_file(e.path() / "thumb.png", ec))
@@ -58,6 +59,22 @@ std::vector<Sample> list(const fs::path& dir)
         out.push_back(std::move(s));
     }
     std::sort(out.begin(), out.end(), [](const Sample& a, const Sample& b) { return a.featured != b.featured ? a.featured : a.id < b.id; });
+    for (std::size_t i = 0; i < out.size(); ++i)
+    {
+        if (out[i].after.empty())
+            continue;
+        auto target = std::find_if(out.begin(), out.end(), [&](const Sample& t) { return t.id == out[i].after; });
+        if (target == out.end() || target == out.begin() + std::ptrdiff_t(i))
+            continue;
+        Sample moved = std::move(out[i]);
+        out.erase(out.begin() + std::ptrdiff_t(i));
+        target = std::find_if(out.begin(), out.end(), [&](const Sample& t) { return t.id == moved.after; });
+        const std::size_t at = std::size_t(target - out.begin()) + 1;
+        out.insert(out.begin() + std::ptrdiff_t(at), std::move(moved));
+        if (at <= i)
+            continue; // moved earlier: the next item now sits at i + 1
+        --i; // moved later: the item that slid into i is unvisited
+    }
     return out;
 }
 

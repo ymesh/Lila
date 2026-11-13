@@ -38,6 +38,7 @@
 #include "curve/CurveNodes.h"
 #include "retopo/RetopoCommands.h"
 #include "retarget/SceneRetarget.h"
+#include "motion/Scene.h"
 #include "rigmath/MathNodes.h"
 #include "scene/Graph.h"
 #include "scene/Node.h"
@@ -216,6 +217,7 @@ void startCore()
     io::fileTypes::registerCommands();
     restrictions::registerBuiltins();
     retarget::registerCommands();
+    motion::registerCommands();
     rigmath::registerCommands();
     ui::layouts::registerCommands();
     ui::themes::registerCommands();

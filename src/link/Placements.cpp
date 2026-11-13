@@ -17,6 +17,7 @@
 #include "math/Transform.h"
 #include "math/Unreal.h"
 #include "scene/ArrayGroup.h"
+#include "scene/Georef.h"
 #include "scene/AttrComponents.h"
 #include "scene/Graph.h"
 #include "scene/Instancing.h"
@@ -25,6 +26,8 @@
 #include "scene/Materials.h"
 #include "scene/MeshNodes.h"
 #include "scene/Transform.h"
+
+#include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
 #include <array>
@@ -55,6 +58,42 @@ bool collisionProxy(const std::string& name)
 bool placeable(const scene::Node* n) { return n && n->type().isA("mesh") && !n->type().isA("lattice") && !collisionProxy(n->name()); }
 
 json vec(const math::Vector& v) { return json::array({v.x, v.y, v.z}); }
+
+glm::dvec3 dvec(const json& v) { return {v[0].get<double>(), v[1].get<double>(), v[2].get<double>()}; }
+
+/**
+ * A level that Cesium lays out on the globe: positions move from the scene's grid into the tangent frame at the origin and
+ * rotations turn by the grid's convergence there, so everything lands where it is on the Earth, not just near the origin.
+ */
+void moveOntoGlobe(json& plan)
+{
+    const std::optional<scene::georef::Georeference> geo = scene::georef::current();
+    const std::optional<scene::georef::GlobeFrame> globe = geo ? scene::georef::globeFrame(*geo) : std::nullopt;
+    if (!globe)
+        return;
+    for (json& grp : plan["groups"])
+    {
+        if (!grp.contains("placements"))
+            continue;
+        for (json& p : grp["placements"])
+        {
+            const glm::dvec3 at = dvec(p["location"]);
+            const glm::dquat turn(globe->rotationAt(at));
+            const json& r = p["rotation"];
+            const glm::dquat q = turn * glm::dquat(r[3].get<double>(), r[0].get<double>(), r[1].get<double>(), r[2].get<double>());
+            p["location"] = vec(math::Vector(globe->toGlobe(at)));
+            p["rotation"] = json::array({q.x, q.y, q.z, q.w});
+        }
+    }
+    for (json& l : plan["lights"])
+    {
+        const glm::dvec3 at = dvec(l["location"]);
+        const glm::dmat3 turn = globe->rotationAt(at);
+        l["location"] = vec(math::Vector(globe->toGlobe(at)));
+        l["forward"] = vec(math::Vector(turn * dvec(l["forward"])));
+        l["up"] = vec(math::Vector(turn * dvec(l["up"])));
+    }
+}
 
 json placementAt(const glm::dmat4& world, json id, std::string name)
 {
@@ -921,12 +960,31 @@ void registerPlacementCommands()
                 plan["lights"] = json::array();
             }
 
+            // The level lands on the globe where the scene is: Unreal's georeferencing takes the scene's origin first.
+            if (json geo = scene::georef::exportJson(); !geo.is_null())
+            {
+                if (hasFeature("georeference"))
+                    plan["georeference"] = std::move(geo);
+                else
+                    log::warn("unrealPlaceInstances: the LilaLink plugin predates georeferencing; rebuild it from Lila's ue/LilaLink so the level lands on the scene's location");
+            }
+
             const std::string hlod = a.get<std::string>("hlodLayer", "");
             auto job = [plan, meshes, alone, withChildren, hlod, dir = cacheDir()]() mutable {
                 LILA_ZONE_N("Unreal placements");
                 std::shared_ptr<RpcClient> client = Link::get().client();
                 if (!client)
                     throw std::runtime_error("not connected");
+                if (plan.contains("georeference"))
+                {
+                    RpcResult geo = client->call("setGeoreference", plan["georeference"], placementTimeoutMs(0));
+                    plan["georeferenced"] = geo.ok ? geo.result : json{{"error", geo.error}};
+                    if (geo.ok && geo.result.value("cesium", false))
+                    {
+                        moveOntoGlobe(plan);
+                        log::info("Unreal: Cesium lays the level out on the globe; placements moved from the scene's grid onto it");
+                    }
+                }
                 std::error_code ec;
                 fs::create_directories(dir, ec);
                 for (json& grp : plan["groups"])
@@ -991,6 +1049,13 @@ void registerPlacementCommands()
             Link::get().post([job]() mutable {
                 json done = job();
                 mainq::post([done] {
+                    if (const json& geo = done.value("georeferenced", json()); geo.is_object())
+                    {
+                        if (geo.contains("error"))
+                            log::error("Unreal georeference: {}", geo["error"].get<std::string>());
+                        else
+                            log::info("Unreal georeference: {}", geo.value("message", std::string("set")));
+                    }
                     for (const json& grp : done["groups"])
                     {
                         const std::string source = grp.value("source", std::string());
@@ -1059,6 +1124,36 @@ void registerPlacementCommands()
             return names;
         },
         .examples = {"unrealCustomData(\"Boulder\", data=[\"random\", \"wear\", \"tint\"])"},
+    });
+
+    ops::registerCommand({
+        .name = "unrealSetGeoreference",
+        .doc = "Put Unreal's open level on the scene's place on the Earth: sets the GeoReferencing plugin's GeoReferencingSystem and "
+               "Cesium for Unreal's CesiumGeoreference (whichever the project has) to the scene's georeference, so what Lila places "
+               "lands at the right spot. unrealPlaceInstances does this itself. Returns what was set.",
+        .undoable = false,
+        .run = [](const Args&) -> json {
+            json geo = scene::georef::exportJson();
+            if (geo.is_null())
+                throw CommandError("unrealSetGeoreference: the scene has no georeference (setGeoreference)");
+            try
+            {
+                Link::get().ensureConnected();
+            }
+            catch (const std::runtime_error& e)
+            {
+                throw CommandError(std::string("not connected to Unreal: ") + e.what());
+            }
+            if (!hasFeature("georeference"))
+                throw CommandError("unrealSetGeoreference: the LilaLink plugin predates georeferencing; rebuild it from Lila's ue/LilaLink");
+            std::shared_ptr<RpcClient> client = Link::get().client();
+            if (!client)
+                throw CommandError("not connected to Unreal");
+            RpcResult r = client->call("setGeoreference", geo, placementTimeoutMs(0));
+            if (!r.ok)
+                throw CommandError("unrealSetGeoreference: " + r.error);
+            return r.result;
+        },
     });
 
     ops::registerCommand({

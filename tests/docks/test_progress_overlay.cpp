@@ -22,6 +22,7 @@
 #include <QPushButton>
 #include <QTimer>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <thread>
@@ -148,18 +149,6 @@ TEST_CASE("progress overlay: a scene open with the editors up stays quick")
 {
     // LILA_PROGRESS_SCENE names a big .lila or Maya file to time by hand; otherwise a small generated scene.
     setupProgress();
-    QMainWindow win;
-    auto* outliner = new QDockWidget("Outliner", &win);
-    auto* tree = new ui::Outliner(outliner);
-    outliner->setWidget(tree);
-    win.addDockWidget(Qt::LeftDockWidgetArea, outliner);
-    auto* refs = new QDockWidget("Reference Editor", &win);
-    refs->setWidget(new ui::ReferenceEditor(refs));
-    win.addDockWidget(Qt::LeftDockWidgetArea, refs);
-    win.resize(1200, 800);
-    win.show();
-    ui::progressui::install(&win);
-
     std::string path;
     if (const char* env = std::getenv("LILA_PROGRESS_SCENE"))
         path = env;
@@ -172,17 +161,47 @@ TEST_CASE("progress overlay: a scene open with the editors up stays quick")
         run("saveScene", {{"args", {path}}});
         run("newScene");
     }
+    const bool maya = path.ends_with(".ma") || path.ends_with(".mb");
+    // The quicker of two opens, so one stall on a loaded machine doesn't decide the result.
+    auto timeOpen = [&] {
+        double best = 1e9;
+        for (int i = 0; i < 2; ++i)
+        {
+            const auto start = std::chrono::steady_clock::now();
+            if (maya)
+                run("mayaImport", {{"args", {path}}});
+            else
+                run("openScene", {{"args", {path}}, {"force", true}});
+            QApplication::processEvents();
+            best = std::min(best, std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+        }
+        return best;
+    };
+    const double bare = timeOpen();
+
+    QMainWindow win;
+    auto* outliner = new QDockWidget("Outliner", &win);
+    auto* tree = new ui::Outliner(outliner);
+    outliner->setWidget(tree);
+    win.addDockWidget(Qt::LeftDockWidgetArea, outliner);
+    auto* refs = new QDockWidget("Reference Editor", &win);
+    refs->setWidget(new ui::ReferenceEditor(refs));
+    win.addDockWidget(Qt::LeftDockWidgetArea, refs);
+    win.resize(1200, 800);
+    win.show();
+    ui::progressui::install(&win);
     QApplication::processEvents();
 
-    const bool maya = path.ends_with(".ma") || path.ends_with(".mb");
-    const auto start = std::chrono::steady_clock::now();
-    if (maya)
-        run("mayaImport", {{"args", {path}}});
-    else
-        run("openScene", {{"args", {path}}, {"force", true}});
-    QApplication::processEvents();
-    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-    MESSAGE("opened " << path << " with the outliner and reference editor up in " << seconds << " s");
+    const double withEditors = timeOpen();
+    MESSAGE("opened " << path << " in " << bare << " s bare, " << withEditors << " s with the outliner and reference editor up");
     CHECK(tree->topLevelItemCount() > 0);
+    // Against the same open without the editors, so load slows both alike: the editors may add a little, never a multiple.
+    CHECK(withEditors < 2.0 * bare + 0.25);
+    // A card that came up on a slow open goes once the open ends.
+    for (int i = 0; i < 50 && card(win); ++i)
+    {
+        sleepMs(10);
+        QApplication::processEvents();
+    }
     CHECK_FALSE(card(win));
 }

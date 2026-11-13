@@ -1,5 +1,6 @@
 #pragma once
 
+#include <lila/Anim.h>
 #include <lila/Extension.h>
 #include <lila/Strings.h>
 
@@ -52,6 +53,10 @@ void registerRulesEditor(lila::ext::Context& ctx);
 /** The Strings mode Spinner drags pose in. */
 lila::scene::strings::Mode stringsMode();
 void setStringsMode(lila::scene::strings::Mode m);
+/** The mode's name as the Spinner arc, menus and readouts show it ("Forward All"). */
+const char* stringsModeLabel(lila::scene::strings::Mode m);
+/** A pose across the time slider's range: its range, falloff each side, falloff type and every, as stringsPose flags. */
+void addRangeFlags(nlohmann::json& call, const lila::scene::anim::TimeSelection& sel);
 /** How far drags may stretch bones: 1 with Stretch off. */
 double stringsStretch();
 /** The additive layer drags across a time range key onto: StringsEdits while that option is on, else empty (the base). */
@@ -74,6 +79,18 @@ void registerCurveOverlay(lila::ext::Context& ctx);
 void closeCurveOverlay();
 /** Anim proxies: the prefs page, actions, and showing proxies with the modes (rig/AnimProxy.cpp). */
 void registerAnimProxy(lila::ext::Context& ctx);
+/** Hands: the puppeteerHand node and its commands (hand/Hands.cpp). */
+void registerHands(lila::ext::Context& ctx);
+/** The Hands panel, the Hand Pad over the viewport, and the hand actions and menus (hand/HandUi.cpp). */
+void registerHandUi(lila::ext::Context& ctx);
+/** Finds the character's hands and makes a hand node for each, replacing any it had. Returns the new nodes. */
+std::vector<lila::scene::NodeId> setupHands(lila::scene::Graph& g, lila::scene::NodeId character);
+/** Props and weapons: prop and grip point nodes and their commands (prop/Props.cpp). */
+void registerProps(lila::ext::Context& ctx);
+/** The Props palette, grip point handles in the viewport, and the prop actions and menus (prop/PropUi.cpp). */
+void registerPropUi(lila::ext::Context& ctx);
+/** Grapple: the contact tool, its palette, contact drawing, actions and menus (gizmo/GrappleUi.cpp). */
+void registerGrapple(lila::ext::Context& ctx);
 /** Animate-mode panels (anim/). */
 void registerAnimPanels(lila::ext::Context& ctx);
 } // namespace puppeteer

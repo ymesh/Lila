@@ -1,0 +1,11 @@
+# The CadImport extension: a STEP assembly written with OpenCascade, imported, re-imported.
+find_package(OpenCASCADE CONFIG QUIET)
+if(NOT OpenCASCADE_FOUND OR NOT TARGET lila_cadimport_extension)
+    return()
+endif()
+add_executable(lila_cad_tests main.cpp test_cad.cpp)
+target_include_directories(lila_cad_tests SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+target_link_libraries(lila_cad_tests PRIVATE LilaUI doctest::doctest TKernel TKMath TKBRep TKPrim TKTopAlgo TKXSBase TKDESTEP TKXCAF TKLCAF TKCAF TKCDF TKG3d TKGeomBase)
+add_dependencies(lila_cad_tests lila_cadimport_extension)
+target_compile_definitions(lila_cad_tests PRIVATE LILA_TEST_CAD_PACKAGE="$<TARGET_FILE_DIR:lila_cadimport_extension>")
+add_test(NAME lila_cad_tests COMMAND lila_cad_tests)

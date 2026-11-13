@@ -85,6 +85,8 @@ struct ShapeDesc
     glm::dvec3 offset{0.0};          // shape frame origin in joint space
     glm::dquat rotation{1, 0, 0, 0}; // shape frame in joint space
     std::vector<glm::dvec3> hull;    // convex hull points, shape space
+    /** Sized from the skeleton's proportions, there being no skinned mesh to fit (not stored). */
+    bool fromBones = false;
 };
 
 ShapeDesc shapeOf(const Node& marker);
@@ -131,6 +133,8 @@ struct BodyDef
     double linearDamping = 0.05;
     double angularDamping = 0.05;
     int64_t group = 0;
+    /** The top joint of the body's skeleton: in a grapple's ragdoll, bodies of different skeletons collide. */
+    NodeId skeleton = kNoNode;
     // The joint to the parent body. Frames are rotations: X the twist axis, Y the plane axis.
     glm::dvec3 anchorInParent{0.0}; // cm, parent joint space
     glm::dquat frameInParent{1, 0, 0, 0};
@@ -169,6 +173,20 @@ struct FieldDef
     int magnitudeAttr = -1;
 };
 
+/**
+ * A grapple contact between two bodies (of two characters, usually): a spring pulling a point on one to a point on the
+ * other, both yielding by mass, with its keyable weight and stiffness sampled each frame.
+ */
+struct ContactDef
+{
+    NodeId node = kNoNode;
+    int a = -1, b = -1;
+    glm::dvec3 pointA{0.0}, pointB{0.0}; // body space, cm
+    /** B's frame to A's at full weight, when the contact holds rotation too. */
+    std::optional<glm::dquat> rotation;
+    int weightAttr = -1, stiffnessAttr = -1;
+};
+
 /** Everything a world is built from, read off a solver node and the scene. */
 struct RigDef
 {
@@ -177,6 +195,9 @@ struct RigDef
     std::vector<PinDef> pins;
     std::vector<ColliderDef> colliders;
     std::vector<FieldDef> fields;
+    std::vector<ContactDef> contacts;
+    /** A grapple's ragdoll: bodies of different skeletons collide whatever selfCollision says. */
+    bool figures = false;
     glm::dvec3 gravity{0.0, -980.0, 0.0};
     bool ground = true;
     double groundHeight = 0.0;
@@ -214,8 +235,16 @@ inline glm::dvec3 rotationVector(const glm::dquat& q0)
     return glm::dvec3(q.x, q.y, q.z) * (2.0 * std::atan2(s, q.w) / s);
 }
 
-/** Fits a marker's shape to its joint's dominant-influence region of the skinned meshes (a bone-sized default with none). */
+/**
+ * Fits a marker's shape to its joint's dominant-influence region of the skinned meshes; with none, bodySizedShape
+ * (fromBones set, for the caller to report).
+ */
 ShapeDesc fitShape(Graph& g, NodeId joint, ShapeKind kind);
+/**
+ * A shape for a joint with no skin to fit: sized by its label (pelvis, spine, head, hand ...) from the skeleton's height
+ * and shoulder span and its bone's length, so a bare skeleton's ragdoll has a body's sizes and mass.
+ */
+ShapeDesc bodySizedShape(Graph& g, NodeId joint, ShapeKind kind, const glm::dquat& frame);
 
 struct LimitFit
 {
@@ -234,7 +263,8 @@ struct LabelDefaults
 {
     ShapeKind shape = ShapeKind::Capsule;
     Behaviour behaviour = Behaviour::PoseMatch;
-    PoseSpace space = PoseSpace::Local;
+    /** Both: local motors alone let a standing body fold under gravity; the world pull holds it up. */
+    PoseSpace space = PoseSpace::Both;
     double twist = 30.0, swing1 = 45.0, swing2 = 45.0;
     double stiffness = 6.0;
 };
@@ -242,5 +272,7 @@ struct LabelDefaults
 std::optional<LabelDefaults> labelDefaults(const std::string& label);
 
 bool registerScene(lila::ext::Context& ctx);
+/** grappleRagdoll (GrappleRagdoll.cpp). */
+void registerGrappleRagdoll(lila::ext::Context& ctx);
 void registerUi(lila::ext::Context& ctx);
 } // namespace physanim

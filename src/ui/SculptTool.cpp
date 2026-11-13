@@ -650,7 +650,7 @@ public:
         const SculptSettings& st = sculptSettings();
         render::MeshDraw d;
         d.mesh = session->sculpt.renderMesh();
-        d.world = glm::mat4(world);
+        d.world = world;
         if (const render::Material* mat = sculptMaterial(st.material))
         {
             d.materials = {*mat};

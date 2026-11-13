@@ -80,6 +80,11 @@ add_executable(lila_tests
     test_create_select.cpp
     test_primitive_axis.cpp
     test_camera.cpp
+    test_georef.cpp
+    test_geo_sidecar.cpp
+    test_pointcloud.cpp
+    test_3dtiles.cpp
+    test_ifc.cpp
     test_light.cpp
     test_showcase.cpp
     test_locks.cpp
@@ -102,6 +107,10 @@ add_executable(lila_tests
 target_link_libraries(lila_tests PRIVATE LilaUI doctest::doctest)
 find_package(miniz CONFIG REQUIRED)
 target_link_libraries(lila_tests PRIVATE miniz::miniz)
+# test_pointcloud writes an E57 to read back.
+find_package(E57Format CONFIG REQUIRED)
+target_link_libraries(lila_tests PRIVATE E57Format)
+target_compile_definitions(lila_tests PRIVATE LILA_TEST_E57_DATA="${CMAKE_SOURCE_DIR}/tests/data/e57" LILA_TEST_3DTILES_DATA="${CMAKE_SOURCE_DIR}/tests/data/3dtiles")
 # The batch run tests start real lilabatch workers.
 add_dependencies(lila_tests lilabatch)
 add_test(NAME lila_tests COMMAND lila_tests)
@@ -159,12 +168,14 @@ add_subdirectory(uv)
 add_subdirectory(rig)
 add_subdirectory(rigtemplates)
 add_subdirectory(retarget)
+add_subdirectory(motion)
 add_subdirectory(rigmath)
 add_subdirectory(gn)
 if(LILA_VOLUMES)
     add_subdirectory(nanovdb)
 endif()
 add_subdirectory(goz)
+add_subdirectory(cad)
 add_subdirectory(print)
 add_subdirectory(retopo)
 add_subdirectory(clay)
@@ -176,6 +187,7 @@ add_subdirectory(brush)
 add_subdirectory(deform)
 add_subdirectory(materials)
 add_subdirectory(stylised)
+add_subdirectory(large_world)
 add_subdirectory(viewport_renderers)
 add_subdirectory(fbxskin)
 add_subdirectory(maya)
@@ -189,6 +201,7 @@ add_subdirectory(trim)
 add_subdirectory(stagehand)
 add_subdirectory(seamwork)
 add_subdirectory(settlement)
+add_subdirectory(crowds)
 add_subdirectory(groundtiles)
 add_subdirectory(terrain)
 add_subdirectory(attributes)

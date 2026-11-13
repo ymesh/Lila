@@ -478,8 +478,6 @@ VatOptions vatFromJson(const nlohmann::json& j, const SequenceOptions& sampling)
     o.folder = j.value("folder", o.folder);
     o.name = j.value("name", o.name);
     o.format = j.value("format", o.format);
-    if (o.format == "png")
-        o.format = "png16";
     o.mode = j.value("mode", o.mode);
     o.positions = j.value("positions", o.positions);
     o.normals = j.value("normals", o.normals);

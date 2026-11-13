@@ -756,6 +756,8 @@ bool Manipulator::press(QPointF px, Qt::MouseButton button, Qt::KeyboardModifier
             s.plug = scene::modifiers::editPlug(g, id);
             s.values[0] = g.storedValue(s.plug);
             d.saved.push_back(s);
+            if (scene::Node* n = g.node(id); n && n->type().isA("mesh"))
+                d.startMeshes[id] = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
             // A curve point its control drives moves the control instead, so the drag restores the controls too.
             if (const scene::Node* n = g.node(id); n->type().isA("curve") && curve::hasControls(*n))
                 for (NodeId c : curve::curveControlNodes(g, *n))
@@ -1154,6 +1156,9 @@ std::optional<glm::dvec3> Manipulator::snapTarget(QPointF px, unsigned snaps) co
             for (geo::Index p = 0; p < m.pointCapacity(); ++p)
                 if (m.pointValid(p) && vis->point(p) && (skip.empty() || !skip[p]))
                     nearest.point(worldOf(p));
+        // An edge to a moving point snaps where it lay at the press, so a point slides along its own edges.
+        const auto start = d.startMeshes.find(id);
+        const geo::Mesh* before = start != d.startMeshes.end() && start->second && start->second->edgeCapacity() == m.edgeCapacity() ? start->second.get() : nullptr;
         if (snaps & SnapEdge)
             for (geo::Index e = 0; e < m.edgeCapacity(); ++e)
             {
@@ -1161,7 +1166,12 @@ std::optional<glm::dvec3> Manipulator::snapTarget(QPointF px, unsigned snaps) co
                     continue;
                 geo::Index p0 = m.edgePoint(e, 0), p1 = m.edgePoint(e, 1);
                 if (!skip.empty() && (skip[p0] || skip[p1]))
+                {
+                    if (before && before->edgeValid(e))
+                        nearest.segment(glm::dvec3(world * glm::dvec4(before->position(before->edgePoint(e, 0)), 1.0)),
+                                        glm::dvec3(world * glm::dvec4(before->position(before->edgePoint(e, 1)), 1.0)));
                     continue;
+                }
                 nearest.segment(worldOf(p0), worldOf(p1));
             }
     }

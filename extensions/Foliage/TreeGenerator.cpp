@@ -1617,7 +1617,15 @@ void registerCommands(ext::Context& ctx)
             const NodeId tree = treeArg(g, a, "treeBakeHandoff");
             if (!tree)
                 throw CommandError("Select a tree built by this tool.");
-            return bakeHandoff(g, tree, callOf(a).values);
+            // The stored settings carry the paths treeExport wrote to; settings passed here override them.
+            const json stored = storedSettings(g, tree);
+            if (!stored.is_object() || a.has("preset"))
+                return bakeHandoff(g, tree, callOf(a).values);
+            json values = stored["values"];
+            if (a.has("settings") && a.flags["settings"].is_object())
+                for (const auto& [k, v] : a.flags["settings"].items())
+                    values[k] = v;
+            return bakeHandoff(g, tree, sanitize(values));
         },
     });
 

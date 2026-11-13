@@ -60,7 +60,7 @@ void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const sc
         if (std::optional<render::HeightfieldDraw> d = heightfieldDisplay::drawFor(g, id, set.terrain, set.showMaterials))
         {
             e.world = shownWorld(n);
-            d->world = glm::mat4(e.world);
+            d->world = e.world;
             d->lightingChannels = scene::lightingChannels::mask(n);
             d->flags = set.wireframe ? render::DrawWire : render::DrawShaded | (set.wireOnShaded ? render::DrawWire : 0u);
             if (const scene::displayLayers::Display layer = scene::displayLayers::display(g, id); layer.color)
@@ -103,7 +103,7 @@ void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const sc
         d.materials = drawMaterials(*shown);
     e.world = shownWorld(n);
     e.shown = shown;
-    d.world = glm::mat4(e.world);
+    d.world = e.world;
     d.node = uint64_t(id);
     d.lightingChannels = scene::lightingChannels::mask(n);
     if (set.vertexColors != render::VertexColorMode::Off && shown && !geo::colors::current(*shown).empty())

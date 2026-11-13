@@ -35,9 +35,10 @@ using json = nlohmann::json;
 
 namespace tailor
 {
+using T = ArgType;
+
 namespace
 {
-using T = ArgType;
 
 int plugIndex(const Node& n, const char* name)
 {

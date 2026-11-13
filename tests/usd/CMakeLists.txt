@@ -1,7 +1,7 @@
 # The OpenUSD extension loaded from its staged package next to lila.exe and driven through importUsd and exportUsd:
 # round trips of Lila scenes, imports of the hand-written stages in fixtures/, live stages and their Attribute Editor
 # sections (offscreen), and Lila's scene and live stages drawn through Hydra Storm as a viewport renderer.
-add_executable(lila_usd_tests main.cpp test_usd_roundtrip.cpp test_usd_fixtures.cpp test_usd_stage.cpp test_usd_panels.cpp test_usd_hydra.cpp
+add_executable(lila_usd_tests main.cpp test_usd_roundtrip.cpp test_usd_fixtures.cpp test_usd_stage.cpp test_usd_panels.cpp test_usd_hydra.cpp test_usd_georef.cpp
     test_usd_materialx.cpp test_usd_components.cpp test_usd_lighting_channels.cpp)
 # LilaUI: the extension's Attribute Editor sections link it, so its DLLs must sit beside the tests.
 target_link_libraries(lila_usd_tests PRIVATE LilaScene LilaUI doctest::doctest)

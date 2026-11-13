@@ -8,6 +8,7 @@
 #include "core/MainQueue.h"
 #include "core/Paths.h"
 #include "render/FrameState.h"
+#include "render/GpuImage.h"
 #include "render/Renderer.h"
 #include "scene/Isolation.h"
 #include "scene/Light.h"

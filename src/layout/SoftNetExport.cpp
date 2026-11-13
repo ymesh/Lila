@@ -533,7 +533,7 @@ json bakeCorrectives(Graph& g, NodeId mesh, NodeId skin, const std::vector<Chann
     return made;
 }
 
-NodeId meshArg(Graph& g, const Args& a, const char* cmd)
+NodeId exportMeshArg(Graph& g, const Args& a, const char* cmd)
 {
     if (a.objects().empty())
         throw CommandError(std::string(cmd) + ": give a mesh with a Soft Net");
@@ -1019,7 +1019,7 @@ void registerSoftNetExportCommands()
         .flags = bakeFlags,
         .run = [](const Args& a) -> json {
             Graph& g = Graph::current();
-            return bake(g, meshArg(g, a, "bakeSoftNet"), a);
+            return bake(g, exportMeshArg(g, a, "bakeSoftNet"), a);
         },
         .examples = {"bakeSoftNet(\"Mochi\", correctives=32)"},
     });
@@ -1038,7 +1038,7 @@ void registerSoftNetExportCommands()
         .flags = routeFlags,
         .run = [](const Args& a) -> json {
             Graph& g = Graph::current();
-            const NodeId mesh = meshArg(g, a, "softNetUnreal");
+            const NodeId mesh = exportMeshArg(g, a, "softNetUnreal");
             const std::string route = a.get<std::string>("route", "bake");
             if (route == "bake")
                 return bake(g, mesh, a);
@@ -1075,7 +1075,7 @@ void registerSoftNetExportCommands()
         .flags = liveFlags,
         .run = [](const Args& a) -> json {
             Graph& g = Graph::current();
-            const NodeId mesh = meshArg(g, a, "unrealSoftNet");
+            const NodeId mesh = exportMeshArg(g, a, "unrealSoftNet");
             const NodeId skin = skin::find(g, mesh);
             if (skin == kNoNode)
                 throw CommandError("unrealSoftNet: " + g.node(mesh)->path() + " has no skin; the live net runs over a skinned mesh");

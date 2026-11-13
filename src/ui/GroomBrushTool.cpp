@@ -40,7 +40,7 @@ using scene::Graph;
 using scene::Node;
 using scene::NodeId;
 
-constexpr const char* kPref = "/groomBrush/settings";
+constexpr const char* kBrushSettingsPref = "/groomBrush/settings";
 constexpr const char* kToolId = "groom.brushes";
 
 struct GroomBrushState
@@ -57,7 +57,7 @@ GroomBrushState& state()
         groom::GroomBrushSettings& s = out.settings;
         try
         {
-            const std::string text = PrefStore::get().value<std::string>("general", kPref, std::string());
+            const std::string text = PrefStore::get().value<std::string>("general", kBrushSettingsPref, std::string());
             if (!text.empty())
             {
                 const nlohmann::json j = nlohmann::json::parse(text);
@@ -123,7 +123,7 @@ void save()
                         {"partName", s.partName},
                         {"flowSink", s.flowSink},
                         {"strengths", st.strengths}};
-    PrefStore::get().set("general", kPref, j.dump());
+    PrefStore::get().set("general", kBrushSettingsPref, j.dump());
     syncGroomPalette();
     viewportTools::requestRedraw();
 }
@@ -350,23 +350,23 @@ public:
             for (const auto& line : mBrush.affectedLines(brushView(view), mHover.x(), mHover.y()))
                 for (size_t i = 1; i < line.size(); ++i)
                 {
-                    f.lines.push_back({glm::vec3(line[i - 1]), hot});
-                    f.lines.push_back({glm::vec3(line[i]), hot});
+                    f.lines.push_back({glm::dvec3(line[i - 1]), hot});
+                    f.lines.push_back({glm::dvec3(line[i]), hot});
                 }
         }
         if (gr && s.mode == "lengths")
             for (const groom::GroomBrush::ColoredLine& line : mBrush.lengthKeyLines(brushView(view), mHover.x(), mHover.y()))
                 for (size_t i = 1; i < line.points.size(); ++i)
                 {
-                    f.lines.push_back({glm::vec3(line.points[i - 1]), glm::vec4(line.color, 1.0f)});
-                    f.lines.push_back({glm::vec3(line.points[i]), glm::vec4(line.color, 1.0f)});
+                    f.lines.push_back({glm::dvec3(line.points[i - 1]), glm::vec4(line.color, 1.0f)});
+                    f.lines.push_back({glm::dvec3(line.points[i]), glm::vec4(line.color, 1.0f)});
                 }
         const std::vector<glm::dvec3> path = mBrush.drawnPath();
         const glm::vec4 drawn(0.4f, 0.8f, 1.0f, 1.0f);
         for (size_t i = 1; i < path.size(); ++i)
         {
-            f.lines.push_back({glm::vec3(path[i - 1]), drawn});
-            f.lines.push_back({glm::vec3(path[i]), drawn});
+            f.lines.push_back({glm::dvec3(path[i - 1]), drawn});
+            f.lines.push_back({glm::dvec3(path[i]), drawn});
         }
         const Qt::KeyboardModifiers mods = QApplication::keyboardModifiers();
         const bool invert = mPressed ? mInvert : (mods & Qt::ControlModifier) != 0;
@@ -458,7 +458,7 @@ QString firstSentence(const QString& hint)
     return out;
 }
 
-QString tip(const char* id, const QString& fallback)
+QString brushTip(const char* id, const QString& fallback)
 {
     const std::string t = groom::groomBrushSettingText(id).second;
     return t.empty() ? fallback : QString("%1: %2").arg(caption(id), QString::fromStdString(t));
@@ -528,7 +528,7 @@ public:
         auto number = [&](const char* id, const QString& label, double lo, double hi, int decimals, const QString& unit, const QString& fallbackTip,
                           std::function<void(Set&, double)> set) {
             QDoubleSpinBox* box = controls::valueField(lo, hi, decimals, unit, fields);
-            box->setToolTip(tip(id, QString("%1: %2").arg(label, fallbackTip)));
+            box->setToolTip(brushTip(id, QString("%1: %2").arg(label, fallbackTip)));
             connect(box, &QDoubleSpinBox::valueChanged, this, [set](double x) {
                 Set s = groomBrushSettings();
                 set(s, x);
@@ -541,7 +541,7 @@ public:
         auto check = [&](const char* id, const QString& label, const QString& fallbackTip, std::function<void(Set&, bool)> set) {
             auto* box = new QCheckBox(label, fields);
             box->setFocusPolicy(Qt::NoFocus);
-            box->setToolTip(tip(id, QString("%1: %2").arg(label, fallbackTip)));
+            box->setToolTip(brushTip(id, QString("%1: %2").arg(label, fallbackTip)));
             connect(box, &QCheckBox::toggled, this, [set](bool on) {
                 Set s = groomBrushSettings();
                 set(s, on);
@@ -556,7 +556,7 @@ public:
             auto* seg = new controls::Segmented(fields);
             for (size_t i = 0; i < choices.size(); ++i)
                 seg->add(choices[i].first, {}, choices[i].first, int(i));
-            seg->setToolTip(tip(id, label));
+            seg->setToolTip(brushTip(id, label));
             connect(seg, &controls::Segmented::picked, this, [choices, set](int i) {
                 Set s = groomBrushSettings();
                 set(s, choices[size_t(i)].second);
@@ -623,7 +623,7 @@ public:
             tr->addWidget(box);
         }
         tr->addStretch();
-        mTargets->setToolTip(tip("targets", "Acts On: what the brush shapes"));
+        mTargets->setToolTip(brushTip("targets", "Acts On: what the brush shapes"));
         mForm->addRow("Acts On", mTargets);
         mRows.push_back({"targets", mTargets});
         mPressure = check("pressure", "Pen Pressure", "pen pressure scales the strength", [](Set& s, bool on) { s.pressure = on; });

@@ -35,6 +35,10 @@ public:
     void segment(const glm::dvec3& a, const glm::dvec3& b);
 
     const std::optional<glm::dvec3>& hit() const { return mHit; }
+    const ViewInfo& view() const { return mView; }
+    QPointF cursor() const { return mPx; }
+    /** The pixel radius a candidate must beat: the nearest so far, or the starting radius. */
+    double radius() const { return mBest; }
 
 private:
     QPointF mPx;

@@ -511,6 +511,18 @@ void keyInto(Graph& g, const SceneSkeleton& tgt, const Rig& tgtRig, const Pose& 
 }
 } // namespace
 
+RunReport keyResult(Graph& g, const SceneSkeleton& tgt, const Rig& tgtRig, const Pose& tgtNow, const Result& res, double start, double fps,
+                    const RunOptions& opts)
+{
+    RunReport rep;
+    rep.mode = "fk";
+    rep.fps = fps;
+    rep.start = start;
+    rep.end = start + double(std::max<size_t>(res.poses.size(), 1) - 1) / fps;
+    keyInto(g, tgt, tgtRig, tgtNow, res, Settings{.copyCurves = false}, kNoNode, opts, rep);
+    return rep;
+}
+
 RunReport run(Graph& g, NodeId r, const RunOptions& opts)
 {
     LILA_ZONE();

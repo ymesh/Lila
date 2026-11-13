@@ -8,6 +8,8 @@
 
 #include <functional>
 #include <optional>
+#include <string_view>
+#include <vector>
 
 namespace lila::scene
 {
@@ -40,19 +42,46 @@ LILA_SCENE_API void playbackChanged();
 LILA_SCENE_API int addPlaybackListener(std::function<void()> fn);
 LILA_SCENE_API void removePlaybackListener(int id);
 
+/** How a range edit eases out across the falloff, from the range's edge (1) to the falloff's far end (0). */
+enum class RangeFalloff : uint8_t
+{
+    Smooth, // smoothstep: eases away from the range and into the untouched frames
+    Linear,
+    Sharp,  // drops quickly from the range, a long thin tail
+    Soft,   // holds near the range, then drops to the untouched frames
+    Constant, // full weight to the falloff's end, then nothing
+};
+LILA_SCENE_API const char* rangeFalloffName(RangeFalloff f);
+LILA_SCENE_API std::optional<RangeFalloff> rangeFalloffFromName(std::string_view name);
+/** The falloff's weight at x, 1 at the range's edge and 0 at the far end of the falloff. */
+LILA_SCENE_API double rangeFalloffWeight(RangeFalloff f, double x);
+
 /**
- * The time slider's selected range (Shift + drag on it), for edits that act across frames, such as Strings poses.
- * A UI selection, not scene data: it is never saved. Falloff, in frames, eases those edits out either side.
+ * The time slider's selected range (Shift + drag on it, or the Curve Overlay's strip), for edits that act across frames,
+ * such as Strings poses and Curve Overlay drags. A UI selection, not scene data: it is never saved. Falloff, in frames,
+ * eases those edits out either side, shaped by the falloff type.
  */
 struct TimeSelection
 {
     bool active = false;
     double start = 0.0, end = 0.0; // seconds, start <= end
-    double falloff = 0.0;           // frames
+    double falloff = 0.0;           // frames before the range, and after it unless falloffAfter is set
+    double falloffAfter = -1.0;     // frames after the range; below 0 the same as falloff
+    RangeFalloff shape = RangeFalloff::Smooth;
+    /** Range edits key every this many frames across the range and its falloff; 0 keys only the frames already keyed. */
+    int every = 0;
+
+    double before() const { return falloff; }
+    double after() const { return falloffAfter < 0.0 ? falloff : falloffAfter; }
 };
 LILA_SCENE_API TimeSelection& timeSelection();
 /** How much of an edit across the selection lands at time: 1 inside, easing to 0 over the falloff, 0 beyond. */
 LILA_SCENE_API double timeSelectionWeight(const TimeSelection& s, double seconds);
+/**
+ * The frames (seconds) a range edit acts on: the keyed times given that fall in the range or its falloff, and with every
+ * above 0 also every `every` frames from the falloff's start, the range's ends and the last eased frame each side.
+ */
+LILA_SCENE_API std::vector<double> timeSelectionFrames(const TimeSelection& s, const std::vector<double>& keyed = {});
 
 LILA_SCENE_API double frameOf(double seconds);
 LILA_SCENE_API double secondsOf(double frame);
@@ -116,7 +145,8 @@ LILA_SCENE_API std::string channelName(Graph& g, const PlugRef& p);
 
 /**
  * True when keys on plug (a transform's rotate or one of its components) go to a rotation curve: one already drives
- * it, or nothing does, no anim layer is active and the node's rotationInterpolation is slerp or smooth.
+ * it, or nothing does, no anim layer takes the key and the node's rotationInterpolation is slerp or smooth. Called
+ * before writing a key: a key router may make the layer the key goes to.
  */
 LILA_SCENE_API bool keysAsRotation(Graph& g, const PlugRef& plug);
 /**

@@ -274,6 +274,8 @@ std::vector<NodeId> withAncestors(Graph& g, const std::vector<NodeId>& nodes)
 void configure(Graph& g, NodeId node, Sim& s, LoopMode mode)
 {
     Setup su = s.solver->configure(g);
+    if (!su.loops)
+        mode = LoopMode::Off;
     su.substeps = std::max(1, su.substeps);
     su.stepped = std::max(1, su.stepped);
     bool loop = false;
@@ -554,6 +556,15 @@ int64_t indexFor(const Sim& s, int64_t frame)
 
 std::shared_ptr<const Frame> run(Graph& g, NodeId node, int64_t frame, LoopMode mode)
 {
+    // A long run pumps events for its progress card; a redraw or idle timer must not start the same one again inside it.
+    static std::set<NodeId> running;
+    if (!running.insert(node).second)
+        throw std::runtime_error("already simulating");
+    struct Leave
+    {
+        NodeId n;
+        ~Leave() { running.erase(n); }
+    } leave{node};
     Sim& s = simFor(g, node);
     try
     {
@@ -825,6 +836,8 @@ anim::RotationCurve reduce(const anim::RotationCurve& in, double degrees)
 NodeId record(Graph& g, NodeId node, const RecordOptions& o)
 {
     LILA_ZONE();
+    // Keying re-evaluates as it goes; skinned meshes nothing here reads wait for the evaluation after.
+    Graph::DeferMeshes deferMeshes;
 
     Sim& s = simFor(g, node);
     configure(g, node, s, o.loop);
@@ -871,7 +884,8 @@ NodeId record(Graph& g, NodeId node, const RecordOptions& o)
         for (size_t f = 0; f < frames.size(); ++f)
         {
             g.setTime(double(start + int64_t(f)) / fps());
-            g.evaluate();
+            // Only the outputs' channels and parents are read: skinned meshes nothing reads stay dirty.
+            g.evaluateUpstream(outputs);
             for (size_t c = 0; c < chosen.size(); ++c)
             {
                 const size_t i = chosen[c];
@@ -951,6 +965,9 @@ NodeId record(Graph& g, NodeId node, const RecordOptions& o)
             continue;
         const double t = double(start + int64_t(f)) / fps();
         g.setTime(t);
+        // One evaluation per frame, of what the outputs' keys read: keys at one time on the layer don't change what is below it.
+        g.evaluateUpstream(outputs);
+        anim::KeyBatch batch;
         for (size_t c = 0; c < chosen.size(); ++c)
         {
             const NodeId id = outputs[chosen[c]];

@@ -190,8 +190,8 @@ void drawShapes(render::FrameState& f, OverlayPainter&, const ViewInfo&)
         for (const Polyline& line : outline(shape->first))
             for (size_t i = 1; i < line.size(); ++i)
             {
-                f.linesOnTop.push_back({glm::vec3(world * glm::dvec4(line[i - 1], 1.0)), color});
-                f.linesOnTop.push_back({glm::vec3(world * glm::dvec4(line[i], 1.0)), color});
+                f.linesOnTop.push_back({glm::dvec3(world * glm::dvec4(line[i - 1], 1.0)), color});
+                f.linesOnTop.push_back({glm::dvec3(world * glm::dvec4(line[i], 1.0)), color});
             }
     }
 }

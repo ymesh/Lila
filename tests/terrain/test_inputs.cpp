@@ -31,7 +31,7 @@ namespace fs = std::filesystem;
 
 namespace
 {
-fs::path scratch(const std::string& name)
+fs::path inputScratch(const std::string& name)
 {
     const fs::path d = fs::temp_directory_path() / ("lila_terrain_inputs_" + name);
     fs::remove_all(d);
@@ -430,7 +430,7 @@ TEST_CASE("terrain inputs: UTM matches the meridian arc and round trips under a 
 
 TEST_CASE("terrain inputs: GeoTIFFs written for fetched areas read back exactly")
 {
-    const fs::path dir = scratch("tiff");
+    const fs::path dir = inputScratch("tiff");
     Dem d = glo30Like(46, 7, 120);
     d.metres[17] = std::numeric_limits<float>::quiet_NaN();
     writeGeoTiff(dir / "a.tif", d);
@@ -514,7 +514,7 @@ TEST_CASE("terrain inputs: tile names, URLs and Web Mercator tile math")
 
 TEST_CASE("terrain inputs: a GLO-30-shaped tile imports with the right extent, orientation and height range")
 {
-    const fs::path dir = scratch("glo30");
+    const fs::path dir = inputScratch("glo30");
     const std::string tile = "Copernicus_DSM_COG_10_N46_00_E007_00_DEM";
     fs::create_directories(dir / "copernicus");
     writeGeoTiff(dir / "copernicus" / (tile + ".tif"), glo30Like(46, 7, 360));
@@ -660,7 +660,7 @@ TEST_CASE("terrain inputs: terrainImportOsm drapes curves on the terrain, adds l
 {
     loadTerrain();
     run("newScene");
-    const fs::path dir = scratch("osm");
+    const fs::path dir = inputScratch("osm");
     {
         std::ofstream(dir / "area.osm") << OsmFixture().xml();
     }
@@ -917,7 +917,7 @@ TEST_CASE("terrain inputs: bare earth takes trees off a hill and keeps the hill;
 
 TEST_CASE("terrain inputs: attribution sections are added and replaced")
 {
-    const fs::path dir = scratch("attr");
+    const fs::path dir = inputScratch("attr");
     writeAttribution(dir, "OpenStreetMap", "first");
     writeAttribution(dir, "Copernicus DEM GLO-30", demAttribution(DemSource::Copernicus, ""));
     writeAttribution(dir, "OpenStreetMap", osmAttribution());
@@ -937,7 +937,7 @@ TEST_CASE("terrain inputs: terrainReload re-reads a painted image saved again, a
 {
     loadTerrain();
     run("newScene");
-    const fs::path dir = scratch("live");
+    const fs::path dir = inputScratch("live");
     auto paint = [&](float level) {
         std::vector<float> rgba(size_t(33 * 33 * 4), 1.0f);
         for (int i = 0; i < 33 * 33; ++i)
@@ -1077,7 +1077,7 @@ TEST_CASE("terrain inputs: WorldCover tile names, and tiled GeoTIFFs read by win
     CHECK(worldCoverClass(0).empty());
     CHECK(std::string(worldCoverAttribution()).find("ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium") != std::string::npos);
 
-    const fs::path dir = scratch("worldcover_read");
+    const fs::path dir = inputScratch("worldcover_read");
     const fs::path file = dir / "wc.tif";
     writeWorldCoverLike(file, 1024, 128, 6.0, 48.0);
     const uint64_t fileSize = fs::file_size(file);
@@ -1148,7 +1148,7 @@ TEST_CASE("terrain inputs: terrainImportLandCover puts WorldCover codes on the r
 {
     loadTerrain();
     run("newScene");
-    const fs::path dir = scratch("worldcover_import");
+    const fs::path dir = inputScratch("worldcover_import");
     const fs::path file = dir / "ESA_WorldCover_10m_2021_v200_N45E006_Map.tif";
     writeWorldCoverLike(file, 1024, 128, 6.0, 48.0);
 
@@ -1229,7 +1229,7 @@ TEST_CASE("terrain inputs: network: a real area downloads from AWS Terrain Tiles
     }
     loadTerrain();
     run("newScene");
-    const fs::path dir = scratch("network");
+    const fs::path dir = inputScratch("network");
     json t = run("terrainImportDem", {{"bbox", {7.64, 45.96, 7.68, 45.99}}, {"source", "terrarium"}, {"spacing", 6000.0}, {"cache", dir.string()}});
     MESSAGE(t.dump());
     // The Matterhorn's summit is 4478 m.

@@ -5,6 +5,10 @@
 // REPORT_LIMIT (per-minute rate limit for reports and replies, optional). REPORTS_GITHUB_API points GitHub calls elsewhere for local tests.
 
 export const REPO = "lila-3d/issues";
+/** Reports are taken only from builds of a commit on this repo's main branch. */
+export const SOURCE_REPO = "lila-3d/Lila";
+export const UNOFFICIAL_BUILD =
+  "Reports are taken from official Lila builds only, and this build isn't one. Download Lila from lila-3d.github.io and report from there.";
 export const KINDS = ["Bug", "Crash", "Performance", "Request", "Question"];
 export const MAX_SECTIONS = 10;
 export const MAX_TITLE = 120;
@@ -117,6 +121,34 @@ export function parseReport(meta) {
   const github = clean(meta.github, 40).replace(/^@/, "");
   if (github && !/^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/.test(github)) return { error: "GitHub username not valid" };
   return { title, sections, kind, github, version: cell(meta.version), os: cell(meta.os), gpu: cell(meta.gpu) };
+}
+
+/** The commit a version string names ("0.1.0+9641744ab1 (build 202610281430-9641744ab1)"), or null when it has none or has uncommitted changes. */
+export function buildCommit(version) {
+  if (typeof version !== "string" || /-dirty\b/.test(version)) return null;
+  const m = version.match(/\+([0-9a-f]{7,40})\b/);
+  return m ? m[1] : null;
+}
+
+/**
+ * Whether the build is of a commit on SOURCE_REPO's main: true, false, or null when GitHub can't say. A fork's own commits
+ * resolve through the parent repo too, so it has to be an ancestor of main, not just a known commit. Only a yes is cached:
+ * a commit not yet pushed is on main later.
+ */
+async function officialBuild(env, fetcher, version) {
+  const sha = buildCommit(version);
+  if (!sha) return false;
+  const key = `builds/${sha}.json`;
+  if (await readJson(env, key)) return true;
+  let compare;
+  try {
+    compare = await github(env, fetcher, "GET", `/repos/${SOURCE_REPO}/compare/${sha}...main`);
+  } catch (e) {
+    return /: 404$/.test(e.message) ? false : null;
+  }
+  const official = compare.status === "ahead" || compare.status === "identical";
+  if (official) await putJson(env, key, { at: new Date().toISOString() });
+  return official;
 }
 
 /** A stored name for an extra attachment: its own name made safe, prefixed so it can't replace the bundle or screenshot. */
@@ -260,6 +292,9 @@ async function fileReport(request, env, fetcher) {
   }
   const report = parseReport(meta);
   if (report.error) return json({ error: report.error }, 400);
+  const official = await officialBuild(env, fetcher, meta.version);
+  if (official === null) return json({ error: "GitHub didn't answer. Try again later." }, 502);
+  if (!official) return json({ error: UNOFFICIAL_BUILD }, 403);
 
   const uploads = [
     { field: "bundle", name: "bundle.zip", label: "support bundle", max: MAX_BUNDLE, type: "application/zip" },

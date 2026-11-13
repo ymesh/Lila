@@ -356,7 +356,8 @@ json runAddRoundabout(const Args& a, const std::string& cmd)
 
     Layers t = readGroup(g, f, cmd);
     static const std::set<std::string> skip = {"TerrainStamps", "TerrainVolume", "TerrainBiomes", "TerrainLayers"};
-    const json list = jsonProp(chainNode(t.group, layer, "TerrainRoads", skip, -160.0, cmd), "roads", json::array());
+    ListEdit roads(*t.node, chainNode(t.group, layer, "TerrainRoads", skip, -160.0, cmd), "roads");
+    const json& list = roads.list();
     std::string id = a.get<std::string>("id", "");
     if (id.empty())
         for (int k = 1; id.empty(); ++k)
@@ -424,8 +425,11 @@ json runAddRoundabout(const Args& a, const std::string& cmd)
     }
     // The ring goes before its approaches so they join it.
     kept.insert(kept.begin() + std::ptrdiff_t(firstApproach.value_or(kept.size())), ring.toJson());
-    nodeNamed(t.group, layer)->values["roads"] = kept.dump();
+    roads.list() = std::move(kept);
+    roads.store(*nodeNamed(t.group, layer));
     commitGroup(t, cmd);
+    if (EditBatch::active())
+        return {{"id", id}, {"layer", layer}, {"approaches", approaches}, {"warnings", warnings}, {"batched", true}};
 
     const Terrain after = findTerrain(g, f.path(names[0]), cmd);
     const auto results = roadResults(after.modifier->id(), layer);
@@ -554,7 +558,8 @@ json runAddRoad(const Args& a, const std::string& cmd)
     const bool base = a.get<std::string>("stage", "final") == "base";
     const std::set<std::string> skip = base ? withLandformTypes({"ErodeTerrain", "TerrainStamps", "TerrainSculpt", "TerrainRoads", "TerrainWaterFeatures", "TerrainVolume", "TerrainBiomes", "TerrainLayers"})
                                                 : std::set<std::string>{"TerrainStamps", "TerrainVolume", "TerrainBiomes", "TerrainLayers"};
-    json list = jsonProp(chainNode(t.group, layer, "TerrainRoads", skip, -160.0, cmd), "roads", json::array());
+    ListEdit roads(*t.node, chainNode(t.group, layer, "TerrainRoads", skip, -160.0, cmd), "roads");
+    json& list = roads.list();
     std::string id = a.get<std::string>("id", "");
     if (id.empty())
         for (int k = 1; id.empty(); ++k)
@@ -603,9 +608,13 @@ json runAddRoad(const Args& a, const std::string& cmd)
         }
     if (!replaced)
         list.push_back(r.toJson());
-    nodeNamed(t.group, layer)->values["roads"] = list.dump();
-    dropUnusedSources(t.group, kRoadSourcePrefix, "TerrainRoads", {"roads"});
+    roads.store(*nodeNamed(t.group, layer));
+    // A batch leaves unused sources for the next edit to drop: its lists are only written back when it commits.
+    if (!EditBatch::active())
+        dropUnusedSources(t.group, kRoadSourcePrefix, "TerrainRoads", {"roads"});
     commitGroup(t, cmd);
+    if (EditBatch::active())
+        return {{"id", id}, {"layer", layer}, {"replaced", replaced}, {"batched", true}};
 
     const Terrain after = findTerrain(g, f.path(names[0]), cmd);
     const auto results = roadResults(after.modifier->id(), layer);

@@ -473,9 +473,8 @@ TEST_CASE("exportVertexAnimation bakes offsets and normals that decode back to t
             for (int c = 0; c < 3; ++c)
                 CHECK(std::abs(a[c] - b[c]) <= (hi[c] - lo[c]) / 255.0 + 1e-6);
         }
-    // "png" still means png16.
-    json legacyPng = ops::execute("exportVertexAnimation", {{"args", {box2}}, {"folder", dir.generic_string()}, {"name", "legacy"}, {"format", "png"}});
-    CHECK(legacyPng["meta"]["format"] == "png16");
+    // A png format names its bit depth.
+    CHECK_THROWS(ops::execute("exportVertexAnimation", {{"args", {box2}}, {"folder", dir.generic_string()}, {"name", "bare"}, {"format", "png"}}));
 
     // Dry run plans the files only.
     json dry = ops::execute("exportVertexAnimation", {{"args", {box2}}, {"folder", (dir / "dry").generic_string()}, {"dryRun", true}});

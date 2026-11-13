@@ -38,6 +38,7 @@ lila_module(lila_scene Scene
     SplitRingsModifier.cpp SplitRingsModifier.h
     AutoPose.cpp AutoPose.h
     FullBodyIk.cpp FullBodyIk.h
+    Grapple.cpp Grapple.h
     Strings.cpp Strings.h
     BendBonesDeformer.cpp BendBonesDeformer.h
     Fracture.cpp Fracture.h
@@ -103,6 +104,8 @@ lila_module(lila_scene Scene
     LightingChannels.cpp LightingChannels.h
     SceneGraphCommands.cpp SceneGraph.h
     SceneData.cpp
+    Georef.cpp
+    GeoSidecar.cpp
     SceneScripts.cpp
     SelectAs.cpp
     Simulation.cpp
@@ -131,4 +134,5 @@ lila_module(lila_scene Scene
 find_package(Eigen3 CONFIG REQUIRED)
 find_package(meshoptimizer CONFIG REQUIRED)
 find_package(manifold CONFIG REQUIRED)
-target_link_libraries(lila_scene PUBLIC lila_ops lila_geo PRIVATE lila_deform lila_retopo lila_uv meshoptimizer::meshoptimizer manifold::manifold Eigen3::Eigen)
+find_package(PROJ CONFIG REQUIRED)
+target_link_libraries(lila_scene PUBLIC lila_ops lila_geo PRIVATE lila_deform lila_retopo lila_uv meshoptimizer::meshoptimizer manifold::manifold Eigen3::Eigen PROJ::proj)

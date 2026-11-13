@@ -38,6 +38,7 @@
 #include <QComboBox>
 #include <QDesktopServices>
 #include <QDockWidget>
+#include <QPointer>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFileSystemWatcher>
@@ -163,12 +164,17 @@ QDockWidget* sculptDock(bool create)
     QMainWindow* mw = mainWindow();
     if (!mw)
         return nullptr;
-    if (auto* d = mw->findChild<QDockWidget*>(kSculptDock))
-        return d;
+    // Asked every frame by the viewport: remembered, and looked up among the window's own children (docks are), not its whole tree.
+    static QPointer<QDockWidget> found;
+    if (found)
+        return found;
+    if (auto* d = mw->findChild<QDockWidget*>(kSculptDock, Qt::FindDirectChildrenOnly))
+        return found = d;
     if (!create)
         return nullptr;
     auto* dock = new QDockWidget("Sculpt", mw);
     dock->setObjectName(kSculptDock);
+    found = dock;
     auto* scroll = new QScrollArea(dock);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);

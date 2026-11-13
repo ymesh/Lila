@@ -35,6 +35,7 @@
 #include "ui/Animation.h"
 #include "ui/ChannelBox.h"
 #include "ui/CursorBadges.h"
+#include "ui/DroneCamera.h"
 #include "ui/Deletion.h"
 #include "ui/NodeLookup.h"
 #include "ui/DrawOverrides.h"

@@ -1654,7 +1654,7 @@ private:
                 {
                     const geo::Index pt = m.cornerPoint(mTintTris.corners[t * 3 + size_t(k)]);
                     const glm::dvec3 up = pt < mTintNormals.size() ? mTintNormals[pt] : glm::dvec3(0.0);
-                    f.tris3d.push_back({glm::vec3(mTarget.toWorld(m.position(pt) + up * lift)), color});
+                    f.tris3d.push_back({glm::dvec3(mTarget.toWorld(m.position(pt) + up * lift)), color});
                 }
     }
 

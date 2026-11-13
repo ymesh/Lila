@@ -359,8 +359,8 @@ void ViewportWidget::drawObjectSymmetryEdges(render::FrameState& s)
         for (uint32_t e : symmetryPlaneEdges(*n, mesh))
             if (vis->edge(e))
                 shape.forEachSegment(e, [&](const glm::dvec3& a, const glm::dvec3& b) {
-                    s.symmetryLines.push_back({glm::vec3(a), kSymmetryRed});
-                    s.symmetryLines.push_back({glm::vec3(b), kSymmetryRed});
+                    s.symmetryLines.push_back({glm::dvec3(a), kSymmetryRed});
+                    s.symmetryLines.push_back({glm::dvec3(b), kSymmetryRed});
                 });
         radialPlaneLines(*n, *mesh, shownWorld(*n), s.lines);
     }
@@ -403,11 +403,13 @@ static std::shared_ptr<const render::PointCloud> vertexDots(scene::NodeId id, co
             on[p] = render::PointDraw::Selected;
     auto cloud = std::make_shared<render::PointCloud>();
     cloud->points.resize(m.pointCapacity());
+    // Relative to the mesh's placement, so the dots stay exact far from the world origin.
+    cloud->origin = glm::dvec3(shape.world[3]);
     tbb::parallel_for(tbb::blocked_range<geo::Index>(0, m.pointCapacity(), 16384), [&](const tbb::blocked_range<geo::Index>& r) {
         for (geo::Index p = r.begin(); p != r.end(); ++p)
         {
             const bool shown = m.pointValid(p) && vis->point(p);
-            cloud->points[p] = {shown ? glm::vec3(shape.point(p)) : glm::vec3(0.0f), shown ? uint32_t(on[p]) : uint32_t(render::PointDraw::Hidden)};
+            cloud->points[p] = {shown ? glm::vec3(shape.point(p) - cloud->origin) : glm::vec3(0.0f), shown ? uint32_t(on[p]) : uint32_t(render::PointDraw::Hidden)};
         }
     });
     // Dots of meshes that are gone are not needed again, and each holds a point per vertex.
@@ -457,7 +459,7 @@ void ViewportWidget::drawComponents(render::FrameState& s)
                 cageDraw.mesh = rm;
                 if (auto part = isolate::masked(&mIsolation, id, mesh))
                     cageDraw.mesh = part->mesh;
-                cageDraw.world = glm::mat4(world);
+                cageDraw.world = world;
                 // Depth tested against the result, as picking is: hidden cage edges stay hidden.
                 cageDraw.flags = render::DrawWire | render::DrawWireDepth;
                 cageDraw.wireColor = palette.wire;
@@ -465,18 +467,18 @@ void ViewportWidget::drawComponents(render::FrameState& s)
                 s.meshes.push_back(std::move(cageDraw));
             }
         const ComponentShape shape(*n, m, mesh, world);
-        auto wp = [&](uint32_t p) { return glm::vec3(shape.point(p)); };
+        auto wp = [&](uint32_t p) { return glm::dvec3(shape.point(p)); };
         auto edgeLines = [&](uint32_t e, std::vector<render::LineVertex>& out, const glm::vec4& col) {
             shape.forEachSegment(e, [&](const glm::dvec3& a, const glm::dvec3& b) {
-                out.push_back({glm::vec3(a), col});
-                out.push_back({glm::vec3(b), col});
+                out.push_back({glm::dvec3(a), col});
+                out.push_back({glm::dvec3(b), col});
             });
         };
         auto faceLines = [&](uint32_t f, const glm::vec4& fill, const glm::vec4& line) {
-            shape.forEachFillVertex(f, [&](const glm::dvec3& p) { s.tris3d.push_back({glm::vec3(p), fill}); });
+            shape.forEachFillVertex(f, [&](const glm::dvec3& p) { s.tris3d.push_back({glm::dvec3(p), fill}); });
             shape.forEachOutline(f, [&](const glm::dvec3& a, const glm::dvec3& b) {
-                s.linesOnTop.push_back({glm::vec3(a), line});
-                s.linesOnTop.push_back({glm::vec3(b), line});
+                s.linesOnTop.push_back({glm::dvec3(a), line});
+                s.linesOnTop.push_back({glm::dvec3(b), line});
             });
         };
         const auto vis = isolate::visibility(&mIsolation, id, mesh);
@@ -531,8 +533,8 @@ void ViewportWidget::drawComponents(render::FrameState& s)
                         continue;
                     const double half = 0.5 * thickness.vertexSelected * atUnit * (view.ortho ? 1.0 : depth);
                     const glm::dvec3 r = right * half, u = up * half;
-                    const glm::vec3 a(c - r - u), b(c + r - u), cc(c + r + u), d(c - r + u);
-                    for (const glm::vec3& v : {a, b, cc, a, cc, d})
+                    const glm::dvec3 a(c - r - u), b(c + r - u), cc(c + r + u), d(c - r + u);
+                    for (const glm::dvec3& v : {a, b, cc, a, cc, d})
                         s.tris3d.push_back({v, kSymmetryRed});
                 }
             }
@@ -618,8 +620,8 @@ void ViewportWidget::drawComponents(render::FrameState& s)
                                 : wgt > 0.0f ? viewportDisplay::falloffColor(wgt, grayWeights)
                                 : on[p] == 2 ? glm::mix(dotLinear, hotLinear, kMirrorAlpha)
                                              : dotLinear;
-                glm::vec3 a(c - r - u), b(c + r - u), cc(c + r + u), d(c - r + u);
-                for (const glm::vec3& v : {a, b, cc, a, cc, d})
+                glm::dvec3 a(c - r - u), b(c + r - u), cc(c + r + u), d(c - r + u);
+                for (const glm::dvec3& v : {a, b, cc, a, cc, d})
                     s.tris3d.push_back({v, col});
             }
         }
@@ -788,7 +790,7 @@ void ViewportWidget::drawHandlerHover(render::FrameState& s)
             if (w[0] <= 0.0f && w[1] <= 0.0f && w[2] <= 0.0f)
                 continue;
             for (int k = 0; k < 3; ++k)
-                s.tris3d.push_back({glm::vec3(world * glm::dvec4(m.position(tris[t + k]), 1.0)), glm::vec4(glm::vec3(color), color.a * w[k])});
+                s.tris3d.push_back({glm::dvec3(world * glm::dvec4(m.position(tris[t + k]), 1.0)), glm::vec4(glm::vec3(color), color.a * w[k])});
         }
     }
 }
@@ -843,7 +845,7 @@ void ViewportWidget::drawPreselect(render::FrameState& s)
     }
     auto quad = [&](glm::dvec3 a, glm::dvec3 b, glm::dvec3 c, glm::dvec3 d, const glm::vec4& col) {
         for (const glm::dvec3& v : {a, b, c, a, c, d})
-            s.tris3d.push_back({glm::vec3(v), col});
+            s.tris3d.push_back({glm::dvec3(v), col});
     };
     // Scaled by depth from one unit ahead, not measured at the point: a hovered face can reach behind the camera.
     const double atUnit = view.unitsPerPixel(view.eye + fwd);
@@ -881,7 +883,7 @@ void ViewportWidget::drawPreselect(render::FrameState& s)
             shape.forEachSegment(id, [&](const glm::dvec3& a, const glm::dvec3& b) { ribbon(a, b, 0.5 * thickness.edgeHover, col); });
         else
         {
-            shape.forEachFillVertex(id, [&](const glm::dvec3& p) { s.tris3d.push_back({glm::vec3(p), fill}); });
+            shape.forEachFillVertex(id, [&](const glm::dvec3& p) { s.tris3d.push_back({glm::dvec3(p), fill}); });
             shape.forEachOutline(id, [&](const glm::dvec3& a, const glm::dvec3& b) { ribbon(a, b, 1.0, col); });
         }
     };

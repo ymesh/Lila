@@ -3,6 +3,7 @@
 #include "Seamwork.h"
 #include "Strip.h"
 
+#include <lila/Relocate.h>
 #include <lila/Command.h>
 #include <lila/Extension.h>
 #include <lila/Log.h>
@@ -163,7 +164,10 @@ bool registerStripNodes(ext::Context& ctx)
         };
         return n;
     };
-    return types::registerType(ctx, std::move(t)) != nullptr;
+    if (!types::registerType(ctx, std::move(t)))
+        return false;
+    lila::scene::relocate::registerWorldAttrs(kStripType, {.worldOutput = true});
+    return true;
 }
 
 void registerStripCommands(ext::Context& ctx)

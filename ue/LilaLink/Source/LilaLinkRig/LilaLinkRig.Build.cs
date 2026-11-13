@@ -18,6 +18,9 @@ public class LilaLinkRig : ModuleRules
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
 			"Eigen",
+			"AnimationCore",
+			"MovieScene",
+			"MovieSceneTracks",
 			"Json",
 		});
 	}

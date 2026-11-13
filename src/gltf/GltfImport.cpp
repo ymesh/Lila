@@ -1,4 +1,5 @@
 #include "gltf/Gltf.h"
+#include "scene/Georef.h"
 
 #include "core/Profile.h"
 #include "core/Progress.h"
@@ -1532,6 +1533,11 @@ ImportResult importGltf(scene::Graph& graph, const fs::path& path, const ImportO
     scope.checkCancel();
     im.buildSkins();
     im.buildMorphs();
+    // A file Lila wrote from a georeferenced scene says where its origin is.
+    if (data->asset.extras.data)
+        if (const json extras = json::parse(std::string_view(data->asset.extras.data), nullptr, false); extras.is_object() && extras.contains("lilaGeoreference"))
+            if (const auto placed = scene::georef::placeImported(graph, extras["lilaGeoreference"], std::vector<uint64_t>(r.roots.begin(), r.roots.end())))
+                r.skipped.push_back("georeference: " + *placed);
     if (opts.animation)
         im.importAnimations();
     else if (data->animations_count)

@@ -264,15 +264,12 @@ GroomData paintedGroom(const std::string& graphJson) {
 // side, and one would remove the file while the other reads it.
 std::string stripes(const std::string& tag) {
 #ifdef _WIN32
-    char dir[MAX_PATH];
-    GetTempPathA(MAX_PATH, dir);
-    const std::string path =
-        std::string(dir) + "groomlab_gpu_stripes_" + tag + "_" + std::to_string(GetCurrentProcessId()) + ".pgm";
+    const auto pid = GetCurrentProcessId();
 #else
-    const std::string dir = std::filesystem::temp_directory_path().string() + "/";
-    const std::string path =
-        std::string(dir) + "groomlab_gpu_stripes_" + tag + "_" + std::to_string(getpid()) + ".pgm";
+    const auto pid = getpid();
 #endif
+    const std::string path =
+        (std::filesystem::temp_directory_path() / ("groomlab_gpu_stripes_" + tag + "_" + std::to_string(pid) + ".pgm")).string();
     FILE* f = std::fopen(path.c_str(), "wb");
     if (!f) return path;
     std::fprintf(f, "P5\n64 16\n255\n");

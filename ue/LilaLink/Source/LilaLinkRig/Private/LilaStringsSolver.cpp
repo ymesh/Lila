@@ -1,5 +1,7 @@
 #include "LilaStringsSolver.h"
 
+#include "Algo/BinarySearch.h"
+
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 
 #ifndef EIGEN_MPL2_ONLY
@@ -563,9 +565,17 @@ void ForwardTurn(const FProblem& P, FPose& S, const int32 G, const FQuat& Q)
 	Place(P, S, W, G, TurnedAbout(W[G], Q), false);
 }
 
+/** V at unit length, as glm::normalize: GetSafeNormal returns zero below a squared length of 1e-8, which loses the tiny
+ * turns a nearly straight limb asks for. Zero stays zero. */
+FVector Unit(const FVector& V)
+{
+	const double L = V.Size();
+	return L > 0.0 ? V / L : FVector::ZeroVector;
+}
+
 FQuat TurnBetween(const FVector& From, const FVector& To)
 {
-	const FVector A = From.GetSafeNormal(), B = To.GetSafeNormal();
+	const FVector A = Unit(From), B = Unit(To);
 	const double C = FVector::DotProduct(A, B);
 	if (C > 1.0 - 1e-12)
 	{
@@ -576,7 +586,7 @@ FQuat TurnBetween(const FVector& From, const FVector& To)
 	{
 		Axis = FMath::Abs(A.X) < 0.9 ? FVector::CrossProduct(A, FVector(1, 0, 0)) : FVector::CrossProduct(A, FVector(0, 1, 0));
 	}
-	return FQuat(Axis.GetSafeNormal(), FMath::Acos(FMath::Clamp(C, -1.0, 1.0)));
+	return FQuat(Unit(Axis), FMath::Acos(FMath::Clamp(C, -1.0, 1.0)));
 }
 
 /** Two-bone start for a limb: the elbow placed by the law of cosines in the limb's bend plane. */
@@ -589,12 +599,12 @@ void TwoBoneStart(const FProblem& P, FPose& S, const int32 Upper, const int32 Lo
 	{
 		return;
 	}
-	const FVector Dir = (Target - A).GetSafeNormal();
+	const FVector Dir = Unit(Target - A);
 	const double D = FMath::Clamp((Target - A).Size(), FMath::Abs(L1 - L2) + 1e-6, L1 + L2 - 1e-6);
 	FVector Bend = (B - A) - FVector::DotProduct(B - A, Dir) * Dir;
 	if (Bend.Size() < 1e-6 * L1)
 	{
-		const FVector Reach = (C - A).GetSafeNormal();
+		const FVector Reach = Unit(C - A);
 		Bend = (B - A) - FVector::DotProduct(B - A, Reach) * Reach;
 		Bend -= FVector::DotProduct(Bend, Dir) * Dir;
 		if (Bend.Size() < 1e-9)
@@ -602,7 +612,7 @@ void TwoBoneStart(const FProblem& P, FPose& S, const int32 Upper, const int32 Lo
 			return;
 		}
 	}
-	Bend = Bend.GetSafeNormal();
+	Bend = Unit(Bend);
 	const double Angle = FMath::Acos(FMath::Clamp((L1 * L1 + D * D - L2 * L2) / (2.0 * L1 * D), -1.0, 1.0));
 	const FVector Elbow = A + L1 * (FMath::Cos(Angle) * Dir + FMath::Sin(Angle) * Bend);
 	Place(P, S, W, Upper, TurnedAbout(W[Upper], TurnBetween(B - A, Elbow - A)), false);
@@ -664,7 +674,8 @@ FResult FullBody(const FProblem& P, const FRequest& R)
 	return Out;
 }
 
-/** Brings each hold's bone to its world by bending its limb from pose S. Returns the largest hold error left. */
+} // namespace
+
 double HoldLimbs(const FProblem& P, FPose& S, const TArray<FHold>& Holds, const int32 Hips, const double MaxStretch,
 				 const TArray<TPair<int32, FVector>>& Soft, const FRules* Rules)
 {
@@ -742,6 +753,142 @@ double HoldLimbs(const FProblem& P, FPose& S, const TArray<FHold>& Holds, const 
 		}
 	}
 	return HoldError(Worlds(P, S), Holds);
+}
+
+namespace
+{
+FMatrix TurnedAround(const FMatrix& World, const FVector& C, const FQuat& Q) { return Mul(Mul(Mul(Translate(C), RotationMatrix(Q)), Translate(-C)), World); }
+
+/** glm::slerp from identity to Q by A, Q already on the short side, so half turns match Lila's to the bit. */
+FQuat PartOf(const FQuat& Q, const double A)
+{
+	const double CosTheta = Q.W;
+	if (CosTheta > 1.0 - DBL_EPSILON)
+	{
+		return FQuat(A * Q.X, A * Q.Y, A * Q.Z, (1.0 - A) + A * Q.W);
+	}
+	const double Theta = FMath::Acos(CosTheta);
+	const double S0 = FMath::Sin((1.0 - A) * Theta), S1 = FMath::Sin(A * Theta), Sin = FMath::Sin(Theta);
+	return FQuat(S1 * Q.X / Sin, S1 * Q.Y / Sin, S1 * Q.Z / Sin, (S0 + S1 * Q.W) / Sin);
+}
+
+/** Puts each isolated bone (parents first) back to its world rotation from Start, where the pose has carried it now. */
+void IsolateRotations(const FProblem& P, FPose& S, const TArray<FMatrix>& Start, const TArray<int32>& Isolate, const int32 Grabbed)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaStrings::IsolateRotations);
+
+	TArray<int32> Bones;
+	for (const int32 B : Isolate)
+	{
+		if (P.Bones.IsValidIndex(B) && B != Grabbed && P.Bones[B].bSolve)
+		{
+			Bones.Add(B);
+		}
+	}
+	Bones.Sort();
+	for (const int32 B : Bones)
+	{
+		const TArray<FMatrix> W = Worlds(P, S);
+		FMatrix Target = Start[B];
+		Target.SetOrigin(W[B].GetOrigin());
+		Place(P, S, W, B, Target, false);
+	}
+}
+
+/** Holds below the grabbed bone outside its own limb: what Forward keeps while the bone above them turns. */
+TArray<FHold> HeldBelow(const FProblem& P, const FRequest& R)
+{
+	TArray<FHold> Out;
+	for (const FHold& H : R.Holds)
+	{
+		if (H.Bone == R.Grabbed || !IsUnder(P, H.Bone, R.Grabbed))
+		{
+			continue;
+		}
+		if (!LimbOf(P, H.Bone, R.Hips, INDEX_NONE, 0, R.Rules).Contains(R.Grabbed))
+		{
+			Out.Add(H);
+		}
+	}
+	return Out;
+}
+
+/** Free: the bone turns or moves alone, its children keeping their world rotation (and, on a move, their place). */
+void FreePose(const FProblem& P, FPose& S, const FRequest& R, const TArray<FMatrix>& Start)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaStrings::FreePose);
+
+	const int32 G = R.Grabbed;
+	if (R.Turn)
+	{
+		ForwardTurn(P, S, G, *R.Turn);
+	}
+	if (R.Move)
+	{
+		const TArray<FMatrix> W = Worlds(P, S);
+		Place(P, S, W, G, Shifted(W[G], *R.Move), true);
+	}
+	for (int32 I = 0; I < P.Bones.Num(); ++I)
+	{
+		if (P.Bones[I].Parent == G && P.Bones[I].bSolve)
+		{
+			const TArray<FMatrix> W = Worlds(P, S);
+			FMatrix Target = Start[I];
+			if (!R.Move)
+			{
+				Target.SetOrigin(W[I].GetOrigin());
+			}
+			Place(P, S, W, I, Target, R.Move.IsSet());
+		}
+	}
+}
+
+/**
+ * Bidirectional and All: a turn takes the parts below the bone half way and the body above half the other way, both
+ * about the bone; a move carries the body half way and bends the limb for the rest (All: the whole body all the way).
+ */
+double BothWays(const FProblem& P, FPose& S, const FRequest& R, const TArray<FMatrix>& Start, const bool bRigid)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaStrings::BothWays);
+
+	const int32 G = R.Grabbed;
+	const FVector C = Start[G].GetOrigin();
+	TArray<FHold> Outside;
+	if (!bRigid)
+	{
+		for (const FHold& H : R.Holds)
+		{
+			if (!IsUnder(P, H.Bone, G))
+			{
+				Outside.Add(H);
+			}
+		}
+	}
+	if (R.Turn)
+	{
+		const FQuat T = *R.Turn;
+		const FQuat Half = PartOf(T.W < 0.0 ? FQuat(-T.X, -T.Y, -T.Z, -T.W) : T, 0.5);
+		const TArray<FMatrix> W = Worlds(P, S);
+		Place(P, S, W, R.Hips, TurnedAround(W[R.Hips], C, Half.Inverse()), true);
+		ForwardTurn(P, S, G, T);
+	}
+	if (R.Move)
+	{
+		const TArray<FMatrix> W = Worlds(P, S);
+		if (bRigid)
+		{
+			Place(P, S, W, R.Hips, Shifted(W[R.Hips], *R.Move), true);
+			return 0.0;
+		}
+		Place(P, S, W, R.Hips, Shifted(W[R.Hips], *R.Move * 0.5), true);
+		TArray<FHold> Holds;
+		FHold& Target = Holds.AddDefaulted_GetRef();
+		Target.Bone = G;
+		Target.World = Shifted(Start[G], *R.Move);
+		Holds.Append(Outside);
+		return HoldLimbs(P, S, Holds, R.Hips, R.MaxStretch, {}, R.Rules);
+	}
+	return Outside.IsEmpty() ? 0.0 : HoldLimbs(P, S, Outside, R.Hips, R.MaxStretch, {}, R.Rules);
 }
 } // namespace
 
@@ -870,23 +1017,51 @@ TArray<int32> LimbOf(const FProblem& P, const int32 Bone, const int32 Hips, cons
 	return Out;
 }
 
+EMode ResolveDefault(const FProblem& P, const FRequest& R)
+{
+	if (R.Rules)
+	{
+		for (const TPair<int32, EMode>& D : R.Rules->Defaults)
+		{
+			if (D.Key == R.Grabbed && D.Value != EMode::Default)
+			{
+				return D.Value;
+			}
+		}
+	}
+	if (R.Move && (R.Grabbed == R.Hips || LimbOf(P, R.Grabbed, R.Hips, INDEX_NONE, 0, R.Rules).Num() >= 2))
+	{
+		return EMode::Ik;
+	}
+	return EMode::Forward;
+}
+
 FResult SolveRequest(const FProblem& P, const FRequest& R)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(LilaStrings::SolveRequest);
 
 	check(P.Bones.IsValidIndex(R.Grabbed));
+	if (R.Mode == EMode::Default)
+	{
+		FRequest Picked = R;
+		Picked.Mode = ResolveDefault(P, R);
+		return SolveRequest(P, Picked);
+	}
 	if (R.Mode == EMode::FullBody)
 	{
-		return FullBody(P, R);
+		FResult Out = FullBody(P, R);
+		Out.Resolved = EMode::FullBody;
+		return Out;
 	}
 	FResult Out;
+	Out.Resolved = R.Mode;
 	Out.Pose = StartPose(P);
 	FPose& S = Out.Pose;
 	const int32 G = R.Grabbed;
 	const TArray<FMatrix> Start = Worlds(P, S);
 	const bool bBelowHips = R.Hips >= 0 && IsUnder(P, G, R.Hips) && G != R.Hips;
 
-	if (R.Mode == EMode::Forward)
+	if (R.Mode == EMode::Forward || R.Mode == EMode::ForwardAll)
 	{
 		if (R.Turn)
 		{
@@ -896,17 +1071,51 @@ FResult SolveRequest(const FProblem& P, const FRequest& R)
 		{
 			Place(P, S, Start, G, Shifted(Start[G], *R.Move), true);
 		}
+		if (R.Mode == EMode::Forward)
+		{
+			if (const TArray<FHold> Held = HeldBelow(P, R); !Held.IsEmpty())
+			{
+				Out.Error = HoldLimbs(P, S, Held, R.Hips, R.MaxStretch, {}, R.Rules);
+			}
+			IsolateRotations(P, S, Start, R.Isolate, G);
+		}
 		return Out;
 	}
 
-	if (R.Mode == EMode::Backward)
+	if (R.Mode == EMode::Free)
+	{
+		FreePose(P, S, R, Start);
+		return Out;
+	}
+
+	if (R.Mode == EMode::Bidirectional || R.Mode == EMode::All)
+	{
+		if (!bBelowHips)
+		{
+			// The hips have nothing above them to give: both ways is Forward there.
+			FRequest Fwd = R;
+			Fwd.Mode = R.Mode == EMode::All ? EMode::ForwardAll : EMode::Forward;
+			FResult F = SolveRequest(P, Fwd);
+			F.Resolved = R.Mode;
+			return F;
+		}
+		Out.Error = BothWays(P, S, R, Start, R.Mode == EMode::All);
+		if (R.Mode == EMode::Bidirectional)
+		{
+			IsolateRotations(P, S, Start, R.Isolate, G);
+		}
+		return Out;
+	}
+
+	if (R.Mode == EMode::Backward || R.Mode == EMode::BackwardAll)
 	{
 		if (R.Hips >= 0 && !IsUnder(P, G, R.Hips))
 		{
 			Out.bHandled = false;
 			return Out;
 		}
-		TArray<FHold> Others = R.Holds;
+		const bool bRigid = R.Mode == EMode::BackwardAll;
+		TArray<FHold> Others = bRigid ? TArray<FHold>() : R.Holds;
 		if (R.Turn)
 		{
 			ForwardTurn(P, S, G, *R.Turn);
@@ -927,13 +1136,21 @@ FResult SolveRequest(const FProblem& P, const FRequest& R)
 			// The body is carried by the grabbed bone; the limbs that hold bend under it.
 			const TArray<FMatrix> W = Worlds(P, S);
 			Place(P, S, W, R.Hips, Shifted(W[R.Hips], *R.Move), true);
-			Soft.Emplace(G, Start[G].GetOrigin() + *R.Move);
+			if (!bRigid)
+			{
+				Soft.Emplace(G, Start[G].GetOrigin() + *R.Move);
+			}
 		}
-		Out.Error = HoldLimbs(P, S, Others, R.Hips, R.MaxStretch, Soft, R.Rules);
+		if (!bRigid)
+		{
+			Out.Error = HoldLimbs(P, S, Others, R.Hips, R.MaxStretch, Soft, R.Rules);
+			IsolateRotations(P, S, Start, R.Isolate, G);
+		}
 		return Out;
 	}
 
 	// IK.
+	Out.Resolved = EMode::Ik;
 	if (R.Hips >= 0 && !IsUnder(P, G, R.Hips))
 	{
 		Out.bHandled = false;
@@ -1004,5 +1221,575 @@ FResult SolveRequest(const FProblem& P, const FRequest& R)
 		}
 	}
 	return Out;
+}
+
+namespace
+{
+// Lila's ikHandle (src/scene/Ik.cpp): its solve wrapper and solvers, on positions and world rotations.
+
+FQuat AxisAngle(const FVector& Axis, const double Radians) { return FQuat(Axis.GetUnsafeNormal(), Radians); }
+
+/** Shortest turn taking direction A onto B (both unit). */
+FQuat Arc(const FVector& A, const FVector& B)
+{
+	const double C = FMath::Clamp(FVector::DotProduct(A, B), -1.0, 1.0);
+	const FVector Axis = FVector::CrossProduct(A, B);
+	if (Axis.Size() < 1e-12)
+	{
+		if (C > 0.0)
+		{
+			return FQuat::Identity;
+		}
+		const FVector Any = FMath::Abs(A.X) < 0.9 ? FVector(1, 0, 0) : FVector(0, 1, 0);
+		return AxisAngle(FVector::CrossProduct(A, Any), UE_DOUBLE_PI);
+	}
+	return AxisAngle(Axis, FMath::Atan2(Axis.Size(), C));
+}
+
+FVector Perpendicular(const FVector& V, const FVector& Axis)
+{
+	const FVector P = V - FVector::DotProduct(V, Axis) * Axis;
+	return P.Size() > 1e-9 ? P.GetUnsafeNormal() : FVector::ZeroVector;
+}
+
+/** glm::slerp: the short way round, linear when the two are within a hair. */
+FQuat SlerpAsLila(const FQuat& X, const FQuat& Y, const double A)
+{
+	FQuat Z = Y;
+	double CosTheta = X.X * Y.X + X.Y * Y.Y + X.Z * Y.Z + X.W * Y.W;
+	if (CosTheta < 0.0)
+	{
+		Z = FQuat(-Y.X, -Y.Y, -Y.Z, -Y.W);
+		CosTheta = -CosTheta;
+	}
+	if (CosTheta > 1.0 - DBL_EPSILON)
+	{
+		return FQuat(FMath::Lerp(X.X, Z.X, A), FMath::Lerp(X.Y, Z.Y, A), FMath::Lerp(X.Z, Z.Z, A), FMath::Lerp(X.W, Z.W, A));
+	}
+	const double Angle = std::acos(CosTheta);
+	const double Sa = std::sin((1.0 - A) * Angle), Sb = std::sin(A * Angle), Si = std::sin(Angle);
+	return FQuat((Sa * X.X + Sb * Z.X) / Si, (Sa * X.Y + Sb * Z.Y) / Si, (Sa * X.Z + Sb * Z.Z) / Si, (Sa * X.W + Sb * Z.W) / Si);
+}
+
+FVector BendDirection(const FChainIk& C, const FVector& Root, const FVector& Dir, const FVector& FkBend)
+{
+	FVector U = C.Pole ? Perpendicular(Root + *C.Pole - Root, Dir) : FVector::ZeroVector;
+	if (U.IsZero())
+	{
+		U = Perpendicular(FkBend, Dir);
+	}
+	if (U.IsZero())
+	{
+		U = Perpendicular(FMath::Abs(FVector::DotProduct(Dir, C.Up)) < 0.9 ? C.Up : C.Side, Dir);
+	}
+	if (C.Twist != 0.0)
+	{
+		U = AxisAngle(Dir, C.Twist).RotateVector(U);
+	}
+	return U;
+}
+
+/** The turn taking frame (X, Y, X x Y) onto (A, B, A x B). */
+FQuat FrameTurn(const FVector& FromX, const FVector& FromY, const FVector& ToX, const FVector& ToY)
+{
+	const FQuat From(FMatrix(FromX, FromY, FVector::CrossProduct(FromX, FromY), FVector::ZeroVector));
+	const FQuat To(FMatrix(ToX, ToY, FVector::CrossProduct(ToX, ToY), FVector::ZeroVector));
+	return (To * From.Inverse()).GetNormalized();
+}
+
+/** The chain as the solvers see it: joint positions and world rotations, the start's parent rotation, and the target. */
+struct FChainState
+{
+	TArray<FVector> Pos;
+	TArray<FQuat> Rot;
+	FQuat Root = FQuat::Identity;
+	FVector Target = FVector::ZeroVector;
+};
+
+bool Limited(const FChainIk& C)
+{
+	for (int32 I = 0; I + 1 < C.Slots.Num(); ++I)
+	{
+		if (C.Slots[I].Limit.Kind != FLimit::EKind::None || C.Slots[I].Stiffness > 0.0)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+/** The slot's limit applied to a local rotation, after its stiffness eased it back toward Start (Lila's limitLocal). */
+FQuat LimitLocal(const FChainSlot& L, const FQuat& Local, const FQuat& Start)
+{
+	FQuat Q = Local.GetNormalized();
+	if (L.Stiffness > 0.0)
+	{
+		Q = SlerpAsLila(Start.GetNormalized(), Q, 1.0 - FMath::Clamp(L.Stiffness, 0.0, 1.0));
+	}
+	if (L.Limit.Kind != FLimit::EKind::None)
+	{
+		Q = L.Orient * ClampRotation(L.Limit, L.Orient.Inverse() * Q);
+	}
+	return Q.GetNormalized();
+}
+
+/** Per joint but the end: the bone's direction in the joint's own frame, its length and its starting local rotation. */
+struct FChainBones
+{
+	TArray<FVector> Dir;
+	TArray<double> Len;
+	TArray<FQuat> Start;
+};
+
+FChainBones BonesOf(const FChainState& K)
+{
+	FChainBones B;
+	FQuat Parent = K.Root;
+	for (int32 I = 0; I + 1 < K.Pos.Num(); ++I)
+	{
+		const FQuat R = K.Rot[I];
+		const FVector D = K.Pos[I + 1] - K.Pos[I];
+		const double L = D.Size();
+		B.Dir.Add(L > 1e-12 ? R.UnrotateVector(D / L) : FVector(1, 0, 0));
+		B.Len.Add(L);
+		B.Start.Add(Parent.Inverse() * R);
+		Parent = R;
+	}
+	return B;
+}
+
+TArray<FQuat> ForwardLimited(const FChainIk& C, const FChainState& K, const FChainBones& B, TArray<FVector>& Pos)
+{
+	TArray<FQuat> World;
+	FQuat Parent = K.Root;
+	for (int32 I = 0; I < B.Len.Num(); ++I)
+	{
+		FQuat R = Parent * B.Start[I];
+		if (const FVector Want = Pos[I + 1] - Pos[I]; Want.Size() > 1e-12)
+		{
+			R = Arc(R.RotateVector(B.Dir[I]), Want.GetUnsafeNormal()) * R;
+		}
+		const FQuat Local = LimitLocal(C.Slots[I], Parent.Inverse() * R, B.Start[I]);
+		World.Add(Parent * Local);
+		Pos[I + 1] = Pos[I] + World[I].RotateVector(B.Dir[I]) * B.Len[I];
+		Parent = World[I];
+	}
+	return World;
+}
+
+/** Cyclic coordinate descent from a limited pose, end to root, each joint as far as its limit and stiffness allow. */
+TArray<FQuat> RefineLimited(const FChainIk& C, const FChainState& K, const FChainBones& B, const TArray<FQuat>& World)
+{
+	const int32 M = B.Len.Num();
+	TArray<FQuat> Local, W;
+	Local.SetNum(M);
+	W.SetNum(M);
+	for (int32 I = 0; I < M; ++I)
+	{
+		Local[I] = (I == 0 ? K.Root : World[I - 1]).Inverse() * World[I];
+	}
+	TArray<FVector> Pos;
+	Pos.SetNum(M + 1);
+	auto Pose = [&] {
+		FQuat Parent = K.Root;
+		Pos[0] = K.Pos[0];
+		for (int32 I = 0; I < M; ++I)
+		{
+			W[I] = Parent * Local[I];
+			Pos[I + 1] = Pos[I] + W[I].RotateVector(B.Dir[I]) * B.Len[I];
+			Parent = W[I];
+		}
+		return (Pos[M] - K.Target).Size();
+	};
+	double BestError = Pose();
+	TArray<FQuat> Best = W;
+	for (int32 It = 0; It < 256 && BestError > 1e-9; ++It)
+	{
+		for (int32 I = M; I-- > 0;)
+		{
+			Pose();
+			const FVector ToEnd = Pos[M] - Pos[I], ToTarget = K.Target - Pos[I];
+			if (ToEnd.Size() < 1e-12 || ToTarget.Size() < 1e-12)
+			{
+				continue;
+			}
+			FQuat Turn = Arc(ToEnd.GetUnsafeNormal(), ToTarget.GetUnsafeNormal());
+			const FChainSlot& L = C.Slots[I];
+			if (L.Stiffness > 0.0)
+			{
+				Turn = SlerpAsLila(FQuat::Identity, Turn, 1.0 - FMath::Clamp(L.Stiffness, 0.0, 1.0));
+			}
+			FQuat Q = ((I == 0 ? K.Root : W[I - 1]).Inverse() * Turn * W[I]).GetNormalized();
+			if (L.Limit.Kind != FLimit::EKind::None)
+			{
+				Q = L.Orient * ClampRotation(L.Limit, L.Orient.Inverse() * Q);
+			}
+			Local[I] = Q;
+		}
+		const double E = Pose();
+		if (E >= BestError - 1e-15)
+		{
+			break;
+		}
+		BestError = E;
+		Best = W;
+	}
+	return Best;
+}
+
+/** Refines a free solution under the limits with FABRIK passes whose forward half honours them; keeps the closest pose. */
+TArray<FQuat> SolveLimited(const FChainIk& C, const FChainState& K, const TArray<FQuat>& Free)
+{
+	const FChainBones B = BonesOf(K);
+	const int32 N = K.Pos.Num();
+	TArray<FVector> Pos;
+	Pos.SetNum(N);
+	Pos[0] = K.Pos[0];
+	for (int32 I = 0; I + 1 < N; ++I)
+	{
+		Pos[I + 1] = Pos[I] + Free[I].RotateVector(B.Dir[I]) * B.Len[I];
+	}
+	TArray<FQuat> Best = ForwardLimited(C, K, B, Pos);
+	double BestError = (Pos[N - 1] - K.Target).Size();
+	auto SafeDir = [](const FVector& V) { return V.Size() > 1e-12 ? V.GetUnsafeNormal() : FVector(1, 0, 0); };
+	for (int32 It = 0, Stalled = 0; It < 256 && BestError > 1e-9 && Stalled < 8; ++It)
+	{
+		Pos[N - 1] = K.Target;
+		for (int32 I = N - 1; I-- > 0;)
+		{
+			Pos[I] = Pos[I + 1] + SafeDir(Pos[I] - Pos[I + 1]) * B.Len[I];
+		}
+		Pos[0] = K.Pos[0];
+		TArray<FQuat> World = ForwardLimited(C, K, B, Pos);
+		if (const double E = (Pos[N - 1] - K.Target).Size(); E < BestError - 1e-12)
+		{
+			Best = MoveTemp(World);
+			BestError = E;
+			Stalled = 0;
+		}
+		else
+		{
+			++Stalled;
+		}
+	}
+	return BestError > 1e-9 ? RefineLimited(C, K, B, Best) : Best;
+}
+
+/** Each joint turned by the shortest arc from where its bone points after its parent turned to where it should point. */
+TArray<FQuat> FollowPositions(const FChainState& K, const TArray<FVector>& Pos)
+{
+	TArray<FQuat> Out;
+	FQuat Inherited = FQuat::Identity;
+	for (int32 I = 0; I + 1 < K.Pos.Num(); ++I)
+	{
+		const FVector FkDir = K.Pos[I + 1] - K.Pos[I], NewDir = Pos[I + 1] - Pos[I];
+		FQuat Turn = Inherited;
+		if (FkDir.Size() > 1e-12 && NewDir.Size() > 1e-12)
+		{
+			Turn = Arc(Inherited.RotateVector(FkDir.GetUnsafeNormal()).GetUnsafeNormal(), NewDir.GetUnsafeNormal()) * Inherited;
+		}
+		Out.Add(Turn * K.Rot[I]);
+		Inherited = Turn;
+	}
+	return Out;
+}
+
+TArray<FQuat> SolveTwoBone(const FChainIk& C, const FChainState& K)
+{
+	const FVector P0 = K.Pos[0], P1 = K.Pos[1], P2 = K.Pos[2];
+	const double A = (P1 - P0).Size(), B = (P2 - P1).Size();
+	const FVector ToTarget = K.Target - P0, FkToEnd = P2 - P0;
+	const double D = ToTarget.Size();
+	TArray<FQuat> World = {K.Rot[0], K.Rot[1]};
+	if (D < 1e-12 || A < 1e-12 || B < 1e-12 || FkToEnd.Size() < 1e-12)
+	{
+		return World;
+	}
+	const FVector Dir = ToTarget / D;
+	const FVector FkDir = FkToEnd.GetUnsafeNormal();
+	const FVector U = BendDirection(C, P0, Dir, Perpendicular(P1 - P0, Dir).IsZero() ? Arc(FkDir, Dir).RotateVector(P1 - P0) : P1 - P0);
+	FVector FkU = Perpendicular(P1 - P0, FkDir);
+	if (FkU.IsZero())
+	{
+		FkU = Perpendicular(Arc(Dir, FkDir).RotateVector(U), FkDir);
+	}
+	const FVector N = FVector::CrossProduct(Dir, U);
+	const FQuat Align = FrameTurn(FkDir, FkU, Dir, U);
+	const double Reach = FMath::Clamp(D, FMath::Abs(A - B), A + B);
+	const double AngleNew = std::acos(FMath::Clamp((A * A + Reach * Reach - B * B) / (2.0 * A * Reach), -1.0, 1.0));
+	const FVector Upper = (P1 - P0).GetUnsafeNormal();
+	const double AngleFk = std::atan2(FVector::DotProduct(Upper, FkU), FVector::DotProduct(Upper, FkDir));
+	const FQuat Turn0 = AxisAngle(N, AngleNew - AngleFk) * Align;
+	const FVector Elbow = P0 + Turn0.RotateVector(P1 - P0);
+	const FVector Want = P0 + Dir * Reach - Elbow;
+	FQuat Turn1 = Turn0;
+	if (Want.Size() > 1e-12)
+	{
+		Turn1 = Arc(Turn0.RotateVector(P2 - P1).GetUnsafeNormal(), Want.GetUnsafeNormal()) * Turn0;
+	}
+	World = {Turn0 * K.Rot[0], Turn1 * K.Rot[1]};
+	return Limited(C) ? SolveLimited(C, K, World) : World;
+}
+
+TArray<FQuat> SolveFabrik(const FChainIk& C, const FChainState& K)
+{
+	const int32 N = K.Pos.Num();
+	TArray<FVector> Pos = K.Pos;
+	TArray<double> Len;
+	double Reach = 0.0;
+	for (int32 I = 0; I + 1 < N; ++I)
+	{
+		Reach += Len.Add_GetRef((Pos[I + 1] - Pos[I]).Size());
+	}
+	const FVector Root = Pos[0];
+	auto SafeDir = [](const FVector& V) { return V.Size() > 1e-12 ? V.GetUnsafeNormal() : FVector(1, 0, 0); };
+	if ((K.Target - Root).Size() >= Reach)
+	{
+		const FVector Dir = SafeDir(K.Target - Root);
+		for (int32 I = 0; I + 1 < N; ++I)
+		{
+			Pos[I + 1] = Pos[I] + Dir * Len[I];
+		}
+	}
+	else
+	{
+		const FVector Line = SafeDir(K.Target - Root);
+		bool bOnLine = true;
+		for (int32 I = 1; I + 1 < N && bOnLine; ++I)
+		{
+			bOnLine = ((Pos[I] - Root) - FVector::DotProduct(Pos[I] - Root, Line) * Line).Size() < 1e-9;
+		}
+		if (bOnLine && N > 2 && (Pos[N - 1] - Root).Size() > 1e-12)
+		{
+			const FQuat Aim = Arc((Pos[N - 1] - Root).GetUnsafeNormal(), Line);
+			for (int32 I = 1; I < N; ++I)
+			{
+				Pos[I] = Root + Aim.RotateVector(Pos[I] - Root);
+			}
+		}
+		for (int32 It = 0; It < 256 && (Pos[N - 1] - K.Target).Size() > 1e-9; ++It)
+		{
+			Pos[N - 1] = K.Target;
+			for (int32 I = N - 1; I-- > 0;)
+			{
+				Pos[I] = Pos[I + 1] + SafeDir(Pos[I] - Pos[I + 1]) * Len[I];
+			}
+			Pos[0] = Root;
+			for (int32 I = 0; I + 1 < N; ++I)
+			{
+				Pos[I + 1] = Pos[I] + SafeDir(Pos[I + 1] - Pos[I]) * Len[I];
+			}
+		}
+	}
+	FVector Axis = Pos[N - 1] - Root;
+	if (N > 2 && Axis.Size() > 1e-12 && (C.Pole || C.Twist != 0.0))
+	{
+		Axis = Axis.GetUnsafeNormal();
+		FVector Mid = FVector::ZeroVector;
+		for (int32 I = 1; I + 1 < N; ++I)
+		{
+			Mid += Pos[I] - Root;
+		}
+		const FVector Bend = Perpendicular(Mid, Axis);
+		if (!Bend.IsZero())
+		{
+			const FVector Want = BendDirection(C, Root, Axis, Bend);
+			const FQuat Swing = AxisAngle(Axis, std::atan2(FVector::DotProduct(FVector::CrossProduct(Bend, Want), Axis), FVector::DotProduct(Bend, Want)));
+			for (int32 I = 1; I + 1 < N; ++I)
+			{
+				Pos[I] = Root + Swing.RotateVector(Pos[I] - Root);
+			}
+		}
+	}
+	const TArray<FQuat> World = FollowPositions(K, Pos);
+	return Limited(C) ? SolveLimited(C, K, World) : World;
+}
+
+FVector AlongPolyline(const TArray<FVector>& Pts, const TArray<double>& Cum, const double S)
+{
+	if (Pts.Num() == 1)
+	{
+		return Pts[0];
+	}
+	int32 K = Algo::UpperBound(Cum, S);
+	K = FMath::Clamp(K, 1, Pts.Num() - 1);
+	const double Seg = Cum[K] - Cum[K - 1];
+	const double T = Seg > 1e-12 ? (S - Cum[K - 1]) / Seg : 0.0;
+	return Pts[K - 1] + (Pts[K] - Pts[K - 1]) * T;
+}
+
+/** The chain laid along the curve from its start (each joint a bone's length from the last), then rolled and twisted. */
+TArray<FQuat> SolveSpline(const FChainIk& C, const FChainState& K)
+{
+	const int32 N = K.Pos.Num();
+	if (C.Curve.Num() < 2)
+	{
+		return SolveFabrik(C, K);
+	}
+	TArray<double> Cum;
+	Cum.Init(0.0, C.Curve.Num());
+	for (int32 I = 1; I < C.Curve.Num(); ++I)
+	{
+		Cum[I] = Cum[I - 1] + (C.Curve[I] - C.Curve[I - 1]).Size();
+	}
+	TArray<double> Len;
+	double Chain = 0.0;
+	for (int32 I = 0; I + 1 < N; ++I)
+	{
+		Chain += Len.Add_GetRef((K.Pos[I + 1] - K.Pos[I]).Size());
+	}
+	TArray<FVector> Pos;
+	Pos.SetNum(N);
+	Pos[0] = K.Pos[0];
+	if (C.bFitCurve && Chain > 1e-12)
+	{
+		double S = 0.0;
+		for (int32 I = 0; I + 1 < N; ++I)
+		{
+			Pos[I + 1] = AlongPolyline(C.Curve, Cum, S += Len[I] * Cum.Last() / Chain);
+		}
+	}
+	else
+	{
+		double S = 0.0;
+		const double Step = FMath::Max(Cum.Last() / double(C.Curve.Num() * 4), 1e-6);
+		for (int32 I = 0; I + 1 < N; ++I)
+		{
+			double Lo = S, Hi = S;
+			while ((AlongPolyline(C.Curve, Cum, Hi) - Pos[I]).Size() < Len[I] && Hi - S < Len[I] * 4.0 + Cum.Last())
+			{
+				Lo = Hi;
+				Hi += Step;
+			}
+			for (int32 It = 0; It < 60; ++It)
+			{
+				const double Mid = 0.5 * (Lo + Hi);
+				((AlongPolyline(C.Curve, Cum, Mid) - Pos[I]).Size() < Len[I] ? Lo : Hi) = Mid;
+			}
+			S = Hi;
+			const FVector D = AlongPolyline(C.Curve, Cum, S) - Pos[I];
+			Pos[I + 1] = D.Size() > 1e-12 ? Pos[I] + D.GetUnsafeNormal() * Len[I] : Pos[I];
+		}
+	}
+	TArray<FQuat> World = FollowPositions(K, Pos);
+	for (int32 I = 0; I + 1 < N; ++I)
+	{
+		const FVector Bone = Pos[I + 1] - Pos[I];
+		const double Share = N > 2 ? double(I) / double(N - 2) : 1.0;
+		const double Angle = C.Roll + C.Twist * Share;
+		if (FMath::Abs(Angle) > 1e-15 && Bone.Size() > 1e-12)
+		{
+			World[I] = AxisAngle(Bone, Angle) * World[I];
+		}
+	}
+	return World;
+}
+} // namespace
+
+void SolveChain(const FProblem& P, FPose& S, const FChainIk& C, const FMatrix& Goal)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaStrings::SolveChain);
+
+	const int32 N = C.Bones.Num();
+	if (N < 2 || C.Slots.Num() != N)
+	{
+		return;
+	}
+	const TArray<FMatrix> Now = Worlds(P, S);
+	const FMatrix ParentWorld = ParentWorldOf(P, Now, C.Bones[0]);
+	// The handle solves from its rest locals (a preferred angle replacing the rotation) under the start's parent as it is now.
+	TArray<FMatrix> Local;
+	for (int32 I = 0; I < N; ++I)
+	{
+		const FChainSlot& L = C.Slots[I];
+		Local.Add(FQuatRotationTranslationMatrix(I + 1 < N && L.Preferred ? *L.Preferred : L.RestRotation, L.Rest));
+	}
+	TArray<FMatrix> W;
+	auto Build = [&] {
+		W.Reset();
+		FMatrix Parent = ParentWorld;
+		for (const FMatrix& M : Local)
+		{
+			W.Add(Parent = Mul(Parent, M));
+		}
+	};
+	Build();
+	FChainState K;
+	K.Root = QuatOf(ParentWorld);
+	K.Target = Goal.GetOrigin();
+	const FVector Root = W[0].GetOrigin();
+	double Reach = 0.0;
+	for (int32 I = 0; I + 1 < N; ++I)
+	{
+		Reach += (W[I + 1].GetOrigin() - W[I].GetOrigin()).Size();
+	}
+	const double D = (K.Target - Root).Size();
+	double Soft = FMath::Min(D, Reach);
+	if (C.Softness > 0.0 && Reach > 1e-12)
+	{
+		const double Ds = FMath::Min(C.Softness, Reach), Da = Reach - Ds;
+		Soft = D > Da ? Da + Ds * (1.0 - std::exp(-(D - Da) / Ds)) : D;
+	}
+	double Stretch = 1.0;
+	if (C.MaxStretch > 1.0 && Soft > 1e-12 && D > Soft)
+	{
+		Stretch = FMath::Min(D / Soft, C.MaxStretch);
+		for (int32 I = 1; I < N; ++I)
+		{
+			Local[I].SetOrigin(Local[I].GetOrigin() * Stretch);
+		}
+		Build();
+	}
+	if (C.Softness > 0.0 && D > 1e-12)
+	{
+		K.Target = Root + (K.Target - Root) * (FMath::Min(D, Soft * Stretch) / D);
+	}
+	for (const FMatrix& M : W)
+	{
+		K.Pos.Add(M.GetOrigin());
+		K.Rot.Add(QuatOf(M));
+	}
+	const TArray<FQuat> World = C.Solver == FChainIk::ESolver::TwoBone && N == 3 ? SolveTwoBone(C, K)
+								: C.Solver == FChainIk::ESolver::Spline		  ? SolveSpline(C, K)
+																			  : SolveFabrik(C, K);
+	// The joints' lengths follow the stretch; the solution's locals are held to the limits, then posed.
+	// Each joint's offset from its parent is its rest one times the stretch, whatever the pose had: the handle sets it.
+	for (int32 I = 1; I < N; ++I)
+	{
+		const int32 B = C.Bones[I];
+		S.Stretch[B] = 1.0;
+		S.Offset[B] = C.Slots[I].Rest * Stretch - P.Bones[B].Before.GetOrigin();
+	}
+	FQuat Parent = K.Root;
+	for (int32 I = 0; I + 1 < N && I < World.Num(); ++I)
+	{
+		FQuat Q = (Parent.Inverse() * World[I]).GetNormalized();
+		if (const FChainSlot& L = C.Slots[I]; L.Limit.Kind != FLimit::EKind::None)
+		{
+			Q = (L.Orient * ClampRotation(L.Limit, L.Orient.Inverse() * Q)).GetNormalized();
+		}
+		const FQuat Solved = Parent * Q;
+		FMatrix Target = FQuatRotationMatrix(Solved);
+		Place(P, S, Worlds(P, S), C.Bones[I], Target, false);
+		Parent = Solved;
+	}
+	// The end turns toward the controller by its align weight: the rotate between orient and axis blended as Lila's joint does.
+	if (C.AlignWeight > 0.0)
+	{
+		const int32 End = C.Bones.Last();
+		const FQuat Fk = S.Rotation[End];
+		FPose Aligned = S;
+		Place(P, Aligned, Worlds(P, Aligned), End, Goal, false);
+		if (C.AlignWeight >= 1.0)
+		{
+			S.Rotation[End] = Aligned.Rotation[End];
+		}
+		else
+		{
+			const FChainSlot& L = C.Slots.Last();
+			const FQuat From = L.Orient.Inverse() * Fk * L.Axis.Inverse(), To = L.Orient.Inverse() * Aligned.Rotation[End] * L.Axis.Inverse();
+			S.Rotation[End] = (L.Orient * SlerpAsLila(From.GetNormalized(), To.GetNormalized(), C.AlignWeight) * L.Axis).GetNormalized();
+		}
+	}
 }
 } // namespace LilaStrings

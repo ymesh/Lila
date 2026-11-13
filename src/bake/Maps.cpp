@@ -268,7 +268,13 @@ bool frontOccluded(const MapContext& ctx, OccluderScope scope, uint32_t high, ui
             return false;
         if (!th.backface)
             return true;
-        o += d * (th.distance + step);
+        // A front face lying on the back face (parts resting on each other share the plane) is met from behind on the
+        // way back, so it still occludes rather than being stepped past with it.
+        TraceHit coincident;
+        const glm::vec3 past = o + d * (th.distance + step);
+        if (ctx.tracer->closestHit(ctx.groupIndex, scope, high, low, RayKind::Occlusion, past, -d, 2.0f * step, coincident) && coincident.backface)
+            return true;
+        o = past;
         tMax -= th.distance + step;
     }
     return false;

@@ -204,7 +204,7 @@ void applyLights(render::FrameState& s)
                  : l.kind == lights::Kind::Disc        ? render::LightDraw::Disc
                                                        : render::LightDraw::Point;
         d.lightingChannels = scene::lightingChannels::mask(*n);
-        d.position = glm::vec3(world[3]);
+        d.position = glm::dvec3(world[3]);
         d.direction = glm::vec3(glm::normalize(-glm::dvec3(world[2])));
         d.right = glm::vec3(glm::normalize(glm::dvec3(world[0])));
         d.radiance = glm::vec3(lights::effectiveColor(l) * l.intensity) * unitScale(l);
@@ -228,18 +228,18 @@ void applyLights(render::FrameState& s)
             if (d.kind == render::LightDraw::Directional)
             {
                 const glm::dmat4 view = glm::lookAt(centre - dir * radius * 2.0, centre, up);
-                d.shadowViewProj = glm::mat4(reverseDepth(glm::orthoRH_ZO(-radius, radius, -radius, radius, radius * 0.5, radius * 3.5)) * view);
+                d.shadowViewProj = reverseDepth(glm::orthoRH_ZO(-radius, radius, -radius, radius, radius * 0.5, radius * 3.5)) * view;
                 d.shadowTexel = float(2.0 * radius / 2048.0);
                 const double angle = glm::radians(l.sourceRadius > 0.0 ? std::min(l.sourceRadius, 10.0) : 0.27);
                 d.shadowDepth = glm::vec4(float(radius * 0.5), float(radius * 3.5), float(std::tan(angle)), float(0.5 / radius));
             }
             else
             {
-                const glm::dvec3 eye = glm::dvec3(d.position);
+                const glm::dvec3 eye = d.position;
                 const double farPlane = glm::length(centre - eye) + radius;
                 const double fov = 2.0 * glm::radians(std::clamp(l.outerConeAngle, 1.0, 89.0));
                 const glm::dmat4 view = glm::lookAt(eye, eye + dir, up);
-                d.shadowViewProj = glm::mat4(reverseDepth(glm::perspectiveRH_ZO(fov, 1.0, std::max(farPlane * 0.001, 0.5), farPlane)) * view);
+                d.shadowViewProj = reverseDepth(glm::perspectiveRH_ZO(fov, 1.0, std::max(farPlane * 0.001, 0.5), farPlane)) * view;
                 d.shadowTexel = float(2.0 * std::tan(fov * 0.5) * glm::length(centre - eye) / 2048.0);
                 d.shadowDepth = glm::vec4(float(std::max(farPlane * 0.001, 0.5)), float(farPlane), d.radius, float(0.5 / std::tan(fov * 0.5)));
             }

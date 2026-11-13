@@ -66,6 +66,7 @@ json importCommand(const Args& a)
     opts.setPlayback = a.get<bool>("setPlayback", true);
     opts.materials = a.get<bool>("materials", true);
     opts.loadPayloads = a.get<bool>("loadPayloads", true);
+    opts.georeference = a.get<bool>("georeference", true);
     opts.take = a.get<std::string>("take", "");
     opts.lightingChannels = a.get<bool>("lightingChannels", true);
     if (a.has("variants"))

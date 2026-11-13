@@ -1,5 +1,7 @@
 #include "link/UnrealLink.h"
 
+#include "math/Unreal.h"
+
 #include "core/Log.h"
 #include "core/MainQueue.h"
 #include "core/Paths.h"
@@ -255,14 +257,41 @@ bool exportsSkeleton(scene::Graph& g, scene::NodeId node, scene::NodeId top)
 }
 
 /**
- * A pinned prop's socket for its import: the joint bakePin made for it and the skeletal mapping that sends that joint's
- * skeleton, whose mesh gets the socket. Null when the prop has none or no mapping sends the skeleton.
+ * A socket offset in the bone's Unreal space: the prop's matrix in the bone's rigid space (Lila) taken through the
+ * skeletal export's axes on the bone side and the static export's on the prop's, so the prop's mesh attached to the
+ * socket lands where it was in Lila.
+ */
+json unrealSocketOffset(const glm::dmat4& rel)
+{
+    auto colsOf = [](math::Vector (*f)(const math::Vector&)) {
+        glm::dmat3 m;
+        for (int c = 0; c < 3; ++c)
+        {
+            glm::dvec3 e(0.0);
+            e[c] = 1.0;
+            m[c] = f(math::Vector(e)).toGlm();
+        }
+        return m;
+    };
+    const glm::dmat3 bone = colsOf(&math::characterToUnreal), mesh = colsOf(&math::toUnreal);
+    const glm::dmat3 r = bone * glm::dmat3(rel) * glm::inverse(mesh);
+    const glm::dvec3 at = bone * glm::dvec3(rel[3]);
+    const glm::dvec3 x = r[0], y = r[1];
+    return {{"location", json::array({at.x, at.y, at.z})}, {"xAxis", json::array({x.x, x.y, x.z})}, {"yAxis", json::array({y.x, y.y, y.z})}};
+}
+
+/**
+ * A pinned prop's socket for its import: the joint bakePin made for it (no offset), or the bone and offset
+ * puppeteerPropUnreal gave it, and the skeletal mapping that sends that joint's skeleton, whose mesh gets the socket.
+ * Null when the prop has none or no mapping sends the skeleton.
  */
 json socketParams(scene::Graph& g, const scene::Node& prop, const json& list)
 {
-    const std::string joint = scene::pins::socketOf(prop);
-    if (joint.empty())
+    const std::string socket = scene::pins::socketOf(prop);
+    if (socket.empty())
         return nullptr;
+    const std::string bone = scene::pins::socketBoneOf(prop);
+    const std::string joint = bone.empty() ? socket : bone;
     scene::NodeId found = scene::kNoNode;
     for (scene::NodeId id : g.findAll(joint))
         if (scene::rig::isJoint(*g.node(id)))
@@ -278,7 +307,12 @@ json socketParams(scene::Graph& g, const scene::Node& prop, const json& list)
         if (!m.is_object() || m.value("kind", std::string()) != "skeletal" || m.value("contentPath", std::string()).empty())
             continue;
         if (scene::Node* n = mappedNode(m.value("node", std::string())); n && exportsSkeleton(g, n->id(), top))
-            return {{"name", joint}, {"bone", joint}, {"skeletalMesh", m["contentPath"]}};
+        {
+            json out = {{"name", socket}, {"bone", joint}, {"skeletalMesh", m["contentPath"]}};
+            if (!bone.empty())
+                out["offset"] = unrealSocketOffset(scene::pins::socketOffsetOf(prop));
+            return out;
+        }
     }
     log::warn("Unreal sync: {} attaches to {}, but no skeletal mapping sends its skeleton; map the character to make the socket",
               prop.path(), joint);

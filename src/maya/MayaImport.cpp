@@ -38,6 +38,7 @@
 #include "scene/Rig.h"
 #include "scene/Skin.h"
 
+#include <nlohmann/json.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <tbb/parallel_for.h>
 
@@ -53,6 +54,8 @@
 
 namespace lila::maya
 {
+using json = nlohmann::json;
+
 namespace
 {
 using geo::Index;
@@ -60,7 +63,6 @@ using geo::kInvalid;
 using scene::Graph;
 using scene::NodeId;
 using scene::PlugRef;
-using json = nlohmann::json;
 
 constexpr int kMaxRefDepth = 8;
 
@@ -3124,6 +3126,8 @@ private:
         {
             fbx::ImportOptions o;
             o.setPlayback = false;
+            // Edits in the .ma are in the FBX's own axes, which importAxes describes; Maya doesn't turn characters.
+            o.turnCharacters = false;
             fbx::ImportResult sub = fbx::importFbx(g, p, o);
             if (!sub.ok)
                 warnings.push_back(std::format("{}: {}", p.filename().string(), sub.error));

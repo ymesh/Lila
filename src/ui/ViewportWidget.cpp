@@ -1,3 +1,4 @@
+#include "ui/PointCloudDisplay.h"
 #include "ui/ViewportWidgetDetail.h"
 
 #include "render/Surface.h"
@@ -6,6 +7,13 @@
 #include "scene/Turntable.h"
 #include "scene/ViewState.h"
 #include "ui/CameraBookmarks.h"
+#include "ui/DroneCamera.h"
+#include "ui/ViewportDisplay.h"
+
+#include <QElapsedTimer>
+#include <QGuiApplication>
+#include <QScreen>
+#include <QTimer>
 
 namespace lila::ui
 {
@@ -325,8 +333,156 @@ void ViewportWidget::leaveEvent(QEvent* e)
     QWidget::leaveEvent(e);
 }
 
+namespace
+{
+double smoothingPref(const char* key) { return std::clamp(PrefStore::get().value<double>("general", key, 0.0), 0.0, 1.0); }
+double lookSmoothing() { return smoothingPref(viewportDisplay::kCameraLookSmoothing); }
+double moveSmoothing() { return smoothingPref(viewportDisplay::kCameraMoveSmoothing); }
+// Camera smoothing is off until its playback is reliable; the prefs and the drone popover rows are commented out with it.
+double cameraSmoothing() { return 0.0; /* std::max(lookSmoothing(), moveSmoothing()); */ }
+
+/** Milliseconds on a steady clock, with sub-millisecond resolution for spacing camera samples. */
+double sampleClockMs()
+{
+    static QElapsedTimer clock = [] {
+        QElapsedTimer t;
+        t.start();
+        return t;
+    }();
+    return double(clock.nsecsElapsed()) / 1e6;
+}
+
+/** The shortest turn from a to b, degrees. */
+double angleToward(double a, double b) { return std::remainder(b - a, 360.0); }
+
+bool sameView(const Camera& a, const Camera& b)
+{
+    return a.target == b.target && a.distance == b.distance && a.yaw == b.yaw && a.pitch == b.pitch && a.focalLength == b.focalLength &&
+           a.orthoWidth == b.orthoWidth;
+}
+
+/** The two samples around t and how far between them t is; before the first and after the last, that sample holds. */
+template <class Samples> std::tuple<const Camera*, const Camera*, double> around(const Samples& s, double t)
+{
+    if (t <= s.front().ms)
+        return {&s.front().camera, &s.front().camera, 0.0};
+    for (size_t i = 1; i < s.size(); ++i)
+        if (t <= s[i].ms)
+            return {&s[i - 1].camera, &s[i].camera, (t - s[i - 1].ms) / std::max(s[i].ms - s[i - 1].ms, 1e-3)};
+    return {&s.back().camera, &s.back().camera, 1.0};
+}
+
+/**
+ * A playback delay moved toward want slowly enough (a quarter of the time passed) that playback time only ever runs
+ * forward, so a change in the input's pace never pulls the view back.
+ */
+double settleDelay(double current, double want, double dtMs)
+{
+    const double step = 0.25 * dtMs;
+    return current + std::clamp(want - current, -step, step);
+}
+} // namespace
+
+const Camera& ViewportWidget::shownCamera()
+{
+    // Off, or a change no playback can bridge: the camera as it is.
+    if (cameraSmoothing() <= 0.0 || !mShownValid || mShownCamera.ortho != mCamera.ortho || mShownCamera.free != mCamera.free ||
+        mShownCamera.zUp != mCamera.zUp)
+        return mCamera;
+    return mShownCamera;
+}
+
+void ViewportWidget::startCameraEase()
+{
+    const double now = sampleClockMs();
+    if (!mShownValid || mCameraSamples.empty() || mShownCamera.ortho != mCamera.ortho || mShownCamera.free != mCamera.free ||
+        mShownCamera.zUp != mCamera.zUp)
+    {
+        mShownCamera = mCamera;
+        mShownValid = true;
+        mCameraSamples.assign(1, {now, mCamera});
+        return;
+    }
+    if (sameView(mCameraSamples.back().camera, mCamera))
+        return;
+    const double gap = now - mCameraSamples.back().ms;
+    if (gap > 4.0 * mInputIntervalMs + 50.0)
+    {
+        // Starting after a pause: the old state held until one interval ago, so motion ramps in instead of jumping.
+        const Camera held = mCameraSamples.back().camera;
+        mCameraSamples.assign(1, {now - mInputIntervalMs, held});
+    }
+    else
+    {
+        // How often updates arrive while moving, and how unevenly: the delay that keeps playback between two samples.
+        const double g = std::clamp(gap, 1.0, 100.0);
+        mInputSpreadMs += (std::abs(g - mInputIntervalMs) - mInputSpreadMs) * 0.1;
+        mInputIntervalMs += (g - mInputIntervalMs) * 0.1;
+    }
+    mCameraSamples.push_back({now, mCamera});
+    while (mCameraSamples.size() > 2 && mCameraSamples[1].ms < now - 500.0)
+        mCameraSamples.pop_front();
+    if (!mEaseTimer)
+    {
+        mEaseTimer = new QTimer(this);
+        mEaseTimer->setTimerType(Qt::PreciseTimer);
+        connect(mEaseTimer, &QTimer::timeout, this, [this] { easeCamera(); });
+    }
+    if (mEaseTimer->isActive())
+        return;
+    const QScreen* screen = window() && window()->screen() ? window()->screen() : QGuiApplication::primaryScreen();
+    mEaseTimer->setInterval(std::max(2, int(1000.0 / std::max(screen ? screen->refreshRate() : 60.0, 30.0))));
+    mEaseTimer->start();
+    easeCamera();
+}
+
+void ViewportWidget::easeCamera()
+{
+    if (cameraSmoothing() <= 0.0 || mCameraSamples.empty())
+    {
+        mShownCamera = mCamera;
+        if (mEaseTimer)
+            mEaseTimer->stop();
+        return;
+    }
+    // Smoothing 1 plays back far enough behind to cover the long gaps between updates (their mean plus three spreads),
+    // 0.5 half that; interpolating only between updates that have arrived keeps the motion continuous.
+    const double cover = std::clamp(mInputIntervalMs + 3.0 * mInputSpreadMs, 4.0, 80.0);
+    const double now = sampleClockMs(), dt = mPlaybackLastMs > 0.0 ? std::clamp(now - mPlaybackLastMs, 0.0, 100.0) : 0.0;
+    mPlaybackLastMs = now;
+    mLookDelayMs = settleDelay(mLookDelayMs, lookSmoothing() * cover, dt);
+    mMoveDelayMs = settleDelay(mMoveDelayMs, moveSmoothing() * cover, dt);
+    const double lookDelay = mLookDelayMs, moveDelay = mMoveDelayMs;
+    Camera& s = mShownCamera;
+    s = mCamera;
+    {
+        const auto [a, b, f] = around(mCameraSamples, now - moveDelay);
+        s.target = a->target + (b->target - a->target) * f;
+        s.distance = std::exp(std::log(std::max(a->distance, 1e-6)) + (std::log(std::max(b->distance, 1e-6)) - std::log(std::max(a->distance, 1e-6))) * f);
+        s.orthoWidth = std::exp(std::log(std::max(a->orthoWidth, 1e-6)) + (std::log(std::max(b->orthoWidth, 1e-6)) - std::log(std::max(a->orthoWidth, 1e-6))) * f);
+        s.focalLength = a->focalLength + (b->focalLength - a->focalLength) * f;
+    }
+    {
+        const auto [a, b, f] = around(mCameraSamples, now - lookDelay);
+        s.yaw = a->yaw + angleToward(a->yaw, b->yaw) * f;
+        s.pitch = a->pitch + (b->pitch - a->pitch) * f;
+    }
+    // Caught up once both playback times have passed the newest sample.
+    if (now - std::max(lookDelay, moveDelay) >= mCameraSamples.back().ms)
+    {
+        s = mCamera;
+        mEaseTimer->stop();
+        mPlaybackLastMs = 0.0;
+    }
+    submit();
+}
+
 void ViewportWidget::requestFrame()
 {
+    if (cameraSmoothing() > 0.0)
+        startCameraEase();
+    else
+        mShownValid = false;
     if (mFrameQueued)
         return;
     mFrameQueued = true;
@@ -338,6 +494,8 @@ void ViewportWidget::requestFrame()
 
 void ViewportWidget::updateCursor()
 {
+    if (drone::applyCursor(this))
+        return;
     if (mFramePickArmed)
     {
         if (cursor().shape() != Qt::CrossCursor)
@@ -384,7 +542,7 @@ render::FrameState ViewportWidget::renderFrame(const RenderView& view)
 render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
 {
     LILA_ZONE();
-    const Camera& camera = rv ? rv->camera : mCamera;
+    const Camera& camera = rv ? rv->camera : shownCamera();
     const double viewAspect = rv ? double(rv->width) / double(std::max(rv->height, 1)) : aspect();
     scene::Graph& g = scene::Graph::current();
     if (!rv && cameraBookmarks::activeView() == this)
@@ -397,6 +555,7 @@ render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
     s.proj = camera.proj(viewAspect);
     s.eye = camera.eye();
     s.zUp = camera.zUp;
+    s.cameraRelative = PrefStore::get().value<bool>("general", viewportDisplay::kCameraRelative, true);
     s.background = viewportBackground();
     {
         LILA_ZONE_N("buildFrame settings");
@@ -470,6 +629,26 @@ render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
         mLodHiddenKey = key;
     }
     drawMeshNodes(s, rv, mLodHidden, underSelection, highlight, aids ? &aidMeshes : nullptr);
+    {
+        ViewInfo cloudView;
+        cloudView.view = s.view;
+        cloudView.proj = s.proj;
+        cloudView.eye = s.eye;
+        cloudView.width = rv ? double(rv->width) : width();
+        cloudView.height = rv ? double(rv->height) : height();
+        cloudView.ortho = camera.ortho;
+        const double heightPx = rv ? double(rv->height) : double(pixelSize().height());
+        const glm::vec3 selected(themeLinear("wireSelected", kSelectedColor)), hot(themeLinear("wirePreselect", kPreselectColor));
+        pointCloudDisplay::draw(
+            s, cloudView, heightPx, g,
+            [&](scene::NodeId id) { return id != mLookThrough && scene::effectivelyVisible(g, id) && mIsolation.shows(id) && !mLodHidden.contains(id); },
+            [&](scene::NodeId id) {
+                if (!highlight)
+                    return glm::vec3(0.0f);
+                return g.isSelected(id) ? selected : mPreselect.mode == scene::ComponentMode::Object && mPreselect.node == id ? hot : glm::vec3(0.0f);
+            },
+            rv != nullptr);
+    }
     // A render is the scene alone: no components, tools, locators, grid or HUD.
     if (rv)
     {
@@ -584,14 +763,14 @@ render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
         for (double x = std::floor((cx - halfW) / step) * step; x <= cx + halfW; x += step)
         {
             glm::vec4 c = lineColor(x, step);
-            s.lines.push_back({glm::vec3(r * x + u * (cy - halfH)), c});
-            s.lines.push_back({glm::vec3(r * x + u * (cy + halfH)), c});
+            s.lines.push_back({glm::dvec3(r * x + u * (cy - halfH)), c});
+            s.lines.push_back({glm::dvec3(r * x + u * (cy + halfH)), c});
         }
         for (double y = std::floor((cy - halfH) / step) * step; y <= cy + halfH; y += step)
         {
             glm::vec4 c = lineColor(y, step);
-            s.lines.push_back({glm::vec3(r * (cx - halfW) + u * y), c});
-            s.lines.push_back({glm::vec3(r * (cx + halfW) + u * y), c});
+            s.lines.push_back({glm::dvec3(r * (cx - halfW) + u * y), c});
+            s.lines.push_back({glm::dvec3(r * (cx + halfW) + u * y), c});
         }
     }
     if (!s.overlayTris.empty())

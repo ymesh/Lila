@@ -216,17 +216,40 @@ enum class Handle
     Help,
     Proxy,
     Breakdown,
-    // The Strings mode arc, in strings::Mode order.
+    // The Strings mode arc, top to bottom; Forward, Backward and Bidirectional carry their All variant on the right button.
+    ModeDefault,
+    ModeFree,
     ModeForward,
     ModeBackward,
+    ModeBidirectional,
     ModeIk,
     ModeFullBody,
     Trail, // a frame on the motion trail
 };
 
-bool isMode(Handle h) { return h >= Handle::ModeForward && h <= Handle::ModeFullBody; }
-strings::Mode modeOf(Handle h) { return strings::Mode(int(h) - int(Handle::ModeForward)); }
-Handle handleOf(strings::Mode m) { return Handle(int(Handle::ModeForward) + int(m)); }
+constexpr strings::Mode kArcModes[] = {strings::Mode::Default,       strings::Mode::Free, strings::Mode::Forward, strings::Mode::Backward,
+                                       strings::Mode::Bidirectional, strings::Mode::Ik,   strings::Mode::FullBody};
+constexpr int kArcCount = int(std::size(kArcModes));
+
+bool isMode(Handle h) { return h >= Handle::ModeDefault && h <= Handle::ModeFullBody; }
+int slotOf(Handle h) { return int(h) - int(Handle::ModeDefault); }
+/** The arc segment's mode: the All variant when that one is current. */
+strings::Mode modeOf(Handle h)
+{
+    const strings::Mode m = kArcModes[slotOf(h)];
+    return strings::allVariant(m, strings::isAllVariant(stringsMode()) && strings::allVariant(stringsMode(), false) == m);
+}
+/** The segment a mode lights: its own, or its non-All variant's. */
+Handle handleOf(strings::Mode m)
+{
+    const strings::Mode base = strings::allVariant(m, false);
+    for (int i = 0; i < kArcCount; ++i)
+        if (kArcModes[i] == base)
+            return Handle(int(Handle::ModeDefault) + i);
+    return Handle::ModeForward;
+}
+bool hasAllVariant(strings::Mode m) { return strings::allVariant(m, true) != strings::allVariant(m, false); }
+
 
 bool isAxis(Handle h) { return h == Handle::AxisX || h == Handle::AxisY || h == Handle::AxisZ; }
 int axisOf(Handle h) { return h == Handle::AxisX ? 0 : h == Handle::AxisY ? 1 : 2; }
@@ -275,34 +298,34 @@ constexpr Button kButtons[] = {
 
 constexpr Handle kTools[] = {Handle::Move, Handle::Rotate, Handle::Scale};
 
-glm::vec4 gray(float v, float a = 1.0f) { return {v, v, v, a}; }
+glm::vec4 spinnerGray(float v, float a = 1.0f) { return {v, v, v, a}; }
 const glm::vec4 kOrange{0.93f, 0.55f, 0.13f, 1.0f};
 const glm::vec4 kYellow{0.92f, 0.78f, 0.22f, 1.0f};
 
 /** Every neutral the Spinner draws with, in one place. */
 struct Palette
 {
-    glm::vec4 plate = gray(0.10f);     // behind the zones, seen in their gaps
-    glm::vec4 bezel = gray(0.165f);    // the band holding the buttons
-    glm::vec4 bezelEdge = gray(1.0f, 0.10f);  // light top edge
-    glm::vec4 bezelInner = gray(0.0f, 0.45f); // dark line where the band meets the zones
-    glm::vec4 well = gray(0.25f);
-    glm::vec4 wellHot = gray(0.33f);
-    glm::vec4 ring = gray(0.86f);              // the on toggle's ring
-    glm::vec4 segment = gray(0.22f);
-    glm::vec4 segmentHot = gray(0.30f);
-    glm::vec4 segmentOn = gray(0.70f);
-    glm::vec4 icon = gray(0.66f);
-    glm::vec4 iconHot = gray(0.95f);
-    glm::vec4 iconOn = gray(0.97f);
-    glm::vec4 iconOnSegment = gray(0.08f);
-    glm::vec4 groove = gray(0.07f);
-    glm::vec4 grooveFill = gray(0.62f);
-    glm::vec4 tick = gray(0.45f);
-    glm::vec4 thumb = gray(0.88f);
-    glm::vec4 thumbHot = gray(1.0f);
-    glm::vec4 disabled = gray(0.30f);
-    glm::vec4 letter = gray(0.0f, 0.5f);
+    glm::vec4 plate = spinnerGray(0.10f);     // behind the zones, seen in their gaps
+    glm::vec4 bezel = spinnerGray(0.165f);    // the band holding the buttons
+    glm::vec4 bezelEdge = spinnerGray(1.0f, 0.10f);  // light top edge
+    glm::vec4 bezelInner = spinnerGray(0.0f, 0.45f); // dark line where the band meets the zones
+    glm::vec4 well = spinnerGray(0.25f);
+    glm::vec4 wellHot = spinnerGray(0.33f);
+    glm::vec4 ring = spinnerGray(0.86f);              // the on toggle's ring
+    glm::vec4 segment = spinnerGray(0.22f);
+    glm::vec4 segmentHot = spinnerGray(0.30f);
+    glm::vec4 segmentOn = spinnerGray(0.70f);
+    glm::vec4 icon = spinnerGray(0.66f);
+    glm::vec4 iconHot = spinnerGray(0.95f);
+    glm::vec4 iconOn = spinnerGray(0.97f);
+    glm::vec4 iconOnSegment = spinnerGray(0.08f);
+    glm::vec4 groove = spinnerGray(0.07f);
+    glm::vec4 grooveFill = spinnerGray(0.62f);
+    glm::vec4 tick = spinnerGray(0.45f);
+    glm::vec4 thumb = spinnerGray(0.88f);
+    glm::vec4 thumbHot = spinnerGray(1.0f);
+    glm::vec4 disabled = spinnerGray(0.30f);
+    glm::vec4 letter = spinnerGray(0.0f, 0.5f);
 };
 const Palette kPal;
 
@@ -485,7 +508,10 @@ QString tipFor(Handle h, const Target& t)
     case Handle::Breakdown:
         return "Breakdown: left toward the previous key, right toward the next; down lags hands, feet and head, up leads (Shift: whole character)";
     case Handle::Plate: return "Drag the rim to move the Spinner (reset in its settings)";
-    case Handle::ModeForward: return "Forward: the joint turns, its children follow";
+    case Handle::ModeDefault: return "Default: the rules pick per joint; moves bend the limb, turns are Forward";
+    case Handle::ModeFree: return "Free: the joint alone, its children keep their world rotation";
+    case Handle::ModeForward: return "Forward: the joint turns, its children follow, pins below hold. Right-click: Forward All";
+    case Handle::ModeBidirectional: return "Bidirectional: both sides swing about the joint. Right-click: All";
     case Handle::ModeBackward: return "Backward: what is pinned below holds and the body swings";
     case Handle::ModeIk: return "IK: the limb bends to put the joint where you drag";
     case Handle::ModeFullBody: return "Full Body: the whole body moves, pins holding";
@@ -552,9 +578,9 @@ public:
         const double inner = rings ? g.ringInner : 0.0;
         for (int axis = 0; axis < 3; ++axis)
         {
-            glm::vec4 col = color ? glm::vec4(viewportDisplay::axisColor(axis), 1.0f) : gray(0.62f - 0.1f * float(axis));
+            glm::vec4 col = color ? glm::vec4(viewportDisplay::axisColor(axis), 1.0f) : spinnerGray(0.62f - 0.1f * float(axis));
             if (footChannel)
-                col = color ? kOrange : gray(0.7f);
+                col = color ? kOrange : spinnerGray(0.7f);
             const Handle h = axis == 0 ? Handle::AxisX : axis == 1 ? Handle::AxisY : Handle::AxisZ;
             const bool lit = hot == h;
             double outer = g.zone;
@@ -564,19 +590,19 @@ public:
                 outer += 3.0;
             }
             if (disabled)
-                col = gray(0.30f, 0.6f);
+                col = spinnerGray(0.30f, 0.6f);
             const glm::vec4 deep = glm::vec4(glm::vec3(col) * 0.70f, col.a);
             p.sector(c, inner, outer, zones[axis][0], zones[axis][1], deep, col, 5.0);
             if (!disabled)
-                p.arc(c, outer - 1.5, zones[axis][0] + 3.0, zones[axis][1] - 3.0, 1.5f, gray(1.0f, lit ? 0.35f : 0.18f), true);
+                p.arc(c, outer - 1.5, zones[axis][0] + 3.0, zones[axis][1] - 3.0, 1.5f, spinnerGray(1.0f, lit ? 0.35f : 0.18f), true);
             const double mid = (zones[axis][0] + zones[axis][1]) * 0.5;
             if (footChannel)
-                iconAt(p, at(c, (inner + g.zone) * 0.5, mid), kToolIcon, "puppeteer.foot", gray(0.1f));
+                iconAt(p, at(c, (inner + g.zone) * 0.5, mid), kToolIcon, "puppeteer.foot", spinnerGray(0.1f));
             else if (!rings)
             {
                 static const char* letters[] = {"X", "Y", "Z"};
                 const QPointF lp = at(c, g.zone - 14.0, mid);
-                p.text(lp + QPointF(0.0, 4.5), letters[axis], disabled ? gray(0.0f, 0.25f) : kPal.letter, OverlayPainter::Center);
+                p.text(lp + QPointF(0.0, 4.5), letters[axis], disabled ? spinnerGray(0.0f, 0.25f) : kPal.letter, OverlayPainter::Center);
             }
         }
         for (double a : {-150.0, -30.0, 90.0})
@@ -585,21 +611,21 @@ public:
         // Centre: the IK/foot pole disc, the uniform scale disc, or the free-drag hub.
         if (rings)
         {
-            glm::vec4 col = !color ? gray(0.78f) : s.tool == Tool::Scale ? kYellow : kOrange;
+            glm::vec4 col = !color ? spinnerGray(0.78f) : s.tool == Tool::Scale ? kYellow : kOrange;
             if (hot == Handle::Center)
                 col = glm::mix(col, glm::vec4(1.0f), 0.2f);
             if (disabled)
-                col = gray(0.30f, 0.6f);
+                col = spinnerGray(0.30f, 0.6f);
             p.smoothDisc(c, g.centerDisc + 2.0, kPal.plate);
             p.sector(c, 0.0, g.centerDisc, 0.0, 360.0, glm::vec4(glm::vec3(col) * 1.05f, col.a), glm::vec4(glm::vec3(col) * 0.78f, col.a));
-            p.arc(c, g.centerDisc - 1.0, -160.0, -20.0, 1.5f, gray(1.0f, 0.25f), true);
-            iconAt(p, c, std::min(28.0, g.centerDisc * 1.1), s.tool == Tool::Scale ? "puppeteer.local" : "puppeteer.pole", gray(0.08f));
+            p.arc(c, g.centerDisc - 1.0, -160.0, -20.0, 1.5f, spinnerGray(1.0f, 0.25f), true);
+            iconAt(p, c, std::min(28.0, g.centerDisc * 1.1), s.tool == Tool::Scale ? "puppeteer.local" : "puppeteer.pole", spinnerGray(0.08f));
         }
         else
         {
             p.smoothDisc(c, kHub + 2.0, kPal.plate);
-            p.smoothDisc(c, kHub, disabled ? kPal.disabled : hot == Handle::Center ? gray(0.98f) : gray(0.80f));
-            p.smoothDisc(c, 3.0, gray(0.1f, 0.6f));
+            p.smoothDisc(c, kHub, disabled ? kPal.disabled : hot == Handle::Center ? spinnerGray(0.98f) : spinnerGray(0.80f));
+            p.smoothDisc(c, 3.0, spinnerGray(0.1f, 0.6f));
         }
 
         drawTools(p, c, g, t, hot, disabled);
@@ -742,13 +768,22 @@ public:
             if (button == Qt::LeftButton && !offKey(t.names))
                 beginDrag(Kind::Breakdown, h, px, mods, t);
             return true;
+        case Handle::ModeDefault:
+        case Handle::ModeFree:
         case Handle::ModeForward:
         case Handle::ModeBackward:
+        case Handle::ModeBidirectional:
         case Handle::ModeIk:
         case Handle::ModeFullBody:
-            if (button == Qt::LeftButton)
+        {
+            const strings::Mode m = kArcModes[slotOf(h)];
+            // Right button: the All variant, or back from it; left keeps whichever variant is current.
+            if (right && hasAllVariant(m))
+                setStringsMode(strings::allVariant(m, !(strings::isAllVariant(stringsMode()) && strings::allVariant(stringsMode(), false) == m)));
+            else if (!right)
                 setStringsMode(modeOf(h));
             return true;
+        }
         case Handle::Trail:
             if (button == Qt::LeftButton)
                 beginTrailDrag(px);
@@ -875,6 +910,7 @@ private:
         QPointF offset, startOffset;
         int trailFrame = -1;
         bool strung = false; // a breakdown through stringsBreakdown
+        bool tween = false;  // a breakdown with a time range selected: stringsTween across it
         glm::dvec3 trailBy{0.0};
         /** The trail as the drag so far would leave it; empty shows the trail as keyed. */
         std::vector<glm::dvec3> trailLive;
@@ -1087,7 +1123,7 @@ private:
     {
         const Geo g = geo();
         p.arc(c, g.ring, kBreakdownFrom, kBreakdownTo, 5.0f, kPal.groove, true);
-        p.arc(c, g.ring + 3.0, kBreakdownFrom + 2.0, kBreakdownTo - 2.0, 1.0f, gray(1.0f, 0.06f));
+        p.arc(c, g.ring + 3.0, kBreakdownFrom + 2.0, kBreakdownTo - 2.0, 1.0f, spinnerGray(1.0f, 0.06f));
         for (double a : {kBreakdownFrom, 90.0, kBreakdownTo})
             p.smoothLine(at(c, g.ring - 8.0, a), at(c, g.ring - (a == 90.0 ? 4.0 : 5.0), a), 1.5f, disabled ? kPal.disabled : kPal.tick);
         // The thumb follows the drag along the groove, back to the middle once released.
@@ -1097,7 +1133,7 @@ private:
         if (std::abs(dot - 90.0) > 0.5 && !disabled)
             p.arc(c, g.ring, std::min(dot, 90.0), std::max(dot, 90.0), 3.0f, kPal.grooveFill);
         const QPointF thumb = at(c, g.ring, dot);
-        p.smoothDisc(thumb, 7.5, gray(0.0f, 0.5f));
+        p.smoothDisc(thumb, 7.5, spinnerGray(0.0f, 0.5f));
         p.smoothDisc(thumb, 6.5, disabled ? kPal.disabled : hot == Handle::Breakdown ? kPal.thumbHot : kPal.thumb);
     }
 
@@ -1205,7 +1241,7 @@ private:
         for (const glm::dvec3& pt : points)
             if (const auto at = mView.project(pt))
                 line.push_back(*at);
-        p.polyline(line, 1.5f, gray(0.9f, 0.45f));
+        p.polyline(line, 1.5f, spinnerGray(0.9f, 0.45f));
         for (size_t i = 0; i < points.size(); ++i)
         {
             const auto at = mView.project(points[i]);
@@ -1213,16 +1249,16 @@ private:
                 continue;
             const bool current = std::abs(mTrail.times[i] - now) < 1e-6;
             const float r = mTrail.keyed[i] ? 4.0f : 2.5f;
-            p.disc(*at, int(i) == hot ? r + 1.5f : r, int(i) == hot ? gray(1.0f) : gray(0.85f, 0.85f), 12);
+            p.disc(*at, int(i) == hot ? r + 1.5f : r, int(i) == hot ? spinnerGray(1.0f) : spinnerGray(0.85f, 0.85f), 12);
             if (current)
-                p.disc(*at, r + 3.0f, gray(0.95f, 0.35f), 16);
+                p.disc(*at, r + 3.0f, spinnerGray(0.95f, 0.35f), 16);
         }
         if (mDrag && mDrag->kind == Kind::Trail && mDrag->trailFrame >= 0)
             if (const auto from = mView.project(mTrail.points[size_t(mDrag->trailFrame)]))
                 if (const auto to = mView.project(mTrail.points[size_t(mDrag->trailFrame)] + mDrag->trailBy))
                 {
-                    p.line(*from, *to, 1.5f, gray(1.0f, 0.8f));
-                    p.disc(*to, 5.0f, gray(1.0f), 16);
+                    p.line(*from, *to, 1.5f, spinnerGray(1.0f, 0.8f));
+                    p.disc(*to, 5.0f, spinnerGray(1.0f), 16);
                 }
     }
 
@@ -1254,8 +1290,8 @@ private:
             lila::scene::ghosts::cache().clearPreview();
             return;
         }
-        // Forward has nothing that bends to put a joint somewhere: the trail drags in IK there.
-        const strings::Mode mode = stringsMode() == strings::Mode::Forward ? strings::Mode::Ik : stringsMode();
+        // The modes that only turn the joint have nothing that bends to put it somewhere: the trail drags in IK there.
+        const strings::Mode mode = strings::movesOrigin(stringsMode(), false) ? stringsMode() : strings::Mode::Ik;
         const lila::scene::anim::TimeSelection& sel = lila::scene::anim::timeSelection();
         const double t = mTrail.times[size_t(d.trailFrame)];
         json call = {{"args", {graph().node(mTrail.joint)->path()}},
@@ -1264,8 +1300,7 @@ private:
                      {"stretch", stringsStretch()}};
         if (sel.active && t >= sel.start - 1e-6 && t <= sel.end + 1e-6)
         {
-            call["range"] = json::array({sel.start, sel.end});
-            call["falloff"] = sel.falloff;
+            addRangeFlags(call, sel);
         }
         else
         {
@@ -1325,34 +1360,46 @@ private:
     /** The Strings modes show on joints being animated; controllers and rigging have their own behaviour. */
     bool modeArc(const Target& t) const { return modes::current() != kRigMode && !t.rig && !t.chain && t.character; }
 
-    static std::pair<double, double> modeSpan(strings::Mode m)
+    static std::pair<double, double> modeSpan(int slot)
     {
-        // Forward on top, down to Full Body, in the order the modes widen.
-        const double step = (kModeTo - kModeFrom) / 4.0, gap = degreesFor(kSegmentGap, geo().ring) * 0.5;
-        const double from = kModeTo - step * (int(m) + 1);
+        // Default on top, down to Full Body, in the order the modes widen.
+        const double step = (kModeTo - kModeFrom) / kArcCount, gap = degreesFor(kSegmentGap, geo().ring) * 0.5;
+        const double from = kModeTo - step * (slot + 1);
         return {from + gap, from + step - gap};
     }
 
-    /** One joined strip of four segments, styled as the tool strip; the current mode is the bright one. */
+    /**
+     * One joined strip of segments, styled as the tool strip; the current mode is the bright one. The segments with an
+     * All variant carry the corner mark, and while that variant is current a bar along the segment's outer edge.
+     */
     void drawModes(OverlayPainter& p, QPointF c, Handle hot)
     {
-        static const char* icons[] = {"puppeteer.forward", "puppeteer.backward", "puppeteer.ik", "puppeteer.fullBody"};
+        static const char* icons[] = {"puppeteer.default", "puppeteer.free", "puppeteer.forward", "puppeteer.backward",
+                                      "puppeteer.bidirectional", "puppeteer.ik", "puppeteer.fullBody"};
         const Geo g = geo();
         const strings::Mode current = stringsMode();
-        for (strings::Mode m : {strings::Mode::Forward, strings::Mode::Backward, strings::Mode::Ik, strings::Mode::FullBody})
+        const Handle lit = handleOf(current);
+        for (int i = 0; i < kArcCount; ++i)
         {
-            const auto [from, to] = modeSpan(m);
-            const bool on = m == current, lit = hot == handleOf(m);
-            const glm::vec4 fill = on ? kPal.segmentOn : lit ? kPal.segmentHot : kPal.segment;
+            const Handle h = Handle(int(Handle::ModeDefault) + i);
+            const auto [from, to] = modeSpan(i);
+            const bool on = h == lit, hover = hot == h;
+            const glm::vec4 fill = on ? kPal.segmentOn : hover ? kPal.segmentHot : kPal.segment;
             p.sector(c, g.ring - kBandHalf, g.ring + kBandHalf, from, to, fill, fill, 4.0);
-            iconAt(p, at(c, g.ring, (from + to) * 0.5), kIcon, icons[int(m)], on ? kPal.iconOnSegment : lit ? kPal.iconHot : kPal.icon);
+            const glm::vec4 ink = on ? kPal.iconOnSegment : hover ? kPal.iconHot : kPal.icon;
+            iconAt(p, at(c, g.ring, (from + to) * 0.5), kIcon, icons[i], ink);
+            if (hasAllVariant(kArcModes[i]))
+            {
+                cornerMark(p, at(c, g.ring - kBandHalf + 3.0, from + degreesFor(3.0, g.ring - kBandHalf)), 5.0, ink);
+                if (on && strings::isAllVariant(current))
+                    p.sector(c, g.ring - kBandHalf, g.ring - kBandHalf + 3.0, from, to, kPal.iconOnSegment, kPal.iconOnSegment, 1.0);
+            }
         }
         // The current mode by name beside the arc, so it reads without learning the icons.
-        static const char* names[] = {"Forward", "Backward", "IK", "Full Body"};
-        const auto [from, to] = modeSpan(current);
+        const auto [from, to] = modeSpan(slotOf(lit));
         const QPointF tag = at(c, g.plate + 8.0, (from + to) * 0.5);
         p.setShadow(true);
-        p.text(QPointF(tag.x(), tag.y() + 4.5), names[int(current)], gray(0.92f), OverlayPainter::Right);
+        p.text(QPointF(tag.x(), tag.y() + 4.5), stringsModeLabel(current), spinnerGray(0.92f), OverlayPainter::Right);
         p.setShadow(false);
     }
 
@@ -1385,12 +1432,12 @@ private:
             const auto lead = mView.project(glm::dvec3(worldOf(g, set.back())[3]));
             if (!lead)
                 continue;
-            p.disc(*lead, 4.0f, gray(0.95f, 0.9f), 12);
+            p.disc(*lead, 4.0f, spinnerGray(0.95f, 0.9f), 12);
             for (size_t i = 0; i + 1 < set.size(); ++i)
                 if (const auto at = mView.project(glm::dvec3(worldOf(g, set[i])[3])))
                 {
-                    p.line(*at, *lead, 1.5f, gray(0.95f, 0.55f));
-                    p.disc(*at, 3.0f, gray(0.95f, 0.9f), 12);
+                    p.line(*at, *lead, 1.5f, spinnerGray(0.95f, 0.55f));
+                    p.disc(*at, 3.0f, spinnerGray(0.95f, 0.9f), 12);
                 }
         }
     }
@@ -1413,8 +1460,8 @@ private:
         {
             if (auto at = mView.project(pivot))
             {
-                p.smoothDisc(*at, kGizmoPixels, gray(0.85f, 0.14f));
-                p.arc(*at, kGizmoPixels, 0.0, 360.0, 2.0f, gray(0.92f, 0.7f));
+                p.smoothDisc(*at, kGizmoPixels, spinnerGray(0.85f, 0.14f));
+                p.arc(*at, kGizmoPixels, 0.0, 360.0, 2.0f, spinnerGray(0.92f, 0.7f));
             }
             return;
         }
@@ -1426,7 +1473,7 @@ private:
             const bool lit = isAxis(hot) && axisOf(hot) == axis;
             if (mDrag && mDrag->kind == Kind::Transform && !lit)
                 continue;
-            const glm::vec4 col = lit ? gray(1.0f) : color ? glm::vec4(viewportDisplay::axisColor(axis), 0.95f) : gray(0.85f - 0.15f * float(axis));
+            const glm::vec4 col = lit ? spinnerGray(1.0f) : color ? glm::vec4(viewportDisplay::axisColor(axis), 0.95f) : spinnerGray(0.85f - 0.15f * float(axis));
             const float width = lit ? 3.0f : 2.0f;
             if (settings().tool == Tool::Rotate)
             {
@@ -1481,7 +1528,7 @@ private:
                 p.line(*base, *tip - u * 4.0, width, c);
                 p.rect(QRectF(tip->x() - 4.5, tip->y() - 4.5, 9.0, 9.0), c);
             }
-            p.text(*tip + u * 16.0 + QPointF(0.0, 4.5), letters[axis], glm::vec4(glm::vec3(lit ? gray(1.0f) : col), c.a), OverlayPainter::Center);
+            p.text(*tip + u * 16.0 + QPointF(0.0, 4.5), letters[axis], glm::vec4(glm::vec3(lit ? spinnerGray(1.0f) : col), c.a), OverlayPainter::Center);
         }
         p.setShadow(false);
     }
@@ -1530,7 +1577,7 @@ private:
         {
             const double around = a < 0.0 ? a + 360.0 : a;
             if (around >= kModeFrom && around <= kModeTo)
-                return handleOf(strings::Mode(std::clamp(int((kModeTo - around) / ((kModeTo - kModeFrom) / 4.0)), 0, 3)));
+                return Handle(int(Handle::ModeDefault) + std::clamp(int((kModeTo - around) / ((kModeTo - kModeFrom) / kArcCount)), 0, kArcCount - 1));
         }
         if (!t.rig && modes::current() != kRigMode && inBand && a >= kBreakdownFrom && a <= kBreakdownTo)
             return Handle::Breakdown;
@@ -1621,9 +1668,12 @@ private:
         g.evaluate();
         if (kind == Kind::Breakdown)
         {
-            // In a Strings mode the breakdown is the space-aware one: the whole character blends, feet in world.
-            if (posesStrings(t) && t.character)
+            // In a Strings mode the breakdown is the space-aware one: the whole character blends, feet in world. With a
+            // time range selected it tweens the range instead, whatever the mode.
+            const bool tween = t.character && !t.rig && lila::scene::anim::timeSelection().active;
+            if ((posesStrings(t) || tween) && t.character)
             {
+                d.tween = tween;
                 for (NodeId j : fullBodyJoints(g, g.find(t.names.front())->id()))
                     d.saved.push_back({j, {{int(Transform::kTranslate), g.value({j, Transform::kTranslate, -1})},
                                            {int(Transform::kRotate), g.value({j, Transform::kRotate, -1})}}});
@@ -1841,16 +1891,17 @@ private:
     /** Whether a drag on these joints poses through Strings rather than the plain move and turn. */
     static bool posesStrings(const Target& t)
     {
-        return !t.rig && !t.chain && ((t.character && stringsMode() != strings::Mode::Forward) || t.related);
+        // Forward All is the plain turn, except across a time range, where each frame needs its own solve.
+        return !t.rig && !t.chain &&
+               ((t.character && (stringsMode() != strings::Mode::ForwardAll || lila::scene::anim::timeSelection().active)) || t.related);
     }
 
     /** The drag as a stringsPose call in the current mode; the readout names the mode. */
     std::pair<const char*, json> stringsCall(json call)
     {
-        static const char* labels[] = {"Forward", "Backward", "IK", "Full Body"};
         call["mode"] = strings::modeName(stringsMode());
         call["stretch"] = stringsStretch();
-        mDrag->readout += QString("  %1").arg(labels[int(stringsMode())]);
+        mDrag->readout += QString("  %1").arg(stringsModeLabel(stringsMode()));
         if (stringsMode() == strings::Mode::Ik && mDrag->chainLength > 0)
             call["chainLength"] = mDrag->chainLength;
         return {"stringsPose", call};
@@ -1910,6 +1961,36 @@ private:
             d.weight = math::breakdownWeight(d.current.x() - d.start.x(), s.breakdownDeadZone, s.breakdownFull);
             d.readout = d.weight < 0.0 ? QString("Previous key %1%").arg(int(std::round(-d.weight * 100.0)))
                                        : QString("Next key %1%").arg(int(std::round(d.weight * 100.0)));
+            if (d.tween)
+            {
+                // Right takes the range toward the inbetween of the poses either side of it, left pushes it away.
+                d.readout = d.weight < 0.0 ? QString("Exaggerate range %1%").arg(int(std::round(-d.weight * 100.0)))
+                                           : QString("Tween range %1%").arg(int(std::round(d.weight * 100.0)));
+                restore();
+                if (d.weight == 0.0)
+                {
+                    lila::scene::ghosts::cache().clearPreview();
+                    return;
+                }
+                json call = {{"args", namesJson(d.target.names)}, {"amount", d.weight}};
+                if (commit)
+                {
+                    lila::scene::ghosts::cache().clearPreview();
+                    if (const std::string layer = stringsLayer(); !layer.empty())
+                        call["layer"] = layer;
+                    runCommand("stringsTween", call);
+                }
+                else
+                {
+                    call["preview"] = true;
+                    if (std::string error = quietly([&] { ops::execute("stringsTween", call, CallSource::Script); }); !error.empty() && !d.warned)
+                    {
+                        d.warned = true;
+                        log::write(LogLevel::Warning, "Spinner: " + error);
+                    }
+                }
+                return;
+            }
             if (d.strung)
             {
                 // Down lags the hands, feet and head behind the body, up leads them, past a small dead zone.
@@ -1967,8 +2048,7 @@ private:
         {
             if (range.active && std::string_view(name) == "stringsPose")
             {
-                call["range"] = json::array({range.start, range.end});
-                call["falloff"] = range.falloff;
+                addRangeFlags(call, range);
                 if (const std::string layer = stringsLayer(); !layer.empty())
                     call["layer"] = layer;
             }
@@ -1978,8 +2058,7 @@ private:
         if (range.active && std::string_view(name) == "stringsPose")
         {
             json across = call;
-            across["range"] = json::array({range.start, range.end});
-            across["falloff"] = range.falloff;
+            addRangeFlags(across, range);
             previewAcross(across);
         }
         // A failing preview says why once per drag rather than doing nothing silently.
@@ -2005,6 +2084,9 @@ private:
                 d.readout += QString("  from %1").arg(QString::fromStdString(result["anchor"].get<std::string>()).section('|', -1).section(':', -1));
             if (result.contains("fallback"))
                 d.readout += QString("  (%1)").arg(QString::fromStdString(result["fallback"].get<std::string>()));
+            if (result.contains("resolved"))
+                if (const auto m = strings::modeFromName(result["resolved"].get<std::string>()))
+                    d.readout += QString(" (%1)").arg(stringsModeLabel(*m));
         }
     }
 
@@ -2082,12 +2164,12 @@ private:
                     line.push_back(*at);
             if (line.size() < 2)
                 continue;
-            p.polyline(line, 1.5f, gray(0.9f, 0.5f));
-            p.disc(line.front(), 3.0f, gray(0.9f, 0.8f), 12);
-            p.disc(line.back(), 3.0f, gray(0.9f, 0.8f), 12);
+            p.polyline(line, 1.5f, spinnerGray(0.9f, 0.5f));
+            p.disc(line.front(), 3.0f, spinnerGray(0.9f, 0.8f), 12);
+            p.disc(line.back(), 3.0f, spinnerGray(0.9f, 0.8f), 12);
             if (g.node(mDrag->arcJoints[i]))
                 if (const auto at = mView.project(glm::dvec3(worldOf(g, mDrag->arcJoints[i])[3])))
-                    p.disc(*at, 4.5f, gray(1.0f), 16);
+                    p.disc(*at, 4.5f, spinnerGray(1.0f), 16);
         }
     }
 
@@ -2125,7 +2207,8 @@ void registerIcons(ext::Context& ctx)
         {"puppeteer.sticky", "target-arrow"},      {"puppeteer.sticky2nd", "vector-bezier"}, {"puppeteer.keepDirection", "direction"},
         {"puppeteer.foot", "shoe"},                {"puppeteer.footAlign", "line"},          {"puppeteer.pole", "target"},
         {"puppeteer.proxy", "puzzle"},             {"puppeteer.forward", "arrow-down-tail"}, {"puppeteer.backward", "arrow-up-tail"},
-        {"puppeteer.ik", "hand-grab"},             {"puppeteer.fullBody", "man"},
+        {"puppeteer.ik", "hand-grab"},             {"puppeteer.fullBody", "man"},            {"puppeteer.default", "wand"},
+        {"puppeteer.free", "feather"},             {"puppeteer.bidirectional", "arrows-down-up"},
     };
     for (const auto& [id, tabler] : icons)
         overlayIcons::add(ctx, id, {.tabler = tabler});

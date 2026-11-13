@@ -140,11 +140,76 @@ std::map<NodeId, Ids> targets(ComponentMode kind, bool allowWhole)
 
 using UvEditFn = std::function<json(geo::Mesh&, const Ids& ids, Node&)>;
 
+/** The shape scaleShape gives the mesh being edited, which exportStack puts round every modifier. */
+thread_local glm::dmat3 tShape{1.0};
+
+/**
+ * The object's scale along each of its own axes with its overall size divided out: the stretch an unfrozen non-uniform
+ * scale gives the mesh in the view but not in object space. Identity for a uniform scale.
+ */
+glm::dmat3 scaleShape(Node& n)
+{
+    const glm::dmat3 l(n.as<glm::dmat4>(scene::Transform::kWorldMatrix));
+    glm::dvec3 s(glm::length(l[0]), glm::length(l[1]), glm::length(l[2]));
+    const double size = std::cbrt(s.x * s.y * s.z);
+    if (!(size > 1e-12))
+        return glm::dmat3(1.0);
+    s /= size;
+    if (glm::all(glm::lessThan(glm::abs(s - 1.0), glm::dvec3(1e-6))))
+        return glm::dmat3(1.0);
+    glm::dmat3 out(1.0);
+    for (int i = 0; i < 3; ++i)
+        out[i][i] = s[i];
+    return out;
+}
+
+void transformPoints(geo::Mesh& m, const glm::dmat3& x)
+{
+    for (glm::dvec3& p : m.positions())
+        p = x * p;
+}
+
+/**
+ * For its scope, the mesh's points carry its object's scaleShape, so uv solvers flatten the surface as it is seen; the
+ * points are put back after. Only the uvs written meanwhile are kept.
+ */
+class ShapedPoints
+{
+public:
+    ShapedPoints(geo::Mesh& m, Node& n) : mMesh(m), mShape(scaleShape(n))
+    {
+        if (mShape == glm::dmat3(1.0))
+            return;
+        mBefore.assign(m.positions().begin(), m.positions().end());
+        transformPoints(m, mShape);
+        tShape = mShape;
+    }
+    ~ShapedPoints()
+    {
+        if (mShape == glm::dmat3(1.0))
+            return;
+        tShape = glm::dmat3(1.0);
+        if (mMesh.positions().size() == mBefore.size())
+            std::copy(mBefore.begin(), mBefore.end(), mMesh.positions().begin());
+        else
+            transformPoints(mMesh, glm::inverse(mShape));
+    }
+    ShapedPoints(const ShapedPoints&) = delete;
+    ShapedPoints& operator=(const ShapedPoints&) = delete;
+    const glm::dmat3& shape() const { return mShape; }
+
+private:
+    geo::Mesh& mMesh;
+    glm::dmat3 mShape;
+    std::vector<glm::dvec3> mBefore;
+};
+
 /**
  * Runs fn on a copy of every target mesh and writes it back to inMesh as one undo step. uv edits keep
  * topology, so component ids and the selection stay valid. Returns fn's results keyed by mesh name.
+ * Unless objectSpace, fn sees the points with the object's non-uniform scale on them (ShapedPoints).
  */
-json editUv(const char* label, ComponentMode kind, const UvEditFn& fn, bool allowWhole = true)
+json editUv(const char* label, ComponentMode kind, const UvEditFn& fn, bool allowWhole = true, bool objectSpace = false)
 {
     LILA_ZONE();
 
@@ -159,14 +224,19 @@ json editUv(const char* label, ComponentMode kind, const UvEditFn& fn, bool allo
         Node& n = *g.node(node);
         scene::PlugRef base = basePlug(n);
         geo::Mesh mesh = baseMesh(base);
-        out[n.path()] = fn(mesh, ids, n);
+        {
+            std::optional<ShapedPoints> shaped;
+            if (!objectSpace)
+                shaped.emplace(mesh, n);
+            out[n.path()] = fn(mesh, ids, n);
+        }
         g.setValue(base, MeshPtr(std::make_shared<geo::Mesh>(std::move(mesh))));
     }
     return out.size() == 1 ? out.begin().value() : out;
 }
 
-/** Same targets, read only. */
-json queryUv(const std::function<json(const geo::Mesh&, const Ids&, Node&)>& fn)
+/** Same targets, read only, with the points shaped as editUv shapes them; fn gets that shape. */
+json queryUv(const std::function<json(const geo::Mesh&, const Ids&, Node&, const glm::dmat3& shape)>& fn)
 {
     std::map<NodeId, Ids> work = targets(ComponentMode::Face, true);
     if (work.empty())
@@ -175,7 +245,15 @@ json queryUv(const std::function<json(const geo::Mesh&, const Ids&, Node&)>& fn)
     for (auto& [node, ids] : work)
     {
         Node& n = *graph().node(node);
-        out[n.path()] = fn(*cageOf(graph(), node), ids, n);
+        const MeshPtr cage = cageOf(graph(), node);
+        if (scaleShape(n) == glm::dmat3(1.0))
+        {
+            out[n.path()] = fn(*cage, ids, n, glm::dmat3(1.0));
+            continue;
+        }
+        geo::Mesh m = *cage;
+        ShapedPoints shaped(m, n);
+        out[n.path()] = fn(m, ids, n, shaped.shape());
     }
     return out.size() == 1 ? out.begin().value() : out;
 }
@@ -433,11 +511,12 @@ std::vector<SeamView> viewsIn(std::vector<SeamView> views, Node& node)
 {
     const glm::dmat4 world = node.as<glm::dmat4>(scene::Transform::kWorldMatrix);
     const glm::dmat4 toObject = glm::inverse(world);
+    // Inside a shaped edit the points carry tShape, so the views do too.
     for (SeamView& v : views)
     {
-        v.position = glm::dvec3(toObject * glm::dvec4(v.position, 1.0));
+        v.position = tShape * glm::dvec3(toObject * glm::dvec4(v.position, 1.0));
         if (v.planeNormal)
-            v.planeNormal = glm::normalize(glm::transpose(glm::dmat3(world)) * *v.planeNormal);
+            v.planeNormal = glm::normalize(glm::inverse(tShape) * (glm::transpose(glm::dmat3(world)) * *v.planeNormal));
     }
     return views;
 }
@@ -653,6 +732,16 @@ Stack exportStack(Node& n)
                                return mod->apply(in, *mod);
                            }, subdivides});
     }
+    // Inside a shaped edit (ShapedPoints) each modifier still runs in object space, so bevel widths and the like are its own.
+    if (tShape != glm::dmat3(1.0))
+        for (StackStep& step : out)
+            step.apply = [inner = std::move(step.apply), shape = tShape](const geo::Mesh& in) {
+                geo::Mesh unshaped = in;
+                transformPoints(unshaped, glm::inverse(shape));
+                geo::Mesh result = inner(unshaped);
+                transformPoints(result, shape);
+                return result;
+            };
     return out;
 }
 
@@ -1397,7 +1486,7 @@ void registerCommands()
                 if (o.type == Projection::Cylindrical || o.type == Projection::Spherical)
                     r["radius"] = fr.radius, r["seamAngle"] = glm::degrees(fr.seamAngle);
                 return r;
-            });
+            }, true, true);
             auto action = std::make_unique<ProjectionsAction>();
             action->before = lastProjectionsMutable();
             action->after = records;
@@ -1735,7 +1824,7 @@ void registerCommands()
             std::string set = uvSetArg(a);
             double tol = std::max(0.0, a.get<double>("tolerance", 0.002));
             std::map<NodeId, Ids> picked;
-            json r = queryUv([&](const geo::Mesh& m, const Ids&, Node& n) -> json {
+            json r = queryUv([&](const geo::Mesh& m, const Ids&, Node& n, const glm::dmat3&) -> json {
                 json stacks = json::array();
                 for (const auto& stack : stackedIslands(m, set, tol))
                 {
@@ -1830,9 +1919,9 @@ void registerCommands()
             const bool final = a.get<bool>("finalMesh", true);
             std::string set = uvSetArg(a);
             if (!a.has("density"))
-                return queryUv([&](const geo::Mesh& m, const Ids& f, Node& n) -> json {
+                return queryUv([&](const geo::Mesh& m, const Ids& f, Node& n, const glm::dmat3& shape) -> json {
                     const FinalMap map = exportTraceOf(m, n, final);
-                    return texelDensity(m, set, f, res, world ? worldLinear(n) : glm::dmat3(1.0), &map);
+                    return texelDensity(m, set, f, res, (world ? worldLinear(n) : glm::dmat3(1.0)) * glm::inverse(shape), &map);
                 });
             double density = a.get<double>("density");
             const bool rescaleTrims = a.get<std::string>("trims", "skip") == "rescale";
@@ -1862,7 +1951,7 @@ void registerCommands()
                 const FinalMap after = map.exported ? exportTraceOf(m, n, final) : FinalMap{};
                 json r = faces.empty() ? json(nullptr) : json(texelDensity(m, set, faces, res, lin, &after));
                 return skipped ? json{{"density", r}, {"skippedTrimFaces", skipped}} : r;
-            });
+            }, true, true);
             if (editedAll == 0 && skippedAll > 0)
                 throw CommandError("uvTexelDensity: these faces are mapped onto a trim sheet, whose texel density is the sheet's pxPerM; "
                                    "change the sheet (trimSheetEdit(values={'pxPerM': ...})) or pass trims='rescale' to take them off it");
@@ -1912,7 +2001,7 @@ void registerCommands()
             std::string set = uvSetArg(a);
             double res = double(std::max(1, a.get<int>("resolution", 1024)));
             const bool final = a.get<bool>("finalMesh", true);
-            return queryUv([&](const geo::Mesh& m, const Ids& f, Node& n) -> json {
+            return queryUv([&](const geo::Mesh& m, const Ids& f, Node& n, const glm::dmat3& shape) -> json {
                 if (m.cornerAttrs().get<glm::vec2>(set).empty())
                     return {{"uvSet", set}, {"exists", false}};
                 const FinalMap map = exportTraceOf(m, n, final);
@@ -1940,7 +2029,7 @@ void registerCommands()
                         {"foldedFaces", s.folded},
                         {"areaDistortion", {{"mean", s.meanArea}, {"max", s.maxArea}}},
                         {"angleDistortion", {{"mean", s.meanAngle}, {"max", s.maxAngle}}},
-                        {"texelDensity", texelDensity(m, set, f, res, worldLinear(n), &map)},
+                        {"texelDensity", texelDensity(m, set, f, res, worldLinear(n) * glm::inverse(shape), &map)},
                         {"measuredOn", map.exported ? "exported" : "cage"}};
             });
         },

@@ -71,8 +71,8 @@ void push(std::vector<render::LineVertex>& lines, const Segments& segs, const gl
 {
     for (auto& [a, b] : segs)
     {
-        lines.push_back({glm::vec3(a), color});
-        lines.push_back({glm::vec3(b), color});
+        lines.push_back({glm::dvec3(a), color});
+        lines.push_back({glm::dvec3(b), color});
     }
 }
 
@@ -357,7 +357,7 @@ void buildTris(Overlay& o, const geo::Mesh& m, const glm::dmat4& world, const st
         float shade = float(0.6 + 0.4 * facing);
         auto vert = [&](geo::Index p) {
             glm::vec4 col = viewportDisplay::weightColor(p < value.size() ? value[p] : 0.0f, true);
-            return render::LineVertex{glm::vec3(xf(world, m.position(p))), glm::vec4(glm::vec3(col) * shade, 1.0f)};
+            return render::LineVertex{glm::dvec3(xf(world, m.position(p))), glm::vec4(glm::vec3(col) * shade, 1.0f)};
         };
         for (size_t k = 1; k + 1 < pts.size(); ++k)
         {

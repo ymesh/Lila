@@ -1364,6 +1364,24 @@ std::string socketOf(const Node& n)
     return joint ? *joint : std::string();
 }
 
+std::string socketBoneOf(const Node& n)
+{
+    const int attr = n.type().attrIndex(kSocketBoneAttr);
+    if (attr < 0)
+        return {};
+    const auto* bone = std::get_if<std::string>(&n.value(attr));
+    return bone ? *bone : std::string();
+}
+
+glm::dmat4 socketOffsetOf(const Node& n)
+{
+    const int attr = n.type().attrIndex(kSocketOffsetAttr);
+    if (attr < 0)
+        return glm::dmat4(1.0);
+    const auto* m = std::get_if<glm::dmat4>(&n.value(attr));
+    return m ? *m : glm::dmat4(1.0);
+}
+
 void registerTypes()
 {
     if (types::find(kType))

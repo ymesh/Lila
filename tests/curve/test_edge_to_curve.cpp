@@ -166,11 +166,13 @@ TEST_CASE("polyEdgeToCurve: history follows the mesh")
     REQUIRE(made.size() == 1);
     CHECK(curveJson(made[0])[0]["points"][0][2].get<double>() == doctest::Approx(-15.0));
     run("move", {{"args", {plane}}, {"by", {0, 7, 0}}});
-    for (const json& p : curveJson(made[0])[0]["points"])
+    const json listed169 = curveJson(made[0]);
+    for (const json& p : listed169[0]["points"])
         CHECK(p[1].get<double>() == doctest::Approx(7.0));
     // Without history the curve stays put.
     json baked = run("polyEdgeToCurve", {{"args", {plane}}, {"edges", front}});
     run("move", {{"args", {plane}}, {"by", {0, 3, 0}}});
-    for (const json& p : curveJson(baked[0])[0]["points"])
+    const json listed174 = curveJson(baked[0]);
+    for (const json& p : listed174[0]["points"])
         CHECK(p[1].get<double>() == doctest::Approx(7.0));
 }

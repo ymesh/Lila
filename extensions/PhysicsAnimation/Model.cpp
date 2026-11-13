@@ -5,6 +5,7 @@
 #include "World.h"
 
 #include <lila/Graph.h>
+#include <lila/Grapple.h>
 #include <lila/Rig.h>
 #include <lila/Simulation.h>
 #include <lila/Transform.h>
@@ -574,6 +575,7 @@ RigDef buildRig(Graph& g, NodeId solver)
             if (auto it = bodyOf.find(a); it != bodyOf.end())
                 b.parent = it->second;
         b.frameInChild = boneFrame(g, b.joint);
+        b.skeleton = lila::scene::grapple::skeletonRoot(g, b.joint);
         if (b.parent >= 0)
         {
             const NodeId pj = rig.bodies[size_t(b.parent)].joint;
@@ -659,8 +661,165 @@ RigDef buildRig(Graph& g, NodeId solver)
         fd.magnitudeAttr = attr(f, "magnitude");
         rig.fields.push_back(fd);
     }
+    if (Node* gr = named(g, text(*s, "grapple")); gr && gr->type().isA(lila::scene::grapple::kType))
+    {
+        namespace gp = lila::scene::grapple;
+        rig.figures = true;
+        // The body a joint rides: its own, else the nearest one above it.
+        auto bodyFor = [&](NodeId joint) {
+            for (NodeId j = joint; j; j = g.parent(j))
+                if (auto it = bodyOf.find(j); it != bodyOf.end())
+                    return it->second;
+            return -1;
+        };
+        auto rotationOf = [](const glm::dmat4& m) { return glm::normalize(glm::quat_cast(glm::dmat3(rigid(m)))); };
+        for (NodeId cid : gp::contactsOf(g, gr->id()))
+        {
+            const Node& c = *g.node(cid);
+            h = hashOwn(g, c, h);
+            const auto [sj, tj] = gp::contactJoints(g, cid);
+            if (!flag(c, "enabled") || !sj || !tj)
+                continue;
+            ContactDef cd;
+            cd.node = cid;
+            cd.a = bodyFor(sj);
+            cd.b = bodyFor(tj);
+            if (cd.a < 0 || cd.b < 0 || cd.a == cd.b)
+                continue;
+            const auto [ps, pt] = gp::contactPoints(g, cid);
+            const glm::dmat4 wa = g.node(rig.bodies[size_t(cd.a)].joint)->as<glm::dmat4>(Transform::kWorldMatrix);
+            const glm::dmat4 wb = g.node(rig.bodies[size_t(cd.b)].joint)->as<glm::dmat4>(Transform::kWorldMatrix);
+            cd.pointA = glm::dvec3(glm::inverse(rigid(wa)) * glm::dvec4(ps, 1.0));
+            cd.pointB = glm::dvec3(glm::inverse(rigid(wb)) * glm::dvec4(pt, 1.0));
+            if (flag(c, "orient"))
+            {
+                const glm::dquat held = glm::normalize(glm::quat_cast(glm::dmat3(eulerToMatrix(vec(c, "rotation"), RotateOrder::XYZ))));
+                const glm::dmat4 ws = g.node(sj)->as<glm::dmat4>(Transform::kWorldMatrix), wt = g.node(tj)->as<glm::dmat4>(Transform::kWorldMatrix);
+                const glm::dquat towardTarget = glm::conjugate(rotationOf(wb)) * rotationOf(wt);
+                const glm::dquat fromSource = glm::conjugate(rotationOf(ws)) * rotationOf(wa);
+                cd.rotation = glm::normalize(towardTarget * held * fromSource);
+            }
+            cd.weightAttr = attr(c, "weight");
+            cd.stiffnessAttr = attr(c, "stiffness");
+            h = hashPod(cd.a, h);
+            h = hashPod(cd.b, h);
+            for (double v : {cd.pointA.x, cd.pointA.y, cd.pointA.z, cd.pointB.x, cd.pointB.y, cd.pointB.z})
+                h = hashPod(v, h);
+            rig.contacts.push_back(cd);
+        }
+    }
     rig.hash = h;
     return rig;
+}
+
+namespace
+{
+bool helperJoint(const std::string& name)
+{
+    const std::string n = lower(bareName(name));
+    return n.find("twist") != std::string::npos || n.find("corrective") != std::string::npos || n.starts_with("ik_");
+}
+
+/** World position of the first joint below top named name (namespaces ignored); none when there is none. */
+std::optional<glm::dvec3> findJoint(Graph& g, NodeId top, const std::string& name)
+{
+    for (NodeId d : g.descendants(top))
+        if (Node* n = g.node(d); n && isJointNode(*n) && lower(bareName(n->name())) == name)
+            return glm::dvec3(n->as<glm::dmat4>(Transform::kWorldMatrix)[3]);
+    return std::nullopt;
+}
+} // namespace
+
+ShapeDesc bodySizedShape(Graph& g, NodeId joint, ShapeKind kind, const glm::dquat& frame)
+{
+    ShapeDesc s;
+    s.kind = kind;
+    s.rotation = frame;
+    s.fromBones = true;
+    NodeId top = joint;
+    while (g.parent(top) && isJointNode(*g.node(g.parent(top))))
+        top = g.parent(top);
+    // The skeleton's height and shoulder span set the proportions, so a body comes out about a body's size and mass.
+    double lo = 1e300, hi = -1e300;
+    for (NodeId d : g.descendants(top))
+        if (Node* n = g.node(d); n && isJointNode(*n))
+        {
+            const double y = n->as<glm::dmat4>(Transform::kWorldMatrix)[3].y;
+            lo = std::min(lo, y), hi = std::max(hi, y);
+        }
+    const double h = std::max(hi > lo ? hi - lo : 0.0, 20.0);
+    const auto shoulderL = findJoint(g, top, "upperarm_l"), shoulderR = findJoint(g, top, "upperarm_r");
+    const double span = shoulderL && shoulderR ? std::max(glm::length(*shoulderL - *shoulderR), 0.12 * h) : 0.22 * h;
+
+    const glm::dmat4 world = rigid(g.node(joint)->as<glm::dmat4>(Transform::kWorldMatrix));
+    const glm::dmat4 inv = glm::inverse(world);
+    const glm::dvec3 axis = frame * glm::dvec3(1, 0, 0);
+    double len = 0.0;
+    for (NodeId c : g.children(joint))
+        if (Node* n = g.node(c); n && isJointNode(*n) && !helperJoint(n->name()))
+            len = std::max(len, glm::dot(glm::dvec3(inv * n->as<glm::dmat4>(Transform::kWorldMatrix)[3]), axis));
+    if (len <= 1e-6)
+        if (Node* j = g.node(joint))
+            len = glm::length(j->as<glm::dvec3>(Transform::kTranslate)) * 0.5;
+
+    std::string label = semanticLabel(g, joint);
+    if (label.ends_with("_l") || label.ends_with("_r"))
+        label.resize(label.size() - 2);
+    // Left to right in the shape's frame: the wide side of a torso box faces that way.
+    const glm::dvec3 side = shoulderL && shoulderR ? glm::dvec3(inv * glm::dvec4(*shoulderL - *shoulderR, 0.0)) : glm::dvec3(0.0);
+    const bool wideOnY = std::abs(glm::dot(side, frame * glm::dvec3(0, 1, 0))) >= std::abs(glm::dot(side, frame * glm::dvec3(0, 0, 1)));
+    auto box = [&](double along, double wide, double deep) {
+        s.extents = wideOnY ? glm::dvec3(along, wide, deep) : glm::dvec3(along, deep, wide);
+        s.radius = std::min(wide, deep) * 0.5;
+        s.length = std::max(along - 2.0 * s.radius, 0.0);
+    };
+    auto capsule = [&](double along, double r) {
+        s.radius = r;
+        s.length = std::max(along - 2.0 * r, 0.0);
+        s.extents = glm::dvec3(along, 2.0 * r, 2.0 * r);
+    };
+    double along = std::max(len, 0.02 * h);
+    if (label == "pelvis")
+        along = std::max(len, 0.08 * h), box(along, span * 0.9, span * 0.6);
+    else if (label.starts_with("spine"))
+        along = std::max(len, 0.03 * h), box(along, span * 0.85, span * 0.55);
+    else if (label.starts_with("neck"))
+        capsule(along, 0.03 * h);
+    else if (label == "head")
+    {
+        s.radius = 0.065 * h;
+        along = 2.0 * s.radius;
+        s.extents = glm::dvec3(along, 1.6 * s.radius, 1.8 * s.radius);
+        s.length = 0.0;
+    }
+    else if (label == "clavicle")
+        capsule(along, 0.03 * h);
+    else if (label == "upperarm")
+        capsule(along, std::max(0.03 * h, len * 0.15));
+    else if (label == "lowerarm")
+        capsule(along, std::max(0.025 * h, len * 0.13));
+    else if (label == "hand")
+        along = 0.1 * h, box(along, 0.05 * h, 0.025 * h);
+    else if (label == "thigh")
+        capsule(along, std::max(0.045 * h, len * 0.15));
+    else if (label == "calf")
+        capsule(along, std::max(0.035 * h, len * 0.12));
+    else if (label == "foot")
+        along = std::max(len, 0.08 * h), box(along, 0.055 * h, 0.05 * h);
+    else if (label == "ball")
+        along = std::max(len, 0.05 * h), box(along, 0.055 * h, 0.03 * h);
+    else
+        capsule(along, std::clamp(len * 0.18, 0.015 * h, 0.06 * h));
+    s.offset = frame * glm::dvec3(along * 0.5, 0.0, 0.0);
+    if (kind == ShapeKind::Sphere)
+        s.radius = std::max(s.radius, along * 0.5);
+    if (kind == ShapeKind::ConvexHull)
+    {
+        const glm::dvec3 e = s.extents * 0.5;
+        for (int i = 0; i < 8; ++i)
+            s.hull.push_back({(i & 1) ? e.x : -e.x, (i & 2) ? e.y : -e.y, (i & 4) ? e.z : -e.z});
+    }
+    return s;
 }
 
 ShapeDesc fitShape(Graph& g, NodeId joint, ShapeKind kind)
@@ -759,29 +918,7 @@ ShapeDesc fitShape(Graph& g, NodeId joint, ShapeKind kind)
         return s;
     }
 
-    // No skinned mesh: a bone-sized shape from the joint down its bone.
-    double len = 0.0;
-    for (NodeId c : g.children(joint))
-        if (Node* n = g.node(c); n && isJointNode(*n))
-            len = std::max(len, glm::length(n->as<glm::dvec3>(Transform::kTranslate)));
-    if (len <= 1e-6)
-        if (Node* j = g.node(joint))
-            len = glm::length(j->as<glm::dvec3>(Transform::kTranslate)) * 0.5;
-    if (len <= 1e-6)
-        len = 10.0;
-    const double r = std::clamp(len * 0.18, 1.0, 15.0);
-    s.radius = r;
-    s.length = std::max(len - 2.0 * r, 0.0);
-    s.extents = glm::dvec3(len, 2.0 * r, 2.0 * r);
-    s.offset = frame * glm::dvec3(len * 0.5, 0.0, 0.0);
-    if (kind == ShapeKind::Sphere)
-        s.radius = std::max(len * 0.5, r);
-    if (kind == ShapeKind::ConvexHull)
-    {
-        for (int i = 0; i < 8; ++i)
-            s.hull.push_back({(i & 1) ? len : 0.0, (i & 2) ? r : -r, (i & 4) ? r : -r});
-        s.offset = glm::dvec3(0.0);
-    }
+    s = bodySizedShape(g, joint, kind, frame);
     return s;
 }
 

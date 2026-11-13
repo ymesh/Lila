@@ -36,16 +36,18 @@ TEST_CASE("node type icons fall back through the base types")
     CHECK(iconFor(derived, fallback) == "sphere");
 }
 
-TEST_CASE("outliner row icons")
+TEST_CASE("outliner row icons come from the node's type, whatever its name or parent")
 {
     run("newScene");
     run("createNode", {{"args", {"mesh"}}, {"name", "body"}});
     run("createNode", {{"args", {"mesh"}}, {"name", "rock_high"}});
     scene::Graph& g = scene::Graph::current();
     g.createNode(*scene::types::find("mesh"), "body_high", g.find("body")->id(), false);
+    run("spaceLocator", {{"name", "mark"}});
     CHECK(outliner::iconName(*g.find("body")) == "cube");
-    CHECK(outliner::iconName(*g.find("body_high")) == "brush");
+    CHECK(outliner::iconName(*g.find("body_high")) == "cube");
     CHECK(outliner::iconName(*g.find("rock_high")) == "cube");
+    CHECK(outliner::iconName(*g.find("mark")) == "crosshair");
 }
 
 TEST_CASE("outliner context menu targets")

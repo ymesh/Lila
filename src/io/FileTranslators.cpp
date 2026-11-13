@@ -299,6 +299,16 @@ void registerBuiltins()
          .extensions = {".stl"},
          .import = {.command = "importStl"},
          .exportSelection = {.command = "exportStl"}});
+    add({.id = "ifc",
+         .label = "IFC",
+         .doc = "IFC building models: elements as meshes, the spatial structure as groups, property sets as attributes, placed by IfcMapConversion.",
+         .extensions = {".ifc"},
+         .import = {.command = "importIfc"}});
+    add({.id = "pointCloud",
+         .label = "Point Cloud",
+         .doc = "LAS, LAZ and E57 scans as streamed point clouds, placed by their CRS.",
+         .extensions = {".las", ".laz", ".e57"},
+         .import = {.command = "importPointCloud"}});
     add({.id = "ply",
          .label = "PLY",
          .doc = "Stanford PLY, binary and ASCII: meshes and point clouds with normals, UVs and colors, as scanners and "

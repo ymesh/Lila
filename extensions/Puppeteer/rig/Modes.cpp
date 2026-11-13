@@ -261,15 +261,23 @@ void registerMenus(ext::Context& ctx)
                           "puppeteer.spinner.autoPose", "puppeteer.curveOverlay"})
         menus::addItem(ctx, {.menu = "Puppeteer", .action = a});
     menus::addItem(ctx, {.menu = "Puppeteer", .kind = menus::Kind::Submenu, .label = "Strings"});
-    for (const char* a : {"puppeteer.strings.forward", "puppeteer.strings.backward", "puppeteer.strings.ik", "puppeteer.strings.fullBody",
+    menus::addItem(ctx, {.menu = "Puppeteer/Strings", .kind = menus::Kind::Submenu, .label = "Mode"});
+    for (const char* a : {"puppeteer.strings.default", "puppeteer.strings.free", "puppeteer.strings.forward", "puppeteer.strings.forwardAll",
+                          "puppeteer.strings.backward", "puppeteer.strings.backwardAll", "puppeteer.strings.bidirectional", "puppeteer.strings.all",
+                          "puppeteer.strings.ik", "puppeteer.strings.fullBody", "", "puppeteer.strings.allVariant", "puppeteer.strings.next"})
+        menus::addItem(ctx, *a ? menus::Item{.menu = "Puppeteer/Strings/Mode", .action = a}
+                               : menus::Item{.menu = "Puppeteer/Strings/Mode", .kind = menus::Kind::Separator});
+    for (const char* a : {"puppeteer.strings.isolate", "puppeteer.strings.rotation.local", "puppeteer.strings.rotation.pivot",
                           "", "puppeteer.strings.lineOfAction", "window.puppeteerStringsRules", "", "puppeteer.strings.contacts", "puppeteer.strings.onLayer", "puppeteer.strings.stretch", "puppeteer.strings.zero", "puppeteer.strings.restoreLengths",
-                          "puppeteer.strings.overshoot", "puppeteer.strings.smooth", "puppeteer.strings.fill", "puppeteer.strings.retime", "puppeteer.strings.trail", "",
+                          "puppeteer.strings.overshoot", "puppeteer.strings.mirror", "puppeteer.strings.tween", "puppeteer.strings.smooth", "puppeteer.strings.fill", "puppeteer.strings.retime", "puppeteer.strings.trail", "",
                           "puppeteer.strings.breakdownParts", "puppeteer.strings.clearBreakdownParts", "",
                           "puppeteer.strings.glue", "puppeteer.strings.attach", "puppeteer.strings.unglue"})
         menus::addItem(ctx, *a ? menus::Item{.menu = "Puppeteer/Strings", .action = a}
                                : menus::Item{.menu = "Puppeteer/Strings", .kind = menus::Kind::Separator});
-    for (const char* a : {"puppeteer.strings.smooth", "puppeteer.strings.fill", "puppeteer.strings.retime"})
-        menus::addItem(ctx, {.menu = menus::kTimeSliderRange, .action = a});
+    for (const char* a : {"puppeteer.strings.tween", "puppeteer.strings.smooth", "puppeteer.strings.fill", "puppeteer.strings.retime", "",
+                          "puppeteer.strings.rotation.local", "puppeteer.strings.rotation.pivot", "puppeteer.strings.onLayer"})
+        menus::addItem(ctx, *a ? menus::Item{.menu = menus::kTimeSliderRange, .action = a}
+                               : menus::Item{.menu = menus::kTimeSliderRange, .kind = menus::Kind::Separator});
 }
 
 void registerShelf(ext::Context& ctx)
@@ -338,7 +346,14 @@ void registerModeBundles(ext::Context& ctx)
     animKeys["viewport"]["Esc"] = "puppeteer.curveOverlay.escape";
     animKeys["viewport"]["Shift+L"] = {{"press", "puppeteer.anim.lock"}};
     animKeys["viewport"]["Shift+P"] = {{"press", "puppeteer.anim.pin"}};
-    animKeys["viewport"]["U"] = {{"LMB", {{"markingMenu", "puppeteerStrings"}}}};
+    animKeys["viewport"]["U"] = {{"LMB", {{"markingMenu", "puppeteerStrings"}}}, {"RMB", {{"markingMenu", "puppeteerStringsModes"}}}};
+    // Strings modes: Alt with the left hand's rows, Shift for the variant that moves more (All, or IK's Full Body).
+    for (const auto& [key, action] : {std::pair{"Alt+Q", "puppeteer.strings.default"}, {"Alt+A", "puppeteer.strings.forward"},
+                                      {"Alt+Shift+A", "puppeteer.strings.forwardAll"}, {"Alt+S", "puppeteer.strings.backward"},
+                                      {"Alt+Shift+S", "puppeteer.strings.backwardAll"}, {"Alt+D", "puppeteer.strings.bidirectional"},
+                                      {"Alt+Shift+Q", "puppeteer.strings.all"}, {"Alt+W", "puppeteer.strings.ik"},
+                                      {"Alt+Shift+W", "puppeteer.strings.fullBody"}, {"Alt+E", "puppeteer.strings.free"}})
+        animKeys["viewport"][key] = {{"press", action}};
 
     modes::add(ctx, {.id = kRigMode,
                      .label = "Puppeteer Rig",
@@ -352,7 +367,7 @@ void registerModeBundles(ext::Context& ctx)
     modes::add(ctx, {.id = kAnimateMode,
                      .label = "Puppeteer Animate",
                      .doc = "Pose the joints directly: click the mesh to pick the joint under it, turn it with the Spinner. "
-                            "U + left drag: pin, contacts, stretch and zero. Space tap: the Curve Overlay (hold Shift to edit its keys); Space hold: the hotbox.",
+                            "U + left drag: pin, contacts, stretch and zero; U + right drag: the Strings modes (Alt+Q, W, E, A, S, D). Space tap: the Curve Overlay (hold Shift to edit its keys); Space hold: the hotbox.",
                      .icon = "walk",
                      .layout = kAnimateLayout,
                      .hotkeys = animKeys,
@@ -374,7 +389,7 @@ void registerModeBundles(ext::Context& ctx)
 void registerModes(ext::Context& ctx)
 {
     // Shift+right-click while animating: keys and poses rather than modelling tools.
-    const json keysMenu = {{"N", {{"label", "Set Key"}, {"action", "anim.setKey"}}},
+    const json keysMenu = {{"N", {{"label", "Set Key"}, {"action", "puppeteer.anim.setKey"}}},
                            {"S", {{"label", "Delete Keys"}, {"action", "anim.deleteKeys"}}},
                            {"E", {{"label", "Next Key"}, {"action", "anim.nextKey"}}},
                            {"W", {{"label", "Previous Key"}, {"action", "anim.prevKey"}}},
@@ -385,6 +400,9 @@ void registerModes(ext::Context& ctx)
                            {"overflow", json::array({{{"label", "Key Translate"}, {"action", "anim.setKeyTranslate"}},
                                                      {{"label", "Key Rotate"}, {"action", "anim.setKeyRotate"}},
                                                      {{"label", "Key Scale"}, {"action", "anim.setKeyScale"}},
+                                                     {{"separator", true}},
+                                                     {{"label", "Key Target"}, {"action", "puppeteer.keys.target"}},
+                                                     {{"label", "Control Tracks On"}, {"action", "puppeteer.tracks.toggle"}},
                                                      {{"separator", true}},
                                                      {{"label", "Lock Key"}, {"action", "puppeteer.anim.lock"}}})}};
     for (const char* name : {"viewportShift", "viewportShiftObject"})

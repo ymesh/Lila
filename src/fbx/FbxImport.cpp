@@ -1,5 +1,6 @@
 #include "fbx/Fbx.h"
 
+#include "core/Log.h"
 #include "core/Profile.h"
 #include "core/UninitVector.h"
 #include "core/Progress.h"
@@ -10,6 +11,7 @@
 #include "scene/Anim.h"
 #include "scene/Camera.h"
 #include "scene/Deformers.h"
+#include "scene/Georef.h"
 #include "scene/Graph.h"
 #include "scene/LodGroup.h"
 #include "scene/Instancing.h"
@@ -400,6 +402,18 @@ void applyCamera(scene::Graph& g, scene::NodeId id, const ufbx_camera& cam, doub
  * Screen sizes from the group's thresholds when they are screen percentages, which is how Lila and Maya's percentage
  * mode write them; distance thresholds have no screen size to become, so the group keeps automatic sizes.
  */
+/** The LilaGeoreference* document properties a georeferenced Lila export writes, as georef::exportJson's crs and origin. */
+std::optional<nlohmann::json> fileGeoreference(const ufbx_props& props)
+{
+    const ufbx_prop* crs = ufbx_find_prop(&props, "LilaGeoreferenceCRS");
+    const ufbx_prop* e = ufbx_find_prop(&props, "LilaGeoreferenceEasting");
+    const ufbx_prop* n = ufbx_find_prop(&props, "LilaGeoreferenceNorthing");
+    const ufbx_prop* h = ufbx_find_prop(&props, "LilaGeoreferenceHeight");
+    if (!crs || !e || !n || !h || !crs->value_str.length)
+        return std::nullopt;
+    return nlohmann::json{{"crs", toString(crs->value_str)}, {"origin", {e->value_real, n->value_real, h->value_real}}};
+}
+
 void applyLodGroup(scene::Graph& graph, scene::NodeId id, const ufbx_lod_group& lod, ImportResult& r)
 {
     if (!ufbx_find_prop(&lod.props, "Thresholds|Level0"))
@@ -856,7 +870,7 @@ ImportResult importFbx(scene::Graph& graph, const fs::path& path, const ImportOp
     // Characters from Z-up (Unreal) files turn to face Lila's forward; see characterTurn.
     bool zUpFile = false;
     fileToCanonical(axes, &zUpFile);
-    const bool turnCharacter = zUpFile && (fbx->skin_clusters.count > 0 || fbx->bones.count > 0);
+    const bool turnCharacter = opts.turnCharacters && zUpFile && (fbx->skin_clusters.count > 0 || fbx->bones.count > 0);
     const glm::dmat3 fileToLilaAxes3 =
         turnCharacter ? characterTurn(math::upAxis()) * fileToLila(axes, math::upAxis()) : fileToLila(axes, math::upAxis());
     const glm::dmat4 C = glm::dmat4(fileToLilaAxes3) * glm::scale(glm::dmat4(1.0), glm::dvec3(unitScale));
@@ -1071,6 +1085,12 @@ ImportResult importFbx(scene::Graph& graph, const fs::path& path, const ImportOp
         r.skipped.push_back(std::format("animation ({} curve(s))", fbx->anim_curves.count));
     for (size_t i = 0; i < fbx->metadata.warnings.count; ++i)
         r.warnings.push_back(toString(fbx->metadata.warnings.data[i].description));
+    if (const std::optional<nlohmann::json> geo = opts.georeference ? fileGeoreference(fbx->metadata.scene_props) : std::nullopt)
+        if (const auto placed = scene::georef::placeImported(graph, *geo, std::vector<uint64_t>(r.roots.begin(), r.roots.end())))
+        {
+            r.georeferenced = true;
+            log::info("importFbx: {}", *placed);
+        }
     r.ok = true;
     return r;
 }

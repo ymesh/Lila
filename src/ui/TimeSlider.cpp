@@ -14,6 +14,7 @@
 #include "ui/Deletion.h"
 #include "ui/Ghosting.h"
 #include "ui/Icons.h"
+#include "ui/MediaLane.h"
 #include "ui/Menus.h"
 #include "ui/SpinScrub.h"
 #include "ui/UiCommands.h"
@@ -142,7 +143,8 @@ public:
     explicit TimeRuler(QWidget* parent) : QWidget(parent)
     {
         setMinimumHeight(28);
-        setMouseTracking(false);
+        // Hover shows which range handle a press would grab.
+        setMouseTracking(true);
         setFocusPolicy(Qt::ClickFocus);
         mPrefListener = PrefStore::get().onChanged([this](const std::string& file) {
             if (file == "general")
@@ -257,18 +259,21 @@ protected:
 
     void mousePressEvent(QMouseEvent* e) override
     {
-        // Shift + drag selects a range for edits across frames; a plain click drops it.
+        // The range's handles: its ends resize it, the feet of its ramps set the falloff (Ctrl: both sides).
+        if (e->button() == Qt::LeftButton && !e->modifiers().testFlag(Qt::ShiftModifier))
+            if (const RangeHandle h = rangeHandleAt(e->position()); h != RangeHandle::None)
+            {
+                mRangeDrag = h;
+                mRangeBoth = e->modifiers().testFlag(Qt::ControlModifier);
+                return;
+            }
+        // Shift + drag selects a range for edits across frames; Shift + click without a drag drops it.
         if (e->button() == Qt::LeftButton && e->modifiers().testFlag(Qt::ShiftModifier))
         {
             mSelecting = true;
+            mSelectMoved = false;
             mSelectFrom = frameAt(e->position().x());
-            selectTo(e->position().x());
             return;
-        }
-        if (e->button() == Qt::LeftButton && anim::timeSelection().active)
-        {
-            anim::timeSelection().active = false;
-            anim::playbackChanged();
         }
         // MMB moves the time but holds the pose, so a key set next copies it there (Maya's MMB drag).
         if (e->button() == Qt::LeftButton || e->button() == Qt::MiddleButton)
@@ -283,16 +288,33 @@ protected:
 
     void mouseMoveEvent(QMouseEvent* e) override
     {
-        if (mSelecting)
-            selectTo(e->position().x());
+        if (mRangeDrag != RangeHandle::None)
+            dragRangeHandle(e->position().x());
+        else if (mSelecting)
+        {
+            if (frameAt(e->position().x()) != mSelectFrom || mSelectMoved)
+            {
+                mSelectMoved = true;
+                selectTo(e->position().x());
+            }
+        }
         else if (mScrubbing)
             scrubTo(e->position().x());
+        else
+        {
+            const RangeHandle h = rangeHandleAt(e->position());
+            setCursor(h == RangeHandle::None ? Qt::ArrowCursor : Qt::SizeHorCursor);
+            setToolTip(h == RangeHandle::None ? QString() : rangeTip(h));
+        }
     }
 
     void mouseReleaseEvent(QMouseEvent*) override
     {
+        if (mSelecting && !mSelectMoved && anim::timeSelection().active)
+            runUi("timeRange", {{"clear", true}});
         mScrubbing = false;
         mSelecting = false;
+        mRangeDrag = RangeHandle::None;
     }
 
 private:
@@ -322,27 +344,147 @@ private:
         update();
     }
 
-    /** The selected range as a light band over its frames, fading out across the falloff on each side. */
+    enum class RangeHandle
+    {
+        None,
+        Start,
+        End,
+        FalloffBefore,
+        FalloffAfter,
+    };
+
+    /** Where each handle sits: the range's edges, and the feet of its falloff ramps. */
+    double handleX(RangeHandle h) const
+    {
+        const anim::TimeSelection& sel = anim::timeSelection();
+        const double ppf = pxPerFrame(), from = anim::frameOf(sel.start), to = anim::frameOf(sel.end);
+        switch (h)
+        {
+        case RangeHandle::Start: return xOf(from) - ppf / 2;
+        case RangeHandle::End: return xOf(to) + ppf / 2;
+        case RangeHandle::FalloffBefore: return xOf(from - sel.before() - 1.0);
+        case RangeHandle::FalloffAfter: return xOf(to + sel.after() + 1.0);
+        default: return -1e9;
+        }
+    }
+
+    /** The handle under pos: the edges along the top half, the ramp feet along the bottom half. */
+    RangeHandle rangeHandleAt(QPointF pos) const
+    {
+        if (!anim::timeSelection().active)
+            return RangeHandle::None;
+        const bool top = pos.y() < height() * 0.5;
+        RangeHandle best = RangeHandle::None;
+        double nearest = 6.0;
+        for (RangeHandle h : {top ? RangeHandle::Start : RangeHandle::FalloffBefore, top ? RangeHandle::End : RangeHandle::FalloffAfter})
+            if (const double d = std::abs(pos.x() - handleX(h)); d < nearest)
+            {
+                nearest = d;
+                best = h;
+            }
+        return best;
+    }
+
+    QString rangeTip(RangeHandle h) const
+    {
+        const anim::TimeSelection& sel = anim::timeSelection();
+        const QString shape = QString::fromUtf8(anim::rangeFalloffName(sel.shape));
+        switch (h)
+        {
+        case RangeHandle::Start: return QString("Range start: frame %1\nDrag to resize").arg(frameOf(sel.start));
+        case RangeHandle::End: return QString("Range end: frame %1\nDrag to resize").arg(frameOf(sel.end));
+        case RangeHandle::FalloffBefore:
+        case RangeHandle::FalloffAfter:
+            return QString("Falloff: %1 frames, %2\nDrag to set this side, Ctrl + drag both; right-click for the falloff type")
+                .arg(h == RangeHandle::FalloffBefore ? sel.before() : sel.after())
+                .arg(shape.left(1).toUpper() + shape.mid(1));
+        default: return {};
+        }
+    }
+
+    void dragRangeHandle(double x)
+    {
+        anim::TimeSelection& sel = anim::timeSelection();
+        const int at = frameAt(x);
+        const int from = frameOf(sel.start), to = frameOf(sel.end);
+        json call;
+        switch (mRangeDrag)
+        {
+        case RangeHandle::Start: call = {{"start", anim::secondsOf(std::min(at, to))}, {"end", sel.end}}; break;
+        case RangeHandle::End: call = {{"start", sel.start}, {"end", anim::secondsOf(std::max(at, from))}}; break;
+        case RangeHandle::FalloffBefore:
+        case RangeHandle::FalloffAfter:
+        {
+            const double frames = std::max(0, mRangeDrag == RangeHandle::FalloffBefore ? from - at - 1 : at - to - 1);
+            if (mRangeBoth)
+                call = {{"falloff", frames}};
+            else
+                call = {{mRangeDrag == RangeHandle::FalloffBefore ? "falloffBefore" : "falloffAfter", frames}};
+            break;
+        }
+        default: return;
+        }
+        runUi("timeRange", call);
+        update();
+    }
+
+    /**
+     * The selected range as a solid plateau over its frames, with its falloff drawn as ramps either side whose height is
+     * the weight each frame takes, so the falloff type reads from the shape. Handles: tabs on the edges, feet on the ramps.
+     */
     void drawSelection(QPainter& p, int first, int last)
     {
         const anim::TimeSelection& sel = anim::timeSelection();
         if (!sel.active)
             return;
         const double from = anim::frameOf(sel.start), to = anim::frameOf(sel.end);
-        const int h = height();
+        const double h = height();
         const double ppf = pxPerFrame();
-        for (int fr = int(std::floor(from - sel.falloff)); fr <= int(std::ceil(to + sel.falloff)); ++fr)
+        p.save();
+        p.setRenderHint(QPainter::Antialiasing);
+        QPainterPath area;
+        const double lo = std::max(double(first) - 0.5, from - sel.before() - 1.0), hi = std::min(double(last) + 0.5, to + sel.after() + 1.0);
+        const int steps = std::max(8, int((xOf(hi) - xOf(lo)) / 2.0));
+        area.moveTo(xOf(lo), h);
+        for (int i = 0; i <= steps; ++i)
         {
-            if (fr < first || fr > last)
-                continue;
-            const double w = anim::timeSelectionWeight(sel, anim::secondsOf(fr));
-            if (w <= 0.0)
-                continue;
-            p.fillRect(QRectF(xOf(fr) - ppf / 2, 0, ppf, h), gray(230, int(70 * w)));
+            const double fr = lo + (hi - lo) * i / steps;
+            // The weight the frames take, as timeSelectionWeight gives it, between frames too.
+            double w = 1.0;
+            if (const double out = from - fr; out > 0.5)
+                w = sel.before() > 0.0 ? anim::rangeFalloffWeight(sel.shape, 1.0 - out / (sel.before() + 1.0)) : 0.0;
+            else if (const double past = fr - to; past > 0.5)
+                w = sel.after() > 0.0 ? anim::rangeFalloffWeight(sel.shape, 1.0 - past / (sel.after() + 1.0)) : 0.0;
+            area.lineTo(xOf(fr), h - w * (h - 2.0));
         }
-        p.setPen(gray(230, 160));
-        p.drawLine(QPointF(xOf(from) - ppf / 2, 0), QPointF(xOf(from) - ppf / 2, h));
-        p.drawLine(QPointF(xOf(to) + ppf / 2, 0), QPointF(xOf(to) + ppf / 2, h));
+        area.lineTo(xOf(hi), h);
+        area.closeSubpath();
+        p.setPen(Qt::NoPen);
+        p.setBrush(gray(230, 46));
+        p.drawPath(area);
+        p.fillRect(QRectF(xOf(from) - ppf / 2, 0, xOf(to) - xOf(from) + ppf, h), gray(230, 34));
+        p.setPen(QPen(gray(235, 210), 1.5));
+        for (RangeHandle e : {RangeHandle::Start, RangeHandle::End})
+        {
+            const double x = handleX(e);
+            p.drawLine(QPointF(x, 0), QPointF(x, h));
+            p.fillRect(QRectF(x - 3, 0, 6, 5), gray(235, 230));
+        }
+        p.setPen(Qt::NoPen);
+        p.setBrush(gray(235, 200));
+        for (RangeHandle f : {RangeHandle::FalloffBefore, RangeHandle::FalloffAfter})
+            if ((f == RangeHandle::FalloffBefore ? sel.before() : sel.after()) > 0.0 || mRangeDrag == f)
+            {
+                const double x = handleX(f);
+                p.drawPolygon(QPolygonF({QPointF(x, h - 6), QPointF(x - 4, h), QPointF(x + 4, h)}));
+            }
+            else
+            {
+                // No falloff yet: a small foot just outside the edge to drag one out.
+                const double x = handleX(f);
+                p.drawEllipse(QPointF(x, h - 3), 2.0, 2.0);
+            }
+        p.restore();
     }
 
     void scrubTo(double x)
@@ -371,13 +513,32 @@ private:
         menu.addSeparator();
         if (anim::timeSelection().active)
         {
+            const anim::TimeSelection& sel = anim::timeSelection();
             QMenu* falloff = menu.addMenu("Range Falloff");
             for (int frames : {0, 2, 5, 10, 20})
             {
                 QAction* item = falloff->addAction(frames ? QString("%1 frames").arg(frames) : QString("None"),
                                                    [frames] { runUi("timeRange", {{"falloff", double(frames)}}); });
                 item->setCheckable(true);
-                item->setChecked(std::abs(anim::timeSelection().falloff - frames) < 1e-9);
+                item->setChecked(std::abs(sel.before() - frames) < 1e-9 && std::abs(sel.after() - frames) < 1e-9);
+            }
+            QMenu* shape = menu.addMenu("Falloff Type");
+            for (const auto& [f, label] : {std::pair{anim::RangeFalloff::Smooth, "Smooth"}, {anim::RangeFalloff::Linear, "Linear"},
+                                           {anim::RangeFalloff::Sharp, "Sharp"}, {anim::RangeFalloff::Soft, "Soft"},
+                                           {anim::RangeFalloff::Constant, "Constant"}})
+            {
+                const std::string name = anim::rangeFalloffName(f);
+                QAction* item = shape->addAction(label, [name] { runUi("timeRange", {{"falloffType", name}}); });
+                item->setCheckable(true);
+                item->setChecked(sel.shape == f);
+            }
+            QMenu* every = menu.addMenu("Key Every");
+            for (int n : {0, 1, 2, 3, 4, 5})
+            {
+                QAction* item = every->addAction(n == 0 ? QString("Keys Only") : n == 1 ? QString("Frame") : QString("%1 Frames").arg(n),
+                                                 [n] { runUi("timeRange", {{"every", n}}); });
+                item->setCheckable(true);
+                item->setChecked(sel.every == n);
             }
             menu.addAction("Clear Range", [] { runUi("timeRange", {{"clear", true}}); });
             menu.addSeparator();
@@ -392,6 +553,7 @@ private:
             }
         }
         audio::fillMenu(menu.addMenu("Audio"));
+        menus::addActionRow(&menu, "anim.importFootage");
         QMenu* speed = menu.addMenu("Playback Speed");
         for (anim::PlaybackSpeed s : anim::kPlaybackSpeeds)
         {
@@ -412,7 +574,10 @@ private:
     bool mScrubbing = false;
     bool mHoldPose = false;
     bool mSelecting = false;
+    bool mSelectMoved = false;
     int mSelectFrom = 0;
+    RangeHandle mRangeDrag = RangeHandle::None;
+    bool mRangeBoth = false;
     int mPrefListener = 0;
 
 public:
@@ -539,7 +704,14 @@ TimeSlider::TimeSlider(QWidget* parent) : QWidget(parent)
     auto* top = new QHBoxLayout();
     top->setSpacing(2);
     mRuler = new TimeRuler(this);
-    top->addWidget(mRuler, 1);
+    {
+        // The media lane sits right on the ruler, so its bars line up with the frames.
+        auto* column = new QVBoxLayout();
+        column->setSpacing(0);
+        column->addWidget(new MediaLane(this));
+        column->addWidget(mRuler, 1);
+        top->addLayout(column, 1);
+    }
     top->addSpacing(4);
     top->addWidget(timeDimLabel("Frame", this));
     mFrame = frameField(this, "Current Frame");
@@ -631,7 +803,7 @@ TimeSlider::TimeSlider(QWidget* parent) : QWidget(parent)
         connect(ghost, &QToolButton::customContextMenuRequested, this, [ghost](const QPoint& at) {
             QMenu menu;
             for (const char* id : {"anim.ghostMode.keys", "anim.ghostMode.frames", "", "anim.ghostShow.mesh", "anim.ghostShow.skeleton",
-                                   "anim.ghostShow.both", "", "anim.refreshGhosts"})
+                                   "anim.ghostShow.both", "", "anim.ghostRange", "anim.refreshGhosts"})
             {
                 if (!*id)
                 {

@@ -37,6 +37,12 @@ struct Image
     double contrast = 1.0;
     /** The Reference window it is a tab of; empty when it only shows as an overlay. */
     std::string window;
+    /** Video: frames added to the one shown, and the rate it plays at (0 for the file's own). */
+    int videoOffset = 0;
+    double videoFps = 0.0;
+    /** Video: holds pausedFrame instead of following the scene time. */
+    bool paused = false;
+    int64_t pausedFrame = 0;
 };
 
 enum class Anchor
@@ -169,8 +175,12 @@ LILA_UI_API void removeListener(int id);
 
 /** The file to read an image from: its linked path resolved, or its embedded bytes written to the reference cache. */
 LILA_UI_API std::string fileOf(const Image& img);
-/** Reads the file into img.data / img.ext. False with a log message when it can't be read. */
+/** Reads the file into img.data / img.ext. False with a log message when it can't be read or is a video (videos stay linked). */
 LILA_UI_API bool embed(Image& img);
+/** Whether the image is a video file. */
+LILA_UI_API bool isVideo(const Image& img);
+/** The frame a video reference shows at a scene time: its pause, offset and rate applied, looping over its length. */
+LILA_UI_API int64_t videoFrame(const Image& img, double sceneSeconds);
 /** Image and video files a set accepts. */
 LILA_UI_API bool isImageFile(const std::string& path);
 

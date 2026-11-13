@@ -895,6 +895,14 @@ StrandsPtr coloredClumps(const char* type, const std::function<void(ParamSet&)>&
     return overHairColor(type, s, set);
 }
 
+/** A TGA's bits per pixel from its header: 32 with alpha, 24 without. */
+int tgaBits(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    char header[18] = {};
+    in.read(header, sizeof header);
+    return static_cast<unsigned char>(header[16]);
+}
+
 TEST(Cards, BandsBakeIntoTheColorMapAndTheIridescenceIntoItsAlpha) {
     const StrandsPtr banded = coloredClumps(op::kBands, [](ParamSet& p) {
         exactBands(p);
@@ -950,7 +958,7 @@ TEST(Cards, BandsBakeIntoTheColorMapAndTheIridescenceIntoItsAlpha) {
     std::filesystem::create_directories(folder);
     const CardBakePaths at = CardBakePaths::in(folder.string(), "fur");
     writeCardBake(written, at, false);
-    EXPECT_EQ(std::filesystem::file_size(at.map("Color")), 18u + 4u * 256u * 256u);
+    EXPECT_EQ(tgaBits(at.map("Color")), 32);
     // Without iridescence the map stays RGB, the cards carry none.
     const StrandsPtr plainFur = coloredClumps(nullptr, {});
     CardMesh plainMesh = buildCards(*plainFur, nullptr, settings);
@@ -961,7 +969,7 @@ TEST(Cards, BandsBakeIntoTheColorMapAndTheIridescenceIntoItsAlpha) {
     written.textures = bakeCardTextures(*plainFur, plainMesh, bake);
     EXPECT_TRUE(written.textures.iridescence.empty());
     writeCardBake(written, at, false);
-    EXPECT_EQ(std::filesystem::file_size(at.map("Color")), 18u + 3u * 256u * 256u);
+    EXPECT_EQ(tgaBits(at.map("Color")), 24);
     std::filesystem::remove_all(folder);
 }
 

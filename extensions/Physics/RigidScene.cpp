@@ -179,7 +179,9 @@ protected:
     void FreeJob(Job* job) override { delete job; }
 
 private:
-    std::unique_ptr<tbb::task_group> mTasks = std::make_unique<tbb::task_group>();
+    // Isolated: a bound context would take the first caller's task as its parent and its FP settings would outlive it.
+    tbb::task_group_context mContext{tbb::task_group_context::isolated};
+    std::unique_ptr<tbb::task_group> mTasks = std::make_unique<tbb::task_group>(mContext);
 };
 
 /** Built shapes by key, the least recently used dropped past the limit. Bodies still holding a dropped shape keep it alive. */
@@ -235,7 +237,7 @@ struct Runtime
     std::unique_ptr<JPH::TempAllocatorImpl> temp;
     std::unique_ptr<JPH::JobSystem> jobs, serialJobs;
     ShapeCache shapes;
-    bool ready = false;
+    std::atomic<bool> ready = false;
     ~Runtime()
     {
         if (!ready)
@@ -457,7 +459,12 @@ struct StepTouch
 
 void initJolt()
 {
-    if (gRuntime.ready)
+    if (gRuntime.ready.load(std::memory_order_acquire))
+        return;
+    // Graph evaluation builds several physics users at once; a second init would free the job system the first one holds.
+    static std::mutex initing;
+    std::lock_guard lock(initing);
+    if (gRuntime.ready.load(std::memory_order_relaxed))
         return;
     JPH::RegisterDefaultAllocator();
     JPH::Factory::sInstance = new JPH::Factory();
@@ -465,7 +472,7 @@ void initJolt()
     gRuntime.temp = std::make_unique<JPH::TempAllocatorImpl>(64 * 1024 * 1024);
     gRuntime.jobs = std::make_unique<TbbJobSystem>();
     gRuntime.serialJobs = std::make_unique<JPH::JobSystemSingleThreaded>(JPH::cMaxPhysicsJobs);
-    gRuntime.ready = true;
+    gRuntime.ready.store(true, std::memory_order_release);
 }
 
 struct RigidScene::Impl final : public JPH::ContactListener

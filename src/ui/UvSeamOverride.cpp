@@ -22,15 +22,13 @@ namespace lila::ui
 {
 namespace
 {
-using json = nlohmann::json;
-
 constexpr const char* kOverrideAttr = "seamViewOverride";
 
-scene::Graph& graph() { return scene::Graph::current(); }
+scene::Graph& currentGraph() { return scene::Graph::current(); }
 
 const scene::Node* overrideNode()
 {
-    scene::Graph& g = graph();
+    scene::Graph& g = currentGraph();
     for (scene::NodeId id : g.nodes())
         if (const scene::Node* n = g.node(id); n && n->type().isA("transform"))
             if (int i = n->type().attrIndex(kOverrideAttr); i >= 0)
@@ -91,7 +89,7 @@ SeamOverrideRow::SeamOverrideRow(QWidget* parent)
     connect(mClear, &QToolButton::clicked, this, [] { setOverride({}); });
     h->addWidget(mClear);
 
-    mListener = graph().addListener([this](scene::Change c, scene::NodeId) {
+    mListener = currentGraph().addListener([this](scene::Change c, scene::NodeId) {
         if (c == scene::Change::Selection || mQueued)
             return;
         mQueued = true;
@@ -103,7 +101,7 @@ SeamOverrideRow::SeamOverrideRow(QWidget* parent)
     refresh();
 }
 
-SeamOverrideRow::~SeamOverrideRow() { graph().removeListener(mListener); }
+SeamOverrideRow::~SeamOverrideRow() { currentGraph().removeListener(mListener); }
 
 void SeamOverrideRow::refresh()
 {
@@ -142,7 +140,7 @@ void SeamOverrideRow::fillMenu()
     none->setChecked(!current);
 
     // Seam views and cameras, by name.
-    scene::Graph& g = graph();
+    scene::Graph& g = currentGraph();
     std::vector<const scene::Node*> views;
     for (scene::NodeId id : g.nodes())
         if (const scene::Node* n = g.node(id); n && n->type().isA("transform"))

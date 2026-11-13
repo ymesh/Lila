@@ -42,6 +42,8 @@ struct ImportOptions
     bool materials = true;
     /** Load payloads; off leaves them unloaded and reports them. */
     bool loadPayloads = true;
+    /** Place the roots by the georeference the stage carries (Lila's lilaGeoreference layer data, or a Cesium georeference prim). */
+    bool georeference = true;
     /** Variant selections: set name to variant for every prim with that set... */
     std::map<std::string, std::string> variants;
     /** ...or per prim path. */

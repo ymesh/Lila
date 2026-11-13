@@ -2,8 +2,12 @@
 
 #include "core/Export.h"
 
+#include "media/Media.h"
+
 #include <QColor>
 #include <QRectF>
+
+#include <vector>
 
 class QMenu;
 class QPainter;
@@ -20,6 +24,9 @@ LILA_UI_API void install();
 
 /** Draws the heard sounds' waveform across rect, rect's left edge at scene time t0 and its right at t1 seconds. */
 LILA_UI_API void drawWaveform(QPainter& p, const QRectF& rect, double t0, double t1, const QColor& color);
+/** Draws the given voices' waveform the same way. */
+LILA_UI_API void drawVoices(QPainter& p, const QRectF& rect, double t0, double t1, const QColor& color,
+                            const std::vector<media::Voice>& voices);
 /** Whether anything would draw: some audible sound has loaded. */
 LILA_UI_API bool hasWaveform();
 

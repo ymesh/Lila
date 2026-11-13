@@ -61,7 +61,7 @@ constexpr int kWeightSliderSteps = 1000;
 std::string gCurrentTarget;
 /** The current target's paths are drawn in the viewport while the panel shows. */
 bool gShowPaths = true;
-QPointer<QWidget> gPanel;
+QPointer<QWidget> gMorphPanel;
 
 /** The morph of the lead selection: a mesh's, a target's, or the morph itself. */
 std::string selectedMorph()
@@ -118,7 +118,7 @@ uint64_t gPathsVersion = 0;
 /** The current target's point paths (only the farthest moving points), and its pivot in Pivot mode, while the panel shows. */
 void drawPaths(render::FrameState& f, OverlayPainter&, const ViewInfo&)
 {
-    if (!gShowPaths || !gPanel || !gPanel->isVisible())
+    if (!gShowPaths || !gMorphPanel || !gMorphPanel->isVisible())
         return;
     const std::string t = currentMorphTarget();
     static std::string cachedFor;
@@ -467,7 +467,7 @@ MorphTargetsPanel::MorphTargetsPanel(QWidget* parent) : QWidget(parent)
         menu.exec(mTree->viewport()->mapToGlobal(at));
     });
 
-    gPanel = this;
+    gMorphPanel = this;
     QPointer<MorphTargetsPanel> self(this);
     mGraphListener = Graph::current().addListener([self](scene::Change, scene::NodeId) {
         ++gPathsVersion;

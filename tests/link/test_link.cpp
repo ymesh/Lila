@@ -891,8 +891,8 @@ TEST_CASE("a vertexAnimation mapping bakes the textures and sends importVertexAn
                                         {"contentPath", "/Game/FX/SM_Blob"},
                                         {"kind", "vertexAnimation"},
                                         {"sequence", {{"start", 1}, {"end", 4}}},
-                                        {"vat", {{"format", "png"}, {"materialParent", "/Game/FX/M_MyVat"}}}});
-    CHECK(m["vat"]["format"] == "png");
+                                        {"vat", {{"format", "png16"}, {"materialParent", "/Game/FX/M_MyVat"}}}});
+    CHECK(m["vat"]["format"] == "png16");
 
     FakeServer server(editor([](const json& req) -> std::optional<json> {
         if (req["method"] == "importVertexAnimation")

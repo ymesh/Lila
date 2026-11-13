@@ -79,8 +79,8 @@ void drawSpline(render::FrameState& f, const curve::Spline& s, const glm::vec4& 
     size_t segs = pl.closed ? pl.size() : (pl.size() ? pl.size() - 1 : 0);
     for (size_t i = 0; i < segs; ++i)
     {
-        f.linesOnTop.push_back({glm::vec3(pl.points[i]), color});
-        f.linesOnTop.push_back({glm::vec3(pl.points[(i + 1) % pl.size()]), color});
+        f.linesOnTop.push_back({glm::dvec3(pl.points[i]), color});
+        f.linesOnTop.push_back({glm::dvec3(pl.points[(i + 1) % pl.size()]), color});
     }
 }
 
@@ -273,8 +273,8 @@ public:
             drawSymmetric(f, mBuild(pts, false), kPreview);
         for (size_t i = 1; i < mPts.size(); ++i)
         {
-            f.linesOnTop.push_back({glm::vec3(mPts[i - 1]), kGhost});
-            f.linesOnTop.push_back({glm::vec3(mPts[i]), kGhost});
+            f.linesOnTop.push_back({glm::dvec3(mPts[i - 1]), kGhost});
+            f.linesOnTop.push_back({glm::dvec3(mPts[i]), kGhost});
         }
         for (const D3& q : mPts)
             dot(p, view, q);
@@ -516,8 +516,8 @@ public:
             for (const D3* h : {&mSpline.handleL[i], &mSpline.handleR[i]})
                 if (glm::distance(*h, mSpline.points[i]) > 1e-9)
                 {
-                    f.linesOnTop.push_back({glm::vec3(mSpline.points[i]), kGhost});
-                    f.linesOnTop.push_back({glm::vec3(*h), kGhost});
+                    f.linesOnTop.push_back({glm::dvec3(mSpline.points[i]), kGhost});
+                    f.linesOnTop.push_back({glm::dvec3(*h), kGhost});
                     if (auto q = view.project(*h))
                         p.rect(QRectF(*q - QPointF(3, 3), QSizeF(6, 6)), kDot);
                 }
@@ -703,12 +703,12 @@ public:
     {
         for (size_t i = 1; i < mStroke.size(); ++i)
         {
-            f.linesOnTop.push_back({glm::vec3(mStroke[i - 1]), kPreview});
-            f.linesOnTop.push_back({glm::vec3(mStroke[i]), kPreview});
+            f.linesOnTop.push_back({glm::dvec3(mStroke[i - 1]), kPreview});
+            f.linesOnTop.push_back({glm::dvec3(mStroke[i]), kPreview});
             if (symmetryPref())
             {
-                f.linesOnTop.push_back({glm::vec3(mirrored(mStroke[i - 1])), kPreview});
-                f.linesOnTop.push_back({glm::vec3(mirrored(mStroke[i])), kPreview});
+                f.linesOnTop.push_back({glm::dvec3(mirrored(mStroke[i - 1])), kPreview});
+                f.linesOnTop.push_back({glm::dvec3(mirrored(mStroke[i])), kPreview});
             }
         }
         ToolStatus status{.tool = "Pencil Curve", .prompt = "draw a stroke, end on its start to close"};
