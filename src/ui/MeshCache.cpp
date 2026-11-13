@@ -144,7 +144,8 @@ struct Layout
 
 std::vector<Layout>& layouts()
 {
-    static std::vector<Layout> l;
+    // Never destroyed, like cache(): its entries hold weak references to meshes extension DLLs own.
+    static auto& l = *new std::vector<Layout>();
     return l;
 }
 
