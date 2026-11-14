@@ -98,6 +98,15 @@
             "python",
             "vulkan"
           ]
+        },
+        {
+          "name": "vulkan-loader",
+          "features": [
+            "wayland",
+            "xcb",
+            "xlib"
+          ],
+          "platform": "linux"
         }
       ]
     },

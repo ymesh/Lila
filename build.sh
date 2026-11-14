@@ -24,7 +24,6 @@ if [ -n "${LILA_VCPKG_INSTALLED_DIR:-}" ]; then
     EXTRA+=("-DVCPKG_INSTALLED_DIR=$LILA_VCPKG_INSTALLED_DIR")
 fi
 if [ ! -f "$ROOT/$DIR/build.ninja" ]; then
-    # The USD port only knows a Windows Python layout.
-    cmake --preset "${LILA_PRESET:-linux}" -S "$ROOT" -B "$ROOT/$DIR" -DLILA_USD=OFF "${EXTRA[@]}"
+    cmake --preset "${LILA_PRESET:-linux}" -S "$ROOT" -B "$ROOT/$DIR" -DLILA_USD=ON -DLILA_BUILD_TESTS=OFF "${EXTRA[@]}"
 fi
 cmake --build "$ROOT/$DIR" --config "$CONFIG"

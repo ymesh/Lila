@@ -87,6 +87,9 @@ const Backend& backend()
         init = reinterpret_cast<void*>(GetProcAddress(lib, "lilaUsdInit"));
         run = reinterpret_cast<void*>(GetProcAddress(lib, "lilaUsdRun"));
 #else
+        // Hydra's default graphics device is Vulkan, not OpenGL, which would need a window; read once, before Pixar's libraries load.
+        setenv("HGI_ENABLE_VULKAN", "1", 0);
+        // OpenUSDCore's RPATH ($ORIGIN) resolves Pixar's libraries from beside it.
         void* lib = dlopen(file.c_str(), RTLD_NOW | RTLD_LOCAL);
         if (!lib)
         {

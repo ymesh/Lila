@@ -14,6 +14,10 @@
 #include <cstring>
 #include <vector>
 
+#if !defined(_WIN32)
+#include <dlfcn.h>
+#endif
+
 PXR_NAMESPACE_USING_DIRECTIVE
 
 namespace lila::usd::hydra
@@ -55,7 +59,23 @@ namespace
     X(vkResetFences)                                                                                                                       \
     X(vkQueueSubmit)
 
+#if defined(_WIN32)
 constexpr VkExternalMemoryHandleTypeFlagBits kHandleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+#else
+constexpr VkExternalMemoryHandleTypeFlagBits kHandleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+#endif
+
+/** vkGetInstanceProcAddr from the Vulkan loader already in the process (Lila's renderer loaded it); null when none is. */
+PFN_vkGetInstanceProcAddr loaderProc()
+{
+#if defined(_WIN32)
+    const HMODULE loader = GetModuleHandleW(L"vulkan-1.dll");
+    return loader ? reinterpret_cast<PFN_vkGetInstanceProcAddr>(GetProcAddress(loader, "vkGetInstanceProcAddr")) : nullptr;
+#else
+    void* loader = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_NOLOAD);
+    return loader ? reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(loader, "vkGetInstanceProcAddr")) : nullptr;
+#endif
+}
 
 VkImageAspectFlags aspectOf(VkFormat f)
 {
@@ -170,9 +190,16 @@ struct HgiInterop::Impl
             destroy(out);
             return false;
         }
+#if defined(_WIN32)
         VkImportMemoryWin32HandleInfoKHR imported{VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR};
         imported.handleType = kHandleType;
         imported.handle = HANDLE(t.handle);
+#else
+        // Unreached: create() declines outside Windows until Lila's renderer exports fds (render/SharedMemory.cpp).
+        VkImportMemoryFdInfoKHR imported{VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR};
+        imported.handleType = kHandleType;
+        imported.fd = -1;
+#endif
         VkMemoryDedicatedAllocateInfo dedicated{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, &imported};
         dedicated.image = out.image;
         VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &dedicated};
@@ -250,8 +277,12 @@ std::unique_ptr<HgiInterop> HgiInterop::create(Hgi* hgi, const std::array<uint8_
         why = "Hydra's GPU driver is not Vulkan";
         return nullptr;
     }
-    const HMODULE loader = GetModuleHandleW(L"vulkan-1.dll");
-    const auto getInstanceProc = loader ? reinterpret_cast<PFN_vkGetInstanceProcAddr>(GetProcAddress(loader, "vkGetInstanceProcAddr")) : nullptr;
+#if !defined(_WIN32)
+    // Lila's renderer exports no memory outside Windows yet (render/SharedMemory.cpp).
+    why = "GPU sharing with Hydra is Windows-only for now";
+    return nullptr;
+#endif
+    const auto getInstanceProc = loaderProc();
     if (!getInstanceProc)
     {
         why = "the Vulkan loader is not loaded";
@@ -299,7 +330,11 @@ std::unique_ptr<HgiInterop> HgiInterop::create(Hgi* hgi, const std::array<uint8_
     int found = 0;
     for (const VkExtensionProperties& e : exts)
         for (const char* want : {VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME, VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME,
+#if defined(_WIN32)
                                  VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME, VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME})
+#else
+                                 VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME})
+#endif
             found += std::strcmp(e.extensionName, want) == 0;
     if (found < 4)
     {
@@ -484,8 +519,7 @@ HgiDeviceWatch::~HgiDeviceWatch()
 std::unique_ptr<HgiDeviceWatch> HgiDeviceWatch::create(Hgi* hgi)
 {
     auto* vk = dynamic_cast<HgiVulkan*>(hgi);
-    const HMODULE loader = GetModuleHandleW(L"vulkan-1.dll");
-    const auto getInstanceProc = loader ? reinterpret_cast<PFN_vkGetInstanceProcAddr>(GetProcAddress(loader, "vkGetInstanceProcAddr")) : nullptr;
+    const auto getInstanceProc = loaderProc();
     if (!vk || !vk->GetPrimaryDevice() || !vk->GetVulkanInstance() || !getInstanceProc)
         return nullptr;
     std::unique_ptr<HgiDeviceWatch> out(new HgiDeviceWatch());

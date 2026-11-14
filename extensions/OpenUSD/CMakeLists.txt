@@ -52,16 +52,32 @@ set(_pxr_cfg $<$<CONFIG:Debug>:/debug>)
 # Every USD library, not just the linked ones: plugInfo names them all, and a stage using one of their schemas loads it.
 # Beyond the system they need TBB and Python, which lila and lilabatch already carry, MaterialX (Storm and the
 # MaterialX schemas), Embree (hdEmbree, when the USD build has it) and the Vulkan loader, which comes with the driver.
-file(GLOB _pxr_dlls_release ${_pxr_root}/bin/usd_*.dll ${_pxr_root}/bin/MaterialX*.dll ${_pxr_root}/bin/embree4.dll)
-file(GLOB _pxr_dlls_debug ${_pxr_root}/debug/bin/usd_*.dll ${_pxr_root}/debug/bin/MaterialX*.dll ${_pxr_root}/debug/bin/embree4.dll)
+if(WIN32)
+    file(GLOB _pxr_dlls_release ${_pxr_root}/bin/usd_*.dll ${_pxr_root}/bin/MaterialX*.dll ${_pxr_root}/bin/embree4.dll)
+    file(GLOB _pxr_dlls_debug ${_pxr_root}/debug/bin/usd_*.dll ${_pxr_root}/debug/bin/MaterialX*.dll ${_pxr_root}/debug/bin/embree4.dll)
+    set(_pxr_libdir bin)
+else()
+    # lib/libusd_*.so and lib/usd: the same layout under lib. MaterialX and Embree with their soname links.
+    file(GLOB _pxr_dlls_release ${_pxr_root}/lib/libusd_*.so ${_pxr_root}/lib/libMaterialX*.so* ${_pxr_root}/lib/libembree4.so*)
+    file(GLOB _pxr_dlls_debug ${_pxr_root}/debug/lib/libusd_*.so ${_pxr_root}/debug/lib/libMaterialX*.so* ${_pxr_root}/debug/lib/libembree4.so*)
+    set(_pxr_libdir lib)
+    # Load the package's copies (whose plugInfo trees sit beside them), not vcpkg_installed's.
+    set_property(TARGET lila_openusd_core APPEND PROPERTY BUILD_RPATH "$ORIGIN")
+    set_property(TARGET lila_openusd_core APPEND PROPERTY INSTALL_RPATH "$ORIGIN")
+endif()
 add_custom_command(TARGET lila_openusd_core POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<IF:$<CONFIG:Debug>,${_pxr_dlls_debug},${_pxr_dlls_release}>" ${_pkg}
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${_pxr_root}${_pxr_cfg}/bin/usd ${_pkg}/usd
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${_pxr_root}${_pxr_cfg}/${_pxr_libdir}/usd ${_pkg}/usd
     COMMAND ${CMAKE_COMMAND} -E make_directory ${_pkg}/plugin/usd
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${_pxr_root}${_pxr_cfg}/plugin/usd ${_pkg}/plugin/usd
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_pxr_root}/share/usd/copyright ${_pkg}/OpenUSD-LICENSE.txt
     COMMENT "Deploying OpenUSD into OpenUSD.lilaext"
     COMMAND_EXPAND_LISTS)
+if(NOT WIN32)
+    add_custom_command(TARGET lila_openusd_core POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -DDIR=${_pkg}/plugin/usd -P ${CMAKE_CURRENT_SOURCE_DIR}/PluginRpath.cmake
+        COMMENT "Pointing OpenUSD's plugins at the libraries in OpenUSD.lilaext")
+endif()
 if(TARGET python)
     # <pkg>/python/pxr: the bindings, which load the libraries above from beside OpenUSDCore.
     add_custom_command(TARGET lila_openusd_core POST_BUILD

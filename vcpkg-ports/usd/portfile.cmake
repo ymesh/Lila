@@ -66,14 +66,24 @@ if("python" IN_LIST FEATURES)
         set(LILA_PYTHON_DIR "C:/Python314")
     endif()
     file(TO_CMAKE_PATH "${LILA_PYTHON_DIR}" LILA_PYTHON_DIR)
-    file(GLOB LILA_PYTHON_LIB "${LILA_PYTHON_DIR}/libs/python3[0-9]*.lib")
-    list(FILTER LILA_PYTHON_LIB EXCLUDE REGEX "_d\\.lib$")
-    if(NOT EXISTS "${LILA_PYTHON_DIR}/python.exe" OR NOT LILA_PYTHON_LIB)
+    if(VCPKG_TARGET_IS_WINDOWS)
+        file(GLOB LILA_PYTHON_LIB "${LILA_PYTHON_DIR}/libs/python3[0-9]*.lib")
+        list(FILTER LILA_PYTHON_LIB EXCLUDE REGEX "_d\\.lib$")
+        set(LILA_PYTHON_EXE "${LILA_PYTHON_DIR}/python.exe")
+        set(LILA_PYTHON_INCLUDE "${LILA_PYTHON_DIR}/include")
+    else()
+        # <prefix>/bin/python3, <prefix>/include/python3.x and <prefix>/lib/libpython3.x.so (a --enable-shared build,
+        # such as scripts/fetch-python.sh's).
+        file(GLOB LILA_PYTHON_LIB "${LILA_PYTHON_DIR}/lib/libpython3.[0-9]*.so")
+        file(GLOB LILA_PYTHON_INCLUDE LIST_DIRECTORIES true "${LILA_PYTHON_DIR}/include/python3.[0-9]*")
+        set(LILA_PYTHON_EXE "${LILA_PYTHON_DIR}/bin/python3")
+    endif()
+    if(NOT EXISTS "${LILA_PYTHON_EXE}" OR NOT LILA_PYTHON_LIB OR NOT LILA_PYTHON_INCLUDE)
         message(FATAL_ERROR "usd[python] needs a Python install with headers and import libraries at ${LILA_PYTHON_DIR}")
     endif()
     list(APPEND FEATURE_OPTIONS
-        "-DPython3_EXECUTABLE=${LILA_PYTHON_DIR}/python.exe"
-        "-DPython3_INCLUDE_DIR=${LILA_PYTHON_DIR}/include"
+        "-DPython3_EXECUTABLE=${LILA_PYTHON_EXE}"
+        "-DPython3_INCLUDE_DIR=${LILA_PYTHON_INCLUDE}"
         "-DPython3_LIBRARY=${LILA_PYTHON_LIB}"
         -DPython3_FIND_REGISTRY=NEVER
         -DPXR_PYTHON_INSTALL_DIR=lib/python
