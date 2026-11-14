@@ -424,11 +424,11 @@ UvEditor::UvEditor(QWidget* parent) : QWidget(parent)
     connect(autoBtn, &QToolButton::clicked, this, [this, packCall] { runCommand("uvAuto", packCall()); });
     QWidget* unwrapGrid = controls::grid({autoBtn, tile("uv.unwrap", "cube-unfolded"), tile("uv.cut", "scissors", "Cut"),
                                           tile("uv.sew", "needle-thread", "Sew"),
-                                          controls::splitRow("uv.autoSeams", {"uv.autoSeams2"}, "line-dashed", body, "Seams"), push("uv.weld", "Weld"),
-                                          controls::splitRow("uv.bff", {"uv.bffDisk", "uv.bffRectangle", "uv.bffCones"}, "grid-dots", body, "Conformal"),
+                                          controls::splitRow("uv.autoSeams", {"uv.autoSeams2", "uv.autoSeamsDarts"}, "line-dashed", body, "Seams"), push("uv.weld", "Weld"),
+                                          controls::splitRow("uv.bff", {"uv.bffDisk", "uv.bffRectangle", "uv.bffCones", "uv.bffFlowCones"}, "grid-dots", body, "Conformal"),
                                           controls::splitRow("uv.unwrapSymmetric", {"uv.unwrapSymmetricStack"}, "flip-vertical", body, "Symmetric"),
                                           push("uv.lightmap", "Lightmap"), push("mesh.transferAttributes", "Transfer"),
-                                          controls::overflow({"uv.seamView", "uv.seamViewPlane", "uv.delete"}, body)},
+                                          controls::overflow({"uv.flowUnwrap", "uv.seamView", "uv.seamViewPlane", "uv.delete"}, body)},
                                          2, body);
     addSection(collapsibleSection("Unwrap", unwrapGrid, body, kUvCollapsed));
 
@@ -1037,6 +1037,12 @@ void registerUvActions()
     cmd("uv.bffRectangle", "BFF Unwrap to Rectangle", "uvBff", json{{"boundary", "rectangle"}},
         "Flatten islands conformally onto rectangles; the selected vertices (or the sharpest four) are the corners.");
     cmd("uv.bffCones", "BFF Unwrap with Cones", "uvBff", json{{"cones", 6}}, "BFF with six automatic cone points to cut area stretch.");
+    cmd("uv.bffFlowCones", "BFF Unwrap with Flow Cones", "uvBff", json{{"coneSource", "flow"}},
+        "BFF with cone points where the surface's flow turns (tips, corners, saddles).");
+    cmd("uv.flowUnwrap", "Flow Unwrap", "uvFlowUnwrap", json::object(),
+        "Unwrap so U and V follow the surface's flow: panels as rectangles, bevels as straight strips, for trim sheets.");
+    cmd("uv.autoSeamsDarts", "Auto Seams with Darts", "uvAutoSeams", json{{"darts", true}},
+        "Auto seams that cut short darts in at tips before splitting an island: shorter seams, fewer islands, a little looser packing.");
     cmd("uv.optimizeConformal", "Optimize Angles", "uvOptimize", json{{"mode", "conformal"}}, "Relax islands in place to keep angles.");
     cmd("uv.optimizeAuthalic", "Optimize Areas", "uvOptimize", json{{"mode", "authalic"}}, "Relax islands in place to keep areas.");
     cmd("uv.optimizeBlend", "Optimize Blend", "uvOptimize", json{{"mode", "blend"}}, "Relax islands in place, half angles, half areas.");

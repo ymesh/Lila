@@ -309,10 +309,10 @@ std::vector<FlagDef> remeshFlags(const char* symmetry)
     return {{"preset", "", T::String, "none",
              "Starting settings for what the mesh is for: gameCharacter, midPoly, hero, stylized, hardSurface, prop, or the name of a preset "
              "saved from the option box. Flags set to other than their default win."},
-            {"method", "", T::String, "patches",
-             "patches: loops run unbroken between a few poles; grid: a straight grid over an open sheet seen from one side (terrain tiles, "
-             "panels), patches otherwise.",
-             {"patches", "grid"}},
+            {"method", "", T::String, "flow",
+             "flow: quads follow the shape, loops run unbroken between a few poles; grid: a straight grid over an open sheet seen from one "
+             "side (terrain tiles, panels), flow otherwise.",
+             {"flow", "grid"}},
             {"targetFaces", "", T::Int, 3000, "Approximate face count.", {}, {}, 8.0},
             {"countTolerance", "", T::Float, 0.1, "Retry at a corrected size until the face count is within this fraction of targetFaces; 0 takes the first try.", {}, {}, 0.0, 1.0},
             {"timeout", "", T::Float, 0.0, "Seconds before giving up with an error saying how far it got, leaving the scene as it was; 0 waits until done or aborted.", {}, {}, 0.0},
@@ -322,6 +322,10 @@ std::vector<FlagDef> remeshFlags(const char* symmetry)
             {"sharpAngle", "", T::Float, 40.0, "Also follow creases sharper than this, degrees; negative disables.", {}, {}, {}, 180.0},
             {"symmetry", "", T::String, symmetry, "off, x, y or z: remesh half and mirror, exactly symmetric. The mesh has to be symmetric across that plane through its origin.",
              {"off", "x", "y", "z"}},
+            {"middleSmoothing", "", T::Float, 0.0,
+             "With symmetry, fills a groove along the middle edge loop (a sternum, a spine) so the rows cross it level: 0 follows "
+             "the source, 1 smooths six faces either side.",
+             {}},
             nodeFlag({"guides", "", T::List, nullptr,
                       "Curves, or meshes whose edges trace lines, that the edge flow turns to follow. Draw them on the mesh with Curves > "
                       "Pencil Curve (S draws on the surface)."},
@@ -335,7 +339,7 @@ std::vector<FlagDef> remeshFlags(const char* symmetry)
             {"densityHandles", "", T::List, nullptr,
              "Local face size as {position: world [x, y, z], radius, scale}: scale times the edge length at the centre (0.35 to 2.8), easing out to the radius."},
             {"pureQuads", "", T::Bool, true, "All quads; false allows a few triangles and pentagons."},
-            {"jointDensity", "", T::Float, 0.5, "Extra faces at joints, armpits and finger webs, where the mesh bends: 0 none, 1 about three times as dense there.", {}, {}, 0.0, 1.0},
+            {"jointDensity", "", T::Float, 0.0, "Extra faces at joints, armpits and finger webs, where the mesh bends: 0 none, 1 about three times as dense there.", {}, {}, 0.0, 1.0},
             {"jointDensityReach", "", T::Float, 6.0, "How far Joint Density's extra faces reach from a fold, in faces; lower keeps them tight to the joint.", {}, {}, 1.0, 12.0},
             {"jointPoleAvoidance", "", T::Float, 30.0, "Keeps poles out of joints, armpits and finger webs; higher pushes them further onto flatter parts. 0 off.", {}, {}, 0.0, 100.0},
             {"edgesAround", "", T::Int, 12, "Thin round parts of a closed shape, like fingers, get at least this many edges round them, at the cost of faces elsewhere; 0 off.", {}, {}, 0.0, 64.0},
@@ -349,10 +353,10 @@ QuadRemeshOptions remeshOptions(const Args& given, const Node& src, const char* 
 {
     const Args a = withPreset(given, cmd);
     QuadRemeshOptions o;
-    const std::string method = a.get<std::string>("method", "patches");
-    if (method != "patches" && method != "grid")
-        throw CommandError(std::string(cmd) + ": method must be patches or grid");
-    o.method = method == "grid" ? RemeshMethod::Grid : RemeshMethod::Patches;
+    const std::string method = a.get<std::string>("method", "flow");
+    if (method != "flow" && method != "grid")
+        throw CommandError(std::string(cmd) + ": method must be flow or grid");
+    o.method = method == "grid" ? RemeshMethod::Grid : RemeshMethod::Flow;
     o.targetFaces = std::max(8, a.get<int>("targetFaces", 3000));
     o.countTolerance = std::clamp(a.get<double>("countTolerance", 0.1), 0.0, 1.0);
     o.timeout = std::max(0.0, a.get<double>("timeout", 0.0));
@@ -364,6 +368,7 @@ QuadRemeshOptions remeshOptions(const Args& given, const Node& src, const char* 
     if (sym != "off" && (sym.size() != 1 || sym[0] < 'x' || sym[0] > 'z'))
         throw CommandError(std::string(cmd) + ": symmetry must be off, x, y or z");
     o.symmetryAxis = sym == "off" ? -1 : sym[0] - 'x';
+    o.middleSmoothing = std::clamp(a.get<double>("middleSmoothing", 0.0), 0.0, 1.0);
     o.guides = guidesFor(a, src);
     o.featureGuides = guidesFor(a, src, "featureGuides", "featureGuidePoints");
     if (a.has("densityHandles") && !a.flags["densityHandles"].is_null())
@@ -371,7 +376,7 @@ QuadRemeshOptions remeshOptions(const Args& given, const Node& src, const char* 
     o.pureQuads = a.get<bool>("pureQuads", true);
     o.resolveGaps = a.get<bool>("resolveGaps", true);
     o.edgesAround = std::clamp(a.get<int>("edgesAround", 12), 0, 64);
-    o.jointDensity = std::clamp(a.get<double>("jointDensity", 0.5), 0.0, 1.0);
+    o.jointDensity = std::clamp(a.get<double>("jointDensity", 0.0), 0.0, 1.0);
     o.jointDensityReach = std::clamp(a.get<double>("jointDensityReach", 6.0), 1.0, 12.0);
     o.jointPoleAvoidance = std::clamp(a.get<double>("jointPoleAvoidance", 30.0), 0.0, 100.0);
     if (a.has("poles") && !a.flags["poles"].is_null())
@@ -504,7 +509,7 @@ void registerCommands()
         .name = "quadRemesh",
         .doc = "Auto quad remesh: a new all-quad mesh whose edge flow follows curvature, hard edges and guide curves, at about "
                "the target face count, optionally with UVs and normals transferred from the source. Open borders, sharp "
-               "creases, crease corners and cone tips are kept. With method=field, where the shape is too thin or tight for the "
+               "creases, crease corners and cone tips are kept. Where the layout folds at a part too thin or tight for the "
                "requested size (a strip narrower than the edge length) it retries finer, so the face count can come out higher. The kept source "
                "is hidden. Runs off the UI thread with a cancellable progress bar, and gives up after timeout= seconds with "
                "an error saying how far it got, changing nothing. Returns {name, metrics, layout, attempts: [{layout, faces, defects, irregular}] for every layout tried, notes: where the result departs from what was asked}, and with poles= where each "

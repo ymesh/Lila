@@ -6,6 +6,8 @@
 #include <doctest/doctest.h>
 
 #include <chrono>
+#include <filesystem>
+#include <string>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -15,14 +17,10 @@ using namespace lila;
 
 namespace
 {
-retopo::QuadRemeshResult remesh(const geo::Mesh& m, int faces, bool patches)
+retopo::QuadRemeshResult remesh(const geo::Mesh& m, int faces, int symmetry = -1)
 {
     retopo::QuadRemeshOptions o{.targetFaces = faces};
-    o.method = patches ? retopo::RemeshMethod::Patches : retopo::RemeshMethod::Field;
-    if (std::getenv("LILA_NO_GAPS"))
-        o.resolveGaps = false;
-    if (std::getenv("LILA_NO_SOFT"))
-        o.softCreaseAngle = 0.0;
+    o.symmetryAxis = symmetry;
     if (const char* a = std::getenv("LILA_AB_ADAPT"))
         o.adaptivity = std::atof(a);
     if (const char* t = std::getenv("LILA_AB_TIMEOUT"))
@@ -30,47 +28,66 @@ retopo::QuadRemeshResult remesh(const geo::Mesh& m, int faces, bool patches)
     return retopo::quadRemesh(m, o);
 }
 
-double seconds(const retopo::QuadRemeshResult& r)
+void check(const char* name, const geo::Mesh& m, int faces, geo::Index maxIrregular)
 {
-    double total = 0.0;
-    for (auto& [stage, sec] : r.timings)
-        total += sec;
-    return total;
-}
-
-void compare(const char* name, const geo::Mesh& m, int faces, geo::Index maxIrregular)
-{
-    retopo::QuadRemeshResult local = remesh(m, faces, false), global = remesh(m, faces, true);
-    REQUIRE(local.ok());
-    REQUIRE(global.ok());
-    MESSAGE(name, "\n  field:   ", local.metrics.summary(), "  ", seconds(local), " s\n  patches: ", global.metrics.summary(), "  ",
-            seconds(global), " s");
-    CHECK(global.layout == "patches");
-    CHECK(global.metrics.irregular <= maxIrregular);
-    CHECK(global.metrics.irregular <= local.metrics.irregular);
+    retopo::QuadRemeshResult r = remesh(m, faces);
+    REQUIRE(r.ok());
+    if (std::getenv("LILA_RETOPO_DUMP"))
+        geo::writeObjFile((std::filesystem::temp_directory_path() / (std::string("flow_") + name + ".obj")).string(), r.mesh);
+    MESSAGE(name << ": " << r.metrics.summary());
+    CHECK(r.layout == "flow");
+    CHECK(r.defects == 0);
+    CHECK(r.metrics.triangles + r.metrics.ngons == 0);
+    CHECK(r.metrics.irregular <= maxIrregular);
+    CHECK(std::abs(double(r.mesh.numFaces()) / faces - 1.0) <= 0.1);
 }
 } // namespace
 
-TEST_CASE("patch layout only turns at the poles")
+TEST_CASE("flow layout turns only at a few poles")
 {
-    compare("sphere", geo::makeSphere({.radius = 50.0, .subdivAxis = 48, .subdivHeight = 48}), 600, 10);
-    compare("cube", geo::makeCube({.subdivX = 8, .subdivY = 8, .subdivZ = 8}), 600, 8);
-    compare("cylinder", geo::makeCylinder({.radius = 30.0, .height = 120.0, .subdivAxis = 48, .subdivHeight = 8, .subdivCaps = 4, .capFill = geo::CapFill::Fan}), 600, 8);
+    check("sphere", geo::makeSphere({.radius = 50.0, .subdivAxis = 48, .subdivHeight = 48}), 600, 10);
+    check("cube", geo::makeCube({.subdivX = 8, .subdivY = 8, .subdivZ = 8}), 600, 8);
+    check("cylinder", geo::makeCylinder({.radius = 30.0, .height = 120.0, .subdivAxis = 48, .subdivHeight = 8, .subdivCaps = 4, .capFill = geo::CapFill::Fan}), 600, 8);
 }
 
-TEST_CASE("a torus, with no poles, comes out as clean patches")
+TEST_CASE("a torus, with no poles, comes out as a clean grid")
 {
-    // No line starts anywhere: the layout seeds a loop and cuts across it.
-    retopo::QuadRemeshResult r = remesh(geo::makeTorus({.subdivAxis = 64, .subdivHeight = 32}), 800, true);
+    retopo::QuadRemeshResult r = remesh(geo::makeTorus({.subdivAxis = 64, .subdivHeight = 32}), 800);
     REQUIRE(r.ok());
     MESSAGE(r.metrics.summary());
-    CHECK(r.layout == "patches");
     CHECK(r.metrics.irregular == 0);
 }
 
-TEST_CASE("zz seamless corpus timing" * doctest::skip())
+TEST_CASE("a symmetric remesh mirrors its half with one straight loop down the middle")
 {
-    // One corpus case per run, by index: lila_retopo_tests -tc="zz seamless corpus timing" -ns, with LILA_CORPUS_CASE=n.
+    geo::Mesh m = geo::makeSphere({.radius = 50.0, .subdivAxis = 48, .subdivHeight = 48});
+    retopo::QuadRemeshResult r = remesh(m, 800, 0);
+    REQUIRE(r.ok());
+    MESSAGE(r.metrics.summary());
+    CHECK(r.defects == 0);
+    // Every point's mirror image is a point.
+    std::vector<glm::dvec3> pts;
+    for (geo::Index p = 0; p < r.mesh.pointCapacity(); ++p)
+        if (r.mesh.pointValid(p))
+            pts.push_back(r.mesh.position(p));
+    int unmatched = 0;
+    for (const glm::dvec3& p : pts)
+    {
+        bool found = false;
+        for (const glm::dvec3& q : pts)
+            if (glm::distance(q, glm::dvec3(-p.x, p.y, p.z)) < 1e-6)
+            {
+                found = true;
+                break;
+            }
+        unmatched += !found;
+    }
+    CHECK(unmatched == 0);
+}
+
+TEST_CASE("zz flow corpus timing" * doctest::skip())
+{
+    // One corpus case per run, by index: lila_retopo_tests -tc="zz flow corpus timing" -ns, with LILA_CORPUS_CASE=n.
     const char* which = std::getenv("LILA_CORPUS_CASE");
     if (!which)
         return;
@@ -79,7 +96,7 @@ TEST_CASE("zz seamless corpus timing" * doctest::skip())
     if (i >= cases.size())
         return;
     auto start = std::chrono::steady_clock::now();
-    retopo::QuadRemeshResult r = remesh(cases[i].mesh, 600, !std::getenv("LILA_CORPUS_LOCAL"));
+    retopo::QuadRemeshResult r = remesh(cases[i].mesh, 600);
     double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     std::printf("%s: %.2f s %s, %d defects\n", cases[i].name.c_str(), s, r.ok() ? r.metrics.summary().c_str() : r.error.c_str(), r.defects);
     if (const char* out = std::getenv("LILA_AB_OUT"))
@@ -112,8 +129,6 @@ TEST_CASE("zz remesh obj" * doctest::skip())
     o.targetFaces = std::getenv("LILA_AB_FACES") ? std::atoi(std::getenv("LILA_AB_FACES")) : 500;
     o.symmetryAxis = std::getenv("LILA_AB_SYM") ? std::atoi(std::getenv("LILA_AB_SYM")) : -1;
     o.resolveGaps = !std::getenv("LILA_NO_GAPS");
-    if (std::getenv("LILA_AB_FIELD"))
-        o.method = retopo::RemeshMethod::Field;
     o.useHardEdges = !std::getenv("LILA_NO_HARD");
     if (const char* a = std::getenv("LILA_AB_ADAPT"))
         o.adaptivity = std::atof(a);

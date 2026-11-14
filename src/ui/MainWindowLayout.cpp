@@ -38,6 +38,17 @@ void MainWindow::restoreLayout()
             if (name.is_string())
                 collapsed << QString::fromStdString(name.get<std::string>());
         mSidebars->restoreCollapsed(collapsed);
+        QList<QStringList> drawers;
+        for (const json& group : p.value(kLayoutFile, "/collapsedGroups", json::array()))
+        {
+            QStringList names;
+            if (group.is_array())
+                for (const json& n : group)
+                    if (n.is_string())
+                        names << QString::fromStdString(n.get<std::string>());
+            drawers << names;
+        }
+        mSidebars->restoreCollapsedGroups(drawers);
         std::map<QString, int> tabSizes;
         json savedSizes = p.value(kLayoutFile, "/tabSizes", json::object());
         for (auto& [name, size] : savedSizes.items())
@@ -211,6 +222,15 @@ void MainWindow::saveLayout()
     for (const QString& name : mSidebars->collapsedNames())
         collapsed.push_back(name.toStdString());
     p.set(kLayoutFile, "/collapsed", collapsed);
+    json collapsedGroups = json::array();
+    for (const QStringList& group : mSidebars->collapsedGroups())
+    {
+        json names = json::array();
+        for (const QString& name : group)
+            names.push_back(name.toStdString());
+        collapsedGroups.push_back(std::move(names));
+    }
+    p.set(kLayoutFile, "/collapsedGroups", collapsedGroups);
     json tabSizes = json::object();
     for (auto& [name, size] : mSidebars->tabSizes())
         tabSizes[name.toStdString()] = size;

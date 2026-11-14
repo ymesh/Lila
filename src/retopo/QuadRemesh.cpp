@@ -2,11 +2,18 @@
 
 #include "core/Profile.h"
 #include "core/Progress.h"
+#include "geo/Knife.h"
 #include "geo/Normals.h"
 #include "geo/Ops.h"
 #include "geo/Topology.h"
 #include "retopo/Internal.h"
-#include "retopo/Patch.h"
+#include "retopo/IntegerGrid.h"
+#include "retopo/Isotropic.h"
+
+#include <AutoRemesher/AutoRemesher>
+#include <AutoRemesher/IsotropicRemesher>
+#include <AutoRemesher/Parameterizer>
+#include <AutoRemesher/QuadExtractor>
 
 #include <tbb/parallel_for.h>
 
@@ -16,7 +23,9 @@
 #include <climits>
 #include <cmath>
 #include <complex>
+#include <cstring>
 #include <optional>
+#include <queue>
 #include <unordered_map>
 
 namespace lila::retopo
@@ -35,13 +44,15 @@ public:
         mOut.emplace_back(name, std::chrono::duration<double>(now - mLast).count());
         mLast = now;
         // Roughly where each stage ends in a typical run, for the progress bar.
-        static const std::pair<const char*, double> kAt[] = {{"bvh", 0.03}, {"surface", 0.12}, {"density", 0.18}, {"cross field", 0.3},
-                                                             {"seamless", 0.6}, {"patches", 0.85}, {"local", 0.9}, {"finish", 1.0}};
+        static const std::pair<const char*, double> kAt[] = {{"bvh", 0.03},   {"surface", 0.12}, {"density", 0.18}, {"isotropic", 0.4},
+                                                             {"cover", 0.75}, {"extract", 0.9},  {"finish", 1.0}};
         double at = mAt;
         for (auto [stage, f] : kAt)
             if (std::string_view(stage) == name)
                 at = f;
         mAt = at;
+        if (std::getenv("LILA_STAGE_LOG"))
+            std::fprintf(stderr, "stage %s\n", name);
         Budget::reached(name, at);
     }
 
@@ -60,8 +71,12 @@ std::vector<std::vector<Index>> pointNeighbours(const geo::Mesh& m)
     return nb;
 }
 
+/** How much further than the crease reach a border point is pulled onto the source's border. */
+constexpr double kBorderReach = 6.0;
+
 /** Snaps each point to its feature (corner, crease line) or the surface; demotes points whose feature isn't near. */
-void projectPoints(geo::Mesh& m, std::vector<FeatureKind>& feature, const geo::MeshBvh& bvh, const FeatureLines& lines, double reach)
+void projectPoints(geo::Mesh& m, std::vector<FeatureKind>& feature, const geo::MeshBvh& bvh, const FeatureLines& creases,
+                   const FeatureLines& border, double reach)
 {
     LILA_ZONE();
 
@@ -71,7 +86,7 @@ void projectPoints(geo::Mesh& m, std::vector<FeatureKind>& feature, const geo::M
     for (Index p = 0; p < m.pointCapacity(); ++p)
     {
         glm::dvec3 q;
-        if (!m.pointValid(p) || feature[p] != FeatureKind::Corner || m.isBoundaryPoint(p) || !lines.closestCorner(m.position(p), reach, q))
+        if (!m.pointValid(p) || feature[p] != FeatureKind::Corner || m.isBoundaryPoint(p) || !creases.closestCorner(m.position(p), reach, q))
             continue;
         const std::array<double, 3> key{q.x, q.y, q.z};
         const double d = glm::distance(m.position(p), q);
@@ -86,6 +101,10 @@ void projectPoints(geo::Mesh& m, std::vector<FeatureKind>& feature, const geo::M
     tbb::parallel_for(Index(0), m.pointCapacity(), [&](Index p) {
         if (!m.pointValid(p))
             return;
+        // A border point belongs on the source's border however far the layout left it.
+        const bool onBorder = m.isBoundaryPoint(p);
+        const FeatureLines& lines = onBorder ? border : creases;
+        const double r = onBorder ? kBorderReach * reach : reach;
         glm::dvec3 at = m.position(p), q;
         if (feature[p] == FeatureKind::Corner)
         {
@@ -98,7 +117,7 @@ void projectPoints(geo::Mesh& m, std::vector<FeatureKind>& feature, const geo::M
         }
         if (feature[p] == FeatureKind::Line)
         {
-            if (lines.closest(at, reach, q))
+            if (lines.closest(at, r, q))
             {
                 m.setPosition(p, q);
                 return;
@@ -162,8 +181,8 @@ private:
  * so the rows crossing the seam meet it straight, and stay on the plane. With a size field, each neighbour pulls by
  * the inverse of the size between them, so edges settle at lengths in proportion to it instead of all alike.
  */
-void relaxAlongFeatures(geo::Mesh& m, const std::vector<FeatureKind>& feature, const geo::MeshBvh& bvh, const FeatureLines& lines, double h,
-                    int iterations, int seamAxis = -1, const SizeField* sizes = nullptr)
+void relaxAlongFeatures(geo::Mesh& m, const std::vector<FeatureKind>& feature, const geo::MeshBvh& bvh, const FeatureLines& creases,
+                        const FeatureLines& border, double h, int iterations, int seamAxis = -1, const SizeField* sizes = nullptr)
 {
     LILA_ZONE();
 
@@ -226,6 +245,7 @@ void relaxAlongFeatures(geo::Mesh& m, const std::vector<FeatureKind>& feature, c
                 // Slide only between the two crease neighbours.
                 if (count != 2)
                     return;
+                const FeatureLines& lines = m.isBoundaryPoint(p) ? border : creases;
                 glm::dvec3 target = glm::mix(at, avg, 0.5), q;
                 if (lines.closest(target, 0.5 * h, q))
                     next[p] = q;
@@ -241,6 +261,111 @@ void relaxAlongFeatures(geo::Mesh& m, const std::vector<FeatureKind>& feature, c
         for (Index p = 0; p < m.pointCapacity(); ++p)
             if (m.pointValid(p))
                 m.setPosition(p, next[p]);
+    }
+}
+
+/**
+ * Fills a groove along the middle of a mirrored result: the points on the plane and six rings either side are smoothed
+ * off the source, less with each ring out, and only straight outwards, so a ridge along the middle (a nose) and the
+ * layout on the surface stay as they are. Each point is averaged only with its neighbours a ring nearer
+ * and a ring further, so the smoothing runs across the middle along the rows and the profile along it (a nose, a
+ * chin) keeps its shape. Plain averaging: a groove is several faces wide, and a pass that kept the broad shape
+ * (Taubin) kept the groove with it.
+ */
+void smoothMiddle(geo::Mesh& m, int axis, double strength)
+{
+    constexpr int kRings = 6, kPasses = 20;
+    const auto nb = pointNeighbours(m);
+    std::vector<int> ring(m.pointCapacity(), -1);
+    std::vector<Index> front;
+    for (Index p = 0; p < m.pointCapacity(); ++p)
+        if (m.pointValid(p) && m.position(p)[axis] == 0.0)
+        {
+            ring[p] = 0;
+            front.push_back(p);
+        }
+    for (int r = 1; r <= kRings; ++r)
+    {
+        std::vector<Index> next;
+        for (Index p : front)
+            for (Index o : nb[p])
+                if (ring[o] < 0)
+                {
+                    ring[o] = r;
+                    next.push_back(o);
+                }
+        front.swap(next);
+    }
+    // Only where the rows meet the middle in a V: a groove the faces are fine enough to follow round (a philtrum under
+    // small faces) bends them a little at each point and is left alone. A point's row takes its middle point's share.
+    constexpr double kLevel = glm::radians(8.0), kSharp = glm::radians(25.0);
+    std::vector<double> share(m.pointCapacity(), 0.0);
+    {
+        std::vector<Index> order;
+        for (Index p = 0; p < m.pointCapacity(); ++p)
+        {
+            if (ring[p] != 0)
+                continue;
+            order.push_back(p);
+            glm::dvec3 out(0.0);
+            int outs = 0;
+            for (Index o : nb[p])
+                if (ring[o] == 1 && m.position(o)[axis] > 0.0)
+                {
+                    out += m.position(o) - m.position(p);
+                    ++outs;
+                }
+            if (outs == 0)
+                continue;
+            // The row leaves the middle at this angle to the plane's normal; level across is zero.
+            out /= double(outs);
+            const double across = std::abs(out[axis]), length = glm::length(out);
+            const double bend = length > 0.0 ? std::acos(std::clamp(across / length, 0.0, 1.0)) : 0.0;
+            share[p] = std::clamp((bend - kLevel) / (kSharp - kLevel), 0.0, 1.0);
+        }
+        for (size_t i = 0; i < order.size(); ++i)
+            for (Index o : nb[order[i]])
+                if (ring[o] == ring[order[i]] + 1)
+                {
+                    if (share[o] == 0.0)
+                        order.push_back(o);
+                    share[o] = std::max(share[o], share[order[i]]);
+                }
+    }
+    std::vector<glm::dvec3> moved(m.pointCapacity());
+    for (int pass = 0; pass < kPasses; ++pass)
+    {
+        const double step = 0.5;
+        const std::vector<glm::vec3> normals = geo::pointNormals(m);
+        for (Index p = 0; p < m.pointCapacity(); ++p)
+        {
+            if (!m.pointValid(p))
+                continue;
+            moved[p] = m.position(p);
+            if (ring[p] < 0 || nb[p].empty())
+                continue;
+            glm::dvec3 mean(0.0);
+            int across = 0;
+            for (Index o : nb[p])
+                if (ring[o] != ring[p])
+                {
+                    mean += m.position(o);
+                    ++across;
+                }
+            if (across == 0)
+                continue;
+            mean /= double(across);
+            const double weight = strength * share[p] * (1.0 - double(ring[p]) / double(kRings + 1));
+            glm::dvec3 move = weight * step * (mean - moved[p]);
+            const glm::dvec3 n(normals[p]);
+            // Straight out only: sliding along the surface as well would drag the faces off the shape they sit on.
+            moved[p] += std::max(0.0, glm::dot(move, n)) * n;
+            if (ring[p] == 0)
+                moved[p][axis] = 0.0;
+        }
+        for (Index p = 0; p < m.pointCapacity(); ++p)
+            if (m.pointValid(p) && ring[p] >= 0)
+                m.setPosition(p, moved[p]);
     }
 }
 
@@ -267,733 +392,6 @@ bool isClosed(const geo::Mesh& m)
     return true;
 }
 
-/** A face squashed onto a line, like a quad whose points all landed on one crease. */
-bool isSliver(const geo::Mesh& m, Index f)
-{
-    double longest = 0.0;
-    m.forEachFaceCorner(f, [&](Index c) { longest = std::max(longest, m.edgeLength(m.cornerEdge(c))); });
-    return m.faceArea(f) < 1e-3 * longest * longest;
-}
-
-/**
- * The points of a sliver other than the ends of its longest edge: they were snapped onto the line the face lies along
- * and have to come off it for the face to open up.
- */
-void releaseSliver(const geo::Mesh& m, Index f, std::vector<FeatureKind>& feature)
-{
-    Index longest = geo::kInvalid;
-    m.forEachFaceCorner(f, [&](Index c) {
-        const Index e = m.cornerEdge(c);
-        if (longest == geo::kInvalid || m.edgeLength(e) > m.edgeLength(longest))
-            longest = e;
-    });
-    const Index a = m.edgePoint(longest, 0), b = m.edgePoint(longest, 1);
-    for (Index p : m.facePoints(f))
-        if (p != a && p != b && feature[p] == FeatureKind::Line)
-            feature[p] = FeatureKind::None;
-}
-
-/**
- * Smooths out folds the snapping and relaxing left: points of faces that face against the source, or are squashed flat,
- * move to the middle of their neighbours, back on the surface (or their crease), until nothing is folded. Corners stay.
- */
-void untangle(geo::Mesh& m, std::vector<FeatureKind>& feature, const geo::Mesh& src, const geo::MeshBvh& bvh,
-              const FeatureLines& lines, double h)
-{
-    LILA_ZONE();
-
-    for (int it = 0; it < 20; ++it)
-    {
-        Budget::checkpoint();
-        std::vector<Index> folded = foldedFaces(m, src, bvh);
-        for (Index f = 0; f < m.faceCapacity(); ++f)
-            if (m.faceValid(f) && isSliver(m, f))
-            {
-                releaseSliver(m, f, feature);
-                folded.push_back(f);
-            }
-        if (folded.empty())
-            return;
-        // A corner with no crease through it (a cone tip, a saddle) only marks the shape; after enough tries a fold it
-        // pins may move it rather than stay.
-        auto pinned = [&](Index p) {
-            if (feature[p] != FeatureKind::Corner)
-                return false;
-            if (it < 10)
-                return true;
-            bool onCrease = false;
-            m.forEachPointEdge(p, [&](Index e) { onCrease = onCrease || feature[m.edgeOtherPoint(e, p)] != FeatureKind::None; });
-            return onCrease;
-        };
-        std::vector<Index> pts;
-        for (Index f : folded)
-            for (Index p : m.facePoints(f))
-                if (!pinned(p))
-                    pts.push_back(p);
-        std::sort(pts.begin(), pts.end());
-        pts.erase(std::unique(pts.begin(), pts.end()), pts.end());
-        // Widen to the ring once it has had a few tries, so a fold pinned between corners can still open up.
-        if (it >= 5)
-        {
-            const std::vector<Index> ring = pts;
-            for (Index p : ring)
-                m.forEachPointEdge(p, [&](Index e) {
-                    const Index q = m.edgeOtherPoint(e, p);
-                    if (feature[q] != FeatureKind::Corner)
-                        pts.push_back(q);
-                });
-            std::sort(pts.begin(), pts.end());
-            pts.erase(std::unique(pts.begin(), pts.end()), pts.end());
-        }
-        std::vector<glm::dvec3> next(pts.size());
-        for (size_t k = 0; k < pts.size(); ++k)
-        {
-            const Index p = pts[k];
-            glm::dvec3 avg(0.0);
-            int count = 0;
-            m.forEachPointEdge(p, [&](Index e) {
-                const Index q = m.edgeOtherPoint(e, p);
-                // Along a crease only its own points pull.
-                if (feature[p] == FeatureKind::None || feature[p] == FeatureKind::Corner || feature[q] != FeatureKind::None)
-                {
-                    avg += m.position(q);
-                    ++count;
-                }
-            });
-            next[k] = m.position(p);
-            if (count == 0)
-                continue;
-            const glm::dvec3 target = avg / double(count);
-            glm::dvec3 q;
-            geo::BvhClosest c;
-            if (feature[p] == FeatureKind::Line && lines.closest(target, h, q))
-                next[k] = q;
-            else if (feature[p] != FeatureKind::Line && bvh.closestPoint(target, c))
-                next[k] = c.point;
-        }
-        for (size_t k = 0; k < pts.size(); ++k)
-            m.setPosition(pts[k], next[k]);
-    }
-}
-
-/** Interior points with two edges just bend an edge: take them out of both faces. */
-void removeValence2(geo::Mesh& m, std::vector<FeatureKind>& feature)
-{
-    LILA_ZONE();
-
-    for (Index p = 0; p < m.pointCapacity(); ++p)
-    {
-        if (!m.pointValid(p) || m.isBoundaryPoint(p) || m.pointValence(p) != 2)
-            continue;
-        std::vector<Index> faces = m.pointFaces(p);
-        std::vector<std::vector<Index>> rebuilt;
-        bool ok = true;
-        for (Index f : faces)
-        {
-            std::vector<Index> pts;
-            for (Index q : m.facePoints(f))
-                if (q != p)
-                    pts.push_back(q);
-            ok &= pts.size() >= 3;
-            rebuilt.push_back(std::move(pts));
-        }
-        if (!ok)
-            continue;
-        for (Index f : faces)
-            m.removeFace(f);
-        m.removePoint(p);
-        for (const auto& pts : rebuilt)
-            m.addFace(pts);
-        feature[p] = FeatureKind::None;
-    }
-}
-
-/**
- * Splits each inner point of more than eight edges (close poles merged into one) into two, with a quad between them
- * across the middle of its fan: valence 10 becomes two of 6, and the two spokes the quad spans gain one edge each.
- */
-void splitHighValence(geo::Mesh& m, std::vector<FeatureKind>& feature)
-{
-    LILA_ZONE();
-
-    for (Index p = 0; p < m.pointCapacity(); ++p)
-    {
-        if (!m.pointValid(p) || m.isBoundaryPoint(p) || m.pointValence(p) <= 8 || (p < feature.size() && feature[p] != FeatureKind::None))
-            continue;
-        // The fan in order: each face's corner after p is the spoke the next face starts from.
-        const std::vector<Index> faces = m.pointFaces(p);
-        std::vector<std::vector<Index>> pts;
-        bool quads = true;
-        for (Index f : faces)
-        {
-            pts.push_back(m.facePoints(f));
-            quads = quads && pts.back().size() == 4;
-        }
-        if (!quads)
-            continue;
-        auto around = [&](size_t i, int step) {
-            const std::vector<Index>& fp = pts[i];
-            const size_t at = size_t(std::find(fp.begin(), fp.end(), p) - fp.begin());
-            return fp[(at + 4 + step) % 4];
-        };
-        std::vector<size_t> order = {0};
-        for (size_t guard = 0; order.size() < faces.size() && guard < faces.size(); ++guard)
-        {
-            const Index spoke = around(order.back(), 1);
-            for (size_t j = 0; j < faces.size(); ++j)
-                if (around(j, -1) == spoke && std::find(order.begin(), order.end(), j) == order.end())
-                {
-                    order.push_back(j);
-                    break;
-                }
-        }
-        if (order.size() != faces.size())
-            continue;
-        const size_t k = order.size(), half = k / 2;
-        const Index n0 = around(order[0], -1), nm = around(order[half], -1);
-        glm::dvec3 sideA(0.0), sideB(0.0);
-        for (size_t i = 0; i < k; ++i)
-            (i < half ? sideA : sideB) += m.position(around(order[i], 1));
-        const glm::dvec3 at = m.position(p);
-        const Index q = m.addPoint(at);
-        if (feature.size() < m.pointCapacity())
-            feature.resize(m.pointCapacity(), FeatureKind::None);
-        std::vector<std::vector<Index>> rebuilt;
-        for (size_t i = 0; i < k; ++i)
-        {
-            std::vector<Index> fp = pts[order[i]];
-            if (i >= half)
-                std::replace(fp.begin(), fp.end(), p, q);
-            rebuilt.push_back(std::move(fp));
-        }
-        for (Index f : faces)
-            m.removeFace(f);
-        for (const auto& fp : rebuilt)
-            m.addFace(fp);
-        m.addFace({p, n0, q, nm});
-        // Removing a face leaves its edges: p's spokes to the faces that moved to q are loose now.
-        std::vector<Index> loose;
-        m.forEachPointEdge(p, [&](Index e) {
-            if (m.edgeFaceCount(e) == 0)
-                loose.push_back(e);
-        });
-        m.removeLoose(loose, {});
-        m.setPosition(p, glm::mix(at, sideA / double(half), 0.25));
-        m.setPosition(q, glm::mix(at, sideB / double(k - half), 0.25));
-    }
-}
-
-void compactTagged(geo::Mesh& m, std::vector<FeatureKind>& feature, std::vector<uint8_t>& boundary);
-
-/**
- * On the half of a symmetric remesh, folds each quad with three corners in a row on the seam (the middle one with no
- * other edge) into its fourth corner's row: the outer two seam corners merge at their midpoint. Left in, the middle
- * corner mirrors into a valence 2 point and the fourth into a valence 6 pair, a diamond on the seam. The rows round each
- * merge relax again, so they don't pinch in to it.
- */
-void collapseSeamWedges(geo::Mesh& m, const std::vector<FeatureKind>& feature, const geo::MeshBvh& bvh, int axis, double tolerance)
-{
-    LILA_ZONE();
-
-    std::vector<Index> merged;
-    auto onSeam = [&](Index p) { return m.isBoundaryPoint(p) && std::abs(m.position(p)[axis]) <= tolerance; };
-    for (bool changed = true; changed;)
-    {
-        changed = false;
-        for (Index b = 0; b < m.pointCapacity(); ++b)
-        {
-            if (!m.pointValid(b) || m.pointValence(b) != 2 || !onSeam(b))
-                continue;
-            const std::vector<Index> faces = m.pointFaces(b);
-            if (faces.size() != 1 || m.faceSize(faces[0]) != 4)
-                continue;
-            const Index wedge = faces[0];
-            std::vector<Index> pts = m.facePoints(wedge);
-            const size_t at = size_t(std::find(pts.begin(), pts.end(), b) - pts.begin());
-            const Index a = pts[(at + 3) % 4], c = pts[(at + 1) % 4];
-            if (!onSeam(a) || !onSeam(c))
-                continue;
-            // c's faces are rebuilt on a; one already holding a would come out with a repeated corner.
-            std::vector<std::vector<Index>> rebuilt;
-            std::vector<Index> cFaces = m.pointFaces(c);
-            bool ok = true;
-            for (Index f : cFaces)
-            {
-                if (f == wedge)
-                    continue;
-                std::vector<Index> fp = m.facePoints(f);
-                ok &= std::find(fp.begin(), fp.end(), a) == fp.end();
-                std::replace(fp.begin(), fp.end(), c, a);
-                rebuilt.push_back(std::move(fp));
-            }
-            if (!ok)
-                continue;
-            const glm::dvec3 mid = 0.5 * (m.position(a) + m.position(c));
-            m.removeFace(wedge);
-            for (Index f : cFaces)
-                if (f != wedge)
-                    m.removeFace(f);
-            m.removePoint(b);
-            m.removePoint(c);
-            for (const auto& fp : rebuilt)
-                m.addFace(fp);
-            m.setPosition(a, mid);
-            merged.push_back(a);
-            changed = true;
-        }
-    }
-    if (merged.empty())
-        return;
-    std::vector<Index> region;
-    std::vector<uint8_t> in(m.pointCapacity(), 0);
-    for (Index p : merged)
-        if (m.pointValid(p) && !in[p])
-        {
-            in[p] = 1;
-            region.push_back(p);
-        }
-    for (int ring = 0; ring < 8; ++ring)
-        for (size_t i = 0, n = region.size(); i < n; ++i)
-            m.forEachPointEdge(region[i], [&](Index e) {
-                const Index q = m.edgeOtherPoint(e, region[i]);
-                if (!in[q])
-                {
-                    in[q] = 1;
-                    region.push_back(q);
-                }
-            });
-    const std::vector<glm::vec3> normals = geo::pointNormals(m);
-    for (int it = 0; it < 20; ++it)
-        for (Index p : region)
-        {
-            if (p < feature.size() && feature[p] != FeatureKind::None)
-                continue;
-            const bool seam = onSeam(p);
-            glm::dvec3 avg(0.0);
-            double weight = 0.0;
-            m.forEachPointEdge(p, [&](Index e) {
-                const Index q = m.edgeOtherPoint(e, p);
-                const double w = seam && !onSeam(q) ? 2.0 : 1.0;
-                avg += w * m.position(q);
-                weight += w;
-            });
-            if (weight == 0.0)
-                continue;
-            glm::dvec3 target = glm::mix(m.position(p), avg / weight, 0.5);
-            if (!seam)
-            {
-                const glm::dvec3 n(normals[p]);
-                target -= n * glm::dot(n, target - m.position(p));
-            }
-            geo::BvhClosest c;
-            if (bvh.closestPoint(target, c))
-                target = c.point;
-            if (seam)
-                target[axis] = 0.0;
-            m.setPosition(p, target);
-        }
-}
-
-/**
- * On the half of a symmetric remesh, each seam point with one edge off the seam moves to the point of its two seam edges
- * nearest that edge's other end, back on the surface, so the row meets the seam square and crosses it straight instead
- * of in a V. Staying on its own seam edges keeps the seam's order.
- */
-void straightenSeamRows(geo::Mesh& m, const std::vector<FeatureKind>& feature, const geo::MeshBvh& bvh, int axis, double tolerance)
-{
-    LILA_ZONE();
-
-    auto onSeam = [&](Index p) { return m.isBoundaryPoint(p) && std::abs(m.position(p)[axis]) <= tolerance; };
-    std::vector<std::pair<Index, glm::dvec3>> moves;
-    for (Index p = 0; p < m.pointCapacity(); ++p)
-    {
-        if (!m.pointValid(p) || !onSeam(p))
-            continue;
-        Index across = geo::kInvalid;
-        std::vector<Index> along;
-        m.forEachPointEdge(p, [&](Index e) {
-            const Index q = m.edgeOtherPoint(e, p);
-            if (onSeam(q))
-                along.push_back(q);
-            else
-                across = across == geo::kInvalid ? q : geo::kInvalid - 1;
-        });
-        // The seam's own bends read as corners; a crease leaving across the seam is a real one and stays.
-        if (along.size() != 2 || across >= geo::kInvalid - 1 || (across < feature.size() && feature[across] != FeatureKind::None))
-            continue;
-        const glm::dvec3 at = m.position(p), q = m.position(across);
-        glm::dvec3 best = at;
-        double bestDist = glm::length(q - at);
-        for (Index s : along)
-        {
-            // Only the half of each seam edge nearest p, so neighbours moving the same way can't cross.
-            const glm::dvec3 d = 0.5 * (m.position(s) - at);
-            const double t = std::clamp(glm::dot(q - at, d) / std::max(glm::dot(d, d), 1e-30), 0.0, 0.8);
-            const glm::dvec3 c = at + t * d;
-            if (glm::length(q - c) < bestDist)
-            {
-                bestDist = glm::length(q - c);
-                best = c;
-            }
-        }
-        geo::BvhClosest c;
-        if (bvh.closestPoint(best, c))
-            best = c.point;
-        best[axis] = 0.0;
-        moves.push_back({p, best});
-    }
-    // A move that turns a face round the point over (a quad bent across its diagonal) stays undone.
-    for (const auto& [p, at] : moves)
-    {
-        const glm::dvec3 was = m.position(p);
-        std::vector<std::pair<Index, glm::dvec3>> before;
-        for (Index f : m.pointFaces(p))
-            before.push_back({f, m.faceAreaVector(f)});
-        m.setPosition(p, at);
-        for (const auto& [f, n] : before)
-            if (glm::dot(m.faceAreaVector(f), n) < 0.25 * glm::dot(n, n))
-            {
-                m.setPosition(p, was);
-                break;
-            }
-    }
-}
-
-/**
- * Closes the holes extraction leaves where the field was too tangled to trace a face. Boundary edges are walked
- * against their faces, and a walk that comes back through a point it already passed is cut there, so a hole that
- * touches itself or another hole still comes out as simple loops. Loops on the source's own border stay open.
- */
-/** A quad patch across a hole loop wider than a face, or false when no pattern fits its sides. */
-bool patchHole(geo::Mesh& m, std::vector<Index>& loop, const geo::MeshBvh* surface)
-{
-    // Quads need an even loop: an odd one gets a point in its longest edge, turning the face beyond it into a pentagon
-    // that the pure-quad pass splits later.
-    if (loop.size() >= 5 && loop.size() % 2 != 0)
-    {
-        size_t longest = 0;
-        double length = -1.0;
-        for (size_t k = 0; k < loop.size(); ++k)
-            if (const double d = glm::distance(m.position(loop[k]), m.position(loop[(k + 1) % loop.size()])); d > length)
-            {
-                length = d;
-                longest = k;
-            }
-        const Index e = m.findEdge(loop[longest], loop[(longest + 1) % loop.size()]);
-        if (e == kInvalid)
-            return false;
-        const Index p = m.splitEdge(e, 0.5);
-        loop.insert(loop.begin() + std::ptrdiff_t(longest + 1), p);
-    }
-    if (loop.size() < 6 || loop.size() % 2 != 0)
-        return false;
-    PatchBoundary b;
-    for (Index p : loop)
-        b.points.push_back(m.position(p));
-    for (int sides : {4, 6, 5, 3})
-    {
-        b.corners = patchCorners(b.points, sides);
-        if (b.corners.size() != size_t(sides) || !patchSidesFillable(patchSideCounts(b)))
-            continue;
-        const PatchResult r = fillPatch(b, {}, surface);
-        if (!r.ok())
-            continue;
-        std::vector<Index> id(r.positions.size());
-        for (size_t i = 0; i < loop.size(); ++i)
-            id[i] = loop[i];
-        for (size_t i = loop.size(); i < r.positions.size(); ++i)
-            id[i] = m.addPoint(r.positions[i]);
-        for (const auto& f : r.faces)
-        {
-            std::vector<Index> pts;
-            for (Index k : f)
-                pts.push_back(id[k]);
-            m.addFace(pts);
-        }
-        return true;
-    }
-    return false;
-}
-
-void fillHoles(geo::Mesh& m, const std::vector<uint8_t>& sourceBoundary, const geo::MeshBvh* surface = nullptr)
-{
-    LILA_ZONE();
-
-    std::vector<std::vector<Index>> out(m.pointCapacity());
-    Index count = 0;
-    for (Index e = 0; e < m.edgeCapacity(); ++e)
-        if (m.edgeValid(e) && m.edgeFaceCount(e) == 1)
-        {
-            const Index c = m.edgeCorner(e);
-            out[m.cornerNextPoint(c)].push_back(m.cornerPoint(c));
-            ++count;
-        }
-    std::vector<std::vector<Index>> loops;
-    std::vector<Index> walk, at(m.pointCapacity(), kInvalid);
-    for (Index start = 0; start < m.pointCapacity() && count > 0; ++start)
-        while (!out[start].empty())
-        {
-            walk.clear();
-            Index p = start;
-            for (;;)
-            {
-                if (const Index from = at[p]; from != kInvalid)
-                {
-                    // Back at a point of this walk: the stretch since then is one loop.
-                    loops.emplace_back(walk.begin() + from, walk.end());
-                    for (size_t k = from; k < walk.size(); ++k)
-                        at[walk[k]] = kInvalid;
-                    walk.resize(from);
-                }
-                if (out[p].empty())
-                    break;
-                at[p] = Index(walk.size());
-                walk.push_back(p);
-                const Index q = out[p].back();
-                out[p].pop_back();
-                --count;
-                p = q;
-            }
-            for (Index q : walk)
-                at[q] = kInvalid;
-        }
-    const auto onBorder = [&](Index p) { return p < sourceBoundary.size() && sourceBoundary[p]; };
-    for (const std::vector<Index>& loop : loops)
-    {
-        if (loop.size() < 3)
-            continue;
-        std::vector<size_t> border;
-        for (size_t k = 0; k < loop.size(); ++k)
-            if (onBorder(loop[k]))
-                border.push_back(k);
-        if (border.size() < 2)
-        {
-            std::vector<Index> hole = loop;
-            if (!(surface && patchHole(m, hole, surface)))
-                m.addFace(hole);
-            continue;
-        }
-        // A hole that reaches the source's border is a bay in it: fill each run of inner points between two border
-        // points, closing it along the border.
-        for (size_t i = 0; i < border.size(); ++i)
-        {
-            const size_t a = border[i], b = border[(i + 1) % border.size()];
-            std::vector<Index> bay;
-            for (size_t k = a;; k = (k + 1) % loop.size())
-            {
-                bay.push_back(loop[k]);
-                if (k == b && bay.size() > 1)
-                    break;
-                if (bay.size() > loop.size())
-                    break;
-            }
-            if (bay.size() >= 3 && bay.front() != bay.back())
-                m.addFace(bay);
-        }
-    }
-}
-
-/** Moving p to `to` leaves every face around it facing the way it did. */
-bool movesCleanly(const geo::Mesh& m, Index p, const glm::dvec3& to)
-{
-    bool ok = true;
-    m.forEachPointCorner(p, [&](Index c) {
-        if (!ok)
-            return;
-        const Index f = m.cornerFace(c);
-        const glm::dvec3 before = m.faceAreaVector(f);
-        glm::dvec3 after(0.0);
-        const Index c0 = m.faceCorner(f);
-        const auto at = [&](Index k) { return m.cornerPoint(k) == p ? to : m.position(m.cornerPoint(k)); };
-        const glm::dvec3 o = at(c0);
-        for (Index k = m.cornerNext(c0); m.cornerNext(k) != c0; k = m.cornerNext(k))
-            after += glm::cross(at(k) - o, at(m.cornerNext(k)) - o);
-        ok = glm::dot(after, before) > 0.1 * glm::length(after) * glm::length(before);
-    });
-    return ok;
-}
-
-/**
- * Every source corner gets an output point. The nearest free point within reach moves onto it if no face turns over;
- * otherwise the nearest edge (a border edge, for a corner on the border) is split there. Either way it stays put after.
- */
-void snapCorners(geo::Mesh& m, std::vector<FeatureKind>& feature, const Surface& s, double reach)
-{
-    LILA_ZONE();
-
-    const double same = 1e-9 * (1.0 + reach);
-    std::vector<Index> corners;
-    const std::vector<uint8_t> tip = s.saddleTips();
-    for (Index v = 0; v < s.vertexCount(); ++v)
-        if (s.feature[v] == FeatureKind::Corner && !tip[v])
-            corners.push_back(v);
-    std::vector<uint8_t> taken(m.pointCapacity(), 0);
-    std::vector<std::pair<double, Index>> near;
-    for (Index v : corners)
-    {
-        const glm::dvec3 target = s.pos[v];
-        const bool onBorder = s.onBoundary[v] != 0;
-        near.clear();
-        bool present = false;
-        for (Index p = 0; p < m.pointCapacity() && !present; ++p)
-        {
-            if (!m.pointValid(p))
-                continue;
-            const double d = glm::distance(m.position(p), target);
-            present = d < same;
-            if (d < reach && !taken[p] && onBorder == m.isBoundaryPoint(p))
-                near.push_back({d, p});
-        }
-        if (present)
-            continue;
-        std::sort(near.begin(), near.end());
-        Index chosen = kInvalid;
-        for (const auto& [d, p] : near)
-            if (movesCleanly(m, p, target))
-            {
-                chosen = p;
-                break;
-            }
-        if (chosen == kInvalid)
-        {
-            // A border corner has to be there however far the outline fell short; an inner one only nearby.
-            Index edge = kInvalid;
-            double bestD = onBorder ? 3.0 * reach : reach, bestT = 0.5;
-            for (Index e = 0; e < m.edgeCapacity(); ++e)
-            {
-                if (!m.edgeValid(e) || (onBorder && !m.isBoundaryEdge(e)))
-                    continue;
-                const glm::dvec3 a = m.position(m.edgePoint(e, 0)), ab = m.position(m.edgePoint(e, 1)) - a;
-                const double len2 = glm::dot(ab, ab);
-                const double t = len2 > 0.0 ? std::clamp(glm::dot(target - a, ab) / len2, 0.1, 0.9) : 0.5;
-                const double d = glm::distance(a + ab * t, target);
-                if (d < bestD)
-                {
-                    bestD = d;
-                    bestT = t;
-                    edge = e;
-                }
-            }
-            if (edge == kInvalid)
-                continue;
-            chosen = m.splitEdge(edge, bestT);
-            feature.resize(m.pointCapacity(), FeatureKind::None);
-            taken.resize(m.pointCapacity(), 0);
-            if (!movesCleanly(m, chosen, target))
-            {
-                feature[chosen] = FeatureKind::None;
-                continue;
-            }
-        }
-        m.setPosition(chosen, target);
-        feature[chosen] = FeatureKind::Corner;
-        taken[chosen] = 1;
-    }
-}
-
-/** Output border points go onto the source's border, so open edges keep their outline. */
-void snapBorder(geo::Mesh& m, std::vector<FeatureKind>& feature, const FeatureLines& border, double reach)
-{
-    LILA_ZONE();
-
-    if (border.empty())
-        return;
-    for (Index p = 0; p < m.pointCapacity(); ++p)
-    {
-        if (!m.pointValid(p) || !m.isBoundaryPoint(p) || feature[p] == FeatureKind::Corner)
-            continue;
-        glm::dvec3 q;
-        if (border.closest(m.position(p), reach, q))
-        {
-            m.setPosition(p, q);
-            feature[p] = FeatureKind::Line;
-        }
-    }
-}
-
-/**
- * Splits every n-gon into n quads around its centroid (no smoothing), so any polygon mix comes out all quads. Edge
- * midpoints along a crease stay on it.
- */
-geo::Mesh splitToQuads(const geo::Mesh& m, std::vector<FeatureKind>& feature, std::vector<uint8_t>& boundary, const FeatureLines& lines,
-                       double h)
-{
-    LILA_ZONE();
-
-    std::vector<glm::dvec3> pts;
-    std::vector<FeatureKind> outFeature;
-    std::vector<uint8_t> outBoundary;
-    std::vector<Index> pointId(m.pointCapacity(), kInvalid);
-    for (Index p = 0; p < m.pointCapacity(); ++p)
-        if (m.pointValid(p))
-        {
-            pointId[p] = Index(pts.size());
-            pts.push_back(m.position(p));
-            outFeature.push_back(feature[p]);
-            outBoundary.push_back(boundary[p]);
-        }
-    std::vector<Index> edgeId(m.edgeCapacity(), kInvalid);
-    for (Index e = 0; e < m.edgeCapacity(); ++e)
-        if (m.edgeValid(e))
-        {
-            Index a = m.edgePoint(e, 0), b = m.edgePoint(e, 1);
-            glm::dvec3 mid = 0.5 * (m.position(a) + m.position(b));
-            FeatureKind k = FeatureKind::None;
-            if (feature[a] != FeatureKind::None && feature[b] != FeatureKind::None)
-            {
-                glm::dvec3 q, t;
-                glm::dvec3 dir = glm::normalize(m.position(b) - m.position(a));
-                if (lines.closest(mid, 0.3 * h, q, &t) && std::abs(glm::dot(t, dir)) > 0.8)
-                    k = FeatureKind::Line;
-            }
-            edgeId[e] = Index(pts.size());
-            pts.push_back(mid);
-            outFeature.push_back(k);
-            outBoundary.push_back(m.isBoundaryEdge(e));
-        }
-    std::vector<Index> sizes, idx;
-    for (Index f = 0; f < m.faceCapacity(); ++f)
-    {
-        if (!m.faceValid(f))
-            continue;
-        Index centre = Index(pts.size());
-        pts.push_back(m.faceCentroid(f));
-        outFeature.push_back(FeatureKind::None);
-        outBoundary.push_back(0);
-        std::vector<Index> cs = m.faceCorners(f);
-        for (size_t k = 0; k < cs.size(); ++k)
-        {
-            Index c = cs[k], prev = cs[(k + cs.size() - 1) % cs.size()];
-            sizes.push_back(4);
-            idx.insert(idx.end(), {pointId[m.cornerPoint(c)], edgeId[m.cornerEdge(c)], centre, edgeId[m.cornerEdge(prev)]});
-        }
-    }
-    geo::Mesh out = geo::Mesh::fromPolygons(pts, sizes, idx);
-    feature = std::move(outFeature);
-    boundary = std::move(outBoundary);
-    return out;
-}
-
-/** Compacts the mesh and the per-point tags along with it. */
-void compactTagged(geo::Mesh& m, std::vector<FeatureKind>& feature, std::vector<uint8_t>& boundary)
-{
-    geo::MeshRemap remap;
-    m.compact(&remap);
-    std::vector<FeatureKind> f(m.pointCapacity(), FeatureKind::None);
-    std::vector<uint8_t> b(m.pointCapacity(), 0);
-    for (Index p = 0; p < Index(remap.points.size()); ++p)
-        if (remap.points[p] != kInvalid)
-        {
-            f[remap.points[p]] = p < feature.size() ? feature[p] : FeatureKind::None;
-            b[remap.points[p]] = p < boundary.size() ? boundary[p] : 0;
-        }
-    feature = std::move(f);
-    boundary = std::move(b);
-}
-} // namespace
-
-namespace
-{
 /**
  * Caps the lattice spacing where the surface comes close to itself across a gap, like a ball sitting in a pocket. A lattice
  * cell wider than the gap bridges it and the result collapses into it. At most twice as fine. The cap grows out gradually
@@ -1060,136 +458,221 @@ double handleDensity(const glm::dvec3& p, const std::vector<DensityHandle>& hand
 }
 
 /**
- * Lays each feature guide onto the working surface as hard edges: the surface vertex path nearest the polyline, with its
- * vertices moved onto the polyline where that leaves their triangles facing the same way, so the crease runs straight.
+ * Joins the loose ends of a cut's chain: each end to the nearest other end within reach, by the shortest path along the
+ * mesh's edges. An open guide keeps the two ends farthest apart.
  */
-void embedFeatureGuides(Surface& s, const std::vector<std::vector<glm::dvec3>>& guides, const geo::MeshBvh& bvh)
+void closeChainGaps(const geo::Mesh& m, std::vector<std::array<Index, 2>>& chainEdges, std::unordered_set<uint64_t>& have, double reach,
+                    bool closed)
+{
+    std::unordered_map<Index, int> degree;
+    for (const auto& [a, b] : chainEdges)
+    {
+        ++degree[a];
+        ++degree[b];
+    }
+    std::vector<Index> ends;
+    for (const auto& [v, d] : degree)
+        if (d == 1)
+            ends.push_back(v);
+    if (!closed && ends.size() >= 2)
+    {
+        // The guide's own two ends: the pair farthest apart.
+        size_t bi = 0, bj = 1;
+        double far = -1.0;
+        for (size_t i = 0; i < ends.size(); ++i)
+            for (size_t j = i + 1; j < ends.size(); ++j)
+                if (const double d = glm::distance(m.position(ends[i]), m.position(ends[j])); d > far)
+                {
+                    far = d;
+                    bi = i;
+                    bj = j;
+                }
+        const Index keepA = ends[bi], keepB = ends[bj];
+        ends.erase(std::remove_if(ends.begin(), ends.end(), [&](Index v) { return v == keepA || v == keepB; }), ends.end());
+    }
+    std::unordered_set<Index> joined;
+    for (Index a : ends)
+    {
+        if (joined.contains(a))
+            continue;
+        std::unordered_map<Index, double> dist{{a, 0.0}};
+        std::unordered_map<Index, Index> from;
+        std::vector<std::pair<double, Index>> heap{{0.0, a}};
+        Index found = kInvalid;
+        while (!heap.empty())
+        {
+            std::pop_heap(heap.begin(), heap.end(), std::greater<>());
+            const auto [d, u] = heap.back();
+            heap.pop_back();
+            if (d > dist[u])
+                continue;
+            if (u != a && degree.contains(u) && degree[u] == 1 && !joined.contains(u))
+            {
+                found = u;
+                break;
+            }
+            m.forEachPointEdge(u, [&](Index e) {
+                const Index w = m.edgeOtherPoint(e, u);
+                const double nd = d + m.edgeLength(e);
+                if (nd > reach)
+                    return;
+                auto it = dist.find(w);
+                if (it == dist.end() || nd < it->second)
+                {
+                    dist[w] = nd;
+                    from[w] = u;
+                    heap.push_back({nd, w});
+                    std::push_heap(heap.begin(), heap.end(), std::greater<>());
+                }
+            });
+        }
+        if (found == kInvalid)
+            continue;
+        for (Index u = found; u != a; u = from[u])
+        {
+            const Index p = from[u];
+            if (have.insert(edgeKey(p, u)).second)
+                chainEdges.push_back({p, u});
+        }
+        joined.insert(a);
+        joined.insert(found);
+    }
+}
+
+/**
+ * Cuts each feature guide into the mesh with the knife, so an edge chain runs exactly along it; returns those edges
+ * as point pairs. Guide points are taken onto the surface, a few per source edge apart, so the cut between two of them
+ * follows the surface closely.
+ */
+std::vector<std::array<Index, 2>> imprintGuides(geo::Mesh& m, const std::vector<std::vector<glm::dvec3>>& guides)
 {
     LILA_ZONE();
 
-    if (guides.empty())
-        return;
-    s.buildTopology();
-    s.buildGeometry();
-    const Index n = s.vertexCount();
-    std::vector<std::vector<Index>> vertexTris(n);
-    for (size_t t = 0; t < s.tris.size(); ++t)
-        for (Index v : s.tris[t])
-            vertexTris[v].push_back(Index(t));
-    std::vector<uint8_t> border(n, 0);
-    for (size_t e = 0; e < s.edges.size(); ++e)
-        if (s.edgeTriCount[e] == 1)
-            border[s.edges[e][0]] = border[s.edges[e][1]] = 1;
-    const auto nearestVertex = [&](const glm::dvec3& p) {
-        Index best = kInvalid;
-        double bestD = std::numeric_limits<double>::max();
-        for (Index v = 0; v < n; ++v)
-            if (const double d = glm::dot(s.pos[v] - p, s.pos[v] - p); d < bestD)
-            {
-                bestD = d;
-                best = v;
-            }
-        return best;
+    double edge = 0.0;
+    Index count = 0;
+    for (Index e = 0; e < m.edgeCapacity(); ++e)
+        if (m.edgeValid(e))
+        {
+            edge += m.edgeLength(e);
+            ++count;
+        }
+    const double step = std::max(1e-9, 2.0 * edge / std::max<Index>(1, count));
+    std::vector<std::array<Index, 2>> out;
+    // A guide along the mesh's own border is an edge loop already; cutting along it would tear the border.
+    auto alongBorder = [&](const std::vector<glm::dvec3>& guide) {
+        std::vector<std::array<glm::dvec3, 2>> segs;
+        for (Index e = 0; e < m.edgeCapacity(); ++e)
+            if (m.edgeValid(e) && m.isBoundaryEdge(e))
+                segs.push_back({m.position(m.edgePoint(e, 0)), m.position(m.edgePoint(e, 1))});
+        if (segs.empty())
+            return false;
+        for (const glm::dvec3& p : guide)
+            if (glm::distance(closestOnSegments(p, segs), p) > 0.5 * step)
+                return false;
+        return true;
     };
-    const double step = std::max(s.meanEdgeLength() * 0.5, 1e-12);
-    std::vector<double> dist(n, std::numeric_limits<double>::max());
-    std::vector<Index> from(n, kInvalid), touched;
     for (const auto& guide : guides)
     {
-        std::vector<glm::dvec3> samples;
-        for (size_t i = 0; i + 1 < guide.size(); ++i)
-        {
-            const int count = std::max(1, int(std::ceil(glm::distance(guide[i], guide[i + 1]) / step)));
-            for (int k = 0; k < count; ++k)
-                samples.push_back(glm::mix(guide[i], guide[i + 1], double(k) / count));
-        }
-        if (!guide.empty())
-            samples.push_back(guide.back());
-        std::vector<Index> path;
-        for (const glm::dvec3& p : samples)
-        {
-            const Index v = nearestVertex(p);
-            if (v == kInvalid || (!path.empty() && path.back() == v))
-                continue;
-            if (path.empty())
-            {
-                path.push_back(v);
-                continue;
-            }
-            // Shortest edge path from the last vertex, which is a few edges away at most.
-            const Index a = path.back();
-            for (Index t : touched)
-            {
-                dist[t] = std::numeric_limits<double>::max();
-                from[t] = kInvalid;
-            }
-            touched.assign({a});
-            dist[a] = 0.0;
-            std::vector<std::pair<double, Index>> heap{{0.0, a}};
-            while (!heap.empty())
-            {
-                std::pop_heap(heap.begin(), heap.end(), std::greater<>());
-                auto [d, u] = heap.back();
-                heap.pop_back();
-                if (u == v || d > dist[u])
-                    break;
-                for (Index k = s.adjStart[u]; k < s.adjStart[u + 1]; ++k)
-                {
-                    const Index w = s.adj[k];
-                    const double nd = d + glm::distance(s.pos[u], s.pos[w]);
-                    if (nd < dist[w] && nd < 8.0 * step)
-                    {
-                        if (dist[w] == std::numeric_limits<double>::max())
-                            touched.push_back(w);
-                        dist[w] = nd;
-                        from[w] = u;
-                        heap.push_back({nd, w});
-                        std::push_heap(heap.begin(), heap.end(), std::greater<>());
-                    }
-                }
-            }
-            if (from[v] == kInvalid)
-            {
-                path.push_back(v);
-                continue;
-            }
-            std::vector<Index> leg;
-            for (Index u = v; u != a; u = from[u])
-                leg.push_back(u);
-            path.insert(path.end(), leg.rbegin(), leg.rend());
-        }
-        for (Index v : path)
-        {
-            glm::dvec3 best = s.pos[v];
-            double bestD = std::numeric_limits<double>::max();
-            for (size_t i = 0; i + 1 < guide.size(); ++i)
-            {
-                const glm::dvec3 a = guide[i], ab = guide[i + 1] - a;
-                const double len2 = glm::dot(ab, ab);
-                const glm::dvec3 q = a + ab * (len2 > 0.0 ? std::clamp(glm::dot(s.pos[v] - a, ab) / len2, 0.0, 1.0) : 0.0);
-                if (const double d = glm::dot(q - s.pos[v], q - s.pos[v]); d < bestD)
-                {
-                    bestD = d;
-                    best = q;
-                }
-            }
+        if (guide.size() < 2 || alongBorder(guide))
+            continue;
+        const geo::MeshBvh bvh(m);
+        const bool closed = glm::distance(guide.front(), guide.back()) < 1e-6 * step;
+        std::vector<geo::KnifePoint> points;
+        auto add = [&](const glm::dvec3& p) {
             geo::BvhClosest c;
-            if (bvh.closestPoint(best, c))
-                best = c.point;
-            bool keeps = !border[v];
-            for (Index t : vertexTris[v])
+            if (bvh.closestPoint(p, c) && c.face != kInvalid)
+                points.push_back(geo::KnifePoint::face(c.face, c.point));
+        };
+        const size_t last = closed ? guide.size() - 1 : guide.size();
+        for (size_t i = 0; i < last; ++i)
+        {
+            add(guide[i]);
+            if (i + 1 < guide.size())
             {
-                std::array<glm::dvec3, 3> p;
-                for (int k = 0; k < 3; ++k)
-                    p[k] = s.tris[t][k] == v ? best : s.pos[s.tris[t][k]];
-                keeps &= glm::dot(glm::cross(p[1] - p[0], p[2] - p[0]), s.triNormal[t]) > 0.0;
+                const int pieces = int(std::ceil(glm::distance(guide[i], guide[i + 1]) / step));
+                for (int k = 1; k < pieces; ++k)
+                    add(glm::mix(guide[i], guide[i + 1], double(k) / pieces));
             }
-            if (keeps)
-                s.pos[v] = best;
         }
-        for (size_t i = 0; i + 1 < path.size(); ++i)
-            s.hard.insert(edgeKey(path[i], path[i + 1]));
+        if (points.size() < 2)
+            continue;
+        geo::KnifeOptions ko;
+        ko.closed = closed;
+        auto borderEdges = [](const geo::Mesh& mesh) {
+            Index n = 0;
+            for (Index e = 0; e < mesh.edgeCapacity(); ++e)
+                n += mesh.edgeValid(e) && mesh.isBoundaryEdge(e);
+            return n;
+        };
+        // A cut that opens the mesh (a guide grazing a border, a knife path that misses) is undone.
+        const geo::Mesh before = m;
+        const Index open = borderEdges(m);
+        const std::vector<Index> cut = geo::knifeCut(m, points, ko);
+        if (borderEdges(m) > open)
+        {
+            m = before;
+            continue;
+        }
+        // The cut's own edges, not the diagonals it adds inside the faces it splits: ends and middle on the cut's path.
+        std::vector<std::array<glm::dvec3, 2>> segs;
+        for (size_t i = 0; i + 1 < points.size(); ++i)
+            segs.push_back({points[i].position, points[i + 1].position});
+        if (closed)
+            segs.push_back({points.back().position, points.front().position});
+        auto onPath = [&](const glm::dvec3& at) { return glm::distance(closestOnSegments(at, segs), at) < 0.05 * step; };
+        std::unordered_set<Index> chain;
+        for (Index e : cut)
+        {
+            if (!m.edgeValid(e))
+                continue;
+            const glm::dvec3 a = m.position(m.edgePoint(e, 0)), b = m.position(m.edgePoint(e, 1));
+            if (onPath(a) && onPath(b) && onPath(0.5 * (a + b)))
+            {
+                out.push_back({m.edgePoint(e, 0), m.edgePoint(e, 1)});
+                chain.insert(m.edgePoint(e, 0));
+                chain.insert(m.edgePoint(e, 1));
+            }
+        }
+        // The knife leaves out stretches that already run along an edge: an edge between two of the chain's points,
+        // along the path, closes such a gap.
+        std::unordered_set<uint64_t> have;
+        for (const auto& [x, y] : out)
+            have.insert(edgeKey(x, y));
+        for (Index p : chain)
+            m.forEachPointEdge(p, [&](Index e) {
+                const Index q = m.edgeOtherPoint(e, p);
+                if (p < q && chain.contains(q) && !have.contains(edgeKey(p, q)) && onPath(0.5 * (m.position(p) + m.position(q))))
+                {
+                    out.push_back({p, q});
+                    have.insert(edgeKey(p, q));
+                }
+            });
+        closeChainGaps(m, out, have, step, closed);
     }
+    return out;
+}
+
+/** The same on a working surface: its hard edges, density and pins carry over, and the guides' edges join the hard set. */
+void imprintGuides(Surface& s, const std::vector<std::vector<glm::dvec3>>& guides)
+{
+    std::vector<Index> sizes(s.tris.size(), 3), corners;
+    corners.reserve(s.tris.size() * 3);
+    for (const auto& t : s.tris)
+        corners.insert(corners.end(), t.begin(), t.end());
+    geo::Mesh m = geo::Mesh::fromPolygons(s.pos, sizes, corners);
+    if (m.pointCapacity() != Index(s.pos.size()))
+        return;
+    const std::vector<std::array<Index, 2>> cut = imprintGuides(m, guides);
+    Surface out = surfaceFromMesh(m, false);
+    if (out.pos.size() < s.pos.size())
+        return;
+    for (size_t v = 0; v < s.density.size(); ++v)
+        out.density[v] = s.density[v];
+    out.hard = s.hard;
+    for (const auto& [a, b] : cut)
+        out.hard.insert(edgeKey(a, b));
+    out.pins = s.pins;
+    s = std::move(out);
 }
 
 /**
@@ -1229,44 +712,509 @@ void fitThickness(const Surface& s, const geo::Mesh& src, const geo::MeshBvh& bv
         scale[v] = std::min(scale[v], cap[v]);
 }
 
-/** The working surface and lattice spacing everything after it shares. Not movable: the bvh points into src. */
+Index defects(const geo::Mesh& m, const geo::Mesh& src, const geo::MeshBvh& bvh, bool sourceClosed);
+
+/** Working triangle edges per quad edge: triangles about as long as the quads resolve the flow and keep the solve small. */
+constexpr double kTriangleRatio = 1.0;
+
+double triangleRatio() { return kTriangleRatio; }
+
+/** The source surface, its features and the quad size wanted over it, then the working triangles the quads are laid out on. */
 struct Work
 {
     geo::Mesh src;
     std::optional<geo::MeshBvh> bvh;
+    bool closed = false;
     Surface s;
     bool symmetric = false;
     geo::SymmetryPlane plane;
-    double h = 0.0, h0 = 0.0, cf = 1.0;
-    std::vector<double> scale;
-    /** The spacing before gaps and thin parts capped it. */
-    std::vector<double> uncapped;
-    FieldOptions fo;
+    /** The mean quad edge asked for. */
+    double h0 = 0.0;
+    double adaptivity = 0.0;
+    /**
+     * Laid out by AutoRemesher's own stages as they come: its simplifier, isotropic triangles, curvature sizes and quad
+     * extraction. A smooth shape with nothing to hold (no creases, pins or asked poles) takes this, an open one with
+     * its borders capped: the stock extraction fills a border in or leaves it ragged.
+     */
+    bool stock = false;
+    /**
+     * Sized by the stock layout's curvature measure, with Lila's size controls as factors and limits on it. Creased
+     * shapes keep Lila's own size field: read across a crease, that measure calls every edge of a cube curved.
+     */
+    bool stockSizes = false;
+    /** The quads asked of the stock layout, over all of iso. */
+    double stockQuads = 0.0;
+    /**
+     * A symmetric remesh laid out on the closed whole: iso is the positive half joined to its mirror image, with its edges
+     * along the plane hard so the layout keeps them as one edge loop.
+     */
+    bool wholeLayout = false;
+    /**
+     * The caps an open shape's borders were closed with for the stock layout, which only lays out closed shapes well:
+     * the border edges are hard in iso, so the layout runs a loop along each, and the quads on the caps are dropped.
+     */
+    geo::Mesh caps;
+    std::optional<geo::MeshBvh> capsBvh;
+    /** The caps' part of iso's area. */
+    double capShare = 0.0;
+    /** Whether a point of the capped surface lies on a cap rather than on the source. */
+    bool onCap(const glm::dvec3& p) const
+    {
+        if (!capsBvh)
+            return false;
+        geo::BvhClosest onCaps, onSource;
+        if (!capsBvh->closestPoint(p, onCaps))
+            return false;
+        return !simpleBvh->closestPoint(p, onSource) || glm::distance(onCaps.point, p) < glm::distance(onSource.point, p);
+    }
+    /** The surface simplified to a few triangles per working triangle, which the working triangles lie on. */
+    geo::Mesh simple;
+    std::optional<geo::MeshBvh> simpleBvh;
+    /** The feature lines off the borders, and the borders. */
+    FeatureLines creases, border;
+    Surface iso;
+    /** Quad edge length per vertex of iso. */
+    std::vector<double> isoSize;
     std::string error;
 
     Work() = default;
     Work(const Work&) = delete;
 };
 
-/** Edges whose two triangles face apart (debug: LILA_SURFACE_DEBUG). */
-int foldedSurfaceEdges(const Surface& s)
+/**
+ * How much the quad size may grow per unit of distance across the surface. A layout can't follow a size that changes
+ * faster: where it is asked to, it strings poles along the change.
+ */
+constexpr double kSizeGrowth = 0.3;
+
+/** Caps size so it grows by at most rate times the distance from any smaller size, out along the edges. */
+void limitGrowth(const Surface& s, std::vector<double>& size, double rate)
 {
-    std::unordered_map<uint64_t, std::vector<Index>> by;
-    for (Index t = 0; t < Index(s.tris.size()); ++t)
-        for (int k = 0; k < 3; ++k)
-            by[edgeKey(s.tris[t][k], s.tris[t][(k + 1) % 3])].push_back(t);
-    auto normal = [&](Index t) {
-        const auto& f = s.tris[t];
-        return glm::cross(s.pos[f[1]] - s.pos[f[0]], s.pos[f[2]] - s.pos[f[0]]);
-    };
-    int n = 0;
-    for (const auto& [k, ts] : by)
-        if (ts.size() == 2)
+    const Index n = s.vertexCount();
+    std::vector<std::pair<double, Index>> heap;
+    for (Index v = 0; v < n; ++v)
+        heap.push_back({size[v], v});
+    std::make_heap(heap.begin(), heap.end(), std::greater<>());
+    while (!heap.empty())
+    {
+        std::pop_heap(heap.begin(), heap.end(), std::greater<>());
+        const auto [at, v] = heap.back();
+        heap.pop_back();
+        if (at > size[v])
+            continue;
+        for (Index k = s.adjStart[v]; k < s.adjStart[v + 1]; ++k)
         {
-            const glm::dvec3 a = normal(ts[0]), b = normal(ts[1]);
-            n += glm::dot(a, b) < -0.5 * glm::length(a) * glm::length(b);
+            const Index u = s.adj[k];
+            const double limit = size[v] + rate * glm::distance(s.pos[u], s.pos[v]);
+            if (size[u] > limit)
+            {
+                size[u] = limit;
+                heap.push_back({limit, u});
+                std::push_heap(heap.begin(), heap.end(), std::greater<>());
+            }
         }
-    return n;
+    }
+}
+
+/** How sizes follow curvature: the working triangles' importance curve, or the quads' scaling by curvature against its mean. */
+enum class CurvatureSizing
+{
+    Triangles,
+    Quads,
+};
+
+/**
+ * Per vertex, the edge length multiplier curvature asks for (autoremesher's measures). Triangles: the normal's turn per
+ * unit length round the vertex against its 75th percentile, squared into an importance, down to 0.35 where curved and
+ * up to 3 where flat. Quads: the steepest normal turn per length to a neighbour against the median, raised to -strength,
+ * 0.3 to 3.
+ */
+std::vector<double> curvatureMultiplier(const Surface& s, double strength, CurvatureSizing sizing)
+{
+    const Index n = s.vertexCount();
+    std::vector<double> mult(n, 1.0);
+    if (strength <= 0.0)
+        return mult;
+    std::vector<double> curv(n, 0.0);
+    // The bend across each edge between its two triangles; a feature edge's bend is a crease, not curvature.
+    tbb::parallel_for(Index(0), n, [&](Index v) {
+        double sum = 0.0, len = 0.0, steepest = 0.0;
+        for (Index k = s.adjStart[v]; k < s.adjStart[v + 1]; ++k)
+        {
+            const Index u = s.adj[k], e = s.adjEdge[k];
+            const double d = glm::distance(s.pos[u], s.pos[v]);
+            if (d <= 0.0)
+                continue;
+            double turn = 0.0;
+            if (s.edgeTriCount[e] == 2 && !(e < Index(s.edgeFeature.size()) && s.edgeFeature[e]))
+                turn = std::acos(std::clamp(glm::dot(s.triNormal[s.edgeTris[e][0]], s.triNormal[s.edgeTris[e][1]]), -1.0, 1.0));
+            sum += turn;
+            len += d;
+            steepest = std::max(steepest, turn / d);
+        }
+        curv[v] = sizing == CurvatureSizing::Triangles ? (len > 0.0 ? sum / len : 0.0) : steepest;
+    });
+    if (sizing == CurvatureSizing::Triangles)
+    {
+        std::vector<double> nonZero;
+        for (double c : curv)
+            if (c > 1e-12)
+                nonZero.push_back(c);
+        if (nonZero.empty())
+            return mult;
+        const size_t at = (nonZero.size() - 1) * 3 / 4;
+        std::nth_element(nonZero.begin(), nonZero.begin() + std::ptrdiff_t(at), nonZero.end());
+        const double reference = std::max(nonZero[at], 1e-12);
+        const double gain = std::min(strength, 2.0) * 7.0;
+        std::vector<double> importance(n);
+        double weighted = 0.0, area = 0.0;
+        for (Index v = 0; v < n; ++v)
+        {
+            const double x = std::min(4.0, curv[v] / reference);
+            importance[v] = 1.0 + gain * x * x;
+            weighted += s.area[v] * importance[v];
+            area += s.area[v];
+        }
+        const double mean = area > 0.0 ? weighted / area : 1.0;
+        for (Index v = 0; v < n; ++v)
+            mult[v] = std::clamp(std::sqrt(mean / importance[v]), 0.35, 3.0);
+        return mult;
+    }
+    // Against the median: the mean is pulled up by slivers and sharp spots until the rest reads as flat.
+    std::vector<double> sorted = curv;
+    std::nth_element(sorted.begin(), sorted.begin() + std::ptrdiff_t(sorted.size() / 2), sorted.end());
+    const double mean = sorted.empty() ? 0.0 : sorted[sorted.size() / 2];
+    if (mean <= 0.0)
+        return mult;
+    for (Index v = 0; v < n; ++v)
+        mult[v] = std::clamp(std::pow(std::max(curv[v] / mean, 1e-3), -strength), 0.3, 3.0);
+    return mult;
+}
+
+/**
+ * The quad edge length per vertex of s: painted density, curvature, joints and handles over the face budget, capped at
+ * gaps and thin parts.
+ */
+std::vector<double> sizeField(const Surface& s, const Work& w, const QuadRemeshOptions& opts, double faces, CurvatureSizing sizing)
+{
+    LILA_ZONE();
+
+    const Index n = s.vertexCount();
+    const double h0 = w.h0;
+    const Curvature curv = estimateCurvature(s);
+    std::vector<double> rho(n);
+    for (Index v = 0; v < n; ++v)
+        rho[v] = std::clamp(double(s.density[v]), 1.0 / 16.0, 16.0);
+    // Painted density spreads so the size changes over several quads; the cover wants it slowly varying.
+    const double meanEdge = std::max(s.meanEdgeLength(), 1e-12);
+    const int spread = int(std::clamp(3.0 * h0 / meanEdge, 2.0, 60.0));
+    for (int it = 0; it < spread; ++it)
+    {
+        std::vector<double> next(n);
+        for (Index v = 0; v < n; ++v)
+        {
+            double sum = rho[v];
+            for (Index k = s.adjStart[v]; k < s.adjStart[v + 1]; ++k)
+                sum += rho[s.adj[k]];
+            next[v] = sum / double(1 + s.adjStart[v + 1] - s.adjStart[v]);
+        }
+        rho = std::move(next);
+    }
+    const std::vector<double> bend = curvatureMultiplier(s, 4.0 * opts.adaptivity, sizing);
+    for (Index v = 0; v < n; ++v)
+        rho[v] /= bend[v] * bend[v];
+    // Joints get theirs after the spread, which would flatten a fold's narrow peak. A fold reads as a saddle only along
+    // its crease, so the band widens from there, halving every two quads.
+    if (opts.jointDensity > 0.0)
+    {
+        std::vector<double> joint = saddleAmount(s, 2.0 * h0);
+        const double perQuad = std::max(1.0, h0 / meanEdge);
+        const double decay = std::pow(0.5, 1.0 / (2.0 * perQuad));
+        const int rings = int(std::min(80.0, opts.jointDensityReach * perQuad));
+        for (int it = 0; it < rings; ++it)
+        {
+            std::vector<double> next = joint;
+            for (Index v = 0; v < n; ++v)
+                for (Index k = s.adjStart[v]; k < s.adjStart[v + 1]; ++k)
+                    next[v] = std::max(next[v], joint[s.adj[k]] * decay);
+            joint.swap(next);
+        }
+        for (Index v = 0; v < n; ++v)
+            rho[v] = std::clamp(rho[v] * (1.0 + 2.0 * opts.jointDensity * joint[v]), 1.0 / 16.0, 16.0);
+    }
+    if (!opts.densityHandles.empty())
+        for (Index v = 0; v < n; ++v)
+            rho[v] = std::clamp(rho[v] * handleDensity(s.pos[v], opts.densityHandles), 1.0 / 16.0, 16.0);
+    double h = h0;
+    if (opts.targetEdgeLength <= 0.0)
+    {
+        double weighted = 0.0;
+        for (Index v = 0; v < n; ++v)
+            weighted += s.area[v] * rho[v];
+        h = std::sqrt(weighted / faces);
+    }
+    std::vector<double> size(n);
+    for (Index v = 0; v < n; ++v)
+        size[v] = h / std::sqrt(rho[v]);
+    if (opts.resolveGaps && w.closed)
+        fitGaps(s, w.src, *w.bvh, size);
+    if (opts.edgesAround > 0 && w.closed)
+        fitThickness(s, w.src, *w.bvh, curv.magnitude, opts.edgesAround, 1.0, size);
+    limitGrowth(s, size, kSizeGrowth);
+    return size;
+}
+
+/**
+ * Makes a working surface mirror symmetric with an edge chain along the plane: points near the plane go onto it, the
+ * triangles still crossing are cut there, and the positive half is joined to its mirror image. Returns the chain.
+ */
+std::unordered_set<uint64_t> symmetrize(Surface& iso, const geo::SymmetryPlane& plane, int axis)
+{
+    // A point within reach of the plane moves onto it, so the cut passes no closer than that to any point it leaves:
+    // no slivers along the chain.
+    constexpr double kReach = 0.3;
+    for (Index v = 0; v < iso.vertexCount(); ++v)
+    {
+        double length = 0.0;
+        const Index n = iso.adjStart[v + 1] - iso.adjStart[v];
+        for (Index k = iso.adjStart[v]; k < iso.adjStart[v + 1]; ++k)
+            length += glm::distance(iso.pos[v], iso.pos[iso.adj[k]]);
+        if (n > 0 && std::abs(plane.distance(iso.pos[v])) < kReach * length / double(n))
+            iso.pos[v] = plane.project(iso.pos[v]);
+    }
+    clipSurface(iso, plane, axis);
+    iso.buildTopology();
+    std::vector<Index> mirrorOf;
+    Surface whole = mirrorSurface(iso, plane, mirrorOf);
+    std::unordered_set<uint64_t> chain;
+    for (size_t e = 0; e < iso.edges.size(); ++e)
+    {
+        const Index a = iso.edges[e][0], b = iso.edges[e][1];
+        if (iso.edgeTriCount[e] == 1 && mirrorOf[a] == a && mirrorOf[b] == b)
+            chain.insert(edgeKey(a, b));
+    }
+    iso = std::move(whole);
+    iso.buildTopology();
+    iso.buildGeometry();
+    return chain;
+}
+
+/**
+ * Closes an open working surface with a cap over each border loop: a fan to the loop's centre, remeshed to the working
+ * triangles' size with the loop left as it is. The border edges are returned, for the layout to hold as edge loops.
+ * False when a border isn't a plain loop, or the caps would be a large part of the result (a sheet seen from one side
+ * has a border all round it and a cap the size of itself).
+ */
+bool capBorders(Surface& iso, geo::Mesh& caps, std::unordered_set<uint64_t>& chain, double& capShare)
+{
+    constexpr double kLargestShare = 0.3;
+    // Each border edge the way its triangle runs it, so the caps face the same way round.
+    std::unordered_map<Index, Index> next;
+    for (const auto& t : iso.tris)
+        for (int k = 0; k < 3; ++k)
+        {
+            const Index a = t[k], b = t[(k + 1) % 3];
+            for (Index j = iso.adjStart[a]; j < iso.adjStart[a + 1]; ++j)
+                if (iso.adj[j] == b && iso.edgeTriCount[iso.adjEdge[j]] == 1)
+                {
+                    if (next.contains(a))
+                        return false;
+                    next[a] = b;
+                }
+        }
+    if (next.empty())
+        return true;
+    const double edge = iso.meanEdgeLength();
+    std::vector<Index> capCorners;
+    std::vector<std::array<Index, 3>> added;
+    std::vector<glm::dvec3> addedPoints;
+    double capArea = 0.0;
+    std::unordered_set<Index> done;
+    std::vector<std::vector<Index>> loops;
+    const double surfaceArea = iso.totalArea();
+    for (const auto& [first, unused] : next)
+    {
+        if (done.contains(first))
+            continue;
+        std::vector<Index> loop;
+        for (Index at = first; !done.contains(at); at = next.at(at))
+        {
+            done.insert(at);
+            loop.push_back(at);
+            if (!next.contains(next.at(at)))
+                return false;
+        }
+        if (loop.size() < 3 || next.at(loop.back()) != first)
+            return false;
+        // Before any cap is built: one too large isn't worth remeshing to find out.
+        glm::dvec3 middle(0.0);
+        for (Index v : loop)
+            middle += iso.pos[v] / double(loop.size());
+        for (size_t i = 0; i < loop.size(); ++i)
+            capArea += 0.5 * glm::length(glm::cross(iso.pos[loop[i]] - middle, iso.pos[loop[(i + 1) % loop.size()]] - middle));
+        if (capArea > kLargestShare * surfaceArea)
+            return false;
+        loops.push_back(std::move(loop));
+    }
+    capArea = 0.0;
+    for (const std::vector<Index>& loop : loops)
+    {
+        // A border left by deleting faces is a sawtooth, and the layout would turn at every tooth. The working border
+        // is evened out along itself; the result's border points go back onto the source's own.
+        for (int pass = 0; pass < 12; ++pass)
+        {
+            std::vector<glm::dvec3> evened(loop.size());
+            for (size_t i = 0; i < loop.size(); ++i)
+                evened[i] = 0.5 * iso.pos[loop[i]] + 0.25 * (iso.pos[loop[(i + loop.size() - 1) % loop.size()]] + iso.pos[loop[(i + 1) % loop.size()]]);
+            for (size_t i = 0; i < loop.size(); ++i)
+                iso.pos[loop[i]] = evened[i];
+        }
+        glm::dvec3 centre(0.0);
+        double longest = 0.0;
+        for (size_t i = 0; i < loop.size(); ++i)
+        {
+            centre += iso.pos[loop[i]] / double(loop.size());
+            longest = std::max(longest, glm::distance(iso.pos[loop[i]], iso.pos[loop[(i + 1) % loop.size()]]));
+        }
+        std::vector<AutoRemesher::Vector3> vertices;
+        std::vector<std::vector<size_t>> triangles;
+        for (Index v : loop)
+            vertices.push_back(AutoRemesher::Vector3(iso.pos[v].x, iso.pos[v].y, iso.pos[v].z));
+        vertices.push_back(AutoRemesher::Vector3(centre.x, centre.y, centre.z));
+        for (size_t i = 0; i < loop.size(); ++i)
+        {
+            // Against the surface's own direction along the edge.
+            triangles.push_back({(i + 1) % loop.size(), i, loop.size()});
+            capArea += 0.5 * glm::length(glm::cross(iso.pos[loop[i]] - centre, iso.pos[loop[(i + 1) % loop.size()]] - centre));
+        }
+        // No shorter than the loop's own edges, which stay whole: the cap has to meet the surface point for point.
+        AutoRemesher::IsotropicRemesher remesher(vertices, triangles);
+        remesher.setTargetEdgeLength(std::max(edge, longest));
+        remesher.setSharpEdgeDegrees(180.0);
+        if (!remesher.remesh())
+            return false;
+        std::map<std::array<double, 3>, Index> onLoop;
+        for (Index v : loop)
+            onLoop[{iso.pos[v].x, iso.pos[v].y, iso.pos[v].z}] = v;
+        std::vector<Index> id;
+        size_t met = 0;
+        for (const auto& p : remesher.remeshedVertices())
+        {
+            const glm::dvec3 at(p.x(), p.y(), p.z());
+            if (auto it = onLoop.find({at.x, at.y, at.z}); it != onLoop.end())
+            {
+                id.push_back(it->second);
+                ++met;
+            }
+            else
+            {
+                id.push_back(Index(iso.pos.size() + addedPoints.size()));
+                addedPoints.push_back(at);
+            }
+        }
+        if (met != loop.size())
+            return false;
+        for (const auto& t : remesher.remeshedTriangles())
+            added.push_back({id[t[0]], id[t[1]], id[t[2]]});
+        for (size_t i = 0; i < loop.size(); ++i)
+            chain.insert(edgeKey(loop[i], loop[(i + 1) % loop.size()]));
+    }
+    capShare = capArea / (capArea + surfaceArea);
+    iso.pos.insert(iso.pos.end(), addedPoints.begin(), addedPoints.end());
+    iso.density.resize(iso.pos.size(), 1.0f);
+    std::vector<Index> sizes(added.size(), 3);
+    for (const auto& t : added)
+    {
+        iso.tris.push_back(t);
+        capCorners.insert(capCorners.end(), t.begin(), t.end());
+    }
+    caps = geo::Mesh::fromPolygons(iso.pos, sizes, capCorners);
+    iso.buildTopology();
+    iso.buildGeometry();
+    return true;
+}
+
+/** Working triangles per quad for the stock stages, which size their quads off the triangles' mean edge. */
+constexpr double kStockTriangles = 6.0;
+
+/**
+ * The stock stages' working triangles. False when the simplified surface turns out to have creases to hold, which the
+ * stock isotropic pass can't be told about; s is then spent and has to be read again.
+ */
+bool prepareStock(Work& w, const QuadRemeshOptions& opts, double faces, double halves, Stopwatch& clock)
+{
+    LILA_ZONE();
+
+    Surface& s = w.s;
+    std::vector<AutoRemesher::Vector3> vertices;
+    vertices.reserve(s.pos.size());
+    for (const glm::dvec3& p : s.pos)
+        vertices.push_back(AutoRemesher::Vector3(p.x, p.y, p.z));
+    std::vector<std::vector<size_t>> triangles;
+    triangles.reserve(s.tris.size());
+    for (const auto& t : s.tris)
+        triangles.push_back({size_t(t[0]), size_t(t[1]), size_t(t[2])});
+    const double voxel = std::sqrt(s.totalArea() / (kStockTriangles * faces * halves) / (0.86602540378 * 0.5));
+    std::vector<AutoRemesher::Vector3> simpleVertices;
+    std::vector<std::vector<size_t>> simpleTriangles;
+    const AutoRemesher::ProgressHandler progress = [](float, const char*) { Budget::checkpoint(); };
+    // Creases are Lila's to find (by angle and length, below); the stock pass's own angle test takes a sculpt's every
+    // sharp wrinkle for one.
+    AutoRemesher::AutoRemesher::resample(vertices, triangles, voxel, 4.0 * opts.adaptivity, 180.0, 0.0, 0, nullptr, nullptr, &progress,
+                                         &simpleVertices, &simpleTriangles);
+    auto fill = [](Surface& to, const std::vector<AutoRemesher::Vector3>& v, const std::vector<std::vector<size_t>>& t) {
+        to.pos.clear();
+        to.tris.clear();
+        for (const auto& p : v)
+            to.pos.push_back(glm::dvec3(p.x(), p.y(), p.z()));
+        for (const auto& f : t)
+            to.tris.push_back({Index(f[0]), Index(f[1]), Index(f[2])});
+        to.density.assign(to.pos.size(), 1.0f);
+        to.hard.clear();
+        to.buildTopology();
+        to.buildGeometry();
+    };
+    fill(s, simpleVertices, simpleTriangles);
+    s.detectFeatures(opts.sharpAngle, 75.0, 2.0 * w.h0);
+    for (size_t e = 0; e < s.edges.size(); ++e)
+        if (s.edgeFeature[e] && !s.edgeBoundary[e])
+            return false;
+    w.border.build(s, 0.5 * w.h0, true);
+    clock.lap("surface");
+    {
+        std::vector<Index> sizes(s.tris.size(), 3), corners;
+        corners.reserve(s.tris.size() * 3);
+        for (const auto& t : s.tris)
+            corners.insert(corners.end(), t.begin(), t.end());
+        w.simple = geo::Mesh::fromPolygons(s.pos, sizes, corners);
+        w.simpleBvh.emplace(w.simple);
+    }
+    fill(w.iso, vertices, triangles);
+    if (w.symmetric)
+    {
+        w.iso.hard = symmetrize(w.iso, w.plane, opts.symmetryAxis);
+        w.wholeLayout = true;
+    }
+    if (!w.closed)
+    {
+        if (!capBorders(w.iso, w.caps, w.iso.hard, w.capShare))
+        {
+            w.iso = Surface();
+            w.wholeLayout = false;
+            return false;
+        }
+        w.capsBvh.emplace(w.caps);
+    }
+    w.iso.detectFeatures(-1.0, 75.0, 0.0);
+    w.isoSize.assign(w.iso.pos.size(), w.h0);
+    w.stock = w.stockSizes = true;
+    // The quads on the caps are laid out too and then dropped.
+    w.stockQuads = (opts.targetEdgeLength > 0.0 ? s.totalArea() / (w.h0 * w.h0) : faces * halves) / (1.0 - w.capShare);
+    if (std::getenv("LILA_STAGE_LOG"))
+        std::fprintf(stderr, "stock triangles: %zu simplified, %zu working, edge %g\n", s.tris.size(), w.iso.tris.size(), voxel);
+    Budget::note(std::to_string(w.iso.tris.size()) + " working triangles for about " + std::to_string(int(faces * halves)) + " faces");
+    clock.lap("isotropic");
+    return true;
 }
 
 void prepareWork(Work& w, const geo::Mesh& source, const QuadRemeshOptions& opts, Stopwatch& clock)
@@ -1280,39 +1228,42 @@ void prepareWork(Work& w, const geo::Mesh& source, const QuadRemeshOptions& opts
     }
     w.src = source;
     w.src.compact();
+    w.adaptivity = opts.adaptivity;
     w.bvh.emplace(w.src);
-    const geo::MeshBvh& bvh = *w.bvh;
+    w.closed = isClosed(w.src);
     clock.lap("bvh");
 
     Surface& s = w.s;
     s = surfaceFromMesh(w.src, opts.useHardEdges);
     s.pins = opts.pinnedPoints;
-    if (std::getenv("LILA_SURFACE_DEBUG"))
-        std::fprintf(stderr, "surface %s: %zu tris, %d folded edges\n", "source", s.tris.size(), foldedSurfaceEdges(s));
     w.symmetric = opts.symmetryAxis >= 0 && opts.symmetryAxis < 3;
-    const bool symmetric = w.symmetric;
-    if (symmetric)
+    if (w.symmetric)
     {
         w.plane.normal = glm::dvec3(0.0);
         w.plane.normal[opts.symmetryAxis] = 1.0;
     }
     // Sizes are for the half that is remeshed; the shape is simplified whole and clipped after, since simplifying the
     // clipped half folds triangles beside its cut border.
-    const double halves = symmetric ? 2.0 : 1.0;
+    const double halves = w.symmetric ? 2.0 : 1.0;
     const double area = s.totalArea() / halves;
     const double faces = std::max(8.0, double(opts.targetFaces) / halves);
-    const double h0 = opts.targetEdgeLength > 0.0 ? opts.targetEdgeLength : std::sqrt(area / faces);
-    const double cf = opts.pureQuads ? 2.0 : 1.0;
-    w.cf = cf;
-    w.h0 = h0;
-    double workLength = cf * h0 / 4.0;
-    const double workTris = std::max(64.0, area / (0.433 * workLength * workLength));
-    bool decimated = double(s.tris.size()) > 1.5 * halves * workTris;
+    w.h0 = opts.targetEdgeLength > 0.0 ? opts.targetEdgeLength : std::sqrt(area / faces);
+    const double triEdge = w.h0 / triangleRatio();
+    const double workTris = std::max(64.0, area / (0.433 * triEdge * triEdge));
+    // Anything the stock stages can't hold takes Lila's own feature-aware triangles and sizes.
+    const bool plain = s.hard.empty() && opts.pinnedPoints.empty() && opts.featureGuides.empty() && !opts.poles &&
+                       !std::getenv("LILA_QR_OWN");
+    if (plain)
+    {
+        if (prepareStock(w, opts, faces, halves, clock))
+            return;
+        s = surfaceFromMesh(w.src, opts.useHardEdges);
+        s.pins = opts.pinnedPoints;
+    }
+    const bool decimated = double(s.tris.size()) > 8.0 * halves * workTris;
     if (decimated)
-        decimateSurface(s, Index(halves * workTris));
-    if (std::getenv("LILA_SURFACE_DEBUG"))
-        std::fprintf(stderr, "surface %s: %zu tris, %d folded edges\n", "decimated", s.tris.size(), foldedSurfaceEdges(s));
-    if (symmetric)
+        decimateSurface(s, Index(4.0 * halves * workTris));
+    if (w.symmetric)
     {
         clipSurface(s, w.plane, opts.symmetryAxis);
         if (s.tris.empty())
@@ -1321,137 +1272,214 @@ void prepareWork(Work& w, const geo::Mesh& source, const QuadRemeshOptions& opts
             return;
         }
     }
-    refineSurface(s, 1.5 * workLength);
-    embedFeatureGuides(s, opts.featureGuides, bvh);
-    if (std::getenv("LILA_SURFACE_DEBUG"))
-        std::fprintf(stderr, "surface %s: %zu tris, %d folded edges\n", "refined", s.tris.size(), foldedSurfaceEdges(s));
-    auto prepare = [&]() {
-        s.buildTopology();
-        s.buildGeometry();
-        s.detectFeatures(opts.sharpAngle, 75.0, 2.0 * h0);
-    };
-    prepare();
-    if (decimated)
+    // Long source triangles split down first: remeshing straight from a few long slivers piles up short edges it can't
+    // collapse.
+    refineSurface(s, triEdge);
+    if (!opts.featureGuides.empty())
+        imprintGuides(s, opts.featureGuides);
+    s.buildTopology();
+    s.buildGeometry();
+    s.detectFeatures(opts.sharpAngle, 75.0, 2.0 * w.h0);
+    if (decimated && opts.smoothInput)
     {
-        // Simplification leaves slivers that make the fields noisy.
-        smoothSurface(s, bvh, 8);
-        prepare();
-    if (std::getenv("LILA_SURFACE_DEBUG"))
-        std::fprintf(stderr, "surface %s: %zu tris, %d folded edges\n", "smoothed", s.tris.size(), foldedSurfaceEdges(s));
+        smoothSurface(s, *w.bvh, 8);
+        s.buildGeometry();
+        s.detectFeatures(opts.sharpAngle, 75.0, 2.0 * w.h0);
     }
     clock.lap("surface");
 
-    // Gaps across air only bridge on a closed shape; an open sheet's folds remesh fine as they are.
-    const bool closedSource = isClosed(w.src);
-
-    // Lattice spacing per vertex from painted density and curvature, normalized to the face budget.
-    std::vector<double>& scale = w.scale;
-    double h = h0;
-    for (int pass = 0; pass < 2; ++pass)
+    w.border.build(s, 0.5 * w.h0, true);
+    w.creases.build(s, 0.5 * w.h0, false, true);
+    std::vector<double> target = sizeField(s, w, opts, faces, CurvatureSizing::Triangles);
+    if (std::getenv("LILA_STAGE_LOG"))
     {
-        const Index n = s.vertexCount();
-        Curvature curv = estimateCurvature(s);
-        std::vector<double> rho(n);
-        for (Index v = 0; v < n; ++v)
-        {
-            double r = s.density[v];
-            if (opts.adaptivity > 0.0)
-                r *= std::pow(1.0 + 2.0 * curv.magnitude[v] * h0, opts.adaptivity);
-            rho[v] = std::clamp(r, 1.0 / 8.0, 8.0);
-        }
-        // Spread far enough that the spacing changes over several lattice cells; extraction needs it slowly varying.
-        const int spread = int(std::clamp(3.0 * cf * h0 / std::max(workLength, 1e-12), 6.0, 60.0));
-        for (int it = 0; it < spread; ++it)
-        {
-            std::vector<double> next(n);
-            for (Index v = 0; v < n; ++v)
-            {
-                double sum = rho[v];
-                for (Index k = s.adjStart[v]; k < s.adjStart[v + 1]; ++k)
-                    sum += rho[s.adj[k]];
-                next[v] = sum / double(1 + s.adjStart[v + 1] - s.adjStart[v]);
-            }
-            rho = std::move(next);
-        }
-        // Joints get theirs after the spread, which would flatten a fold's narrow peak. A fold reads as a saddle only along
-        // its crease, so the band widens from there, halving every two cells.
-        if (opts.jointDensity > 0.0)
-        {
-            std::vector<double> joint = saddleAmount(s, cf * h0);
-            const double perCell = std::max(1.0, cf * h0 / std::max(s.meanEdgeLength(), 1e-12));
-            const double decay = std::pow(0.5, 1.0 / (2.0 * perCell));
-            const int rings = int(std::min(80.0, opts.jointDensityReach * perCell));
-            for (int it = 0; it < rings; ++it)
-            {
-                std::vector<double> next = joint;
-                for (Index v = 0; v < n; ++v)
-                    for (Index k = s.adjStart[v]; k < s.adjStart[v + 1]; ++k)
-                        next[v] = std::max(next[v], joint[s.adj[k]] * decay);
-                joint.swap(next);
-            }
-            for (Index v = 0; v < n; ++v)
-                rho[v] = std::clamp(rho[v] * (1.0 + 2.0 * opts.jointDensity * joint[v]), 1.0 / 8.0, 8.0);
-        }
-        // Handles ease out over their own radius already; spreading them as well would flatten their peak.
-        if (!opts.densityHandles.empty())
-            for (Index v = 0; v < n; ++v)
-                rho[v] = std::clamp(rho[v] * handleDensity(s.pos[v], opts.densityHandles), 1.0 / 8.0, 8.0);
-        if (opts.targetEdgeLength <= 0.0)
-        {
-            double weighted = 0.0;
-            for (Index v = 0; v < n; ++v)
-                weighted += s.area[v] * rho[v];
-            h = std::sqrt(weighted / faces);
-        }
-        scale.resize(n);
-        for (Index v = 0; v < n; ++v)
-            scale[v] = cf * h / std::sqrt(rho[v]);
-        w.uncapped = scale;
-        if (opts.resolveGaps && closedSource)
-            fitGaps(s, w.src, bvh, scale);
-        if (opts.edgesAround > 0 && closedSource)
-            fitThickness(s, w.src, bvh, curv.magnitude, opts.edgesAround, cf, scale);
-        double minScale = std::numeric_limits<double>::max();
-        for (Index v = 0; v < n; ++v)
-            minScale = std::min(minScale, scale[v]);
-        if (pass == 1 || minScale >= 2.5 * workLength)
-            break;
-        // Denser spots need a finer working mesh to resolve their lattice.
-        workLength = minScale / 2.5;
-        refineSurface(s, 1.5 * workLength);
-        prepare();
+        std::vector<double> sorted = target;
+        std::sort(sorted.begin(), sorted.end());
+        int borders = 0, corners = 0;
+        for (size_t e = 0; e < s.edges.size(); ++e)
+            borders += s.edgeBoundary[e];
+        for (Index v = 0; v < s.vertexCount(); ++v)
+            corners += s.feature[v] == FeatureKind::Corner;
+        std::fprintf(stderr, "surface: %zu triangles, h0 %g, quad size p10 %g p50 %g p90 %g, mean edge %g, %zu hard, %d border edges, %d corners\n",
+                     s.tris.size(), w.h0, sorted[sorted.size() / 10], sorted[sorted.size() / 2], sorted[sorted.size() * 9 / 10], s.meanEdgeLength(),
+                     s.hard.size(), borders, corners);
     }
-    w.h = h;
     clock.lap("density");
-
+    for (double& t : target)
+        t /= triangleRatio();
+    // The working triangles lie on the simplified surface, which keeps the shape but not the sculpted pores that would
+    // read as curvature everywhere.
     {
-        std::vector<double> sorted = scale;
-        std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2, sorted.end());
-        w.fo.scale = sorted[sorted.size() / 2];
+        std::vector<Index> sizes(s.tris.size(), 3), corners;
+        corners.reserve(s.tris.size() * 3);
+        for (const auto& t : s.tris)
+            corners.insert(corners.end(), t.begin(), t.end());
+        w.simple = geo::Mesh::fromPolygons(s.pos, sizes, corners);
+        w.simpleBvh.emplace(w.simple);
     }
-    w.fo.guides = opts.guides;
-    w.fo.softCreaseAngle = opts.softCreaseAngle;
-    w.fo.jointStiffness = opts.jointPoleAvoidance;
-    s.thinCorners(scale);
-    Budget::note(std::to_string(s.tris.size()) + " working triangles for about " + std::to_string(int(faces)) + " faces");
+    w.iso = remeshIsotropic(s, target, *w.simpleBvh, w.creases, w.border);
+    w.iso.buildTopology();
+    w.iso.buildGeometry();
+    // Its features are the hard set it carries over, not new creases read off the coarser triangles.
+    w.iso.detectFeatures(-1.0, 75.0, 0.0);
+    // The quads' own sizes, measured on the working triangles where curvature reads at about the quads' scale.
+    w.isoSize = sizeField(w.iso, w, opts, faces, CurvatureSizing::Quads);
+    // Creased is a crease for every fifty quads' worth of surface or so: a sculpt's few stray sharp edges don't count.
+    double creased = 0.0;
+    for (size_t e = 0; e < w.iso.edges.size(); ++e)
+        if (w.iso.edgeFeature[e] && !w.iso.edgeBoundary[e])
+            creased += glm::distance(w.iso.pos[w.iso.edges[e][0]], w.iso.pos[w.iso.edges[e][1]]);
+    w.stockSizes = creased * w.h0 < 0.02 * w.iso.totalArea() && !std::getenv("LILA_QR_OWN_SIZES");
+    if (w.symmetric && !std::getenv("LILA_QR_HALF"))
+    {
+        // Laid out whole like the stock path: the half joined to its mirror image, its cut an edge chain to hold.
+        std::vector<Index> mirrorOf;
+        Surface whole = mirrorSurface(w.iso, w.plane, mirrorOf);
+        const Index n = w.iso.vertexCount();
+        for (size_t e = 0; e < w.iso.edges.size(); ++e)
+        {
+            const Index a = w.iso.edges[e][0], b = w.iso.edges[e][1];
+            if (w.iso.edgeTriCount[e] == 1 && mirrorOf[a] == a && mirrorOf[b] == b)
+                whole.hard.insert(edgeKey(a, b));
+        }
+        w.isoSize.resize(whole.pos.size());
+        for (Index v = n; v < whole.vertexCount(); ++v)
+            w.isoSize[v] = w.isoSize[mirrorOf[v]];
+        w.iso = std::move(whole);
+        w.iso.buildTopology();
+        w.iso.buildGeometry();
+        w.iso.detectFeatures(-1.0, 75.0, 0.0);
+        w.wholeLayout = true;
+    }
+    w.stockQuads = opts.targetEdgeLength > 0.0 ? w.iso.totalArea() / (w.h0 * w.h0) : faces * (w.wholeLayout ? halves : 1.0);
+    if (const char* dump = std::getenv("LILA_ISO_DUMP"))
+        if (FILE* f = std::fopen(dump, "w"))
+        {
+            for (const glm::dvec3& p : w.iso.pos)
+                std::fprintf(f, "v %.9g %.9g %.9g\n", p.x, p.y, p.z);
+            for (const auto& t : w.iso.tris)
+                std::fprintf(f, "f %d %d %d\n", int(t[0] + 1), int(t[1] + 1), int(t[2] + 1));
+            for (uint64_t key : w.iso.hard)
+                std::fprintf(f, "l %d %d\n", int(key >> 32) + 1, int(key & 0xffffffffu) + 1);
+            std::fclose(f);
+        }
+    Budget::note(std::to_string(w.iso.tris.size()) + " working triangles for about " + std::to_string(int(faces)) + " faces");
+    clock.lap("isotropic");
 }
 
-/** Each pole's triangle on the working surface: the one with the nearest centre. Poles behind the symmetry plane drop. */
+/** The working triangles in the form the field and cover solvers take. */
+struct CoverInput
+{
+    std::vector<AutoRemesher::Vector3> vertices;
+    std::vector<std::vector<size_t>> triangles;
+    std::unordered_set<uint64_t> features;
+    std::vector<size_t> pinned;
+    std::vector<double> faceSize;
+    std::vector<AutoRemesher::FaceHint> hints;
+    std::vector<double> stiffness;
+    std::vector<AutoRemesher::Vector3> guidance;
+    /** For the stock layout: a factor on its own sizes, and the longest edge allowed, each empty when it does nothing. */
+    std::vector<double> sizeFactor, sizeLimit;
+    /** Per triangle, whether it is on a cap. Empty without caps. */
+    std::vector<uint8_t> onCap;
+    /** The field turned through corners too sharp for it to lie along both sides, and those sides' corners held. */
+    std::vector<std::pair<size_t, AutoRemesher::Vector3>> fieldOverrides;
+    std::unordered_set<size_t> forcedCorners;
+};
+
+/**
+ * What Lila's own size controls ask of the stock layout, per working triangle. factor: painted density, joints and
+ * handles, as a multiple of the size curvature gives. limit: the longest edge gaps and thin parts allow, 0 where they
+ * don't care. Each stays empty when nothing asks.
+ */
+void stockSizes(const Work& w, const QuadRemeshOptions& opts, std::vector<double>& factor, std::vector<double>& limit)
+{
+    const Surface& iso = w.iso;
+    auto perTriangle = [&](const std::vector<double>& at) {
+        std::vector<double> out(iso.tris.size());
+        for (size_t t = 0; t < iso.tris.size(); ++t)
+            out[t] = (at[iso.tris[t][0]] + at[iso.tris[t][1]] + at[iso.tris[t][2]]) / 3.0;
+        return out;
+    };
+    bool painted = false;
+    for (float d : iso.density)
+        painted = painted || d != 1.0f;
+    if (painted || opts.jointDensity > 0.0 || !opts.densityHandles.empty())
+    {
+        QuadRemeshOptions flat = opts;
+        flat.adaptivity = 0.0;
+        flat.resolveGaps = false;
+        flat.edgesAround = 0;
+        flat.targetEdgeLength = w.h0;
+        const std::vector<double> size = sizeField(iso, w, flat, 1.0, CurvatureSizing::Quads);
+        bool any = false;
+        for (double v : size)
+            any = any || std::abs(v / w.h0 - 1.0) > 0.02;
+        if (any)
+        {
+            factor = perTriangle(size);
+            for (double& f : factor)
+                f /= w.h0;
+        }
+    }
+    if (w.closed && (opts.resolveGaps || opts.edgesAround > 0))
+    {
+        // The stock sizes run from a third of the mean to three times it, and each fit looks only as far as the size it
+        // is given and stops at a fraction of it: one from each end and the mean, the tightest of the three.
+        constexpr double kLargest = 3.0;
+        const std::vector<double> curvature = opts.edgesAround > 0 ? estimateCurvature(iso).magnitude : std::vector<double>();
+        std::vector<double> size(iso.pos.size(), kLargest * w.h0);
+        for (double from : {kLargest * w.h0, w.h0, w.h0 / kLargest})
+        {
+            std::vector<double> fitted(iso.pos.size(), from);
+            if (opts.resolveGaps)
+                fitGaps(iso, w.src, *w.bvh, fitted);
+            // A little under the ask: the layout rounds the count round a part to a whole number, down as often as up.
+            if (opts.edgesAround > 0)
+                fitThickness(iso, w.src, *w.bvh, curvature, opts.edgesAround, 0.92, fitted);
+            for (size_t v = 0; v < size.size(); ++v)
+                if (fitted[v] < 0.98 * from)
+                    size[v] = std::min(size[v], fitted[v]);
+        }
+        bool any = false;
+        for (double& v : size)
+        {
+            any = any || v < 0.98 * kLargest * w.h0;
+            if (v >= 0.98 * kLargest * w.h0)
+                v = 0.0;
+        }
+        if (any)
+        {
+            // A triangle is limited by its tightest corner; a corner with no limit doesn't loosen the others.
+            limit.assign(iso.tris.size(), 0.0);
+            for (size_t t = 0; t < iso.tris.size(); ++t)
+                for (Index v : iso.tris[t])
+                    if (size[v] > 0.0)
+                        limit[t] = limit[t] > 0.0 ? std::min(limit[t], size[v]) : size[v];
+        }
+    }
+}
+
+void turnSharpCorners(const Surface& iso, CoverInput& in);
+
+AutoRemesher::Vector3 toAr(const glm::dvec3& p) { return AutoRemesher::Vector3(p.x, p.y, p.z); }
+glm::dvec3 fromAr(const AutoRemesher::Vector3& p) { return glm::dvec3(p.x(), p.y(), p.z()); }
+
+/** Each pole's working triangle: the one with the nearest centre. Poles behind the symmetry plane drop. */
 std::vector<FieldSingularity> polesOnSurface(const Work& w, const std::vector<Pole>& poles)
 {
     std::vector<FieldSingularity> out;
     for (const Pole& p : poles)
     {
-        if (p.valence == 4 || (w.symmetric && w.plane.distance(p.position) < 0.0))
+        if (p.valence == 4 || (w.symmetric && !w.wholeLayout && w.plane.distance(p.position) < 0.0))
             continue;
         Index best = kInvalid;
         double bestD = std::numeric_limits<double>::max();
-        for (size_t t = 0; t < w.s.tris.size(); ++t)
+        for (size_t t = 0; t < w.iso.tris.size(); ++t)
         {
-            const auto& tri = w.s.tris[t];
-            glm::dvec3 c = (w.s.pos[tri[0]] + w.s.pos[tri[1]] + w.s.pos[tri[2]]) / 3.0;
-            double d = glm::dot(c - p.position, c - p.position);
-            if (d < bestD)
+            const auto& tri = w.iso.tris[t];
+            const glm::dvec3 c = (w.iso.pos[tri[0]] + w.iso.pos[tri[1]] + w.iso.pos[tri[2]]) / 3.0;
+            if (const double d = glm::dot(c - p.position, c - p.position); d < bestD)
             {
                 bestD = d;
                 best = Index(t);
@@ -1464,180 +1492,1761 @@ std::vector<FieldSingularity> polesOnSurface(const Work& w, const std::vector<Po
 }
 
 /**
- * The cross field of a symmetric shape, solved over the whole shape (the half joined to its reflection) and the same
- * either side by construction: the seam is held along the plane, so it can be a straight edge loop, and each vertex
- * takes the mean of its own cross and its reflection's. Its poles are placed once: close opposite pairs cancel, and the
- * rest move at least two quads off the seam and out of saddles (crotch, armpit, finger webs), mirrored pole for pole.
- * Returns the field on the half's vertices; s's seam border loses the corners clipping made there.
+ * The flow for a symmetric remesh: solved on the half joined to its mirror image, so it runs on across the plane as it
+ * would on the whole shape instead of bending to meet the cut as a border, and held along the plane there so the
+ * middle stays one edge loop. Per triangle of the half.
  */
-/** Corners under 30 degrees plus crowded poles above which a patch layout is laid out again in the seamless charts. */
-constexpr Index kRescueCrowding = 40;
-
-/** Saddle amount (saddleAmount at the field's spacing) above which a pole counts as in a joint. */
-constexpr double kPoleSaddle = 0.15;
-
-std::vector<glm::dvec3> symmetricField(Work& w, const QuadRemeshOptions& opts)
+std::vector<AutoRemesher::Vector3> symmetricFlow(const Work& w, const CoverInput& in, std::string& error)
 {
     LILA_ZONE();
 
-    Surface& s = w.s;
-    const geo::SymmetryPlane& plane = w.plane;
+    const Surface& half = w.iso;
     std::vector<Index> mirrorOf;
-    Surface whole = mirrorSurface(s, plane, mirrorOf);
-    whole.buildTopology();
-    whole.buildGeometry();
-    whole.detectFeatures(opts.sharpAngle, 75.0, 2.0 * w.h0);
-    const Index n = s.vertexCount(), nt = Index(s.tris.size());
-    if (const char* dump = std::getenv("LILA_WHOLE_DUMP"))
-        if (FILE* f = std::fopen(dump, "w"))
-        {
-            for (Index v = 0; v < whole.vertexCount(); ++v)
-                std::fprintf(f, "v %.9g %.9g %.9g\n", whole.pos[v].x, whole.pos[v].y, whole.pos[v].z);
-            for (const auto& t : whole.tris)
-                std::fprintf(f, "f %d %d %d\n", int(t[0] + 1), int(t[1] + 1), int(t[2] + 1));
-            for (Index v = 0; v < whole.vertexCount(); ++v)
-                if (whole.feature[v] != FeatureKind::None)
-                    std::fprintf(f, "# feature %d %d\n", int(v), int(whole.feature[v]));
-            std::fclose(f);
-        }
-    std::vector<double> scale(whole.vertexCount());
-    for (Index v = 0; v < n; ++v)
-        scale[v] = scale[mirrorOf[v]] = w.scale[v];
-
-    auto onSeam = [&](Index v) { return mirrorOf[v] == v; };
-    auto seamTangent = [&](Index v) { return glm::normalize(glm::cross(plane.normal, whole.normal[v])); };
-    FieldOptions fo = w.fo;
-    for (Index v = 0; v < n; ++v)
-        if (onSeam(v) && whole.feature[v] == FeatureKind::None)
-            fo.aligned.push_back({v, seamTangent(v)});
-
-    auto reflectDir = [&](const glm::dvec3& d) { return d - 2.0 * glm::dot(d, plane.normal) * plane.normal; };
-    auto symmetrize = [&](std::vector<glm::dvec3>& q) {
-        for (Index v = 0; v < n; ++v)
-        {
-            const glm::dvec3 nv = whole.normal[v], e1 = anyTangent(nv), e2 = glm::cross(nv, e1);
-            auto power = [&](glm::dvec3 d) {
-                d -= nv * glm::dot(nv, d);
-                return std::polar(1.0, 4.0 * std::atan2(glm::dot(d, e2), glm::dot(d, e1)));
-            };
-            const std::complex<double> z = power(q[v]) + power(reflectDir(q[mirrorOf[v]]));
-            if (std::abs(z) < 1e-12)
-                continue;
-            const double a = std::arg(z) / 4.0;
-            q[v] = std::cos(a) * e1 + std::sin(a) * e2;
-            q[mirrorOf[v]] = reflectDir(q[v]);
-        }
-    };
-    std::vector<glm::dvec3> q = solveCrossField(whole, fo);
-    symmetrize(q);
-
-    // Two quads off the seam (with pure quads the field's spacing is two quads) and out of saddles.
-    const std::vector<double> saddle = saddleAmount(whole, w.fo.scale);
-    auto centre = [&](Index t) { return (whole.pos[whole.tris[t][0]] + whole.pos[whole.tris[t][1]] + whole.pos[whole.tris[t][2]]) / 3.0; };
-    auto allowed = [&](Index t) {
-        const auto& tri = whole.tris[t];
-        const double cell = (scale[tri[0]] + scale[tri[1]] + scale[tri[2]]) / 3.0;
-        const double sad = std::max({saddle[tri[0]], saddle[tri[1]], saddle[tri[2]]});
-        return t < nt && plane.distance(centre(t)) >= 2.0 * cell / w.cf && sad < kPoleSaddle;
-    };
-    std::vector<FieldSingularity> half;
-    for (const FieldSingularity& p : fieldSingularities(whole, q))
-        if (p.tri < nt)
-            half.push_back(p);
-    const size_t found = half.size();
-    half = spreadPoles(whole, cancelClosePoles(whole, half, scale, 1.5), scale, 1.0, allowed);
-    std::vector<FieldSingularity> poles = half;
-    for (const FieldSingularity& p : half)
-        poles.push_back({p.tri + nt, p.index});
-    PrescribedTwist pt = prescribeSingularities(whole, poles);
-    if (pt.error.empty())
+    Surface whole = mirrorSurface(half, w.plane, mirrorOf);
+    const size_t nt = half.tris.size();
+    std::vector<AutoRemesher::Vector3> vertices;
+    for (const glm::dvec3& p : whole.pos)
+        vertices.push_back(toAr(p));
+    std::vector<std::vector<size_t>> triangles;
+    for (const auto& t : whole.tris)
+        triangles.push_back({size_t(t[0]), size_t(t[1]), size_t(t[2])});
+    // The cut is no feature of the whole; every other feature is, mirrored.
+    auto onPlane = [&](Index v) { return mirrorOf[v] == v; };
+    std::unordered_set<uint64_t> features;
+    for (uint64_t key : in.features)
     {
-        // Weaker pull to the curvature lets the field keep to the poles it is given instead of growing new ones beside them.
-        fo.curvatureWeight *= std::getenv("LILA_PRESCRIBED_ALIGN") ? std::atof(std::getenv("LILA_PRESCRIBED_ALIGN")) : 0.3;
-        fo.twist = std::move(pt.twist);
-        q = solveCrossField(whole, fo);
-        symmetrize(q);
-    }
-    else
-        Budget::note("pole placement: " + pt.error);
-    const size_t after = fieldSingularities(whole, q).size();
-    Budget::note(std::to_string(found) + " poles on the half, " + std::to_string(half.size()) + " placed, " + std::to_string(after) + " in the whole field");
-    if (std::getenv("LILA_POLE_DEBUG"))
-    {
-        std::fprintf(stderr, "symmetric field: %zu half poles found, %zu placed, %zu in the final whole field\n", found, half.size(), after);
-        std::unordered_map<Index, int> want;
-        for (const FieldSingularity& p : poles)
-            want[p.tri] += p.index;
-        for (const FieldSingularity& p : fieldSingularities(whole, q))
-        {
-            auto it = want.find(p.tri);
-            if (it != want.end() && it->second == p.index)
-            {
-                want.erase(it);
-                continue;
-            }
-            const auto& tri = whole.tris[p.tri];
-            int feat = 0;
-            for (Index v : tri)
-                feat = std::max(feat, int(whole.feature[v]) + (mirrorOf[v] == v ? 10 : 0));
-            const glm::dvec3 c = centre(p.tri);
-            std::fprintf(stderr, "  extra pole %+d at %.1f %.1f %.1f feature %d\n", p.index, c.x, c.y, c.z, feat);
-        }
-        for (Index v = 0; v < n; ++v)
-            if (onSeam(v) && whole.feature[v] != FeatureKind::None)
-                std::fprintf(stderr, "  seam feature %d at %.2f %.2f %.2f\n", int(whole.feature[v]), whole.pos[v].x, whole.pos[v].y, whole.pos[v].z);
-        for (const auto& [t, k] : want)
-            if (k != 0)
-            {
-                const glm::dvec3 c = centre(t);
-                std::fprintf(stderr, "  missing pole %+d at %.1f %.1f %.1f\n", k, c.x, c.y, c.z);
-            }
-    }
-
-    // The half's seam is its border: a line along the plane except where a crease of the whole crosses it.
-    for (Index v = 0; v < n; ++v)
-    {
-        if (!onSeam(v))
+        const Index a = Index(key >> 32), b = Index(key & 0xffffffffu);
+        if (onPlane(a) && onPlane(b))
             continue;
-        const glm::dvec3 t = seamTangent(v);
-        const bool crossing = whole.feature[v] == FeatureKind::Corner ||
-                              (whole.feature[v] == FeatureKind::Line && std::abs(glm::dot(whole.featureDir[v], t)) < 0.7);
-        if (crossing || s.pinned[v])
-            s.feature[v] = FeatureKind::Corner;
-        else
-        {
-            s.feature[v] = FeatureKind::Line;
-            s.featureDir[v] = t;
-        }
+        features.insert(key);
+        features.insert(edgeKey(mirrorOf[a], mirrorOf[b]));
     }
-    q.resize(n);
-    return q;
+    auto reflect = [&](const AutoRemesher::Vector3& d) {
+        const glm::dvec3 v = fromAr(d);
+        return toAr(v - 2.0 * glm::dot(v, w.plane.normal) * w.plane.normal);
+    };
+    std::vector<AutoRemesher::FaceHint> hints;
+    for (const auto& h : in.hints)
+    {
+        hints.push_back(h);
+        hints.push_back({h.face + nt, reflect(h.direction), h.weight});
+    }
+    for (size_t t = 0; t < whole.tris.size(); ++t)
+    {
+        const auto& f = whole.tris[t];
+        for (int k = 0; k < 3; ++k)
+            if (onPlane(f[k]) && onPlane(f[(k + 1) % 3]))
+                hints.push_back({t, toAr(whole.pos[f[(k + 1) % 3]] - whole.pos[f[k]]), 8.0});
+    }
+    std::vector<double> stiffness;
+    if (!in.stiffness.empty())
+    {
+        stiffness = in.stiffness;
+        stiffness.insert(stiffness.end(), in.stiffness.begin(), in.stiffness.end());
+    }
+    AutoRemesher::Parameterizer pz(&vertices, &triangles, nullptr);
+    pz.setFeatureEdges(&features);
+    if (!hints.empty())
+        pz.setFaceHints(&hints);
+    if (!stiffness.empty())
+        pz.setFieldStiffness(&stiffness);
+    pz.setProgressHandler([](float, const char*) { Budget::checkpoint(); });
+    if (!pz.solveField() || pz.field().size() != whole.tris.size())
+    {
+        error = "the edge flow couldn't be solved on this shape";
+        return {};
+    }
+    return std::vector<AutoRemesher::Vector3>(pz.field().begin(), pz.field().begin() + std::ptrdiff_t(nt));
 }
 
-/** Whether the field is solved on the half joined to its reflection, with its poles cancelled and spread once there. */
-bool usesSymmetricField(const Work& w, const QuadRemeshOptions& opts) { return w.symmetric && !opts.poles && !std::getenv("LILA_HALF_FIELD"); }
-
-/** The cross field, turning exactly at opts.poles when given. */
-std::vector<glm::dvec3> crossField(Work& w, const QuadRemeshOptions& opts, std::string& error)
+CoverInput coverInput(const Work& w, const QuadRemeshOptions& opts, std::string& error)
 {
-    if (usesSymmetricField(w, opts))
-        return symmetricField(w, opts);
+    LILA_ZONE();
+
+    const Surface& iso = w.iso;
+    CoverInput in;
+    in.vertices.reserve(iso.pos.size());
+    for (const glm::dvec3& p : iso.pos)
+        in.vertices.push_back(toAr(p));
+    in.triangles.reserve(iso.tris.size());
+    for (const auto& t : iso.tris)
+        in.triangles.push_back({size_t(t[0]), size_t(t[1]), size_t(t[2])});
+    in.features = iso.hard;
+    if (!opts.pinnedPoints.empty())
+    {
+        // Pins stay exactly where they are through the isotropic pass, so they match by position.
+        std::unordered_set<uint64_t> at;
+        auto key = [](const glm::dvec3& p) {
+            uint64_t h = 1469598103934665603ull;
+            for (int i = 0; i < 3; ++i)
+            {
+                double d = p[i] == 0.0 ? 0.0 : p[i];
+                uint64_t bits;
+                std::memcpy(&bits, &d, sizeof(bits));
+                h = (h ^ bits) * 1099511628211ull;
+            }
+            return h;
+        };
+        for (const glm::dvec3& p : opts.pinnedPoints)
+            at.insert(key(p));
+        for (size_t v = 0; v < iso.pos.size(); ++v)
+            if (at.contains(key(iso.pos[v])))
+                in.pinned.push_back(v);
+    }
+    in.faceSize.resize(iso.tris.size());
+    for (size_t t = 0; t < iso.tris.size(); ++t)
+    {
+        const auto& f = iso.tris[t];
+        in.faceSize[t] = (w.isoSize[f[0]] + w.isoSize[f[1]] + w.isoSize[f[2]]) / 3.0;
+    }
+    auto centre = [&](size_t t) { return (iso.pos[iso.tris[t][0]] + iso.pos[iso.tris[t][1]] + iso.pos[iso.tris[t][2]]) / 3.0; };
+    if (w.stockSizes)
+        stockSizes(w, opts, in.sizeFactor, in.sizeLimit);
+    if (w.capsBvh)
+    {
+        in.onCap.resize(iso.tris.size());
+        tbb::parallel_for(size_t(0), iso.tris.size(), [&](size_t t) { in.onCap[t] = w.onCap(centre(t)); });
+    }
+
+    // Flow guides: faces the curve passes over follow it.
+    if (!opts.guides.empty())
+    {
+        // A layout made whole has the mirrored side to steer too.
+        std::vector<std::vector<glm::dvec3>> guides = opts.guides;
+        if (w.wholeLayout)
+            for (const auto& guide : opts.guides)
+            {
+                guides.push_back(guide);
+                for (glm::dvec3& p : guides.back())
+                    p = w.plane.reflect(p);
+            }
+        for (const auto& guide : guides)
+            for (size_t i = 0; i + 1 < guide.size(); ++i)
+            {
+                const glm::dvec3 a = guide[i], b = guide[i + 1], ab = b - a;
+                const double len2 = glm::dot(ab, ab);
+                if (len2 <= 0.0)
+                    continue;
+                geo::Bounds box;
+                box.min = glm::min(a, b) - glm::dvec3(w.h0);
+                box.max = glm::max(a, b) + glm::dvec3(w.h0);
+                for (size_t t = 0; t < iso.tris.size(); ++t)
+                {
+                    const glm::dvec3 c = centre(t);
+                    if (glm::any(glm::lessThan(c, box.min)) || glm::any(glm::greaterThan(c, box.max)))
+                        continue;
+                    const double u = std::clamp(glm::dot(c - a, ab) / len2, 0.0, 1.0);
+                    const double d = glm::distance(c, a + u * ab);
+                    const double reach = 0.75 * in.faceSize[t];
+                    if (d < reach)
+                        in.hints.push_back({t, toAr(ab), 4.0 * (1.0 - d / reach)});
+                }
+            }
+    }
+    // Soft creases: edges bending at least softCreaseAngle steer the faces either side along them.
+    if (opts.softCreaseAngle > 0.0)
+    {
+        const double limit = std::cos(glm::radians(opts.softCreaseAngle));
+        for (size_t e = 0; e < iso.edges.size(); ++e)
+        {
+            if (iso.edgeTriCount[e] != 2 || iso.hard.contains(edgeKey(iso.edges[e][0], iso.edges[e][1])))
+                continue;
+            const Index t0 = iso.edgeTris[e][0], t1 = iso.edgeTris[e][1];
+            if (glm::dot(iso.triNormal[t0], iso.triNormal[t1]) > limit)
+                continue;
+            const glm::dvec3 dir = iso.pos[iso.edges[e][1]] - iso.pos[iso.edges[e][0]];
+            in.hints.push_back({size_t(t0), toAr(dir), 2.0});
+            in.hints.push_back({size_t(t1), toAr(dir), 2.0});
+        }
+    }
+    // Joint Pole Avoidance: the field is stiffer in saddles (crotch, armpits, finger webs), so its poles settle beside them.
+    if (opts.jointPoleAvoidance > 0.0)
+    {
+        const std::vector<double> saddle = saddleAmount(iso, 2.0 * w.h0);
+        in.stiffness.resize(iso.tris.size());
+        for (size_t t = 0; t < iso.tris.size(); ++t)
+        {
+            const auto& f = iso.tris[t];
+            const double s = std::max({saddle[f[0]], saddle[f[1]], saddle[f[2]]});
+            in.stiffness[t] = 1.0 + opts.jointPoleAvoidance * s;
+        }
+    }
+    // Poles asked for: the field is solved turning exactly at them, and the cover keeps to it as it is.
     if (opts.poles)
     {
-        PrescribedTwist pt = prescribeSingularities(w.s, polesOnSurface(w, *opts.poles));
+        FieldOptions fo;
+        fo.scale = w.h0;
+        fo.jointStiffness = opts.jointPoleAvoidance;
+        PrescribedTwist pt = prescribeSingularities(iso, polesOnSurface(w, *opts.poles));
         if (!pt.error.empty())
         {
             error = pt.error;
-            return {};
+            return in;
         }
-        w.fo.twist = std::move(pt.twist);
+        fo.twist = std::move(pt.twist);
+        const std::vector<glm::dvec3> q = solveCrossField(iso, fo);
+        in.guidance.resize(iso.tris.size());
+        for (size_t t = 0; t < iso.tris.size(); ++t)
+        {
+            const auto& f = iso.tris[t];
+            const glm::dvec3 n = iso.triNormal[t];
+            glm::dvec3 d = q[f[0]] - n * glm::dot(n, q[f[0]]);
+            glm::dvec3 sum = d;
+            for (int k = 1; k < 3; ++k)
+            {
+                glm::dvec3 o = matchQuarterRotation(d, q[f[k]], n);
+                sum += o - n * glm::dot(n, o);
+            }
+            const double len = glm::length(sum);
+            in.guidance[t] = toAr(len > 0.0 ? sum / len : anyTangent(n));
+        }
     }
-    return solveCrossField(w.s, w.fo);
+    else if (w.symmetric && !w.wholeLayout)
+        in.guidance = symmetricFlow(w, in, error);
+    // Not with edge loop curves: where one crosses a crease or border at a slant, the two make a sharp sector that is
+    // no corner.
+    if (in.guidance.empty() && !w.stock && opts.featureGuides.empty() && !std::getenv("LILA_QR_NO_CORNERS"))
+        turnSharpCorners(iso, in);
+    if (std::getenv("LILA_STAGE_LOG"))
+        std::fprintf(stderr, "sharp corners: %zu triangles turned, %zu sides held\n", in.fieldOverrides.size(), in.forcedCorners.size());
+    return in;
 }
 
-Index defects(const geo::Mesh& m, const geo::Mesh& src, const geo::MeshBvh& bvh, bool sourceClosed);
+/**
+ * The stock sizes as they come pinch rows of thin quads together at the end of a sharp crease (a nostril's): the size
+ * jumps from triangle to triangle and the quads stretch up to 2.3 to 1 along it. Smoothed a little and held to 1.5 to 1,
+ * the head and Mochi come out with fewer poles and folds at every size tried.
+ *
+ * Pole pairs cancel across twice the stock reach: fewer poles on the head at every size with the surface no further
+ * off. At four times it starts to fold and drift, and at eight it flattens the nose.
+ */
+void tameSizes(AutoRemesher::Parameterizer& pz)
+{
+    pz.setMaximumSingularityPairDistance(12);
+    pz.setScalingSmoothing(3);
+    pz.setMaxAspectRatio(1.5);
+}
 
-/** The share of the mesh's points whose mirror image across the axis plane lies off the mesh, by over 1% of its size. */
+/**
+ * Corners where two feature edges meet at under 45 degrees and no third joins them: turned at a prism's tip, where a
+ * third crease runs down the side, the star prism came out with half as many poles again. A quad corner there has one side along U and the other
+ * along V, but a field lying along both sides takes them for the same direction and the tip collapses. Across each
+ * such corner's fan of triangles the field is turned from along the first side to square to the second (the long way
+ * round, a quarter turn short of the corner's own angle), and the two sides are held to whichever direction that
+ * makes them nearer.
+ */
+void turnSharpCorners(const Surface& iso, CoverInput& in)
+{
+    constexpr double kSharpest = glm::radians(45.0);
+    const Index n = iso.vertexCount();
+    // Each vertex's triangles, and per triangle the vertex after and before it going round.
+    std::vector<std::vector<Index>> around(n);
+    for (Index t = 0; t < Index(iso.tris.size()); ++t)
+        for (Index v : iso.tris[t])
+            around[v].push_back(t);
+    auto featureBetween = [&](Index a, Index b) {
+        for (Index k = iso.adjStart[a]; k < iso.adjStart[a + 1]; ++k)
+            if (iso.adj[k] == b)
+                return iso.edgeFeature[iso.adjEdge[k]] != 0;
+        return false;
+    };
+    for (Index v = 0; v < n; ++v)
+    {
+        // The fan in order: each triangle (v, a, b) leads to the one whose first side is (v, b).
+        std::unordered_map<Index, Index> byFirst;
+        auto sides = [&](Index t, Index& a, Index& b) {
+            const auto& tri = iso.tris[t];
+            const int k = tri[0] == v ? 0 : tri[1] == v ? 1 : 2;
+            a = tri[(k + 1) % 3];
+            b = tri[(k + 2) % 3];
+            return k;
+        };
+        int features = 0;
+        for (Index t : around[v])
+        {
+            Index a, b;
+            sides(t, a, b);
+            byFirst[a] = t;
+        }
+        for (Index k = iso.adjStart[v]; k < iso.adjStart[v + 1]; ++k)
+            features += iso.edgeFeature[iso.adjEdge[k]] != 0;
+        if (features != 2)
+            continue;
+        for (Index start : around[v])
+        {
+            Index a, b;
+            sides(start, a, b);
+            if (!featureBetween(v, a))
+                continue;
+            // From this feature side round to the next.
+            std::vector<Index> fan;
+            double angle = 0.0;
+            Index t = start;
+            bool closed = false;
+            for (size_t guard = 0; guard < around[v].size(); ++guard)
+            {
+                sides(t, a, b);
+                fan.push_back(t);
+                angle += std::acos(std::clamp(glm::dot(glm::normalize(iso.pos[a] - iso.pos[v]), glm::normalize(iso.pos[b] - iso.pos[v])), -1.0, 1.0));
+                if (featureBetween(v, b))
+                {
+                    closed = true;
+                    break;
+                }
+                auto next = byFirst.find(b);
+                if (next == byFirst.end())
+                    break;
+                t = next->second;
+            }
+            if (!closed || angle >= kSharpest || angle <= 0.0)
+                continue;
+            double before = 0.0;
+            for (size_t i = 0; i < fan.size(); ++i)
+            {
+                const int k = sides(fan[i], a, b);
+                const glm::dvec3 first = glm::normalize(iso.pos[a] - iso.pos[v]);
+                const glm::dvec3 normal = iso.triNormal[fan[i]];
+                const double own = std::acos(std::clamp(glm::dot(first, glm::normalize(iso.pos[b] - iso.pos[v])), -1.0, 1.0));
+                // At the middle of this triangle, measured from its own first side.
+                const double middle = before + 0.5 * own;
+                const double turn = middle / angle * (angle - 1.5707963267948966) - before;
+                const glm::dvec3 dir = std::cos(turn) * first + std::sin(turn) * glm::cross(normal, first);
+                in.fieldOverrides.push_back({size_t(fan[i]), toAr(dir)});
+                if (i == 0)
+                    in.forcedCorners.insert(3 * size_t(fan[i]) + size_t(k));
+                if (i + 1 == fan.size())
+                    in.forcedCorners.insert(3 * size_t(fan[i]) + size_t((k + 2) % 3));
+                before += own;
+            }
+        }
+    }
+}
+
+void setUp(AutoRemesher::Parameterizer& pz, const CoverInput& in, const Work& w)
+{
+    double edge = 0.0;
+    size_t count = 0;
+    for (const auto& t : in.triangles)
+        for (int k = 0; k < 3; ++k, ++count)
+            edge += glm::distance(w.iso.pos[t[k]], w.iso.pos[t[(k + 1) % 3]]);
+    edge /= std::max<size_t>(1, count);
+    // The cover's unit is scaling times the mean edge; with this it is one, so the face sizes are lengths.
+    if (w.stock)
+    {
+        pz.setGradientAdaptivity(4.0 * w.adaptivity);
+        tameSizes(pz);
+        pz.setTargetQuadCount(w.stockQuads);
+        if (!in.onCap.empty())
+            pz.setUnsizedFaces(&in.onCap);
+        pz.setFeatureEdges(&in.features);
+        if (!in.sizeFactor.empty())
+            pz.setFaceScalingMultiplier(&in.sizeFactor);
+        if (!in.sizeLimit.empty())
+            pz.setFaceSizeLimit(&in.sizeLimit);
+        if (!in.hints.empty())
+            pz.setFaceHints(&in.hints);
+        if (!in.stiffness.empty())
+            pz.setFieldStiffness(&in.stiffness);
+        pz.setProgressHandler([](float, const char*) { Budget::checkpoint(); });
+        return;
+    }
+    if (!w.stockSizes)
+    {
+        pz.setScaling(1.0 / std::max(edge, 1e-12));
+        pz.setFaceScaling(&in.faceSize);
+    }
+    else
+    {
+        pz.setGradientAdaptivity(4.0 * w.adaptivity);
+        tameSizes(pz);
+        pz.setTargetQuadCount(w.stockQuads);
+        if (!in.sizeFactor.empty())
+            pz.setFaceScalingMultiplier(&in.sizeFactor);
+        if (!in.sizeLimit.empty())
+            pz.setFaceSizeLimit(&in.sizeLimit);
+    }
+    pz.setFeatureEdges(&in.features);
+    if (!in.fieldOverrides.empty())
+    {
+        pz.setFieldOverrides(&in.fieldOverrides);
+        pz.setForcedCorners(&in.forcedCorners);
+    }
+    if (!in.pinned.empty())
+        pz.setPinnedVertices(&in.pinned);
+    if (!in.hints.empty())
+        pz.setFaceHints(&in.hints);
+    if (!in.stiffness.empty())
+        pz.setFieldStiffness(&in.stiffness);
+    if (!in.guidance.empty())
+        pz.setSingularitySimplification(false);
+    pz.setProgressHandler([](float, const char*) { Budget::checkpoint(); });
+}
+
+/** Per point, the feature it lies on: a corner, a crease or border line, or none. Only border points take a border. */
+std::vector<FeatureKind> pointFeatures(const geo::Mesh& m, const FeatureLines& creases, const FeatureLines& border, double reach)
+{
+    std::vector<FeatureKind> feature(m.pointCapacity(), FeatureKind::None);
+    tbb::parallel_for(Index(0), m.pointCapacity(), [&](Index p) {
+        if (!m.pointValid(p))
+            return;
+        const bool onBorder = m.isBoundaryPoint(p);
+        const FeatureLines& lines = onBorder ? border : creases;
+        glm::dvec3 q;
+        if (lines.closestCorner(m.position(p), reach, q))
+            feature[p] = FeatureKind::Corner;
+        else if (lines.closest(m.position(p), onBorder ? kBorderReach * reach : reach, q))
+            feature[p] = FeatureKind::Line;
+    });
+    return feature;
+}
+
+/** The polygon two faces sharing exactly one edge make together, or empty when they share more or none. */
+std::vector<Index> mergedPolygon(const std::vector<Index>& f, const std::vector<Index>& g)
+{
+    int shared = 0;
+    size_t fi = 0, gi = 0;
+    for (size_t i = 0; i < f.size(); ++i)
+        for (size_t j = 0; j < g.size(); ++j)
+            if (f[i] == g[(j + 1) % g.size()] && f[(i + 1) % f.size()] == g[j])
+            {
+                ++shared;
+                fi = i;
+                gi = j;
+            }
+    if (shared != 1)
+        return {};
+    // f from the end of the shared edge round to its start, then the rest of g.
+    std::vector<Index> out;
+    for (size_t k = 1; k <= f.size(); ++k)
+        out.push_back(f[(fi + k) % f.size()]);
+    for (size_t k = 2; k < g.size(); ++k)
+        out.push_back(g[(gi + k) % g.size()]);
+    std::vector<Index> sorted = out;
+    std::sort(sorted.begin(), sorted.end());
+    if (std::adjacent_find(sorted.begin(), sorted.end()) != sorted.end())
+        return {};
+    return out;
+}
+
+/** How far a polygon's corners are from square: the sum of their cosines squared, and a lot for a corner folded back. */
+double squareness(const std::vector<glm::dvec3>& points, const std::vector<Index>& f)
+{
+    double cost = 0.0;
+    for (size_t k = 0; k < f.size(); ++k)
+    {
+        const glm::dvec3 p = points[f[k]], u = points[f[(k + f.size() - 1) % f.size()]] - p, v = points[f[(k + 1) % f.size()]] - p;
+        const double lu = glm::length(u), lv = glm::length(v);
+        if (lu <= 0.0 || lv <= 0.0)
+            return 1e9;
+        const double c = glm::dot(u, v) / (lu * lv);
+        cost += c * c + (c < -0.9 ? 10.0 : 0.0);
+    }
+    return cost;
+}
+
+/** An even polygon as a ladder of quads, the squarest of its offsets. */
+std::vector<std::vector<Index>> ladder(const std::vector<glm::dvec3>& points, const std::vector<Index>& loop)
+{
+    const size_t n = loop.size(), m = n / 2;
+    double bestCost = std::numeric_limits<double>::max();
+    std::vector<std::vector<Index>> best;
+    for (size_t s = 0; s < m; ++s)
+    {
+        std::vector<std::vector<Index>> quads;
+        double cost = 0.0;
+        for (size_t i = 0; i + 1 < m; ++i)
+        {
+            quads.push_back({loop[(s + i) % n], loop[(s + i + 1) % n], loop[(s + n - 2 - i) % n], loop[(s + n - 1 - i) % n]});
+            cost += squareness(points, quads.back());
+        }
+        if (cost < bestCost)
+        {
+            bestCost = cost;
+            best = std::move(quads);
+        }
+    }
+    return best;
+}
+
+/**
+ * Splits poly into a quad and an odd face of oddSize points holding the edge (x, y), so the odd face moves on across
+ * that edge: the squarer of the ways to do it.
+ */
+bool splitTowards(const std::vector<glm::dvec3>& points, const std::vector<Index>& poly, Index x, Index y, size_t oddSize,
+                  std::vector<Index>& quad, std::vector<Index>& odd)
+{
+    const size_t n = poly.size();
+    if (n != oddSize + 2)
+        return false;
+    size_t at = n;
+    for (size_t k = 0; k < n; ++k)
+        if ((poly[k] == x && poly[(k + 1) % n] == y) || (poly[k] == y && poly[(k + 1) % n] == x))
+            at = k;
+    if (at == n)
+        return false;
+    double bestCost = std::numeric_limits<double>::max();
+    // The odd face is oddSize consecutive points covering positions at and at + 1; the quad is the rest plus its two ends.
+    for (size_t first = at + n - (oddSize - 2); first <= at + n; ++first)
+    {
+        std::vector<Index> run, rest;
+        for (size_t k = 0; k < oddSize; ++k)
+            run.push_back(poly[(first + k) % n]);
+        rest.push_back(run.back());
+        for (size_t k = oddSize; k < n; ++k)
+            rest.push_back(poly[(first + k) % n]);
+        rest.push_back(run.front());
+        if (rest.size() != 4)
+            continue;
+        const double cost = squareness(points, rest) + squareness(points, run);
+        if (cost < bestCost)
+        {
+            bestCost = cost;
+            quad = rest;
+            odd = run;
+        }
+    }
+    return bestCost < std::numeric_limits<double>::max();
+}
+
+/**
+ * Pairs up the faces that aren't quads (triangles and pentagons) through the quads between them: each odd face walks
+ * to a nearby other one, re-splitting itself and the next quad on the way so it moves one quad at a time, and the two
+ * become quads where they meet. With seam, a triangle may instead walk onto an edge of the half's cut, where its mirror
+ * image meets it into a quad once mirrored. Returns how many odd faces are left.
+ */
+size_t pairOddFaces(std::vector<glm::dvec3>& points, std::vector<std::vector<Index>>& faces, const std::function<bool(Index, Index)>& seam = {},
+                    size_t maxPath = 120, double unsquare = 3.0)
+{
+    LILA_ZONE();
+
+    auto seamEdgeOf = [&](size_t f, Index& x, Index& y) {
+        if (!seam)
+            return false;
+        const auto& face = faces[f];
+        for (size_t k = 0; k < face.size(); ++k)
+            if (seam(face[k], face[(k + 1) % face.size()]))
+            {
+                x = face[k];
+                y = face[(k + 1) % face.size()];
+                return true;
+            }
+        return false;
+    };
+    auto isOdd = [&](size_t f) {
+        Index x, y;
+        return faces[f].size() == 5 || (faces[f].size() == 3 && !seamEdgeOf(f, x, y));
+    };
+    for (int round = 0; round < 4; ++round)
+    {
+        std::unordered_map<uint64_t, std::vector<size_t>> byEdge;
+        for (size_t f = 0; f < faces.size(); ++f)
+            for (size_t k = 0; k < faces[f].size(); ++k)
+                byEdge[edgeKey(faces[f][k], faces[f][(k + 1) % faces[f].size()])].push_back(f);
+        auto neighbours = [&](size_t f) {
+            std::vector<size_t> out;
+            for (size_t k = 0; k < faces[f].size(); ++k)
+            {
+                const auto& list = byEdge[edgeKey(faces[f][k], faces[f][(k + 1) % faces[f].size()])];
+                if (list.size() == 2)
+                    out.push_back(list[0] == f ? list[1] : list[0]);
+            }
+            return out;
+        };
+        std::vector<uint8_t> used(faces.size(), 0);
+        bool any = false;
+        for (size_t start = 0; start < faces.size(); ++start)
+        {
+            if (faces[start].empty() || used[start] || !isOdd(start))
+                continue;
+            // Cheapest first through quads, where going straight on across a quad costs one and turning in it costs
+            // more: an odd face carried along one row leaves no poles behind it, and every turn leaves a pair. The first
+            // few odd faces reached (or, for a triangle, quads on the seam) are candidates.
+            constexpr double kTurn = 4.0;
+            using State = std::pair<size_t, size_t>; // a face, and the face it was entered from
+            std::map<State, std::pair<double, State>> reached;
+            std::priority_queue<std::pair<double, State>, std::vector<std::pair<double, State>>, std::greater<>> open;
+            const State origin{start, SIZE_MAX};
+            reached[origin] = {0.0, origin};
+            open.push({0.0, origin});
+            std::vector<State> candidates;
+            auto sharedEdge = [&](size_t f, size_t g) {
+                for (size_t k = 0; k < faces[f].size(); ++k)
+                {
+                    const auto& list = byEdge[edgeKey(faces[f][k], faces[f][(k + 1) % faces[f].size()])];
+                    if (list.size() == 2 && (list[0] == g || list[1] == g))
+                        return k;
+                }
+                return SIZE_MAX;
+            };
+            while (!open.empty() && candidates.size() < 6)
+            {
+                const auto [cost, at] = open.top();
+                open.pop();
+                if (cost > reached[at].first || cost > double(maxPath))
+                    continue;
+                const size_t f = at.first;
+                const size_t cameBy = at.second == SIZE_MAX ? SIZE_MAX : sharedEdge(f, at.second);
+                for (size_t k = 0; k < faces[f].size(); ++k)
+                {
+                    const auto& list = byEdge[edgeKey(faces[f][k], faces[f][(k + 1) % faces[f].size()])];
+                    if (list.size() != 2)
+                        continue;
+                    const size_t g = list[0] == f ? list[1] : list[0];
+                    if (used[g] || g == at.second || g == start)
+                        continue;
+                    const bool straight = cameBy == SIZE_MAX || faces[f].size() != 4 || (k + 4 - cameBy) % 4 == 2;
+                    const double to = cost + 1.0 + (straight ? 0.0 : kTurn);
+                    const State next{g, f};
+                    auto it = reached.find(next);
+                    if (it != reached.end() && it->second.first <= to)
+                        continue;
+                    reached[next] = {to, at};
+                    Index sx, sy;
+                    if (isOdd(g))
+                        candidates.push_back(next);
+                    else if (faces[g].size() == 4)
+                    {
+                        if (faces[start].size() == 3 && seamEdgeOf(g, sx, sy))
+                            candidates.push_back(next);
+                        open.push({to, next});
+                    }
+                }
+            }
+            for (const State& end : candidates)
+            {
+                const size_t found = end.first;
+                std::vector<size_t> path;
+                for (State at = end;; at = reached[at].second)
+                {
+                    path.push_back(at.first);
+                    if (at == origin || path.size() > 4 * maxPath)
+                        break;
+                }
+                std::reverse(path.begin(), path.end());
+                std::vector<size_t> once = path;
+                std::sort(once.begin(), once.end());
+                if (path.front() != start || std::adjacent_find(once.begin(), once.end()) != once.end())
+                    continue;
+                bool toSeam = !isOdd(found);
+                // The odd face walks along copies, so a step that fails leaves the faces as they were.
+                std::vector<std::vector<Index>> work;
+                for (size_t f : path)
+                    work.push_back(faces[f]);
+                bool ok = true;
+                const size_t steps = toSeam ? work.size() - 1 : work.size() - 2;
+                for (size_t i = 0; ok && i < steps; ++i)
+                {
+                    const std::vector<Index> poly = mergedPolygon(work[i], work[i + 1]);
+                    // The edge the odd face moves up to: the one the next quad shares with the face after it, or its seam edge.
+                    Index x = kInvalid, y = kInvalid;
+                    const auto& q = work[i + 1];
+                    if (i + 2 < work.size())
+                    {
+                        const auto& after = work[i + 2];
+                        for (size_t k = 0; k < q.size() && x == kInvalid; ++k)
+                            for (size_t j = 0; j < after.size(); ++j)
+                                if (q[k] == after[(j + 1) % after.size()] && q[(k + 1) % q.size()] == after[j])
+                                {
+                                    x = q[k];
+                                    y = q[(k + 1) % q.size()];
+                                    break;
+                                }
+                    }
+                    else
+                        for (size_t k = 0; k < q.size(); ++k)
+                            if (seam(q[k], q[(k + 1) % q.size()]))
+                            {
+                                x = q[k];
+                                y = q[(k + 1) % q.size()];
+                                break;
+                            }
+                    std::vector<Index> quad, odd;
+                    ok = !poly.empty() && x != kInvalid && splitTowards(points, poly, x, y, work[i].size(), quad, odd);
+                    if (ok)
+                    {
+                        work[i] = std::move(quad);
+                        work[i + 1] = std::move(odd);
+                    }
+                }
+                std::vector<std::vector<Index>> ending;
+                if (ok && !toSeam)
+                {
+                    const std::vector<Index> poly = mergedPolygon(work[work.size() - 2], work.back());
+                    ok = !poly.empty() && poly.size() % 2 == 0;
+                    if (ok)
+                        ending = poly.size() == 4 ? std::vector<std::vector<Index>>{poly} : ladder(points, poly);
+                }
+                // Two odd faces side by side always merge: an odd-shaped quad beats two faces that aren't quads.
+                for (const auto& q : ending)
+                    ok = ok && (path.size() == 2 ? squareness(points, q) < 1e9 : squareness(points, q) < unsquare);
+                for (size_t i = 0; ok && i < steps; ++i)
+                    ok = squareness(points, work[i]) < unsquare;
+                if (!ok)
+                    continue;
+                for (size_t i = 0; i < steps; ++i)
+                    faces[path[i]] = std::move(work[i]);
+                if (toSeam)
+                    faces[path.back()] = std::move(work.back());
+                else
+                {
+                    faces[path[path.size() - 2]].clear();
+                    faces[path.back()].clear();
+                }
+                for (size_t f : path)
+                    used[f] = 1;
+                for (auto& q : ending)
+                {
+                    faces.push_back(std::move(q));
+                    used.push_back(1);
+                }
+                any = true;
+                break;
+            }
+        }
+        faces.erase(std::remove_if(faces.begin(), faces.end(), [](const std::vector<Index>& f) { return f.empty(); }), faces.end());
+        if (!any)
+            break;
+    }
+    size_t odd = 0;
+    for (size_t f = 0; f < faces.size(); ++f)
+        odd += isOdd(f);
+    return odd;
+}
+
+/**
+ * Collapses edges shorter than a tenth of a quad and drops the faces that leaves with fewer than three points, plus any
+ * face repeating another's points: the extraction now and then squashes a quad onto a line or lays one twice. With no
+ * h, a quad is as long as the face's own mean edge, for a layout whose sizes vary.
+ */
+void cleanSoup(std::vector<std::vector<Index>>& faces, const std::vector<glm::dvec3>& points, double h)
+{
+    const bool local = h <= 0.0;
+    std::vector<Index> to(points.size());
+    for (Index p = 0; p < Index(points.size()); ++p)
+        to[p] = p;
+    auto find = [&](Index p) {
+        while (to[p] != p)
+            p = to[p] = to[to[p]];
+        return p;
+    };
+    for (const auto& f : faces)
+    {
+        if (local)
+        {
+            h = 0.0;
+            for (size_t k = 0; k < f.size(); ++k)
+                h += glm::distance(points[f[k]], points[f[(k + 1) % f.size()]]) / double(f.size());
+        }
+        for (size_t k = 0; k < f.size(); ++k)
+        {
+            const Index a = f[k], b = f[(k + 1) % f.size()];
+            if (glm::distance(points[a], points[b]) < 0.1 * h)
+            {
+                const Index ra = find(a), rb = find(b);
+                if (ra != rb)
+                    to[std::max(ra, rb)] = std::min(ra, rb);
+            }
+        }
+    }
+    std::unordered_set<std::string> seen;
+    for (auto& f : faces)
+    {
+        std::vector<Index> g;
+        for (Index p : f)
+        {
+            const Index q = find(p);
+            if (std::find(g.begin(), g.end(), q) == g.end())
+                g.push_back(q);
+        }
+        if (g.size() < 3)
+        {
+            f.clear();
+            continue;
+        }
+        std::vector<Index> key = g;
+        std::sort(key.begin(), key.end());
+        if (!seen.insert(std::string(reinterpret_cast<const char*>(key.data()), key.size() * sizeof(Index))).second)
+        {
+            f.clear();
+            continue;
+        }
+        f = std::move(g);
+    }
+    faces.erase(std::remove_if(faces.begin(), faces.end(), [](const std::vector<Index>& f) { return f.empty(); }), faces.end());
+}
+
+/**
+ * Merges each pair of faces that share two edges round a point of their own (a point with only those two faces) into
+ * one face without it: two quads make a quad. Pairing odd faces leaves a few.
+ */
+void mergeDoublets(std::vector<std::vector<Index>>& faces, size_t pointCount)
+{
+    for (bool again = true; again;)
+    {
+        again = false;
+        std::vector<std::array<size_t, 2>> at(pointCount, {SIZE_MAX, SIZE_MAX});
+        std::vector<int> count(pointCount, 0);
+        std::unordered_map<uint64_t, int> uses;
+        for (size_t f = 0; f < faces.size(); ++f)
+            for (size_t k = 0; k < faces[f].size(); ++k)
+            {
+                const Index p = faces[f][k];
+                if (count[p] < 2)
+                    at[p][count[p]] = f;
+                ++count[p];
+                ++uses[edgeKey(p, faces[f][(k + 1) % faces[f].size()])];
+            }
+        std::vector<uint8_t> touched(faces.size(), 0);
+        for (Index p = 0; p < Index(pointCount); ++p)
+        {
+            if (count[p] != 2 || touched[at[p][0]] || touched[at[p][1]])
+                continue;
+            std::vector<Index>& f = faces[at[p][0]];
+            std::vector<Index>& g = faces[at[p][1]];
+            const size_t nf = f.size(), ng = g.size();
+            if (nf + ng - 4 < 3 || nf + ng - 4 > 5)
+                continue;
+            const size_t kf = size_t(std::find(f.begin(), f.end(), p) - f.begin()), kg = size_t(std::find(g.begin(), g.end(), p) - g.begin());
+            const Index a = f[(kf + 1) % nf], b = f[(kf + nf - 1) % nf];
+            // Both of p's edges are shared by the two faces, so p is no border point and the faces close round it.
+            if (g[(kg + 1) % ng] != b || g[(kg + ng - 1) % ng] != a || uses[edgeKey(p, a)] != 2 || uses[edgeKey(p, b)] != 2)
+                continue;
+            std::vector<Index> merged;
+            for (size_t k = 1; k < nf; ++k)
+                merged.push_back(f[(kf + k) % nf]);
+            for (size_t k = 2; k + 1 < ng; ++k)
+                merged.push_back(g[(kg + k) % ng]);
+            std::vector<Index> sorted = merged;
+            std::sort(sorted.begin(), sorted.end());
+            if (std::adjacent_find(sorted.begin(), sorted.end()) != sorted.end())
+            {
+                // The same points both ways round: a pocket of two faces back to back, closed on itself.
+                std::vector<Index> sf = f, sg = g;
+                std::sort(sf.begin(), sf.end());
+                std::sort(sg.begin(), sg.end());
+                if (sf != sg)
+                    continue;
+                f.clear();
+            }
+            else
+                f = std::move(merged);
+            g.clear();
+            touched[at[p][0]] = touched[at[p][1]] = 1;
+            again = true;
+        }
+        faces.erase(std::remove_if(faces.begin(), faces.end(), [](const std::vector<Index>& f) { return f.empty(); }), faces.end());
+    }
+}
+
+/**
+ * Keeps the positive half of a layout made whole, for mirroring. The points along the cut go onto the plane, and a
+ * triangle with an edge there (where the layout broke its middle edge loop) closes up along that edge, so the loop runs
+ * on through one point instead of round a kite.
+ */
+void keepPositiveHalf(std::vector<glm::dvec3>& points, std::vector<std::vector<Index>>& faces, const geo::SymmetryPlane& plane)
+{
+    auto edgeUses = [&] {
+        std::unordered_map<uint64_t, int> uses;
+        for (const auto& f : faces)
+            for (size_t k = 0; k < f.size(); ++k)
+                ++uses[edgeKey(f[k], f[(k + 1) % f.size()])];
+        return uses;
+    };
+    const std::unordered_map<uint64_t, int> whole = edgeUses();
+    auto behind = [&](const std::vector<Index>& f) {
+        glm::dvec3 c(0.0);
+        for (Index v : f)
+            c += points[v];
+        return plane.distance(c / double(f.size())) < 0.0;
+    };
+    faces.erase(std::remove_if(faces.begin(), faces.end(), behind), faces.end());
+    // The cut is the border the half has that the whole didn't: a border of the source's own stays where it is.
+    std::unordered_map<uint64_t, int> uses = edgeUses();
+    std::vector<uint8_t> onCut(points.size(), 0);
+    for (auto& [key, n] : uses)
+    {
+        if (n == 1 && whole.at(key) == 2)
+            onCut[key >> 32] = onCut[key & 0xffffffffu] = 1;
+        else if (n == 1)
+            n = 0;
+    }
+    for (Index p = 0; p < Index(points.size()); ++p)
+        if (onCut[p])
+            points[p] = plane.project(points[p]);
+    std::vector<Index> to(points.size());
+    for (Index p = 0; p < Index(points.size()); ++p)
+        to[p] = p;
+    auto find = [&](Index p) {
+        while (to[p] != p)
+            p = to[p] = to[to[p]];
+        return p;
+    };
+    // A face with a corner on the cut and no other face at it (the loop turned a corner there) would share both edges
+    // with its mirror image: the corner's two neighbours close onto it.
+    std::vector<int> faceCount(points.size(), 0);
+    for (const auto& f : faces)
+        for (Index p : f)
+            ++faceCount[p];
+    for (const auto& f : faces)
+        for (size_t k = 0; k < f.size(); ++k)
+        {
+            const Index a = f[(k + f.size() - 1) % f.size()], p = f[k], b = f[(k + 1) % f.size()];
+            if (onCut[a] && onCut[p] && onCut[b] && faceCount[p] == 1)
+                to[find(a)] = to[find(b)] = find(p);
+        }
+    for (auto& f : faces)
+    {
+        if (f.size() != 3)
+            continue;
+        for (size_t k = 0; k < 3; ++k)
+        {
+            const Index a = find(f[k]), b = find(f[(k + 1) % 3]);
+            if (a != b && onCut[a] && onCut[b] && uses[edgeKey(f[k], f[(k + 1) % 3])] == 1)
+            {
+                points[a] = 0.5 * (points[a] + points[b]);
+                to[b] = a;
+                break;
+            }
+        }
+    }
+    for (auto& f : faces)
+    {
+        std::vector<Index> g;
+        for (Index v : f)
+            if (const Index q = find(v); std::find(g.begin(), g.end(), q) == g.end())
+                g.push_back(q);
+        f = g.size() >= 3 ? std::move(g) : std::vector<Index>{};
+    }
+    faces.erase(std::remove_if(faces.begin(), faces.end(), [](const std::vector<Index>& f) { return f.empty(); }), faces.end());
+}
+
+/** Drops the points no face uses. */
+void compactSoup(std::vector<glm::dvec3>& points, std::vector<std::vector<Index>>& faces)
+{
+    std::vector<Index> id(points.size(), kInvalid);
+    std::vector<glm::dvec3> kept;
+    for (auto& f : faces)
+        for (Index& v : f)
+        {
+            if (id[v] == kInvalid)
+            {
+                id[v] = Index(kept.size());
+                kept.push_back(points[v]);
+            }
+            v = id[v];
+        }
+    points = std::move(kept);
+}
+
+/**
+ * The half's border on the mirror plane: its points go onto the plane and points that meet there become one, so a sliver
+ * row the layout left along the cut closes up instead of turning into faces lying flat in the plane.
+ */
+void weldSeam(std::vector<glm::dvec3>& points, std::vector<std::vector<Index>>& faces, const geo::SymmetryPlane& plane, int axis, double h)
+{
+    std::unordered_map<uint64_t, int> uses;
+    for (const auto& f : faces)
+        for (size_t k = 0; k < f.size(); ++k)
+            ++uses[edgeKey(f[k], f[(k + 1) % f.size()])];
+    std::vector<uint8_t> onSeam(points.size(), 0);
+    for (const auto& [key, n] : uses)
+        if (n == 1)
+            for (Index p : {Index(key >> 32), Index(key & 0xffffffffu)})
+                if (std::abs(plane.distance(points[p])) < 1.0 * h)
+                {
+                    points[p][axis] = plane.offset;
+                    onSeam[p] = 1;
+                }
+    // Seam points closer than a fifth of a quad along the seam merge.
+    std::vector<Index> seam;
+    for (Index p = 0; p < Index(points.size()); ++p)
+        if (onSeam[p])
+            seam.push_back(p);
+    std::vector<Index> to(points.size());
+    for (Index p = 0; p < Index(points.size()); ++p)
+        to[p] = p;
+    auto find = [&](Index p) {
+        while (to[p] != p)
+            p = to[p] = to[to[p]];
+        return p;
+    };
+    for (size_t i = 0; i < seam.size(); ++i)
+        for (size_t j = i + 1; j < seam.size(); ++j)
+            if (glm::distance(points[seam[i]], points[seam[j]]) < 0.2 * h)
+            {
+                const Index a = find(seam[i]), b = find(seam[j]);
+                if (a != b)
+                    to[std::max(a, b)] = std::min(a, b);
+            }
+    for (auto& f : faces)
+    {
+        std::vector<Index> g;
+        for (Index p : f)
+        {
+            const Index q = find(p);
+            if (g.empty() || g.back() != q)
+                g.push_back(q);
+        }
+        while (g.size() > 1 && g.front() == g.back())
+            g.pop_back();
+        bool flat = true;
+        for (Index p : g)
+            flat = flat && onSeam[p];
+        f = g.size() >= 3 && !flat ? std::move(g) : std::vector<Index>{};
+    }
+    faces.erase(std::remove_if(faces.begin(), faces.end(), [](const std::vector<Index>& f) { return f.empty(); }), faces.end());
+    // A border that leaves the plane for one or two points and comes back is a quad (or triangle) the layout missed.
+    {
+        std::unordered_map<uint64_t, int> directed;
+        auto dkey = [](Index a, Index b) { return (uint64_t(a) << 32) | b; };
+        for (const auto& f : faces)
+            for (size_t k = 0; k < f.size(); ++k)
+                directed[dkey(f[k], f[(k + 1) % f.size()])] = 1;
+        std::unordered_map<Index, Index> next;
+        for (const auto& f : faces)
+            for (size_t k = 0; k < f.size(); ++k)
+            {
+                const Index a = f[k], b = f[(k + 1) % f.size()];
+                if (!directed.contains(dkey(b, a)))
+                    next[a] = b;
+            }
+        std::vector<std::vector<Index>> added;
+        for (const auto& [start, first] : next)
+        {
+            if (!onSeam[start] || onSeam[first])
+                continue;
+            std::vector<Index> chain{start, first};
+            Index at = first;
+            while (chain.size() <= 4)
+            {
+                auto it = next.find(at);
+                if (it == next.end())
+                    break;
+                at = it->second;
+                chain.push_back(at);
+                if (onSeam[at])
+                    break;
+            }
+            if (!onSeam[chain.back()] || chain.size() < 3 || chain.size() > 4 || chain.back() == start)
+                continue;
+            std::reverse(chain.begin(), chain.end());
+            added.push_back(chain);
+        }
+        faces.insert(faces.end(), added.begin(), added.end());
+    }
+    // A seam point inside one face only, between two other seam points, would fold that face onto its mirror image: it
+    // goes, and the face becomes a triangle that pairs with its mirror into a quad.
+    std::vector<int> faceCount(points.size(), 0);
+    for (const auto& f : faces)
+        for (Index p : f)
+            ++faceCount[p];
+    for (auto& f : faces)
+        for (bool again = true; again && f.size() > 3;)
+        {
+            again = false;
+            for (size_t k = 0; k < f.size(); ++k)
+            {
+                const Index a = f[(k + f.size() - 1) % f.size()], b = f[k], c = f[(k + 1) % f.size()];
+                if (onSeam[b] && onSeam[a] && onSeam[c] && faceCount[b] == 1)
+                {
+                    f.erase(f.begin() + std::ptrdiff_t(k));
+                    again = true;
+                    break;
+                }
+            }
+        }
+}
+
+/** Dissolves the edges on the plane between two triangles: a triangle and its mirror image make one quad. */
+void joinSeamTriangles(geo::Mesh& m, const geo::SymmetryPlane& plane, double h)
+{
+    std::vector<Index> edges;
+    for (Index e = 0; e < m.edgeCapacity(); ++e)
+    {
+        if (!m.edgeValid(e) || m.isBoundaryEdge(e))
+            continue;
+        if (std::abs(plane.distance(m.position(m.edgePoint(e, 0)))) > 1e-6 * h || std::abs(plane.distance(m.position(m.edgePoint(e, 1)))) > 1e-6 * h)
+            continue;
+        bool triangles = true;
+        int faces = 0;
+        m.forEachEdgeCorner(e, [&](Index c) {
+            ++faces;
+            triangles = triangles && m.faceSize(m.cornerFace(c)) == 3;
+        });
+        if (faces == 2 && triangles)
+            edges.push_back(e);
+    }
+    if (!edges.empty())
+        geo::dissolveEdges(m, edges);
+}
+
+/**
+ * The quads traced straight from the cover's integer grid, as a polygon soup; empty when the grid leaves a hole off
+ * the source's borders (a fold in the cover), which the library's extraction mends instead.
+ */
+/**
+ * How much of the working surface the result leaves out, in quads' worth: a part whose layout folded through and
+ * through (a thin arm at too coarse a size) drops out whole and leaves no hole to show for it.
+ */
+int uncovered(const geo::Mesh& m, const Work& w)
+{
+    if (m.numFaces() == 0)
+        return 0;
+    const geo::MeshBvh result(m);
+    const Surface& iso = w.iso;
+    double missing = 0.0;
+    for (Index v = 0; v < iso.vertexCount(); ++v)
+    {
+        glm::dvec3 at = iso.pos[v];
+        if ((w.symmetric && w.plane.distance(at) < 0.0) || w.onCap(at))
+            continue;
+        geo::BvhClosest c;
+        if (!result.closestPoint(at, c, 2.0 * w.h0))
+            missing += iso.area[v];
+    }
+    const int quads = int(missing / std::max(w.h0 * w.h0, 1e-12));
+    return quads >= 2 ? quads : 0;
+}
+
+/** A face with less area than this (times the spacing squared) lying along a crease is a flap. */
+constexpr double kFlapArea = 0.08;
+/** How far (in spacings) on average an edge loop may lie from a guide and still be laid onto it. */
+constexpr double kLoopReach = 0.6;
+
+/** Longest hole, in edges, the grid's holes are filled across; a longer one means the cover folded over a region. */
+constexpr size_t kMaxGridHole = 24;
+
+/**
+ * Closes the grid's holes off the source's borders: an even loop as a ladder of quads, an odd one as a ladder plus a
+ * triangle for the pairing to walk off. False when a hole is too long or can't be traced as one loop.
+ */
+bool fillGridHoles(const std::vector<glm::dvec3>& points, std::vector<std::vector<Index>>& faces, const Work& w)
+{
+    std::unordered_set<uint64_t> half;
+    auto dkey = [](Index a, Index b) { return (uint64_t(a) << 32) | b; };
+    for (const auto& f : faces)
+        for (size_t k = 0; k < f.size(); ++k)
+            half.insert(dkey(f[k], f[(k + 1) % f.size()]));
+    // A hole's loop runs against the faces' winding: each border half edge a -> b gives b -> a.
+    std::unordered_map<Index, Index> next;
+    glm::dvec3 q;
+    for (const auto& f : faces)
+        for (size_t k = 0; k < f.size(); ++k)
+        {
+            const Index a = f[k], b = f[(k + 1) % f.size()];
+            if (half.contains(dkey(b, a)) || w.border.closest(0.5 * (points[a] + points[b]), 0.25 * w.h0, q))
+                continue;
+            if (!next.emplace(b, a).second)
+                return false;
+        }
+    std::unordered_set<Index> seen;
+    for (const auto& [start, unused] : next)
+    {
+        if (seen.contains(start))
+            continue;
+        std::vector<Index> loop;
+        Index at = start;
+        while (!seen.contains(at))
+        {
+            seen.insert(at);
+            loop.push_back(at);
+            auto it = next.find(at);
+            if (it == next.end())
+                return false;
+            at = it->second;
+        }
+        if (at != start || loop.size() < 3 || loop.size() > kMaxGridHole)
+            return false;
+        if (loop.size() % 2 == 1)
+        {
+            faces.push_back({loop[0], loop[1], loop[2]});
+            loop.erase(loop.begin() + 1);
+        }
+        if (loop.size() == 4)
+            faces.push_back(loop);
+        else if (loop.size() > 4)
+            for (auto& quad : ladder(points, loop))
+                faces.push_back(std::move(quad));
+    }
+    return true;
+}
+
+void gridSoup(const Work& w, const std::vector<std::vector<AutoRemesher::Vector2>>& uvs, std::vector<glm::dvec3>& points,
+              std::vector<std::vector<Index>>& faces)
+{
+    LILA_ZONE();
+
+    std::vector<Chart> charts(uvs.size());
+    for (size_t t = 0; t < uvs.size(); ++t)
+        for (int k = 0; k < 3; ++k)
+            charts[t][k] = glm::dvec2(uvs[t][k].x(), uvs[t][k].y());
+    Extracted ex = extractIntegerGrid(w.iso, charts);
+    const geo::Mesh& g = ex.mesh;
+    if (g.numFaces() == 0)
+        return;
+    glm::dvec3 q;
+    int holes = 0;
+    for (Index e = 0; e < g.edgeCapacity(); ++e)
+        if (g.edgeValid(e) && g.isBoundaryEdge(e) &&
+            !w.border.closest(0.5 * (g.position(g.edgePoint(e, 0)) + g.position(g.edgePoint(e, 1))), 0.25 * w.h0, q))
+            ++holes;
+    if (std::getenv("LILA_STAGE_LOG"))
+        std::fprintf(stderr, "integer grid: %u faces, %d hole edges\n", unsigned(g.numFaces()), holes);
+    std::vector<Index> id(g.pointCapacity(), kInvalid);
+    for (Index p = 0; p < g.pointCapacity(); ++p)
+        if (g.pointValid(p))
+        {
+            id[p] = Index(points.size());
+            points.push_back(g.position(p));
+        }
+    for (Index f = 0; f < g.faceCapacity(); ++f)
+        if (g.faceValid(f))
+        {
+            std::vector<Index> face;
+            for (Index p : g.facePoints(f))
+                face.push_back(id[p]);
+            faces.push_back(std::move(face));
+        }
+    if (holes > 0 && !fillGridHoles(points, faces, w))
+    {
+        points.clear();
+        faces.clear();
+    }
+}
+
+/**
+ * Frees the points of a face laid flat along a crease: when a row of points beside a crease was taken onto it, the face
+ * between that row and the crease's own edge lies on the line with no area. The points off its crease edge (the edge it
+ * shares with a face across the crease, else its longest) go back to their other neighbours' mean on the surface.
+ */
+void freeCreaseFlaps(geo::Mesh& m, std::vector<FeatureKind>& feature, const geo::MeshBvh& surface, double h)
+{
+    const auto nb = pointNeighbours(m);
+    std::unordered_set<Index> freed;
+    for (Index f = 0; f < m.faceCapacity(); ++f)
+    {
+        if (!m.faceValid(f))
+            continue;
+        const std::vector<Index> pts = m.facePoints(f);
+        if (pts.size() < 4 || glm::length(m.faceAreaVector(f)) > kFlapArea * h * h)
+            continue;
+        if (std::any_of(pts.begin(), pts.end(), [&](Index p) { return feature[p] == FeatureKind::None; }))
+            continue;
+        // Its crease edge: the one shared with a face turned well away, else the longest.
+        const glm::dvec3 n = m.faceNormal(f);
+        Index keepA = kInvalid, keepB = kInvalid;
+        double best = -1.0;
+        for (Index c : m.faceCorners(f))
+        {
+            const Index e = m.cornerEdge(c);
+            const Index a = m.edgePoint(e, 0), b = m.edgePoint(e, 1);
+            double score = glm::distance(m.position(a), m.position(b));
+            const Index r = m.cornerRadial(c);
+            if (r != c)
+                if (const Index g = m.cornerFace(r); g != f && std::abs(glm::dot(m.faceNormal(g), n)) < 0.7)
+                    score += 1e6 * h;
+            if (score > best)
+            {
+                best = score;
+                keepA = a;
+                keepB = b;
+            }
+        }
+        for (Index p : pts)
+            if (p != keepA && p != keepB && feature[p] == FeatureKind::Line && !m.isBoundaryPoint(p))
+                freed.insert(p);
+    }
+    if (freed.empty())
+        return;
+    for (Index p : freed)
+        feature[p] = FeatureKind::None;
+    for (int round = 0; round < 4; ++round)
+        for (Index p : freed)
+        {
+            glm::dvec3 avg(0.0);
+            int count = 0;
+            for (Index o : nb[p])
+                if (!freed.contains(o) || round > 0)
+                {
+                    avg += m.position(o);
+                    ++count;
+                }
+            if (count == 0)
+                continue;
+            geo::BvhClosest c;
+            avg /= double(count);
+            m.setPosition(p, surface.closestPoint(avg, c) ? c.point : avg);
+        }
+}
+
+/**
+ * The closed edge loop of a quad mesh lying closest along a closed guide, traced straight through four-edge points from
+ * the points nearest the guide; empty when none closes within reach (mean distance under kLoopReach spacings).
+ */
+std::vector<Index> nearestEdgeLoop(const geo::Mesh& m, const std::vector<std::array<glm::dvec3, 2>>& segs, double h)
+{
+    std::vector<std::pair<double, Index>> near;
+    for (Index p = 0; p < m.pointCapacity(); ++p)
+        if (m.pointValid(p) && !m.isBoundaryPoint(p))
+            near.push_back({glm::distance(closestOnSegments(m.position(p), segs), m.position(p)), p});
+    std::sort(near.begin(), near.end());
+    near.resize(std::min<size_t>(near.size(), 12));
+    double guideLength = 0.0;
+    for (const auto& sg : segs)
+        guideLength += glm::distance(sg[0], sg[1]);
+    const size_t most = size_t(4.0 * guideLength / std::max(h, 1e-12)) + 8;
+    auto facesOf = [&](Index e) {
+        std::vector<Index> out;
+        const Index c0 = m.edgeCorner(e);
+        if (c0 == kInvalid)
+            return out;
+        Index c = c0;
+        do
+        {
+            out.push_back(m.cornerFace(c));
+            c = m.cornerRadial(c);
+        } while (c != c0 && out.size() < 8);
+        return out;
+    };
+    std::vector<Index> best;
+    double bestScore = kLoopReach * h;
+    for (const auto& [d0, start] : near)
+    {
+        if (m.pointValence(start) != 4)
+            continue;
+        std::vector<Index> edges;
+        m.forEachPointEdge(start, [&](Index e) { edges.push_back(e); });
+        for (Index first : edges)
+        {
+            std::vector<Index> loop{start};
+            Index at = start, via = first;
+            bool closed = false;
+            for (size_t step = 0; step < most; ++step)
+            {
+                const Index next = m.edgeOtherPoint(via, at);
+                if (next == start)
+                {
+                    closed = true;
+                    break;
+                }
+                if (m.isBoundaryPoint(next) || m.pointValence(next) != 4)
+                    break;
+                loop.push_back(next);
+                // Straight on: the edge at next sharing no face with the one we came in by.
+                Index out = kInvalid;
+                m.forEachPointEdge(next, [&](Index e) {
+                    if (e == via)
+                        return;
+                    bool sharesFace = false;
+                    for (Index f : facesOf(via))
+                        for (Index g : facesOf(e))
+                            sharesFace |= f == g;
+                    if (!sharesFace)
+                        out = e;
+                });
+                if (out == kInvalid)
+                    break;
+                at = next;
+                via = out;
+            }
+            if (!closed || loop.size() < 3)
+                continue;
+            double mean = 0.0;
+            for (Index p : loop)
+                mean += glm::distance(closestOnSegments(m.position(p), segs), m.position(p));
+            mean /= double(loop.size());
+            if (mean < bestScore)
+            {
+                bestScore = mean;
+                best = loop;
+            }
+        }
+    }
+    return best;
+}
+
+/**
+ * Lays an edge loop onto each closed guide: the nearest closed loop's points move onto the guide (and back onto the
+ * surface), and their neighbours ease halfway after them so the quads beside stay even.
+ */
+void layLoopsOnGuides(geo::Mesh& m, const std::vector<std::vector<glm::dvec3>>& guides, const geo::MeshBvh& bvh, double h)
+{
+    const auto nb = pointNeighbours(m);
+    for (const auto& guide : guides)
+    {
+        if (guide.size() < 3 || glm::distance(guide.front(), guide.back()) > 1e-6 * h)
+            continue;
+        std::vector<std::array<glm::dvec3, 2>> segs;
+        for (size_t i = 0; i + 1 < guide.size(); ++i)
+            segs.push_back({guide[i], guide[i + 1]});
+        const std::vector<Index> loop = nearestEdgeLoop(m, segs, h);
+        if (loop.empty())
+            continue;
+        std::unordered_map<Index, glm::dvec3> moved;
+        for (Index p : loop)
+        {
+            const glm::dvec3 q = closestOnSegments(m.position(p), segs);
+            geo::BvhClosest c;
+            moved[p] = bvh.closestPoint(q, c) ? c.point : q;
+        }
+        std::unordered_map<Index, glm::dvec3> eased;
+        for (Index p : loop)
+        {
+            const glm::dvec3 shift = moved[p] - m.position(p);
+            for (Index o : nb[p])
+                if (!moved.contains(o))
+                {
+                    auto [it, fresh] = eased.try_emplace(o, glm::dvec3(0.0));
+                    it->second += 0.5 * shift;
+                }
+        }
+        for (const auto& [p, at] : moved)
+            m.setPosition(p, at);
+        for (const auto& [p, shift] : eased)
+        {
+            geo::BvhClosest c;
+            const glm::dvec3 q = m.position(p) + shift * 0.5;
+            m.setPosition(p, bvh.closestPoint(q, c) ? c.point : q);
+        }
+    }
+}
+
+/**
+ * Smooths the points round faces that face against the source until they don't: each free point of a folded face and
+ * its neighbours moves to its neighbours' mean on the surface. Creases, corners and seam points stay.
+ */
+void unfold(geo::Mesh& m, const std::vector<FeatureKind>& feature, const geo::Mesh& src, const geo::MeshBvh& bvh, const geo::MeshBvh& surface,
+            int seamAxis, double h)
+{
+    auto nb = pointNeighbours(m);
+    for (int round = 0; round < 8; ++round)
+    {
+        const std::vector<Index> folded = foldedFaces(m, src, bvh);
+        if (folded.empty())
+            return;
+        std::unordered_set<Index> moving;
+        for (Index f : folded)
+            for (Index p : m.facePoints(f))
+            {
+                moving.insert(p);
+                for (Index o : nb[p])
+                    moving.insert(o);
+            }
+        for (Index p : moving)
+        {
+            if (feature[p] != FeatureKind::None || m.isBoundaryPoint(p) || nb[p].empty() ||
+                (seamAxis >= 0 && std::abs(m.position(p)[seamAxis]) < 0.35 * h))
+                continue;
+            glm::dvec3 avg(0.0);
+            for (Index o : nb[p])
+                avg += m.position(o);
+            avg /= double(nb[p].size());
+            geo::BvhClosest c;
+            m.setPosition(p, surface.closestPoint(avg, c) ? c.point : avg);
+        }
+    }
+}
+
+/**
+ * One connected part's quads as a polygon soup: the cover solved over the working triangles, traced from its integer
+ * grid (or the library's extraction where the grid leaves a hole).
+ */
+bool coverSoup(Work& w, const QuadRemeshOptions& opts, std::vector<glm::dvec3>& points, std::vector<std::vector<Index>>& faces, std::string& error,
+               Stopwatch& clock)
+{
+    {
+        CoverInput in = coverInput(w, opts, error);
+        if (!error.empty())
+            return false;
+        AutoRemesher::Parameterizer pz(&in.vertices, &in.triangles, in.guidance.empty() ? nullptr : &in.guidance);
+        setUp(pz, in, w);
+        if (!pz.parameterize())
+        {
+            error = "the quad layout couldn't be solved on this shape";
+            return false;
+        }
+        clock.lap("cover");
+        if (std::getenv("LILA_STAGE_LOG"))
+        {
+            int flipped = 0;
+            for (const auto& uv : pz.originalTriangleUvs())
+                flipped += (uv[1].x() - uv[0].x()) * (uv[2].y() - uv[0].y()) - (uv[1].y() - uv[0].y()) * (uv[2].x() - uv[0].x()) < 0.0;
+            std::fprintf(stderr, "cover: %zu triangles, %d flipped, %zu feature edges, %zu singular\n", in.triangles.size(), flipped,
+                         in.features.size(), pz.singularVertexIndices().size());
+        }
+        std::unique_ptr<std::vector<std::vector<AutoRemesher::Vector2>>> uvs = pz.takeTriangleUvs();
+        std::vector<std::vector<AutoRemesher::Vector2>> originalUvs = pz.originalTriangleUvs();
+        std::vector<size_t> singular = pz.singularVertexIndices();
+        const FeatureLines& border = w.border;
+        const double h0 = w.h0;
+        if (!std::getenv("LILA_AR_EXTRACT") && !w.stock)
+            gridSoup(w, originalUvs, points, faces);
+        if (faces.empty())
+        {
+            // The library's extraction mends a layout the integer grid can't close, at the cost of a few more poles.
+            AutoRemesher::QuadExtractor qe(&in.vertices, &in.triangles, uvs.get());
+            qe.setOriginalTriangleUvs(&originalUvs);
+            qe.setSingularVertices(&singular);
+            qe.setProgressHandler([](float, const char*) { Budget::checkpoint(); });
+            // A loop along the source's own border (or the symmetry cut) stays open.
+            qe.setKeepHole([&](const std::vector<AutoRemesher::Vector3>& loop) {
+                if (border.empty())
+                    return false;
+                glm::dvec3 q;
+                for (const auto& p : loop)
+                    if (!border.closest(fromAr(p), 0.75 * h0, q))
+                        return false;
+                return true;
+            });
+            if (!qe.extract() || qe.remeshedQuads().empty())
+            {
+                error = "extraction produced no faces";
+                return false;
+            }
+            for (const auto& p : qe.remeshedVertices())
+                points.push_back(fromAr(p));
+            for (const auto& f : qe.remeshedQuads())
+            {
+                std::vector<Index> face;
+                for (size_t v : f)
+                    face.push_back(Index(v));
+                faces.push_back(std::move(face));
+            }
+        }
+        clock.lap("extract");
+
+    }
+    return true;
+}
+
+/** The connected parts of a surface, each with its share of the per-vertex sizes. */
+std::vector<std::pair<Surface, std::vector<double>>> surfaceParts(const Surface& s, const std::vector<double>& size)
+{
+    const Index n = s.vertexCount();
+    std::vector<Index> part(n, kInvalid);
+    Index parts = 0;
+    for (Index v = 0; v < n; ++v)
+    {
+        if (part[v] != kInvalid || s.adjStart[v] == s.adjStart[v + 1])
+            continue;
+        std::vector<Index> stack{v};
+        part[v] = parts;
+        while (!stack.empty())
+        {
+            const Index u = stack.back();
+            stack.pop_back();
+            for (Index k = s.adjStart[u]; k < s.adjStart[u + 1]; ++k)
+                if (part[s.adj[k]] == kInvalid)
+                {
+                    part[s.adj[k]] = parts;
+                    stack.push_back(s.adj[k]);
+                }
+        }
+        ++parts;
+    }
+    std::vector<std::pair<Surface, std::vector<double>>> out(parts);
+    if (parts == 1)
+    {
+        out[0] = {s, size};
+        return out;
+    }
+    std::vector<Index> local(n, kInvalid);
+    for (Index v = 0; v < n; ++v)
+        if (part[v] != kInvalid)
+        {
+            auto& [ps, psize] = out[part[v]];
+            local[v] = Index(ps.pos.size());
+            ps.pos.push_back(s.pos[v]);
+            ps.density.push_back(v < Index(s.density.size()) ? s.density[v] : 1.0f);
+            psize.push_back(size[v]);
+        }
+    for (const auto& t : s.tris)
+        out[part[t[0]]].first.tris.push_back({local[t[0]], local[t[1]], local[t[2]]});
+    for (uint64_t key : s.hard)
+    {
+        const Index a = Index(key >> 32), b = Index(key & 0xffffffffu);
+        out[part[a]].first.hard.insert(edgeKey(local[a], local[b]));
+    }
+    for (auto& [ps, psize] : out)
+    {
+        ps.pins = s.pins;
+        ps.buildTopology();
+        ps.buildGeometry();
+        ps.detectFeatures(-1.0, 75.0, 0.0);
+    }
+    return out;
+}
+
+/** The quads laid out over the working triangles, cleaned up on the source: features snapped, relaxed, mirrored. */
+QuadRemeshResult coverRemesh(Work& w, const QuadRemeshOptions& opts, Stopwatch& clock)
+{
+    LILA_ZONE();
+
+    QuadRemeshResult out;
+    out.layout = "flow";
+    std::vector<glm::dvec3> points;
+    std::vector<std::vector<Index>> faces;
+    {
+        // Each connected part gets its own cover: one solve over several leaves all but the first unanchored.
+        Surface whole = std::move(w.iso);
+        std::vector<double> wholeSize = std::move(w.isoSize);
+        auto parts = surfaceParts(whole, wholeSize);
+        const double wholeArea = whole.totalArea(), wholeQuads = w.stockQuads;
+        for (auto& [part, size] : parts)
+        {
+            w.iso = std::move(part);
+            w.isoSize = std::move(size);
+            // Each part's share of the stock layout's quads goes by its area.
+            if (parts.size() > 1 && wholeArea > 0.0)
+                w.stockQuads = wholeQuads * w.iso.totalArea() / wholeArea;
+            std::vector<glm::dvec3> partPoints;
+            std::vector<std::vector<Index>> partFaces;
+            if (!coverSoup(w, opts, partPoints, partFaces, out.error, clock))
+                break;
+            const Index base = Index(points.size());
+            points.insert(points.end(), partPoints.begin(), partPoints.end());
+            for (auto& f : partFaces)
+            {
+                for (Index& v : f)
+                    v += base;
+                faces.push_back(std::move(f));
+            }
+        }
+        w.iso = std::move(whole);
+        w.isoSize = std::move(wholeSize);
+        w.stockQuads = wholeQuads;
+        if (!out.ok())
+            return out;
+    }
+    const double h0 = w.h0;
+    if (const char* path = std::getenv("LILA_RAW_DUMP"))
+        if (FILE* f = std::fopen(path, "w"))
+        {
+            for (const glm::dvec3& p : points)
+                std::fprintf(f, "v %.9g %.9g %.9g\n", p.x, p.y, p.z);
+            for (const auto& face : faces)
+            {
+                std::fprintf(f, "f");
+                for (Index v : face)
+                    std::fprintf(f, " %d", int(v + 1));
+                std::fprintf(f, "\n");
+            }
+            std::fclose(f);
+        }
+    if (w.capsBvh)
+    {
+        auto capped = [&](const std::vector<Index>& f) {
+            glm::dvec3 c(0.0);
+            for (Index v : f)
+                c += points[v];
+            return w.onCap(c / double(f.size()));
+        };
+        faces.erase(std::remove_if(faces.begin(), faces.end(), capped), faces.end());
+    }
+    const bool refine = !std::getenv("LILA_QR_RAW");
+    if (refine)
+        cleanSoup(faces, points, w.stock ? 0.0 : w.h0);
+    // Dropping faces left lying in the plane can bare another row of border points next to it, so twice.
+    if (w.wholeLayout)
+        keepPositiveHalf(points, faces, w.plane);
+    else if (w.symmetric)
+        for (int pass = 0; pass < 2; ++pass)
+            weldSeam(points, faces, w.plane, opts.symmetryAxis, w.h0);
+    if (opts.pureQuads && refine)
+    {
+        std::function<bool(Index, Index)> seam;
+        std::unordered_set<uint64_t> border;
+        // A triangle walked onto the cut meets its mirror image in a kite across the middle edge loop, which a whole
+        // layout has no need to break.
+        if (w.symmetric && !w.wholeLayout)
+        {
+            std::unordered_map<uint64_t, int> uses;
+            for (const auto& f : faces)
+                for (size_t k = 0; k < f.size(); ++k)
+                    ++uses[edgeKey(f[k], f[(k + 1) % f.size()])];
+            for (const auto& [key, n] : uses)
+                if (n == 1)
+                    border.insert(key);
+            seam = [&](Index a, Index b) {
+                return border.contains(edgeKey(a, b)) && std::abs(w.plane.distance(points[a])) < 1e-9 * w.h0 &&
+                       std::abs(w.plane.distance(points[b])) < 1e-9 * w.h0;
+            };
+        }
+        // The squarest pairings first; what is left pairs through quads less square, which the relax evens out after.
+        for (double unsquare : {3.0, 6.0, 12.0})
+            if (pairOddFaces(points, faces, seam, 120, unsquare) == 0)
+                break;
+        mergeDoublets(faces, points.size());
+    }
+    compactSoup(points, faces);
+    std::vector<Index> sizes, indices;
+    for (const auto& f : faces)
+    {
+        sizes.push_back(Index(f.size()));
+        indices.insert(indices.end(), f.begin(), f.end());
+    }
+    geo::Mesh m = geo::Mesh::fromPolygons(points, sizes, indices);
+    m.compact();
+    const geo::Mesh& src = w.src;
+    const geo::MeshBvh& bvh = *w.bvh;
+    geo::conformNormals(m);
+    // Conforming only makes the winding consistent; the source's own decides which way round it goes.
+    if (2 * foldedFaces(m, src, bvh).size() > size_t(m.numFaces()))
+        for (Index f = 0; f < m.faceCapacity(); ++f)
+            if (m.faceValid(f))
+                m.flipFace(f);
+
+    const int axis = w.symmetric ? opts.symmetryAxis : -1;
+    if (w.symmetric)
+        for (Index p = 0; p < m.pointCapacity(); ++p)
+            if (m.pointValid(p) && m.isBoundaryPoint(p) && std::abs(w.plane.distance(m.position(p))) < 0.35 * h0)
+            {
+                glm::dvec3 at = m.position(p);
+                at[axis] = 0.0;
+                m.setPosition(p, at);
+            }
+    std::vector<FeatureKind> feature = pointFeatures(m, w.creases, w.border, 0.3 * h0);
+    if (refine)
+    {
+        projectPoints(m, feature, *w.simpleBvh, w.creases, w.border, 0.3 * h0);
+        freeCreaseFlaps(m, feature, *w.simpleBvh, h0);
+        relaxAlongFeatures(m, feature, *w.simpleBvh, w.creases, w.border, h0, opts.relaxIterations, axis);
+        unfold(m, feature, src, bvh, *w.simpleBvh, axis, h0);
+    }
+    clock.lap("refine");
+
+    if (w.symmetric)
+    {
+        // Seam points sit exactly on the plane so the mirror welds them and the halves match bit for bit.
+        for (Index p = 0; p < m.pointCapacity(); ++p)
+            if (m.pointValid(p) && m.isBoundaryPoint(p) && std::abs(w.plane.distance(m.position(p))) < 0.35 * h0)
+            {
+                glm::dvec3 at = m.position(p);
+                at[axis] = 0.0;
+                m.setPosition(p, at);
+            }
+        geo::MirrorOptions mo;
+        mo.plane = w.plane;
+        mo.weld = true;
+        mo.tolerance = std::max(1e-9, h0 * 1e-6);
+        geo::mirrorMesh(m, mo);
+        m.compact();
+        joinSeamTriangles(m, w.plane, h0);
+        m.compact();
+        if (opts.middleSmoothing > 0.0)
+            smoothMiddle(m, axis, opts.middleSmoothing);
+    }
+    if (!opts.featureGuides.empty())
+        layLoopsOnGuides(m, opts.featureGuides, bvh, h0);
+    if (opts.sharpAngle > 0.0 && !w.creases.empty())
+        geo::setHardEdgesByAngle(m, opts.sharpAngle);
+    out.metrics = measureQuality(m, &bvh);
+    out.defects = int(defects(m, src, bvh, w.closed)) + uncovered(m, w);
+    out.mesh = std::move(m);
+    return out;
+}
+
+/** The mirrored half's asymmetry: the share of points whose mirror image lies off the mesh by over 1% of its size. */
 double asymmetry(const geo::Mesh& m, const geo::MeshBvh& bvh, int axis)
 {
     const geo::Bounds box = m.bounds();
@@ -1660,38 +3269,6 @@ double asymmetry(const geo::Mesh& m, const geo::MeshBvh& bvh, int axis)
     return double(far) / double(n);
 }
 
-/** Relax passes on a patch layout per Relax Iteration asked for. */
-constexpr int kPatchRelaxPerIteration = 5;
-
-/** Debug dumps: the mesh as an obj. */
-void dumpObj(const geo::Mesh& m, const std::string& path)
-{
-    FILE* f = std::fopen(path.c_str(), "w");
-    if (!f)
-        return;
-    std::vector<Index> id(m.pointCapacity(), 0);
-    Index next = 1;
-    for (Index p = 0; p < m.pointCapacity(); ++p)
-        if (m.pointValid(p))
-        {
-            std::fprintf(f, "v %.9g %.9g %.9g\n", m.position(p).x, m.position(p).y, m.position(p).z);
-            id[p] = next++;
-        }
-    for (Index fc = 0; fc < m.faceCapacity(); ++fc)
-        if (m.faceValid(fc))
-        {
-            std::fprintf(f, "f");
-            for (Index p : m.facePoints(fc))
-                std::fprintf(f, " %d", int(id[p]));
-            std::fprintf(f, "\n");
-        }
-    std::fclose(f);
-}
-Index largeFaces(const geo::Mesh& m);
-Index sharpCorners(const geo::Mesh& m);
-Index clusteredPoles(const geo::Mesh& m);
-bool better(const QuadRemeshResult& a, int defectsA, const QuadRemeshResult& b, int defectsB);
-
 QuadRemeshResult quadRemeshOnce(const geo::Mesh& source, const QuadRemeshOptions& opts)
 {
     LILA_ZONE();
@@ -1705,358 +3282,32 @@ QuadRemeshResult quadRemeshOnce(const geo::Mesh& source, const QuadRemeshOptions
         result.error = w.error;
         return result;
     }
-    const geo::Mesh& src = w.src;
-    const geo::MeshBvh& bvh = *w.bvh;
-    Surface& s = w.s;
-    const bool symmetric = w.symmetric;
-    if (symmetric)
-        if (const double off = asymmetry(src, bvh, opts.symmetryAxis); off > 0.05)
+    if (w.symmetric)
+        if (const double off = asymmetry(w.src, *w.bvh, opts.symmetryAxis); off > 0.05)
             result.notes.push_back("the mesh isn't symmetric across " + std::string(1, char('X' + opts.symmetryAxis)) + " (" +
                                    std::to_string(int(std::lround(100.0 * off))) + "% of it has no mirror image), so this mirrors its +" +
                                    std::string(1, char('X' + opts.symmetryAxis)) + " half; set Symmetry to Off for it");
-    const geo::SymmetryPlane& plane = w.plane;
-    const double h = w.h, cf = w.cf;
-    const std::vector<double>& scale = w.scale;
-    const FieldOptions& fo = w.fo;
-
-    std::vector<glm::dvec3> q = crossField(w, opts, result.error);
-    if (!result.ok())
-        return result;
-    Budget::note(std::to_string(fieldSingularities(s, q).size()) + " poles");
-    clock.lap("cross field");
-
-    // Extraction and cleanup for one lattice layout.
-    auto buildFrom = [&](Extracted ex, const char* layout) {
-        QuadRemeshResult out;
-        out.layout = layout;
-        if (ex.mesh.numFaces() == 0)
-        {
-            out.error = "extraction produced no faces";
-            return out;
-        }
-        clock.lap("extract");
-
-        FeatureLines lines;
-        lines.build(s, fo.scale * 0.5);
-        geo::Mesh& m = ex.mesh;
-        auto seamDebug = [&](const char* stage) {
-            if (!symmetric || !std::getenv("LILA_SEAM_DEBUG"))
-                return;
-            for (Index p = 0; p < m.pointCapacity(); ++p)
-            {
-                if (!m.pointValid(p) || !m.isBoundaryPoint(p) || std::abs(plane.distance(m.position(p))) > 0.35 * h)
-                    continue;
-                int inner = 0;
-                m.forEachPointEdge(p, [&](Index e) { inner += !m.isBoundaryEdge(e); });
-                if (inner != 1)
-                    std::fprintf(stderr, "seam %s %s inner %d at %.3f %.3f %.3f\n", layout, stage, inner, m.position(p).x, m.position(p).y, m.position(p).z);
-            }
-        };
-        seamDebug("extracted");
-        // LILA_STAGE_DUMP=<dir>: the mesh after each cleanup step, as <layout>_<step>.obj.
-        auto stageDump = [&](const char* stage) {
-            if (const char* dir = std::getenv("LILA_STAGE_DUMP"))
-                dumpObj(m, std::string(dir) + "/" + layout + "_" + stage + ".obj");
-        };
-        std::vector<FeatureKind>& feature = ex.feature;
-        std::vector<uint8_t>& boundary = ex.boundary;
-        feature.resize(m.pointCapacity(), FeatureKind::None);
-        boundary.resize(m.pointCapacity(), 0);
-        removeValence2(m, feature);
-        seamDebug("v2");
-        stageDump("1v2");
-        // Every border point on the plane is the seam's, however it was traced, so no hole fill closes a bay along it.
-        if (symmetric)
-        {
-            boundary.resize(m.pointCapacity(), 0);
-            for (Index p = 0; p < m.pointCapacity(); ++p)
-                if (m.pointValid(p) && m.isBoundaryPoint(p) && std::abs(plane.distance(m.position(p))) < 1e-6 * h)
-                    boundary[p] = 1;
-        }
-        geo::conformNormals(m);
-        fillHoles(m, boundary, &bvh);
-        seamDebug("holes");
-        {
-            std::vector<Index> tris;
-            for (Index f = 0; f < m.faceCapacity(); ++f)
-                if (m.faceValid(f) && m.faceSize(f) == 3)
-                    tris.push_back(f);
-            geo::QuadrangulateOptions qo;
-            qo.maxFaceAngle = 60.0;
-            geo::quadrangulateFaces(m, tris, qo);
-        }
-        seamDebug("quads");
-        feature.resize(m.pointCapacity(), FeatureKind::None);
-        removeValence2(m, feature);
-        boundary.resize(m.pointCapacity(), 0);
-        compactTagged(m, feature, boundary);
-        seamDebug("compact");
-        stageDump("2compact");
-        geo::conformNormals(m);
-        // Conforming only makes the winding consistent; the source's own decides which way round it goes.
-        if (2 * foldedFaces(m, src, bvh).size() > size_t(m.numFaces()))
-            for (Index f = 0; f < m.faceCapacity(); ++f)
-                if (m.faceValid(f))
-                    m.flipFace(f);
-        const double coarseH = cf * h;
-        FeatureLines border;
-        border.build(s, fo.scale * 0.5, true);
-        snapCorners(m, feature, s, 1.25 * coarseH);
-        boundary.resize(m.pointCapacity(), 0);
-        seamDebug("presnap");
-        stageDump("3corners");
-        snapBorder(m, feature, border, 1.5 * coarseH);
-        seamDebug("snapped");
-        stageDump("4border");
-        projectPoints(m, feature, bvh, lines, 0.6 * coarseH);
-        relaxAlongFeatures(m, feature, bvh, lines, coarseH, std::max(1, opts.relaxIterations / 2), symmetric ? opts.symmetryAxis : -1);
-        clock.lap("cleanup");
-        stageDump("5relax");
-
-        // The patch layout is built at the final density.
-        if (opts.pureQuads && std::string_view(layout) != "patches")
-        {
-            m = splitToQuads(m, feature, boundary, lines, coarseH);
-            seamDebug("split");
-            snapBorder(m, feature, border, coarseH);
-            seamDebug("snapped2");
-            projectPoints(m, feature, bvh, lines, 0.4 * coarseH);
-        }
-        // Patch grids are filled flat between their corners, so they take longer to even out over the surface.
-        const bool patches = std::string_view(layout) == "patches";
-        int relaxIterations = patches ? kPatchRelaxPerIteration * opts.relaxIterations : opts.relaxIterations;
-        if (const char* e = std::getenv("LILA_PATCH_RELAX"); e && patches)
-            relaxIterations = std::atoi(e);
-        if (!patches)
-            splitHighValence(m, feature);
-        stageDump("6split");
-        const std::optional<SizeField> sizes = patches ? std::optional<SizeField>(std::in_place, s, scale) : std::nullopt;
-        relaxAlongFeatures(m, feature, bvh, lines, h, relaxIterations, symmetric ? opts.symmetryAxis : -1, sizes ? &*sizes : nullptr);
-        stageDump("7relax");
-        untangle(m, feature, src, bvh, lines, h);
-        stageDump("8untangle");
-        clock.lap("refine");
-
-        if (symmetric)
-        {
-            // Seam points sit exactly on the plane so the mirror welds them and the halves match bit for bit.
-            const int axis = opts.symmetryAxis;
-            for (Index p = 0; p < m.pointCapacity(); ++p)
-                if (m.pointValid(p) && m.isBoundaryPoint(p) && std::abs(plane.distance(m.position(p))) < 0.35 * h)
-                {
-                    glm::dvec3 at = m.position(p);
-                    at[axis] = 0.0;
-                    m.setPosition(p, at);
-                }
-            seamDebug("premerge");
-            // The patch layout's center line is a traced line, an edge loop already.
-            if (!patches)
-            {
-                collapseSeamWedges(m, feature, bvh, axis, 1e-9 * h);
-                straightenSeamRows(m, feature, bvh, axis, 1e-9 * h);
-            }
-            seamDebug("premirror");
-            geo::MirrorOptions mo;
-            mo.plane = plane;
-            mo.weld = true;
-            mo.tolerance = std::max(1e-9, h * 1e-6);
-            geo::mirrorMesh(m, mo);
-            m.compact();
-        }
-        if (opts.sharpAngle > 0.0 && !lines.empty())
-            geo::setHardEdgesByAngle(m, opts.sharpAngle);
-        out.metrics = measureQuality(m, &bvh);
-        out.mesh = std::move(m);
-        return out;
-    };
-
-    const bool closed = isClosed(src);
-    auto record = [&](QuadRemeshResult r) {
-        if (r.ok())
-            result.attempts.push_back({r.layout, r.mesh.numFaces(), int(defects(r.mesh, src, bvh, closed)), r.metrics.irregular});
-        // LILA_DUMP_ATTEMPTS=<dir>: every attempt as attempt<n>_<layout>.obj, in the source's space.
-        if (const char* dir = std::getenv("LILA_DUMP_ATTEMPTS"); dir && r.ok())
-            dumpObj(r.mesh, std::string(dir) + "/attempt" + std::to_string(result.attempts.size()) + "_" + r.layout + ".obj");
-        return r;
-    };
-    auto build = [&](const char* layout, const std::vector<glm::dvec3>& o, const std::vector<std::array<int, 2>>* steps = nullptr) {
-        return record(buildFrom(extractMesh(s, q, o, scale, steps), layout));
-    };
-    const bool pinned = !opts.pinnedPoints.empty();
-    auto flawsOf = [&](const QuadRemeshResult& r) { return r.ok() ? int(defects(r.mesh, src, bvh, closed) + largeFaces(r.mesh)) : 0; };
-    // Pinned points only hold exactly in one global parametrization, whose lattice points round onto them. Where it
-    // doesn't come out clean, the local field, which holds them only nearly, and the result says so.
-    auto pinnedLayout = [&](const std::vector<glm::dvec3>& qPin) {
-        std::optional<QuadRemeshResult> kept;
-        int keptFlaws = 0;
-        auto consider = [&](QuadRemeshResult r) {
-            const int flaws = flawsOf(r);
-            if (r.ok() && (!kept || flaws < keptFlaws || (flaws == keptFlaws && r.metrics.irregular < kept->metrics.irregular)))
-            {
-                kept = std::move(r);
-                keptFlaws = flaws;
-            }
-            return flaws;
-        };
-        // Steering the rounding away from folds untangles some layouts, so a folded one tries again with it when the
-        // budget leaves room. One folded through and through (busy creases, mostly) doesn't come right by steering.
-        for (int foldRetries : {0, 48})
-        {
-            const auto started = std::chrono::steady_clock::now();
-            std::vector<std::array<int, 2>> steps;
-            Extracted grid;
-            Index folds = 0;
-            std::vector<glm::dvec3> o = solveSeamlessPositions(s, qPin, scale, nullptr, &steps, &grid, foldRetries, &folds);
-            if (o.empty())
-                break;
-            // The grid traces folds left in the layout as holes; rounding to the nearest lattice point covers them.
-            if (grid.mesh.numFaces() == 0 || consider(record(buildFrom(std::move(grid), "seamless"))) > 0)
-                consider(record(buildFrom(extractMesh(s, qPin, o, scale, &steps), "seamless")));
-            const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
-            if (folds == 0 || folds > Index(s.tris.size() / 100) || Budget::remaining() <= 3.0 * took || (kept && keptFlaws == 0))
-                break;
-        }
-        clock.lap("seamless");
-        if (kept && keptFlaws == 0)
-            return std::move(*kept);
-        QuadRemeshResult field = build("field", solvePositionField(s, q, scale));
-        if (kept && (!field.ok() || keptFlaws <= flawsOf(field)))
-            return std::move(*kept);
-        if (field.ok())
-            result.notes.push_back("the pinned points don't fit a clean global layout here, so the local field holds them only nearly");
-        return field;
-    };
-    // Close poles of opposite turn are only a kink in the flow, and poles packed together crowd the layout: the field is
-    // solved again turning only at the poles left once those are cancelled and spread. The symmetric field did this once
-    // already, on its half.
-    std::vector<glm::dvec3> qLayout = q;
-    if ((pinned || opts.method == RemeshMethod::Patches) && !opts.poles && !usesSymmetricField(w, opts))
+    QuadRemeshResult r = coverRemesh(w, opts, clock);
+    if (!r.ok() && !opts.featureGuides.empty())
     {
-        // Weaker pull to the curvature lets the field keep to the poles it is given instead of growing new ones beside them.
-        FieldOptions budgeted = fo;
-        budgeted.curvatureWeight *= 0.3;
-        for (int round = 0; round < 3; ++round)
-        {
-            const std::vector<FieldSingularity> poles = fieldSingularities(s, qLayout);
-            const std::vector<FieldSingularity> kept = spreadPoles(s, cancelClosePoles(s, poles, scale, 1.5), scale, 1.0);
-            bool same = kept.size() == poles.size();
-            for (size_t i = 0; i < kept.size() && same; ++i)
-                same = kept[i].tri == poles[i].tri && kept[i].index == poles[i].index;
-            if (same)
-                break;
-            PrescribedTwist pt = prescribeSingularities(s, kept);
-            if (!pt.error.empty())
-                break;
-            budgeted.twist = std::move(pt.twist);
-            qLayout = solveCrossField(s, budgeted);
-        }
-        Budget::note(std::to_string(fieldSingularities(s, qLayout).size()) + " poles for the layout");
+        // Edge loop curves that can't be laid in (a curve the layout can't follow) shouldn't cost the whole remesh.
+        QuadRemeshOptions plain = opts;
+        plain.featureGuides.clear();
+        QuadRemeshResult again = quadRemeshOnce(source, plain);
+        if (again.ok())
+            again.notes.insert(again.notes.begin(), "the edge loop curves couldn't be laid into the layout (" + r.error + "), so this follows the flow without them");
+        return again;
     }
-    QuadRemeshResult best;
-    if (pinned)
-        best = pinnedLayout(qLayout);
-    else if (opts.method == RemeshMethod::Patches)
+    if (!r.ok())
     {
-        std::string why;
-        if (const char* dump = std::getenv("LILA_FIELD_DUMP"))
-            if (FILE* f = std::fopen(dump, "w"))
-            {
-                for (Index v = 0; v < s.vertexCount(); ++v)
-                    std::fprintf(f, "%.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g\n", s.pos[v].x, s.pos[v].y, s.pos[v].z, s.normal[v].x,
-                                 s.normal[v].y, s.normal[v].z, qLayout[v].x, qLayout[v].y, qLayout[v].z);
-                std::fclose(f);
-            }
-        // Handles that change the size a lot get a cross of lines, so their patches take the size in their side counts.
-        std::vector<glm::dvec3> crosses;
-        for (const DensityHandle& handle : opts.densityHandles)
-            if (std::abs(std::log(std::max(handle.scale, 1e-3))) > std::log(1.3))
-                crosses.push_back(handle.position);
-        // An edge length asked for sets the count, as it does for the field.
-        const double half = symmetric ? 0.5 : 1.0;
-        const double patchFaces = opts.targetEdgeLength > 0.0
-                                      ? std::max(8.0, s.totalArea() * half / (opts.targetEdgeLength * opts.targetEdgeLength))
-                                      : double(opts.targetFaces) * half;
-        Extracted ex = layoutPatches(s, qLayout, scale, patchFaces, &why, crosses);
-        clock.lap("patches");
-        if (const char* raw = std::getenv("LILA_PATCH_RAW"); raw && ex.mesh.numFaces() > 0)
-            dumpObj(ex.mesh, raw);
-        if (ex.mesh.numFaces() > 0)
-            best = record(buildFrom(std::move(ex), "patches"));
-        else
-            best.error = why;
-        // Where the field's lines drift (long limbs) the layout can fold or crowd its poles; the layout traced in the
-        // continuous seamless charts doesn't drift, and is kept when it is clearly cleaner. Its poles are the field's
-        // own, unmerged, so elsewhere the field layout stays. It carries a density handle's size more weakly, so not there.
-        if (opts.densityHandles.empty())
-        {
-            const int fieldFlaws = flawsOf(best);
-            const Index fieldCrowding = best.ok() ? sharpCorners(best.mesh) + clusteredPoles(best.mesh) : 0;
-            if (!best.ok() || fieldFlaws > 0 || fieldCrowding > kRescueCrowding)
-            {
-                std::string whySeamless;
-                Extracted seamlessEx = layoutPatches(s, qLayout, scale, patchFaces, &whySeamless, crosses, true);
-                if (seamlessEx.mesh.numFaces() > 0)
-                {
-                    QuadRemeshResult seamless = record(buildFrom(std::move(seamlessEx), "patches"));
-                    const int seamlessFlaws = flawsOf(seamless);
-                    const Index seamlessCrowding = seamless.ok() ? sharpCorners(seamless.mesh) + clusteredPoles(seamless.mesh) : 0;
-                    const bool take = seamless.ok() && (!best.ok() || seamlessFlaws < fieldFlaws ||
-                                                        (seamlessFlaws == fieldFlaws && double(seamlessCrowding) < 0.6 * double(fieldCrowding)));
-                    if (std::getenv("LILA_PATCH_DEBUG"))
-                        std::fprintf(stderr, "seamless patches: field %d flaws %d crowding, seamless %d flaws %d crowding, %s\n", fieldFlaws,
-                                     int(fieldCrowding), seamlessFlaws, int(seamlessCrowding), take ? "seamless kept" : "field kept");
-                    if (take)
-                    {
-                        result.notes.push_back("the patch layout traced along the flow came out folded or crowded, so it was traced in a seamless parametrization instead");
-                        best = std::move(seamless);
-                    }
-                }
-            }
-        }
-        // Where the patches don't come out (a torus with no poles) or come out with flaws, the local field when it is
-        // cleaner, said so. A few flaws stay when the field would pay for them in poles all over.
-        const int patchFlaws = flawsOf(best);
-        if (!best.ok() || patchFlaws > 0)
-        {
-            QuadRemeshResult field = build("field", solvePositionField(s, q, scale));
-            const bool fewFlaws = patchFlaws <= std::max(8, int(best.mesh.numFaces() / 100));
-            if (field.ok() && (!best.ok() || (flawsOf(field) < patchFlaws && (!fewFlaws || field.metrics.irregular <= 3 * best.metrics.irregular / 2))))
-            {
-                result.notes.push_back(best.ok() ? "the patch layout came out with " + std::to_string(patchFlaws) +
-                                                       (patchFlaws == 1 ? " flaw" : " flaws") + ", so each point is placed from the flow near it instead, with more poles"
-                                                 : "the patch layout didn't work out for this shape (" + why + "), so each point is placed from the flow near it instead");
-                best = std::move(field);
-            }
-        }
-    }
-    else
-        best = build("field", solvePositionField(s, q, scale));
-    // Where lattice points land against a tight spot is down to where the lattice happens to sit; a lattice shifted by
-    // half a cell often fits where the first didn't, at the same density.
-    int bestDefects = best.ok() ? int(defects(best.mesh, src, bvh, closed)) : 0;
-    if (best.layout == "field" && !(best.ok() && bestDefects == 0))
-        for (glm::dvec2 shift : {glm::dvec2(0.5, 0.0), glm::dvec2(0.0, 0.5), glm::dvec2(0.5, 0.5)})
-        {
-            QuadRemeshResult again = build("shifted", solvePositionField(s, q, scale, shift));
-            clock.lap("shifted");
-            const int againDefects = again.ok() ? int(defects(again.mesh, src, bvh, closed)) : 0;
-            if (better(again, againDefects, best, bestDefects))
-            {
-                best = std::move(again);
-                bestDefects = againDefects;
-            }
-            if (best.ok() && bestDefects == 0)
-                break;
-        }
-    result.defects = best.ok() ? int(bestDefects) : 0;
-    if (!best.ok())
-    {
-        result.error = best.error;
+        result.error = r.error;
         return result;
     }
-    result.mesh = std::move(best.mesh);
-    result.metrics = best.metrics;
-    result.layout = best.layout;
+    result.attempts.push_back({r.layout, r.mesh.numFaces(), r.defects, r.metrics.irregular});
+    result.mesh = std::move(r.mesh);
+    result.metrics = r.metrics;
+    result.layout = r.layout;
+    result.defects = r.defects;
     clock.lap("finish");
     return result;
 }
@@ -2112,7 +3363,13 @@ Index defects(const geo::Mesh& m, const geo::Mesh& src, const geo::MeshBvh& bvh,
                 }
             });
         });
-        count += n > 0 && m.faceArea(f) > 6.0 * around / double(n);
+        const bool big = n > 0 && m.faceArea(f) > 6.0 * around / double(n);
+        if (big && std::getenv("LILA_DEFECT_LIST"))
+        {
+            const glm::dvec3 c = m.faceCentroid(f);
+            std::fprintf(stderr, "defect big face %.3f %.3f %.3f\n", c.x, c.y, c.z);
+        }
+        count += big;
     }
     return count;
 }
@@ -2125,51 +3382,6 @@ Index largeFaces(const geo::Mesh& m)
         count += m.faceValid(f) && m.faceSize(f) > 5;
     return count;
 }
-
-/** Face corners under 30 degrees: sheared quads that relaxing couldn't open. */
-Index sharpCorners(const geo::Mesh& m)
-{
-    const double limit = std::cos(glm::radians(30.0));
-    Index count = 0;
-    for (Index f = 0; f < m.faceCapacity(); ++f)
-    {
-        if (!m.faceValid(f))
-            continue;
-        const std::vector<Index> pts = m.facePoints(f);
-        const size_t n = pts.size();
-        for (size_t k = 0; k < n; ++k)
-        {
-            const glm::dvec3 p = m.position(pts[k]), a = m.position(pts[(k + n - 1) % n]) - p, b = m.position(pts[(k + 1) % n]) - p;
-            const double la = glm::length(a), lb = glm::length(b);
-            count += la > 0.0 && lb > 0.0 && glm::dot(a, b) / (la * lb) > limit;
-        }
-    }
-    return count;
-}
-
-/** Inner poles with another inner pole within two edges: crowded poles pinch the quads between them. */
-Index clusteredPoles(const geo::Mesh& m)
-{
-    auto pole = [&](Index p) { return m.pointValid(p) && !m.isBoundaryPoint(p) && m.pointValence(p) != 4; };
-    Index count = 0;
-    for (Index p = 0; p < m.pointCapacity(); ++p)
-    {
-        if (!pole(p))
-            continue;
-        bool near = false;
-        m.forEachPointEdge(p, [&](Index e) {
-            const Index a = m.edgeOtherPoint(e, p);
-            near = near || pole(a);
-            m.forEachPointEdge(a, [&](Index e2) {
-                const Index b = m.edgeOtherPoint(e2, a);
-                near = near || (b != p && pole(b));
-            });
-        });
-        count += near;
-    }
-    return count;
-}
-
 /** Of two results, the one that worked with fewer defects. */
 bool better(const QuadRemeshResult& a, int defectsA, const QuadRemeshResult& b, int defectsB)
 {
@@ -2210,21 +3422,32 @@ static PoleResult findPolesWithin(const geo::Mesh& source, const QuadRemeshOptio
         out.error = w.error;
         return out;
     }
-    std::vector<glm::dvec3> q = crossField(w, opts, out.error);
+    CoverInput in = coverInput(w, opts, out.error);
     if (!out.ok())
         return out;
-    for (const FieldSingularity& f : fieldSingularities(w.s, q))
+    AutoRemesher::Parameterizer pz(&in.vertices, &in.triangles, in.guidance.empty() ? nullptr : &in.guidance);
+    setUp(pz, in, w);
+    if (!pz.solveField())
     {
-        const auto& tri = w.s.tris[f.tri];
-        glm::dvec3 c = (w.s.pos[tri[0]] + w.s.pos[tri[1]] + w.s.pos[tri[2]]) / 3.0;
-        out.poles.push_back({c, 4 - f.index});
+        out.error = "the edge flow couldn't be solved on this shape";
+        return out;
+    }
+    const std::vector<size_t>& at = pz.singularVertexIndices();
+    const std::vector<int>& charge = pz.singularVertexCharges();
+    for (size_t i = 0; i < at.size(); ++i)
+    {
+        glm::dvec3 c = w.iso.pos[at[i]];
+        // A layout made whole turns on both sides; the result mirrors its positive half.
+        if (w.wholeLayout && w.plane.distance(c) < -1e-9)
+            continue;
+        out.poles.push_back({c, 4 - charge[i]});
         if (w.symmetric && std::abs(w.plane.distance(c)) > 1e-9)
         {
             c[opts.symmetryAxis] = -c[opts.symmetryAxis];
-            out.poles.push_back({c, 4 - f.index});
+            out.poles.push_back({c, 4 - charge[i]});
         }
     }
-    for (int total : shellIndexTotals(w.s).indexTotal)
+    for (int total : shellIndexTotals(w.iso).indexTotal)
         out.shellTotals.push_back(total == INT_MIN ? std::optional<int>() : std::optional<int>(total));
     return out;
 }
@@ -2264,40 +3487,39 @@ void keepOrMerge(QuadRemeshResult& kept, QuadRemeshResult&& again, bool take)
     kept.attempts = std::move(attempts);
 }
 
-/** The first clean layout, retrying finer for thin strips and tight spots, up to about four times the faces asked for. */
+/**
+ * The layout at the size asked for; one with many flaws (folds or holes in over 1% of its faces, usually a thin part too
+ * narrow for the quads) tries again up to twice as fine, and the cleanest is kept.
+ */
 QuadRemeshResult cleanest(const geo::Mesh& source, const QuadRemeshOptions& opts, int& asked)
 {
     auto started = std::chrono::steady_clock::now();
     QuadRemeshResult result = quadRemeshOnce(source, opts);
     double lastTook = secondsSince(started);
     asked = opts.targetFaces;
-    if (source.numFaces() == 0)
-        return result;
-    // Pinned points tie the lattice to the source's own spacing; a finer retry would no longer meet them. Patches meet
-    // the count they are given rather than folding where it is coarse, so they keep it once they come out at all.
-    if (!opts.pinnedPoints.empty() || (result.ok() && (result.defects == 0 || opts.method == RemeshMethod::Patches)))
+    auto many = [](const QuadRemeshResult& r) { return r.defects > std::max(8, int(r.mesh.numFaces() / 100)); };
+    if (source.numFaces() == 0 || !opts.pinnedPoints.empty() || (result.ok() && !many(result)))
         return result;
     QuadRemeshOptions finer = opts;
-    for (int attempt = 0; attempt < 4; ++attempt)
+    for (int attempt = 0; attempt < 2; ++attempt)
     {
-        // A finer lattice takes longer; one that wouldn't finish in time gives way to the best result so far.
         if (result.ok() && (Budget::remaining() < 2.0 * lastTook || std::getenv("LILA_NO_FINER")))
             break;
         if (opts.targetEdgeLength > 0.0)
-            finer.targetEdgeLength *= 0.85;
+            finer.targetEdgeLength *= 0.7;
         else
-            finer.targetFaces = int(std::lround(finer.targetFaces / (0.85 * 0.85)));
+            finer.targetFaces = int(std::lround(finer.targetFaces / (0.7 * 0.7)));
         started = std::chrono::steady_clock::now();
         QuadRemeshResult again = quadRemeshOnce(source, finer);
         lastTook = secondsSince(started);
-        const bool take = better(again, again.defects, result, result.defects) || (again.ok() && again.defects == 0);
+        const bool take = better(again, again.defects, result, result.defects);
         if (take)
             asked = finer.targetFaces;
         keepOrMerge(result, std::move(again), take);
         if (take)
             result.notes = {"at " + std::to_string(opts.targetFaces) + " faces the layout folded at thin parts or tight spots, so it was made finer (" +
                             std::to_string(finer.targetFaces) + " asked)"};
-        if (result.ok() && result.defects == 0)
+        if (result.ok() && !many(result))
             break;
     }
     return result;
@@ -2329,7 +3551,8 @@ void fitCount(const geo::Mesh& source, const QuadRemeshOptions& opts, QuadRemesh
         QuadRemeshResult r = quadRemeshOnce(source, again);
         lastTook = secondsSince(started);
         const auto nonQuads = [](const QuadRemeshResult& x) { return x.metrics.triangles + x.metrics.ngons; };
-        const bool take = r.ok() && r.defects <= result.defects && nonQuads(r) <= nonQuads(result) && off(r) < off(result);
+        const bool take = r.ok() && r.defects <= std::max(result.defects + 2, result.defects * 5 / 4) && nonQuads(r) <= nonQuads(result) + 2 &&
+                          off(r) < off(result);
         if (take)
             asked = again.targetFaces;
         keepOrMerge(result, std::move(r), take);
@@ -2400,9 +3623,9 @@ static QuadRemeshResult quadRemeshWithin(const geo::Mesh& source, const QuadReme
         result = gridRemesh(source, opts);
         if (result.ok())
             return result;
-        gridNote = "Grid takes an open sheet seen from one side (" + result.error + "), so this is laid out by patches";
+        gridNote = "Grid takes an open sheet seen from one side (" + result.error + "), so this follows the flow instead";
         result = {};
-        laid.method = RemeshMethod::Patches;
+        laid.method = RemeshMethod::Flow;
     }
     int asked = laid.targetFaces;
     keepOrMerge(result, cleanest(source, laid, asked), true);

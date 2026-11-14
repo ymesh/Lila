@@ -348,6 +348,15 @@ json LayoutController::capture() const
     if (mSidebars)
         for (const QString& name : mSidebars->collapsedNames())
             collapsed.push_back(name.toStdString());
+    json collapsedGroups = json::array();
+    if (mSidebars)
+        for (const QStringList& group : mSidebars->collapsedGroups())
+        {
+            json names = json::array();
+            for (const QString& name : group)
+                names.push_back(name.toStdString());
+            collapsedGroups.push_back(std::move(names));
+        }
     json tabSizes = json::object();
     if (mSidebars)
     {
@@ -361,7 +370,7 @@ json LayoutController::capture() const
             {"tabSizes", std::move(tabSizes)},
             {"state", mWindow->saveState().toBase64().toStdString()},
             {"docks", std::move(docks)},
-            {"collapsed", std::move(collapsed)},
+            {"collapsed", std::move(collapsed)}, {"collapsedGroups", std::move(collapsedGroups)},
             {"viewport", {{"quad", mViewports->quad()}, {"camera", mViewports->active()->viewName()}}},
             {"shelf", {{"visible", shelf && shelf->toggleViewAction()->isChecked()}, {"current", currentShelf()}}}};
 }
@@ -542,6 +551,17 @@ void LayoutController::apply(const json& layout)
             if (n.is_string())
                 collapsed << QString::fromStdString(n.get<std::string>());
         mSidebars->restoreCollapsed(collapsed);
+        QList<QStringList> drawers;
+        for (const json& group : layout.value("collapsedGroups", json::array()))
+        {
+            QStringList names;
+            if (group.is_array())
+                for (const json& n : group)
+                    if (n.is_string())
+                        names << QString::fromStdString(n.get<std::string>());
+            drawers << names;
+        }
+        mSidebars->restoreCollapsedGroups(drawers);
         std::map<QString, int> tabSizes;
         json savedSizes = layout.value("tabSizes", json::object());
         for (auto& [name, size] : savedSizes.items())

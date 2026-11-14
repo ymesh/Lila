@@ -63,7 +63,10 @@ struct CageEstimateOptions
     int iterations = 4;
     /** Kept between the cage and the high, as a fraction of the lows' bounds diagonal. */
     double margin = 0.004;
-    /** Each low's cage stops just short of the group's other lows in front of it, so it never pokes through a mesh lying on it. */
+    /**
+     * Each low's cage stops just short of the group's other lows in front of it, and of its own surface across a fold (an
+     * arm over the torso), so it never pokes through a mesh lying on it.
+     */
     bool clearance = true;
 };
 

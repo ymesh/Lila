@@ -79,9 +79,10 @@ TEST_CASE("moved poles are where the field turns")
     retopo::PoleResult after = retopo::findPoles(m, o);
     REQUIRE(after.ok());
     CHECK(after.poles.size() == moved.size());
-    CHECK(nearest(after.poles, to).second < 5.0);
+    // Poles sit on the working triangles' corners, about a quad apart here.
+    CHECK(nearest(after.poles, to).second < 8.0);
     for (const retopo::Pole& p : moved)
-        CHECK(nearest(after.poles, p.position).second < 5.0);
+        CHECK(nearest(after.poles, p.position).second < 8.0);
 
     // A pair of opposite poles can be added anywhere; a lone one can't.
     std::vector<retopo::Pole> paired = before.poles;

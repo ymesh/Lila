@@ -572,6 +572,10 @@ NodeId create(Graph& g, const std::vector<NodeId>& meshes, const Options& o)
         qo.targetEdgeLength = std::min(qo.targetEdgeLength, 0.85 * girth / double(o.edgesAround));
     qo.adaptivity = 0.0;
     qo.jointDensity = 0.0;
+    // The voxel sheet's steps aren't creases to keep; only the joint loops are.
+    qo.sharpAngle = -1.0;
+    qo.useHardEdges = false;
+    qo.smoothInput = true;
     qo.featureGuides = loopGuides(sheet, bones, std::max(0, o.loopsPerBone));
     // Off the UI thread, cancellable, and bounded: a shape the remesh struggles with fails with a reason, not a freeze.
     qo.timeout = 120.0;

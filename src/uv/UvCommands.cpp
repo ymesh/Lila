@@ -562,6 +562,7 @@ AutoSeamOptions seamArgs(const Args& a, std::string* overridden = nullptr)
     o.keepSeams = a.get<bool>("keepSeams", false);
     o.visibility = a.get<bool>("visibility", true);
     o.merge = a.get<bool>("merge", true);
+    o.darts = a.get<bool>("darts", AutoSeamOptions{}.darts);
     o.useHardEdges = a.get<bool>("useHardEdges", false);
     std::string method = a.get<std::string>("method", "split");
     if (method != "split" && method != "optcuts")
@@ -603,6 +604,7 @@ std::vector<FlagDef> seamFlagDefs()
             {"maxDistortion", "", T::Float, 0.08, "Split islands that stretch more than this when flattened.", {}, {}, 0.0},
             {"visibility", "", T::Bool, true, "Hide cuts where they are least visible."},
             {"merge", "", T::Bool, true, "Merge islands back while they still flatten well."},
+            {"darts", "", T::Bool, AutoSeamOptions{}.darts, "Before splitting an island that stretches, try short cuts in from where it caps over (fingertips, a nose)."},
             {"method", "", T::String, "split",
              "split (hard edges, open to disks, split where stretched) or optcuts (Auto Seams 2: seams and distortion optimised together).",
              {"split", "optcuts"}},
@@ -1878,13 +1880,15 @@ void registerCommands()
 
     ops::registerCommand({
         .name = "uvOrient",
-        .doc = "Rotate the selected islands upright: by bounding box, principal axis, longest edge or edge grid.",
-        .flags = {uvSetFlag(), {"mode", "", T::String, "bbox", "bbox, principal, edge or grid (polygon edges along U and V).", {"bbox", "principal", "edge", "grid"}}},
+        .doc = "Rotate the selected islands upright: by bounding box, principal axis, longest edge, edge grid or surface flow.",
+        .flags = {uvSetFlag(), {"mode", "", T::String, "bbox", "bbox, principal, edge, grid (polygon edges along U and V), flow (the surface's curvature and creases along U and V) or auto (grid, else flow, else bbox).", {"bbox", "principal", "edge", "grid", "flow", "auto"}}},
         .run = [](const Args& a) -> json {
             std::string mode = a.get<std::string>("mode", "bbox");
             OrientMode om = mode == "principal" ? OrientMode::Principal
                             : mode == "edge"    ? OrientMode::LongestEdge
                             : mode == "grid"    ? OrientMode::Grid
+                            : mode == "flow"    ? OrientMode::Flow
+                            : mode == "auto"    ? OrientMode::Upright
                                                 : OrientMode::BoundingBox;
             std::string set = uvSetArg(a);
             return editUv("UV Orient", K::Face, [&](geo::Mesh& m, const Ids& f, Node& n) -> json {
@@ -2214,13 +2218,29 @@ void registerCommands()
         },
     });
 
-    for (const char* cmd : {"uvUnwrap", "uvOptimize", "uvLiveRelax", "uvPack", "uvAuto", "uvHose", "uvBff", "uvMosaic", "uvTexelDensity", "uvLayout"})
+    for (const char* cmd : {"uvUnwrap", "uvOptimize", "uvLiveRelax", "uvPack", "uvAuto", "uvHose", "uvBff", "uvFlowUnwrap", "uvMosaic", "uvTexelDensity", "uvLayout"})
     {
         ops::options::Override o;
         if (const ops::options::Override* had = ops::options::findOverride(cmd))
             o = *had;
         o.labels["finalMesh"] = "After Modifiers";
         ops::options::setOverride(cmd, std::move(o));
+    }
+    {
+        ops::options::Override o;
+        if (const ops::options::Override* had = ops::options::findOverride("uvFlowUnwrap"))
+            o = *had;
+        o.labels["straightAngle"] = "Straighten Within";
+        o.ranges["straightAngle"] = {0.0, 45.0, 1.0, " deg"};
+        ops::options::setOverride("uvFlowUnwrap", std::move(o));
+    }
+    {
+        ops::options::Override o;
+        if (const ops::options::Override* had = ops::options::findOverride("uvBff"))
+            o = *had;
+        o.labels["coneSource"] = "Cones From";
+        o.choices["coneSource"] = {{"stretch", "Stretch"}, {"flow", "Flow"}};
+        ops::options::setOverride("uvBff", std::move(o));
     }
     for (const char* cmd : {"uvAuto", "uvAutoSeams", "uvHose"})
     {

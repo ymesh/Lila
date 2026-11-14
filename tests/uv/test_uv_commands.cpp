@@ -1,4 +1,5 @@
 #include "TestUtil.h"
+#include "GroovedPanel.h"
 #include "bake/BakeNodes.h"
 #include "geo/Topology.h"
 #include "ops/Command.h"
@@ -825,8 +826,9 @@ TEST_CASE("uvUnwrapExported applies the modifiers and leaves no collapsed uvs")
 
 TEST_CASE("uvLiveRelax repairs the export after its uv symmetry pass")
 {
-    // A thin symmetric plate unwrapped symmetrically: the relax leaves the rim strips collapsed on the export, and the
-    // symmetry pass that mirrors the relax rewrites islands across the plane, so the repair has to come after it.
+    // A thin symmetric plate unwrapped symmetrically: the bevels eat its end faces whole, so their strips collapse on the
+    // export, and the symmetry pass that mirrors the relax rewrites islands across the plane, so the repair comes after
+    // it. Those strips only open by folding the end flaps into the island: they stay, and the island stays untangled.
     run("newScene");
     std::string plate = run("polyCube", {{"width", 10.0}, {"height", 0.4}, {"depth", 6.0}, {"subdivisionsX", 2}, {"subdivisionsZ", 2}})[0];
     run("select", {{"args", {plate}}});
@@ -838,27 +840,30 @@ TEST_CASE("uvLiveRelax repairs the export after its uv symmetry pass")
     run("setAttr", {{"args", {subdiv + ".levels", 2}}});
     run("setAttr", {{"args", {subdiv + ".uvs", 1}}});
     run("select", {{"args", {plate}}});
-    run("uvLiveRelax", {{"iterations", 200}});
 
-    scene::Graph& g = scene::Graph::current();
-    g.evaluate();
-    const geo::Mesh& m = *g.find(plate)->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
-    // Per island, no triangle under 2% of the uv area the island's density gives it.
-    uv::ChartOptions co;
-    co.source = uv::IslandSource::Uvs;
-    size_t collapsed = 0;
-    for (const uv::Chart& ch : uv::buildCharts(m, {}, co))
-    {
-        const double density = std::abs(ch.areaUv()) / std::max(ch.area3d(), 1e-300);
-        for (const auto& t : ch.tris)
+    // Per island, the exported triangles under 2% of the uv area the island's density gives them.
+    auto collapsed = [&] {
+        const geo::Mesh& m = *meshOf(plate);
+        uv::ChartOptions co;
+        co.source = uv::IslandSource::Uvs;
+        size_t n = 0;
+        for (const uv::Chart& ch : uv::buildCharts(m, {}, co))
         {
-            const glm::dvec3 a = ch.pos[t[0]], b = ch.pos[t[1]], c = ch.pos[t[2]];
-            const double a3 = 0.5 * glm::length(glm::cross(b - a, c - a));
-            const glm::dvec2 u = ch.uv[t[1]] - ch.uv[t[0]], v = ch.uv[t[2]] - ch.uv[t[0]];
-            collapsed += a3 > 1e-9 && 0.5 * std::abs(u.x * v.y - u.y * v.x) < 0.02 * a3 * density;
+            const double density = std::abs(ch.areaUv()) / std::max(ch.area3d(), 1e-300);
+            for (const auto& t : ch.tris)
+            {
+                const glm::dvec3 a = ch.pos[t[0]], b = ch.pos[t[1]], c = ch.pos[t[2]];
+                const double a3 = 0.5 * glm::length(glm::cross(b - a, c - a));
+                const glm::dvec2 u = ch.uv[t[1]] - ch.uv[t[0]], v = ch.uv[t[2]] - ch.uv[t[0]];
+                n += a3 > 1e-9 && 0.5 * std::abs(u.x * v.y - u.y * v.x) < 0.02 * a3 * density;
+            }
         }
-    }
-    CHECK(collapsed == 0);
+        return n;
+    };
+    const size_t before = collapsed();
+    run("uvLiveRelax", {{"iterations", 200}});
+    CHECK(collapsed() <= before);
+    CHECK(overlaps(*cageOf(plate)) == 0);
 }
 
 TEST_CASE("camera projection maps what a camera sees to 0-1, image up as V")
@@ -964,4 +969,81 @@ TEST_CASE("islands keep off the uvs of meshes baked into the same texture")
     ps.output.name = "T_{mesh}_{map}";
     bake::setProjectSettings(g, project->id(), ps);
     CHECK(shared(cubes[0]) == 0);
+}
+
+namespace
+{
+/** The grooved panel under an autoBevel on its picked edges and two levels of Fit Surface subdivision, selected. */
+std::string groovedPanel()
+{
+    run("newScene");
+    json points = json::array(), faces = json::array(), uvs = json::array();
+    for (const auto& p : kGroovedPanelPoints)
+        points.push_back({p[0], p[1], p[2]});
+    for (const auto& f : kGroovedPanelFaces)
+        faces.push_back({f[0], f[1], f[2], f[3]});
+    for (const auto& u : kGroovedPanelUvs)
+        uvs.push_back({u[0], u[1]});
+    const json made = run("createMesh", {{"points", points}, {"faces", faces}, {"uvs", uvs}});
+    const std::string name = made.is_array() ? made[0].get<std::string>() : made.get<std::string>();
+
+    scene::Graph& g = scene::Graph::current();
+    geo::Mesh m = *meshOf(name);
+    auto edgesOf = [&](const auto& pairs) {
+        std::vector<geo::Index> out;
+        for (geo::Index e = 0; e < m.edgeCapacity(); ++e)
+            if (m.edgeValid(e))
+                for (const auto& pr : pairs)
+                    if ((int(m.edgePoint(e, 0)) == pr[0] && int(m.edgePoint(e, 1)) == pr[1]) ||
+                        (int(m.edgePoint(e, 0)) == pr[1] && int(m.edgePoint(e, 1)) == pr[0]))
+                        out.push_back(e);
+        return out;
+    };
+    const std::vector<geo::Index> bevels = edgesOf(kGroovedPanelBevels);
+    REQUIRE(bevels.size() == kGroovedPanelBevels.size());
+    std::span<bool> seam = m.edgeAttrs().getOrAdd<bool>(geo::attr::kSeam);
+    for (geo::Index e : edgesOf(kGroovedPanelSeams))
+        seam[e] = true;
+    g.setValue({g.find(name)->id(), scene::MeshNode::kInMesh, -1}, scene::MeshPtr(std::make_shared<geo::Mesh>(std::move(m))));
+
+    const json bevelled = run("autoBevel", {{"args", {name}}, {"offset", 1.0}, {"segments", 2}});
+    const std::string bevel = bevelled.is_array() ? bevelled[0].get<std::string>() : bevelled.get<std::string>();
+    run("bevelEditEdges", {{"args", {bevel}}});
+    run("selectComponents", {{"args", {name}}, {"edges", bevels}});
+    run("bevelApplyEdges", {{"args", {bevel}}});
+    const json added = run("addModifier", {{"args", {name}}, {"kind", "subdivision"}});
+    const std::string subdiv = added.is_array() ? added[0].get<std::string>() : added.get<std::string>();
+    run("setAttr", {{"args", {subdiv + ".levels", 2}}});
+    run("setAttr", {{"args", {subdiv + ".uvs", 1}}});
+    run("select", {{"args", {name}}});
+    return name;
+}
+} // namespace
+
+TEST_CASE("uv tools solving on the export leave the cage's own islands untangled")
+{
+    // The bevel squeezes the groove's strips to slivers on the export; opening them must not fold the island the UV Editor shows.
+    {
+        const std::string panel = groovedPanel();
+        REQUIRE(meshOf(panel)->numFaces() > cageOf(panel)->numFaces());
+        REQUIRE(overlaps(*cageOf(panel)) > 0);
+    }
+    const std::pair<const char*, json> tools[] = {{"uvUnwrap", json::object()},
+                                                  {"uvOptimize", json::object()},
+                                                  {"uvLiveRelax", {{"flatten", true}}}};
+    for (const auto& [tool, flags] : tools)
+    {
+        const std::string label = tool;
+        CAPTURE(label);
+        const std::string panel = groovedPanel();
+        run(tool, flags);
+        CHECK(overlaps(*cageOf(panel)) == 0);
+        CHECK(overlaps(*meshOf(panel)) == 0);
+    }
+    // A relax keeps a clean island clean.
+    const std::string panel = groovedPanel();
+    run("uvUnwrap");
+    run("uvLiveRelax");
+    CHECK(overlaps(*cageOf(panel)) == 0);
+    CHECK(overlaps(*meshOf(panel)) == 0);
 }

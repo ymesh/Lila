@@ -1,0 +1,51 @@
+/*
+ *  Copyright (c) 2026 Jeremy HU <jeremy-at-dust3d dot org>. All rights reserved.
+ *
+ *  Permission is hereby granted, free of charge, to any person obtaining a copy
+ *  of this software and associated documentation files (the "Software"), to deal
+ *  in the Software without restriction, including without limitation the rights
+ *  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ *  copies of the Software, and to permit persons to whom the Software is
+ *  furnished to do so, subject to the following conditions:
+ *
+ *  The above copyright notice and this permission notice shall be included in all
+ *  copies or substantial portions of the Software.
+ *
+ *  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ *  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ *  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ *  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ *  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ *  SOFTWARE.
+ */
+#ifndef AUTO_REMESHER_FRAME_FIELD_H
+#define AUTO_REMESHER_FRAME_FIELD_H
+
+#include <AutoRemesher/Vector3>
+#include <cstddef>
+#include <vector>
+
+namespace AutoRemesher {
+
+class SurfaceMesh;
+
+/** A direction the field should follow on one face (a flow guide, a soft crease), with how hard it pulls. */
+struct FaceHint {
+    size_t face = 0;
+    Vector3 direction;
+    double weight = 1.0;
+};
+
+class FrameField {
+public:
+    /**
+     * hints pull faces toward a direction; stiffness (per face, 1 neutral) scales how strongly the field is kept smooth
+     * across each face's edges, which pushes singularities out of stiff regions.
+     */
+    static bool create(const SurfaceMesh& mesh, double sharpEdgeDegrees,
+        std::vector<Vector3>* field, const std::vector<FaceHint>* hints = nullptr,
+        const std::vector<double>* stiffness = nullptr);
+};
+}
+#endif

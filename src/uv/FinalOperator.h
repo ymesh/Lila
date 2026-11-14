@@ -93,7 +93,8 @@ inline constexpr double kCageHold = 0.05;
  */
 struct CageHold
 {
-    CageHold(const Chart& ch, const FinalIsland& isl, std::span<const glm::dvec2> x0);
+    /** Whole holds every edge alike, however well the export reads it. */
+    CageHold(const Chart& ch, const FinalIsland& isl, std::span<const glm::dvec2> x0, bool whole = false);
 
     /** The factor that makes the hold the given share of the export's mean stiffness per vertex. */
     double scaleFor(double share, double exportDiag) const { return diagMean > 0.0 ? share * exportDiag / diagMean : 0.0; }

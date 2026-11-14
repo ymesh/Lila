@@ -3,6 +3,7 @@
 #include "core/Profile.h"
 #include "geo/Bvh.h"
 #include "geo/Normals.h"
+#include "uv/Flow.h"
 #include "uv/Metrics.h"
 #include "uv/OptCuts.h"
 #include "uv/Project.h"
@@ -25,6 +26,15 @@ namespace lila::uv
 {
 namespace
 {
+/** Darts tried on one island before it splits instead. */
+constexpr int kMaxDarts = 4;
+/** Darts may add up to this share of the island's border length. */
+constexpr double kDartShare = 0.35;
+/** Angle defect (radians, over two rings) a cap point needs before a dart there is worth trying. */
+constexpr double kMinDartCurvature = 0.05;
+/** Cap points closer than this (times the square root of the island's area) share one dart. */
+constexpr double kDartSpacing = 0.15;
+
 struct Context
 {
     const geo::Mesh& mesh;
@@ -32,6 +42,7 @@ struct Context
     bool checkDistortion = true;
     std::vector<uint8_t> inSet;     // per face
     std::vector<uint8_t> cut;       // per edge: a seam inside or between islands
+    std::vector<uint8_t> dart;      // per edge: cut as a dart, so its island doesn't dart again
     std::vector<uint8_t> mandatory; // per edge: islands never merge across it
     std::vector<double> cost;       // per edge: price of cutting it
     std::vector<double> sharp;      // per edge: 0 flat to 1 at a right angle or more
@@ -107,6 +118,7 @@ void setup(Context& ctx, std::span<const Index> faces, const std::vector<float>&
         ctx.area[f] = m.faceArea(f);
     });
     ctx.cut.assign(m.edgeCapacity(), 0);
+    ctx.dart.assign(m.edgeCapacity(), 0);
     ctx.mandatory.assign(m.edgeCapacity(), 0);
     ctx.cost.assign(m.edgeCapacity(), 0.0);
     ctx.sharp.assign(m.edgeCapacity(), 0.0);
@@ -568,6 +580,61 @@ std::vector<Index> cutPath(const Context& ctx, const Chart& ch, const std::vecto
     return path;
 }
 
+/** Cheapest edge path from a chart vertex to the chart's border, as mesh edges, leaving out edges in cut. */
+std::vector<Index> dartPath(const Context& ctx, const Chart& ch, Index from, std::span<const uint8_t> cut)
+{
+    const geo::Mesh& m = ctx.mesh;
+    const Index V = ch.vertexCount();
+    std::unordered_map<Index, int> uses;
+    for (Index c : ch.corners)
+        ++uses[m.cornerEdge(c)];
+    std::vector<std::vector<std::pair<Index, Index>>> adj(V);
+    std::vector<uint8_t> border(V, 0);
+    for (size_t f = 0; f + 1 < ch.faceStart.size(); ++f)
+        for (Index k = ch.faceStart[f]; k < ch.faceStart[f + 1]; ++k)
+        {
+            const Index e = m.cornerEdge(ch.corners[k]);
+            const Index a = ch.cornerVertex[k];
+            const Index b = ch.cornerVertex[k + 1 < ch.faceStart[f + 1] ? k + 1 : ch.faceStart[f]];
+            if (uses[e] < 2 || cut[e])
+            {
+                border[a] = border[b] = 1;
+                continue;
+            }
+            adj[a].emplace_back(b, e);
+        }
+    std::vector<double> dist(V, std::numeric_limits<double>::infinity());
+    std::vector<std::pair<Index, Index>> prev(V, {kInvalid, kInvalid});
+    using Item = std::pair<double, Index>;
+    std::priority_queue<Item, std::vector<Item>, std::greater<>> pq;
+    dist[from] = 0.0;
+    pq.emplace(0.0, from);
+    Index hit = kInvalid;
+    while (!pq.empty())
+    {
+        auto [dd, v] = pq.top();
+        pq.pop();
+        if (dd > dist[v])
+            continue;
+        if (border[v])
+        {
+            hit = v;
+            break;
+        }
+        for (auto [w, e] : adj[v])
+            if (const double nd = dd + ctx.cost[e]; nd < dist[w])
+            {
+                dist[w] = nd;
+                prev[w] = {v, e};
+                pq.emplace(nd, w);
+            }
+    }
+    std::vector<Index> path;
+    for (Index v = hit; v != kInvalid && prev[v].first != kInvalid; v = prev[v].first)
+        path.push_back(prev[v].second);
+    return path;
+}
+
 enum class Verdict
 {
     Accept,
@@ -579,6 +646,7 @@ struct Evaluation
 {
     Verdict verdict = Verdict::Accept;
     std::vector<Index> cuts;
+    bool darts = false;
     std::vector<std::vector<Index>> parts;
     Chart chart;
 };
@@ -592,6 +660,67 @@ Chart islandChart(const Context& ctx, std::span<const Index> faces, size_t* coun
     if (count)
         *count = charts.size();
     return charts.empty() ? Chart{} : std::move(charts.front());
+}
+
+/**
+ * Darts that let an island flatten: cuts from its flow's cap points (most curved first, up to kMaxDarts) to its border,
+ * kept only when they bring it under the distortion limit without passing kDartShare of its border's length. Empty when
+ * they don't, or when the island has darts already. The border loop is in the island's own (unflattened) chart.
+ */
+std::vector<Index> tryDarts(const Context& ctx, std::span<const Index> faces, const std::vector<Index>& loop)
+{
+    const geo::Mesh& m = ctx.mesh;
+    for (Index f : faces)
+        for (Index c : m.faceCorners(f))
+            if (ctx.dart[m.cornerEdge(c)])
+                return {};
+    const Chart ch = islandChart(ctx, faces);
+    double perimeter = 0.0;
+    for (size_t i = 0; i < loop.size(); ++i)
+        perimeter += glm::distance(ch.pos[loop[i]], ch.pos[loop[(i + 1) % loop.size()]]);
+    std::vector<uint8_t> cut = ctx.cut;
+    std::vector<Index> darts, dartedAt;
+    double length = 0.0;
+    int made = 0;
+    const double spacing = kDartSpacing * std::sqrt(ch.area3d());
+    const std::vector<FlowCone> found = flowCones(ch);
+    for (const FlowCone& cone : found)
+    {
+        if (cone.index <= 0 || cone.curvature < kMinDartCurvature || made >= kMaxDarts)
+            continue;
+        // A cone beside one already darted (singular points come in clusters round a cap) is open already.
+        bool open = false;
+        for (Index v : dartedAt)
+            open |= glm::distance(ch.pos[v], ch.pos[cone.vertex]) < spacing;
+        if (open)
+            continue;
+        dartedAt.push_back(cone.vertex);
+        const std::vector<Index> path = dartPath(ctx, ch, cone.vertex, cut);
+        if (path.empty())
+            continue;
+        for (Index e : path)
+        {
+            cut[e] = 1;
+            length += m.edgeLength(e);
+            darts.push_back(e);
+        }
+        ++made;
+        if (length > kDartShare * perimeter)
+            return {};
+        ChartOptions co;
+        co.useSeamAttr = false;
+        co.extraSeams = cut;
+        std::vector<Chart> charts = buildCharts(m, faces, co);
+        if (charts.size() != 1)
+            return {};
+        UnwrapOptions uo;
+        uo.iterations = 6;
+        uo.usePins = false;
+        const UnwrapResult r = unwrapChart(charts.front(), uo);
+        if (r.ok && r.distortion <= ctx.opts.maxDistortion && !chartOverlaps(charts.front()))
+            return darts;
+    }
+    return {};
 }
 
 Evaluation evaluate(const Context& ctx, std::span<const Index> faces)
@@ -652,6 +781,14 @@ Evaluation evaluate(const Context& ctx, std::span<const Index> faces)
     bool bad = !r.ok || r.distortion > ctx.opts.maxDistortion || chartOverlaps(ch);
     if (bad && faces.size() >= size_t(std::max(2, ctx.opts.minSplitFaces)))
     {
+        if (ctx.opts.darts)
+            if (std::vector<Index> darts = tryDarts(ctx, faces, loops.front()); !darts.empty())
+            {
+                ev.cuts = std::move(darts);
+                ev.darts = true;
+                ev.verdict = Verdict::Cut;
+                return ev;
+            }
         split();
         return ev;
     }
@@ -678,6 +815,9 @@ std::vector<Chart> settle(Context& ctx, std::vector<std::vector<Index>> queue)
             case Verdict::Cut:
                 for (Index e : ev[i].cuts)
                     ctx.cut[e] = 1;
+                if (ev[i].darts)
+                    for (Index e : ev[i].cuts)
+                        ctx.dart[e] = 1;
                 next.push_back(std::move(queue[i]));
                 break;
             case Verdict::Split:

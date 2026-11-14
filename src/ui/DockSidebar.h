@@ -17,6 +17,7 @@ class QHBoxLayout;
 class QMainWindow;
 class QTabBar;
 class QToolBar;
+class QToolButton;
 
 namespace lila::ui
 {
@@ -118,7 +119,8 @@ private:
 
 /**
  * Collapsing a docked panel hides it and leaves a tab on a thin strip along its window edge; clicking the tab brings it
- * back where it was. The tab stays, checked, while the panel is open, so the same click collapses it again; it goes when
+ * back where it was. A tab group collapses and expands as one: clicking its showing tab closes every tab of the group,
+ * and clicking any of their strip tabs opens them all with that one on top. The tab stays, checked, while the panel is open, so the same click collapses it again; it goes when
  * the panel is moved, floated or closed. The bottom strip sits at the left of the status bar rather than in a band of
  * its own. Collapsed panels persist through the layout prefs.
  */
@@ -133,12 +135,22 @@ public:
     void manage(QDockWidget* dock);
     void collapse(QDockWidget* dock);
     void expand(QDockWidget* dock);
+    /** Collapses every tab of the dock's group at once, so the whole column closes like a drawer. */
+    void collapseGroup(QDockWidget* dock);
+    /** Expands the dock and the collapsed tabs of its group together, with the dock on top. */
+    void expandGroup(QDockWidget* dock);
+    /** The edge's drawer button: expands every collapsed panel of the area, or with none collapsed, collapses all of it. */
+    void toggleArea(Qt::DockWidgetArea area);
     /** See revealDock. */
     void reveal(QDockWidget* dock);
     bool isCollapsed(const QDockWidget* dock) const;
 
     QStringList collapsedNames() const;
     void restoreCollapsed(const QStringList& names);
+    /** The collapsed panels that went in together as a tab group, one list per group, for the layout prefs. */
+    QList<QStringList> collapsedGroups() const;
+    /** After restoreCollapsed: which of the collapsed panels expand together. */
+    void restoreCollapsedGroups(const QList<QStringList>& groups);
     void expandAll();
     /** Hides the dock, dropping its sidebar tab if it is collapsed. */
     void close(QDockWidget* dock);
@@ -170,6 +182,8 @@ private:
     /** Once the current layout change settles, drops an open dock's tab if the dock was closed, floated or moved. */
     void dropStaleTabLater(QDockWidget* dock);
     void hookTabBars();
+    /** Keeps a tab bar's collapse button at its right end, left of the scroll arrows, with the icon of its edge. */
+    void placeDrawerButton(QTabBar* bar);
     QDockWidget* dockForTab(QTabBar* bar, int index) const;
     void hideStaleTabBars();
     bool mStaleBarsQueued = false;
@@ -203,11 +217,15 @@ private:
     QMainWindow* mWindow;
     std::vector<EdgeDrag> mEdgeDrags;
     std::map<Qt::DockWidgetArea, QToolBar*> mStrips;
+    std::map<Qt::DockWidgetArea, QToolButton*> mStripHeads;
     std::map<QDockWidget*, QWidget*> mTabs;
     /** Docks whose strip tab stays while they are open. */
     std::set<QDockWidget*> mOpen;
     std::map<QDockWidget*, QSize> mSizes;
     std::map<QString, int> mTabSizes;
+    /** Collapsed docks that expand together: the id is shared by the tabs of a group collapsed at once. */
+    std::map<QDockWidget*, int> mDrawers;
+    int mNextDrawer = 1;
     bool mPressOnCurrentTab = false;
     QPoint mTabPressPos;
     bool mCollapsedByClick = false;

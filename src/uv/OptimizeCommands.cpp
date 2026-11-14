@@ -7,6 +7,7 @@
 #include "scene/MeshNodes.h"
 #include "uv/Align.h"
 #include "uv/Bff.h"
+#include "uv/Flow.h"
 #include "uv/OptCuts.h"
 #include "uv/Optimize.h"
 #include "uv/SymmetryUv.h"
@@ -137,6 +138,10 @@ void registerOptimizeCommands()
         .flags = {uvSetFlag(),
                   {"boundary", "", T::String, "free", "free, disk, rectangle or polygon.", {"free", "disk", "rectangle", "polygon"}},
                   {"cones", "", T::Int, 0, "Cone points placed automatically (free boundary only); each adds a short seam.", {}, {}, 0.0, 64.0},
+                  {"coneSource", "", T::String, "stretch",
+                   "stretch: where flattening stretches most. flow: where the surface's flow turns (caps and saddles), most curved first; "
+                   "with cones 0, every one that bends enough.",
+                   {"stretch", "flow"}},
                   {"exactLengths", "", T::Bool, false, "free boundary: bend rather than stretch to close it, so its lengths are exact."},
                   {"pack", "", T::Bool, false, "Pack the islands into 0-1 afterwards."},
                   finalMeshFlag()},
@@ -153,6 +158,13 @@ void registerOptimizeCommands()
             else
                 throw CommandError("uvBff: boundary must be free, disk, rectangle or polygon");
             bo.autoCones = std::clamp(a.get<int>("cones", 0), 0, 64);
+            const std::string coneSource = a.get<std::string>("coneSource", "stretch");
+            if (coneSource != "stretch" && coneSource != "flow")
+                throw CommandError("uvBff: coneSource must be stretch or flow");
+            const bool flowSource = coneSource == "flow" && bo.boundary == BffBoundary::MinimalArea;
+            const int flowCount = bo.autoCones;
+            if (flowSource)
+                bo.autoCones = 0;
             bo.exactLengths = a.get<bool>("exactLengths", false);
             const bool pack = a.get<bool>("pack", false), rectangle = boundary == "rectangle";
             std::string set = uvSetOf(a);
@@ -177,6 +189,8 @@ void registerOptimizeCommands()
                             o.corners.push_back(v);
                     if (rectangle && o.corners.size() != 4)
                         o.corners.clear();
+                    if (flowSource)
+                        o.cones = flowConeVertices(ch, flowCount);
                     Chart trial = ch;
                     BffResult r = bff(trial, o);
                     if (!r.ok)
@@ -204,6 +218,85 @@ void registerOptimizeCommands()
                 if (cones > 0)
                     markSeamsFromUvs(m, faces, set);
                 json out = {{"islands", charts.size()}, {"failed", failed.load()}, {"cones", cones.load()}, {"seamsAdded", opened}};
+                const PackOptions packing;
+                if (json fm = finishOnExport(m, faces, set, n, final, pack ? &packing : nullptr); !fm.is_null())
+                    out["finalMesh"] = std::move(fm);
+                return out;
+            }));
+        },
+    });
+
+    ops::registerCommand({
+        .name = "uvFlowUnwrap",
+        .doc = "Unwrap the selected faces' islands so U and V follow the surface's flow (its curvature, creases and borders): panels come "
+               "out as rectangles and bevels as straight strips, ready for trim sheets. Each island is cut open from the points its flow "
+               "turns round; one that would fold or overlap itself that way is unwrapped for least stretch instead and counted in fellBack. Islands keep "
+               "their place unless pack=True or they had no uvs.",
+        .flags = {uvSetFlag(),
+                  {"straighten", "", T::Bool, true, "Lay border and crease edges that run nearly along U or V exactly along it."},
+                  {"straightAngle", "", T::Float, 12.0, "How close to U or V an edge must run to be straightened, degrees.", {}, {}, 0.0, 45.0},
+                  {"pack", "", T::Bool, false, "Pack the islands into 0-1 afterwards."},
+                  finalMeshFlag()},
+        .run = [](const Args& a) -> json {
+            const bool final = a.get<bool>("finalMesh", true);
+            FlowUnwrapOptions fo;
+            fo.straighten = a.get<bool>("straighten", true);
+            fo.straightAngle = std::clamp(a.get<double>("straightAngle", 12.0), 0.0, 45.0);
+            const bool pack = a.get<bool>("pack", false);
+            std::string set = uvSetOf(a);
+            return editUvMeshes("UV Flow Unwrap", K::Face, symmetricUvEdit(set, [&](geo::Mesh& m, const Ids& f, Node& n) -> json {
+                LILA_ZONE_N("uvFlowUnwrap");
+                std::vector<Index> faces = liveFaces(m, f);
+                Index opened = cutToDisks(m, faces);
+                ChartOptions co;
+                co.uvSet = set;
+                std::vector<Chart> charts = buildCharts(m, faces, co);
+                std::atomic<size_t> fellBack{0}, darts{0}, straightened{0}, repaired{0}, folded{0};
+                std::vector<uint8_t> place(charts.size(), 0);
+                tbb::parallel_for(size_t(0), charts.size(), size_t(1), [&](size_t i) {
+                    Chart& ch = charts[i];
+                    const bool had = usableUvs(ch);
+                    const glm::dvec2 c0 = ch.uvCentroid();
+                    const double a0 = std::abs(ch.areaUv());
+                    Chart trial = ch;
+                    const FlowUnwrapResult r = flowUnwrap(trial, fo);
+                    if (r.ok && r.folded == 0 && !chartOverlaps(trial))
+                    {
+                        ch = std::move(trial);
+                        darts += r.darts;
+                        straightened += r.straightened;
+                        repaired += r.repaired;
+                    }
+                    else
+                    {
+                        ++fellBack;
+                        UnwrapOptions uo;
+                        uo.usePins = false;
+                        if (!unwrapChart(ch, uo).ok)
+                            ++folded;
+                    }
+                    if (had && !pack)
+                        fitChart(ch, c0, a0);
+                    else
+                        place[i] = 1;
+                });
+                std::vector<Chart> toPack;
+                for (size_t i = 0; i < charts.size(); ++i)
+                    if (place[i])
+                        toPack.push_back(std::move(charts[i]));
+                if (!toPack.empty())
+                    packCharts(toPack, {});
+                for (size_t i = 0, k = 0; i < charts.size(); ++i)
+                    if (place[i])
+                        charts[i] = std::move(toPack[k++]);
+                writeCharts(m, charts, set);
+                if (darts > 0)
+                    markSeamsFromUvs(m, faces, set);
+                json out = {{"islands", charts.size()},       {"darts", darts.load()},       {"straightened", straightened.load()},
+                            {"repaired", repaired.load()},    {"fellBack", fellBack.load()}, {"failed", folded.load()},
+                            {"seamsAdded", opened}};
+                if (fellBack > 0)
+                    out["note"] = std::to_string(fellBack.load()) + " island(s) couldn't follow their flow without folding or overlapping and were unwrapped for least stretch instead";
                 const PackOptions packing;
                 if (json fm = finishOnExport(m, faces, set, n, final, pack ? &packing : nullptr); !fm.is_null())
                     out["finalMesh"] = std::move(fm);

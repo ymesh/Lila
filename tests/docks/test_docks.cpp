@@ -9,6 +9,7 @@
 #include <QMainWindow>
 #include <QMenuBar>
 #include <QToolBar>
+#include <QToolButton>
 #include <QTabBar>
 #include <QMouseEvent>
 
@@ -751,4 +752,69 @@ TEST_CASE("dragging a tab out of its group keeps the tab bar carrying the drag")
     w.win.restoreState(state);
     settle();
     CHECK(w.docks["channelBox"]->isVisible());
+}
+
+TEST_CASE("clicking the showing tab collapses its whole tab group, and a strip tab brings the group back")
+{
+    Window w;
+    QDockWidget* channels = w.docks["channelBox"];
+    QDockWidget* attrs = w.docks["attributeEditor"];
+    QTabBar* bar = w.tabBarFor(channels);
+    REQUIRE(bar);
+    const int width = channels->width();
+    click(bar, Qt::LeftButton, bar->tabRect(bar->currentIndex()).center());
+    settle();
+    CHECK(w.sidebars->isCollapsed(channels));
+    CHECK(w.sidebars->isCollapsed(attrs));
+    CHECK_FALSE(channels->isVisible());
+    CHECK_FALSE(attrs->isVisible());
+    CHECK(w.central->geometry().right() > w.win.width() - 60);
+
+    w.sidebars->expandGroup(attrs);
+    settle();
+    CHECK_FALSE(w.sidebars->isCollapsed(channels));
+    CHECK_FALSE(w.sidebars->isCollapsed(attrs));
+    CHECK(dockShowing(attrs));
+    CHECK_FALSE(dockShowing(channels));
+    CHECK(std::abs(attrs->width() - width) <= 2);
+}
+
+TEST_CASE("one tab collapsed on its own leaves the rest of its group open")
+{
+    Window w;
+    QDockWidget* channels = w.docks["channelBox"];
+    QDockWidget* attrs = w.docks["attributeEditor"];
+    w.sidebars->collapse(channels);
+    settle();
+    CHECK(w.sidebars->isCollapsed(channels));
+    CHECK_FALSE(w.sidebars->isCollapsed(attrs));
+    CHECK(attrs->isVisible());
+}
+
+TEST_CASE("a tab bar's collapse button closes the group and the edge's drawer button brings it back")
+{
+    Window w;
+    QDockWidget* channels = w.docks["channelBox"];
+    QDockWidget* attrs = w.docks["attributeEditor"];
+    QTabBar* bar = w.tabBarFor(channels);
+    REQUIRE(bar);
+    auto* button = bar->findChild<QToolButton*>("lilaDrawerButton");
+    REQUIRE(button);
+    CHECK(button->isVisible());
+    CHECK(button->geometry().right() <= bar->width());
+    button->click();
+    settle();
+    CHECK(w.sidebars->isCollapsed(channels));
+    CHECK(w.sidebars->isCollapsed(attrs));
+
+    w.sidebars->toggleArea(Qt::RightDockWidgetArea);
+    settle();
+    CHECK(dockShowing(channels));
+    CHECK(attrs->isVisible());
+    CHECK_FALSE(w.sidebars->isCollapsed(attrs));
+
+    w.sidebars->toggleArea(Qt::RightDockWidgetArea);
+    settle();
+    CHECK(w.sidebars->isCollapsed(channels));
+    CHECK(w.sidebars->isCollapsed(attrs));
 }

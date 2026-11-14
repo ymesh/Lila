@@ -42,6 +42,12 @@ struct AutoSeamOptions
     double maxDistortion = 0.08;
     /** Islands this small are never split for distortion. */
     int minSplitFaces = 8;
+    /**
+     * An island that can't flatten first tries darts: short cuts in from the points its surface caps over (a fingertip,
+     * the tip of a nose), found as the singular points of its flow. It splits in two only when darts don't do. Shorter
+     * seams and fewer islands, but notched islands pack a little looser.
+     */
+    bool darts = false;
     /** Prefer cuts where they are least visible: occluded, concave and downward facing. */
     bool visibility = true;
     /** Merge neighbouring islands back together while the result stays below maxDistortion. */

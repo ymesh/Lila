@@ -6,7 +6,8 @@ add_executable(lila_uv_tests
     test_live.cpp
     test_bevel_uv.cpp
     test_hose.cpp
-    test_final_mesh.cpp)
+    test_final_mesh.cpp
+    test_uv_flow.cpp)
 target_link_libraries(lila_uv_tests PRIVATE LilaScene doctest::doctest)
 add_test(NAME lila_uv_tests COMMAND lila_uv_tests)
 

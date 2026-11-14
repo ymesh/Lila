@@ -9,7 +9,7 @@ add_executable(lila_retopo_tests
     test_repair.cpp
     test_poles.cpp
     test_retopo.cpp
-    test_seamless.cpp
+    test_flow.cpp
     test_tools.cpp
     test_topology.cpp)
 target_link_libraries(lila_retopo_tests PRIVATE LilaScene doctest::doctest)

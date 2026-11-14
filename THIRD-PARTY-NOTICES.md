@@ -65,6 +65,7 @@ web-ifc 0.78 and the CDT it bundles are statically linked and unmodified; their 
 | GroomLab engine (core and io, modified) | Apache-2.0 | Nick Rutlinh | `src/groom/groomlab` (licence and NOTICE there), from https://github.com/thekesslereffect/groomlab at 3e7ffec |
 | MikkTSpace | Zlib | Morten S. Mikkelsen | `src/geo/third_party/mikktspace` |
 | Dem Bones | BSD-3-Clause | Electronic Arts Inc. | `third_party/dem-bones` (licence in `third_party/dem-bones/LICENSE.md`), from https://github.com/electronicarts/dem-bones at 09b899b |
+| AutoRemesher (quad layout core: frame field, quad cover, extraction; modified) | MIT | Jeremy HU (Dust3D) | `third_party/autoremesher` (licence in `third_party/autoremesher/LICENSE`), from https://github.com/huxingyi/autoremesher at 4a49f82 |
 | stb_truetype | MIT OR Unlicense | Sean Barrett | `src/curve/third_party/stb` |
 | NanoSVG | Zlib | Mikko Mononen | `src/curve/third_party/nanosvg` |
 | ONNX Runtime 1.24.4 (runs the motion model; DirectML build on Windows) | MIT | Microsoft Corporation | https://github.com/microsoft/onnxruntime (licence in `third_party/onnxruntime/LICENSE`) |

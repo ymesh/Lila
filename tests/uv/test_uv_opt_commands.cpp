@@ -45,3 +45,18 @@ TEST_CASE("uv optimise, bff, optcuts, symmetry and align commands")
     run("uvAlignToEdge");
     run("undo");
 }
+
+TEST_CASE("uvFlowUnwrap lays a cylinder's wall out square to U and V, with nothing folded")
+{
+    run("newScene");
+    std::string cyl = run("polyCylinder", {{"subdivisionsAxis", 24}, {"subdivisionsHeight", 6}})[0];
+    run("select", {{"args", {cyl}}});
+    run("uvAutoSeams", {{"visibility", false}});
+    json r = run("uvFlowUnwrap", {{"pack", true}});
+    CHECK(r["fellBack"] == 0);
+    CHECK(r["failed"] == 0);
+    CHECK(r["straightened"].get<int>() > 0);
+    CHECK(run("uvLayout")["foldedFaces"] == 0);
+    run("undo");
+    run("redo");
+}

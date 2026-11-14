@@ -31,18 +31,20 @@ using detail::triFrame;
 
 constexpr double kPinWeight = 1e6;    // times the mean diagonal
 constexpr double kTargetWeight = 1e3; // soft pins (drags)
+/** Relaxing the export, a step stops before it squeezes one of the island's own triangles under this share of its rest area. */
+constexpr double kCageFloor = 0.2;
 
 double cross2(glm::dvec2 a, glm::dvec2 b)
 {
     return a.x * b.y - a.y * b.x;
 }
 
-/** Smallest t in (0, inf) where det(J0 + t Jd) reaches zero, or infinity. */
-double flipRoot(const Jac2& j0, const Jac2& jd)
+/** Smallest t in (0, inf) where det(J0 + t Jd) reaches the floor (zero: the triangle flips), or infinity. */
+double flipRoot(const Jac2& j0, const Jac2& jd, double floor = 0.0)
 {
     double qa = jd.det();
     double qb = j0.a * jd.d + j0.d * jd.a - j0.b * jd.c - j0.c * jd.b;
-    double qc = j0.det();
+    double qc = j0.det() - floor;
     double root = std::numeric_limits<double>::infinity();
     double disc = qb * qb - 4.0 * qa * qc;
     if (disc < 0.0)
@@ -727,8 +729,8 @@ double LiveIsland::maxStep(const std::vector<glm::dvec2>& dir) const
                 continue;
             t = std::min(t, 0.9 * flipRoot(j0, jd));
         }
-        return std::max(0.0, t);
     }
+    // The island's own triangles too when the export is what relaxes: its layout is what the UV Editor shows and edits.
     for (size_t i = 0; i < mChart.tris.size(); ++i)
     {
         const Frame& f = mFrames[i];
@@ -744,9 +746,10 @@ double LiveIsland::maxStep(const std::vector<glm::dvec2>& dir) const
             dv += dir[tr[j]].y * f.g[j];
         }
         Jac2 j0{gu.x, gu.y, gv.x, gv.y}, jd{du.x, du.y, dv.x, dv.y};
-        if (j0.det() <= 0.0)
+        const double det = j0.det();
+        if (det <= 0.0)
             continue;
-        t = std::min(t, 0.9 * flipRoot(j0, jd));
+        t = std::min(t, 0.9 * flipRoot(j0, jd, mFinal ? std::min(kCageFloor, 0.5 * det) : 0.0));
     }
     return std::max(0.0, t);
 }

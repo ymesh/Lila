@@ -269,7 +269,8 @@ void Surface::detectFeatures(double sharpAngleDeg, double cornerDeficitDeg, doub
     }
 
     // A crease that runs along both sides of a thin triangle forks at a sliver no lattice corner fits: keep the sharper
-    // side. Only angle creases; hard edges and borders are the user's.
+    // side. Two creases that meet at a point with nothing else there are a sharp corner, which the layout turns at.
+    // Only angle creases; hard edges and borders are the user's.
     {
         const auto bendOf = [&](size_t e) {
             return std::acos(std::clamp(glm::dot(filtered[edgeTris[e][0]], filtered[edgeTris[e][1]]), -1.0, 1.0));
@@ -292,6 +293,11 @@ void Surface::detectFeatures(double sharpAngleDeg, double cornerDeficitDeg, doub
                     continue;
                 const bool canA = byAngleOnly(ea), canB = byAngleOnly(eb);
                 if (!canA && !canB)
+                    continue;
+                int meeting = 0;
+                for (Index j = adjStart[v]; j < adjStart[v + 1]; ++j)
+                    meeting += edgeFeature[adjEdge[j]] != 0;
+                if (meeting == 2)
                     continue;
                 const size_t drop = !canA ? eb : !canB ? ea : (bendOf(ea) < bendOf(eb) ? ea : eb);
                 edgeFeature[drop] = 0;
@@ -901,7 +907,7 @@ std::vector<uint8_t> Surface::saddleTips() const
     return out;
 }
 
-void FeatureLines::build(const Surface& s, double cellSize, bool boundaryOnly)
+void FeatureLines::build(const Surface& s, double cellSize, bool boundaryOnly, bool innerOnly)
 {
     LILA_ZONE();
 
@@ -909,11 +915,11 @@ void FeatureLines::build(const Surface& s, double cellSize, bool boundaryOnly)
     mCorners.clear();
     mCell = std::max(cellSize, 1e-9);
     for (size_t e = 0; e < s.edges.size(); ++e)
-        if (s.edgeFeature[e] && (!boundaryOnly || s.edgeBoundary[e]))
+        if (s.edgeFeature[e] && (!boundaryOnly || s.edgeBoundary[e]) && (!innerOnly || !s.edgeBoundary[e]))
             mSegs.push_back({s.pos[s.edges[e][0]], s.pos[s.edges[e][1]]});
     const std::vector<uint8_t> tip = s.saddleTips();
     for (Index v = 0; v < s.vertexCount(); ++v)
-        if (s.feature[v] == FeatureKind::Corner && !tip[v] && (!boundaryOnly || s.onBoundary[v]))
+        if (s.feature[v] == FeatureKind::Corner && !tip[v] && (!boundaryOnly || s.onBoundary[v]) && (!innerOnly || !s.onBoundary[v]))
             mCorners.push_back(s.pos[v]);
     mBuckets.assign(std::max<size_t>(64, mSegs.size() * 2), {});
     mCornerBuckets.assign(mBuckets.size(), {});

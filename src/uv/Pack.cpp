@@ -2,6 +2,7 @@
 
 #include "core/Profile.h"
 #include "core/Progress.h"
+#include "uv/Flow.h"
 #include "uv/Layout.h"
 #include "uv/Unwrap.h"
 #include "uv/UvCommon.h"
@@ -708,18 +709,15 @@ std::vector<double> baseAngles(const PackOptions& o)
 }
 
 /**
- * The turn that puts an island's edge grid on the axes when it has one (hard surface quads), else its smallest bounding
- * rectangle, held to the rotations the pack allows: any angle with free rotation, the nearest multiple of rotateStep
+ * The turn that puts an island's edge grid on the axes when it has one (hard surface quads), else its flow or its
+ * smallest bounding rectangle (uprightAngle), held to the rotations the pack allows: any angle with free rotation, the nearest multiple of rotateStep
  * otherwise, and none for an exact angle list or a step of 0.
  */
 void preOrientChart(Chart& ch, const PackOptions& o)
 {
     if (ch.uv.size() < 2)
         return;
-    double agreement = 0.0;
-    double angle = gridAngle(ch, &agreement);
-    if (agreement < 0.4)
-        angle = minAreaRectAngle(ch.uv);
+    double angle = uprightAngle(ch);
     if (!o.freeRotation)
     {
         if (!o.angles.empty() || o.rotateStep <= 0)

@@ -107,7 +107,7 @@ QString fileId(const QString& name)
         {"Vulkan-Headers", "vulkan-headers"}, {"Vulkan Memory Allocator", "vulkan-memory-allocator"}, {"volk", "volk"},
         {"meshoptimizer", "meshoptimizer"}, {"Jolt", "joltphysics"}, {"GLM", "glm"}, {"nlohmann", "nlohmann-json"},
         {"cpp-httplib", "cpp-httplib"}, {"Brotli", "brotli"}, {"cgltf", "cgltf"}, {"libwebp", "libwebp"}, {"Zstandard", "zstd"},
-        {"Tracy", "tracy"}, {"Capstone", "capstone"}, {"doctest", "doctest"}, {"Dem Bones", "dem-bones"}, {"FFmpeg", "ffmpeg"},
+        {"Tracy", "tracy"}, {"Capstone", "capstone"}, {"doctest", "doctest"}, {"Dem Bones", "dem-bones"}, {"AutoRemesher", "autoremesher"}, {"FFmpeg", "ffmpeg"},
         {"miniaudio", "miniaudio"}, {"Archivo", "archivo"}, {"Inter", "inter"}, {"JetBrains Mono", "jetbrains-mono"},
         {"Tabler Icons", "tabler-icons"}, {"OpenVDB", "openvdb"}, {"MaterialX", "materialx"}, {"GroomLab", "groomlab"},
         {"GoogleTest", "gtest"}, {"MD4C", "md4c"}, {"SQLite", "sqlite3"}, {"OpenSSL", "openssl"}, {"ONNX Runtime", "onnx-runtime"}, {"DirectML", "directml"},

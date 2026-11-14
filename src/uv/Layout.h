@@ -17,6 +17,8 @@ enum class OrientMode : uint8_t
     Principal,   // principal axis of the uv area along U
     LongestEdge, // longest boundary edge snapped to the nearest axis
     Grid,        // polygon edges, weighted by length, turned onto the axes: a quad grid runs along U and V
+    Flow,        // the surface's flow (curvature and creases) along U and V
+    Upright,     // edge grid when there is one, else flow when it costs little room, else bounding box
 };
 
 /**

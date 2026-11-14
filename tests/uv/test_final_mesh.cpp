@@ -628,7 +628,7 @@ TEST_CASE("final mesh: islands whose export reads a neighbour that moved solve a
             const glm::dvec3 p = m.position(m.cornerPoint(c));
             const double x = std::abs(std::abs(p.x) - 1.0) < 1e-9 ? 0.01 * p.x : p.x;
             pin[c] = std::abs(p.x) > 1e-9;
-            uv[c] = glm::vec2(float(x / 10.0 + 0.5 + (side > 0.0 ? 0.002 : 0.0)), float(p.z / 10.0 + 0.5));
+            uv[c] = glm::vec2(float(x / 10.0 + 0.5 + (side > 0.0 ? 0.002 : 0.0)), float(0.5 - p.z / 10.0));
         });
     }
     REQUIRE(islandsOf(m).size() == 2);

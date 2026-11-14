@@ -1,4 +1,5 @@
 #include "uv/Layout.h"
+#include "uv/Flow.h"
 
 #include "core/Profile.h"
 #include "uv/Unwrap.h"
@@ -407,6 +408,8 @@ void orientChart(Chart& ch, OrientMode mode)
         break;
     }
     case OrientMode::Grid: angle = gridAngle(ch); break;
+    case OrientMode::Flow: angle = flowAngle(ch); break;
+    case OrientMode::Upright: angle = uprightAngle(ch); break;
     case OrientMode::LongestEdge:
     {
         double best = -1.0;

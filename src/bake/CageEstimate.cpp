@@ -376,6 +376,8 @@ void solve(LowState& s, float floor)
 
 /** How much of the gap to another low in front a cage may cross. */
 constexpr float kClearanceShare = 0.9f;
+/** A fold's two sides both push into the gap between them, so each gets a little under half. */
+constexpr float kOwnClearanceShare = 0.45f;
 
 /** Holds every point to its clearance. */
 void clampToClearance(LowState& s)
@@ -618,31 +620,42 @@ CageEstimate estimateCage(std::span<const CageLow> lows, const GroupSettings& se
     addStageTiming(est.timings, "lowInputs", t0);
     t0 = Clock::now();
 
-    // The other lows, for clearance: rays go into each one's own space, where t stays the world distance.
+    // The lows, for clearance: rays go into each one's own space, where t stays the world distance. A low's own surface
+    // counts where a fold faces it, like an arm over the torso.
     struct Other
     {
         geo::MeshBvh bvh;
         glm::dmat4 toLocal;
     };
     std::vector<std::unique_ptr<Other>> others(lows.size());
-    if (options.clearance && lows.size() > 1)
+    if (options.clearance)
         tbb::parallel_for(size_t(0), lows.size(), [&](size_t i) {
             if (lows[i].mesh && states[i].input.soup.triangleCount())
                 others[i] = std::make_unique<Other>(Other{geo::MeshBvh(*lows[i].mesh), glm::inverse(lows[i].world)});
         });
-    auto gapAhead = [&](size_t self, const glm::vec3& p, const glm::vec3& dir, float reach) {
-        double best = reach;
+    // The most push before the cage reaches another low (kClearanceShare of the gap) or meets its own fold's cage coming
+    // the other way (half the gap less a little).
+    auto clearAhead = [&](size_t self, const glm::vec3& p, const glm::vec3& dir, float reach, float eps) {
+        double best = reach, allowed = std::numeric_limits<double>::max();
         for (size_t j = 0; j < others.size(); ++j)
         {
-            if (j == self || !others[j])
+            if (!others[j])
                 continue;
-            const glm::dvec3 o(others[j]->toLocal * glm::dvec4(glm::dvec3(p), 1.0));
+            glm::dvec3 o(others[j]->toLocal * glm::dvec4(glm::dvec3(p), 1.0));
             const glm::dvec3 d(others[j]->toLocal * glm::dvec4(glm::dvec3(dir), 0.0));
             geo::BvhHit h;
-            if (others[j]->bvh.raycast(o, d, h, best))
-                best = std::min(best, h.t);
+            // Its own surface only where it faces the cage across a gap; the faces the ray leaves from look away.
+            const bool own = j == self;
+            if (own)
+                o += d * double(eps);
+            if (others[j]->bvh.raycast(o, d, h, best, !own))
+            {
+                const double t = h.t + (own ? double(eps) : 0.0);
+                best = std::min(best, t);
+                allowed = std::min(allowed, double(own ? kOwnClearanceShare : kClearanceShare) * t);
+            }
         }
-        return float(best);
+        return float(allowed);
     };
 
     addStageTiming(est.timings, "clearance", t0);
@@ -674,7 +687,7 @@ CageEstimate estimateCage(std::span<const CageLow> lows, const GroupSettings& se
             std::vector<float> in(first[tris] - first[0], -1.0f);
             // Per corner: the most push before the cage reaches halfway to another low.
             std::vector<float> cornerClear(tris * 3, std::numeric_limits<float>::max());
-            const bool clearance = options.clearance && others.size() > 1;
+            const bool clearance = options.clearance;
             tbb::parallel_for(tbb::blocked_range<size_t>(0, tris, 64), [&](const tbb::blocked_range<size_t>& r) {
                 sampling.checkCancel();
                 for (size_t t = r.begin(); t < r.end(); ++t)
@@ -694,9 +707,9 @@ CageEstimate estimateCage(std::span<const CageLow> lows, const GroupSettings& se
                             {
                                 const int k = w.x >= w.y && w.x >= w.z ? 0 : w.y >= w.z ? 1 : 2;
                                 // Meshes that touch or cross can't be kept apart; only a real gap holds the cage back.
-                                const float gap = gapAhead(lowIndex, P, dir, s.cap);
-                                if (gap < s.cap && kClearanceShare * gap > s.margin)
-                                    cornerClear[t * 3 + size_t(k)] = std::min(cornerClear[t * 3 + size_t(k)], kClearanceShare * gap);
+                                const float allowed = clearAhead(lowIndex, P, dir, s.cap, 4.0f * s.eps);
+                                if (allowed < s.cap && allowed > s.margin)
+                                    cornerClear[t * 3 + size_t(k)] = std::min(cornerClear[t * 3 + size_t(k)], allowed);
                             }
                             if (need.outward <= 0.0f && need.inward >= 0.0f)
                                 in[slot - first[0]] = need.inward;

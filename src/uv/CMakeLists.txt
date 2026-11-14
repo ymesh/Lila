@@ -5,6 +5,7 @@ lila_module(lila_uv Scene
     Bff.cpp
     Chart.cpp
     FinalMesh.cpp
+    Flow.cpp
     Guided.cpp
     Hose.cpp
     Hotspot.cpp

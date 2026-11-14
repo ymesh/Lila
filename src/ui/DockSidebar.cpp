@@ -119,6 +119,21 @@ const std::map<Qt::DockWidgetArea, std::pair<Qt::ToolBarArea, const char*>>& str
 }
 
 constexpr const char* kTabMinimum = "lilaTabMinimum";
+constexpr const char* kDrawerButton = "lilaDrawerButton";
+/** Dynamic property on a dock: it was the showing tab when its group collapsed, so it is on top when the edge expands. */
+constexpr const char* kDrawerFront = "lilaDrawerFront";
+
+/** The icon of an edge's drawer button: the sidebar glyphs on the sides, chevrons toward or away from the edge otherwise. */
+QString drawerIcon(Qt::DockWidgetArea area, bool expand)
+{
+    switch (area)
+    {
+    case Qt::LeftDockWidgetArea: return expand ? "layout-sidebar-left-expand" : "layout-sidebar-left-collapse";
+    case Qt::RightDockWidgetArea: return expand ? "layout-sidebar-right-expand" : "layout-sidebar-right-collapse";
+    case Qt::TopDockWidgetArea: return expand ? "chevrons-down" : "chevrons-up";
+    default: return expand ? "chevrons-up" : "chevrons-down";
+    }
+}
 /** Dynamic property on a tabbed dock: the tab it covered when it was raised, which shows again when it is tucked away. */
 constexpr const char* kCoveredTab = "lilaCoveredTab";
 constexpr QSize kRelaxedMinimum(1, 1);
@@ -622,7 +637,7 @@ DockTitleBar::DockTitleBar(QDockWidget* dock) : QWidget(dock), mDock(dock)
     QToolButton* find = titleButton("search", "Find in panel (Ctrl+F)", this);
     h->addWidget(find);
     connect(find, &QToolButton::clicked, dock, [dock] { panelFilter::open(dock); });
-    QToolButton* collapse = titleButton("minus", "Collapse to the side", this);
+    QToolButton* collapse = titleButton("minus", "Collapse panels", this);
     QToolButton* floatBtn = titleButton("picture-in-picture", "Float", this);
     QToolButton* close = titleButton("x", "Close", this);
     h->addWidget(collapse);
@@ -632,6 +647,12 @@ DockTitleBar::DockTitleBar(QDockWidget* dock) : QWidget(dock), mDock(dock)
     connect(floatBtn, &QToolButton::clicked, dock, [dock] { dock->setFloating(!dock->isFloating()); });
     connect(close, &QToolButton::clicked, dock, &QDockWidget::close);
     connect(dock, &QDockWidget::topLevelChanged, collapse, [collapse](bool floating) { collapse->setVisible(!floating); });
+    const auto edgeIcon = [collapse, dock] {
+        if (auto* window = qobject_cast<QMainWindow*>(dock->parentWidget()); window && !dock->isFloating())
+            collapse->setIcon(icon(drawerIcon(window->dockWidgetArea(dock), false)));
+    };
+    connect(dock, &QDockWidget::dockLocationChanged, collapse, edgeIcon);
+    edgeIcon();
     connect(dock, &QDockWidget::windowTitleChanged, this, [this] { update(); });
     setDocsPage(dock->property(kDocsPage).toString().toStdString());
 }
@@ -743,7 +764,31 @@ void DockSidebars::hookTabBars()
         {
             bar->setProperty("lilaDockTabs", true);
             bar->installEventFilter(this);
+            QToolButton* collapse = titleButton("chevrons-left", "Collapse panels", bar);
+            collapse->setObjectName(kDrawerButton);
+            collapse->setCursor(Qt::ArrowCursor);
+            connect(collapse, &QToolButton::clicked, this, [this, bar] {
+                if (QDockWidget* d = dockForTab(bar, bar->currentIndex()))
+                    collapseGroup(d);
+            });
+            placeDrawerButton(bar);
         }
+}
+
+void DockSidebars::placeDrawerButton(QTabBar* bar)
+{
+    auto* button = bar->findChild<QToolButton*>(kDrawerButton, Qt::FindDirectChildrenOnly);
+    if (!button)
+        return;
+    int right = bar->width() - 4;
+    for (QToolButton* scroll : bar->findChildren<QToolButton*>(QString(), Qt::FindDirectChildrenOnly))
+        if (scroll != button && scroll->isVisible())
+            right = std::min(right, scroll->x() - 2);
+    button->move(right - button->width(), (bar->height() - button->height()) / 2);
+    if (QDockWidget* d = dockForTab(bar, bar->currentIndex()))
+        button->setIcon(ui::icon(drawerIcon(mWindow->dockWidgetArea(d), false)));
+    button->show();
+    button->raise();
 }
 
 QDockWidget* DockSidebars::dockForTab(QTabBar* bar, int index) const
@@ -861,7 +906,11 @@ bool DockSidebars::eventFilter(QObject* obj, QEvent* e)
     bool isMouse = e->type() == QEvent::MouseButtonPress || e->type() == QEvent::MouseButtonRelease || e->type() == QEvent::MouseButtonDblClick;
     auto* mouse = isMouse ? static_cast<QMouseEvent*>(e) : nullptr;
     if (!mouse)
+    {
+        if (auto* bar = qobject_cast<QTabBar*>(obj); bar && (e->type() == QEvent::Resize || e->type() == QEvent::Show || e->type() == QEvent::LayoutRequest))
+            placeDrawerButton(bar);
         return false;
+    }
     if (auto* bar = qobject_cast<QTabBar*>(obj))
     {
         if (mouse->button() == Qt::LeftButton && e->type() == QEvent::MouseButtonPress)
@@ -883,10 +932,15 @@ bool DockSidebars::eventFilter(QObject* obj, QEvent* e)
                     if (!page.empty())
                         menu.addAction(ui::icon("help"), "Docs", [page] { docs::open(page); });
                     menu.addAction(ui::icon("minus"), "Collapse to the Side", this, [this, d] {
-                        holdShape(mWindow);
                         if (d)
-                            collapse(d);
+                            collapseGroup(d);
                     });
+                    if (bar->count() > 1)
+                        menu.addAction(ui::icon("minus"), "Collapse This Tab Only", this, [this, d] {
+                            holdShape(mWindow);
+                            if (d)
+                                collapse(d);
+                        });
                     menu.addAction(ui::icon("picture-in-picture"), "Float", d, [d] { d->setFloating(true); });
                     menu.addAction(ui::icon("x"), "Close", d, [this, d] {
                         if (d)
@@ -918,10 +972,9 @@ bool DockSidebars::eventFilter(QObject* obj, QEvent* e)
                 mPressOnCurrentTab = false;
                 mCollapsedByClick = true;
                 QPointer<QDockWidget> d = dockForTab(bar, index);
-                holdShape(mWindow);
                 QTimer::singleShot(0, this, [this, d] {
                     if (d)
-                        collapse(d);
+                        collapseGroup(d);
                 });
             }
             return false;
@@ -959,6 +1012,7 @@ void DockSidebars::dropTab(QDockWidget* dock)
     it->second->deleteLater();
     mTabs.erase(it);
     mOpen.erase(dock);
+    mDrawers.erase(dock);
     mSizes.erase(dock);
     refreshStrips();
 }
@@ -990,10 +1044,7 @@ void DockSidebars::manage(QDockWidget* dock)
 {
     auto* bar = new DockTitleBar(dock);
     dock->setTitleBarWidget(bar);
-    connect(bar, &DockTitleBar::collapseRequested, this, [this, dock] {
-        holdShape(mWindow);
-        collapse(dock);
-    });
+    connect(bar, &DockTitleBar::collapseRequested, this, [this, dock] { collapseGroup(dock); });
     // Showing a collapsed panel from a menu or hotkey expands it.
     relaxHiddenMinimum(dock, dock->isVisible());
     connect(dock, &QDockWidget::visibilityChanged, this, [this, dock](bool visible) {
@@ -1026,7 +1077,7 @@ void DockSidebars::reveal(QDockWidget* dock)
                 dock->setProperty(kCoveredTab, other->objectName());
             }
     if (isCollapsed(dock))
-        expand(dock);
+        expandGroup(dock);
     else
     {
         dock->show();
@@ -1200,6 +1251,11 @@ QToolBar* DockSidebars::strip(Qt::DockWidgetArea area)
     bar->toggleViewAction()->setVisible(false);
     bar->setContextMenuPolicy(Qt::PreventContextMenu);
     bar->setStyleSheet("QToolBar { background: #2c2c2c; border: none; padding: 0; spacing: 2px; }");
+    QToolButton* head = titleButton(drawerIcon(area, true), "Expand panels", bar);
+    head->setFixedSize(30, 24);
+    bar->addWidget(head);
+    connect(head, &QToolButton::clicked, this, [this, area] { toggleArea(area); });
+    mStripHeads[area] = head;
     placeStrip(area, bar);
     bar->hide();
     mStrips[area] = bar;
@@ -1289,9 +1345,17 @@ void DockSidebars::collapse(QDockWidget* dock)
         tab->setToolTip("Expand " + dock->windowTitle());
         tab->installEventFilter(this);
         QAction* action = bar->addWidget(tab);
-        connect(tab, &QToolButton::clicked, this, [this, dock] {
-            holdShape(mWindow);
-            isCollapsed(dock) ? expand(dock) : collapse(dock);
+        connect(tab, &QToolButton::clicked, this, [this, dock, tab] {
+            if (isCollapsed(dock))
+                expandGroup(dock);
+            else if (dockShowing(dock))
+                collapseGroup(dock);
+            else
+            {
+                // Open behind another tab of its group: the click brings it to the front.
+                tab->setChecked(true);
+                dock->raise();
+            }
         });
         connect(tab, &QObject::destroyed, bar, [bar, action] { bar->removeAction(action); });
         mTabs[dock] = tab;
@@ -1329,6 +1393,7 @@ void DockSidebars::expand(QDockWidget* dock)
     if (it == mTabs.end() || mOpen.count(dock))
         return;
     mOpen.insert(dock);
+    mDrawers.erase(dock);
     auto* tab = static_cast<QToolButton*>(it->second);
     tab->setChecked(true);
     tab->setToolTip("Collapse " + dock->windowTitle());
@@ -1357,6 +1422,112 @@ void DockSidebars::expand(QDockWidget* dock)
         });
     refreshStrips();
     Q_EMIT changed();
+}
+
+void DockSidebars::collapseGroup(QDockWidget* dock)
+{
+    if (dock->isFloating() || mWindow->dockWidgetArea(dock) == Qt::NoDockWidgetArea)
+        return;
+    holdShape(mWindow);
+    QList<QDockWidget*> group;
+    QDockWidget* front = dock;
+    // In tab order, so the strip lists the panels the way the tab bar did.
+    if (QTabBar* bar = liveTabBar(mWindow, dock))
+    {
+        for (int i = 0; i < bar->count(); ++i)
+            if (QDockWidget* d = dockForTab(bar, i); d && !d->isHidden() && !d->isFloating() && !group.contains(d))
+                group << d;
+        if (QDockWidget* current = dockForTab(bar, bar->currentIndex()); current && group.contains(current))
+            front = current;
+    }
+    if (!group.contains(dock))
+        group << dock;
+    for (QDockWidget* d : mWindow->tabifiedDockWidgets(dock))
+        if (!d->isHidden() && !d->isFloating() && !group.contains(d))
+            group << d;
+    if (!dockShowing(front))
+        for (QDockWidget* d : group)
+            if (dockShowing(d))
+                front = d;
+    const Qt::DockWidgetArea area = mWindow->dockWidgetArea(front);
+    const bool sideways = area == Qt::LeftDockWidgetArea || area == Qt::RightDockWidgetArea;
+    const QSize slot(slotExtent(mWindow, front, Qt::Horizontal), slotExtent(mWindow, front, Qt::Vertical));
+    const int drawer = mNextDrawer++;
+    for (QDockWidget* d : group)
+    {
+        d->setProperty(kDrawerFront, d == front);
+        collapse(d);
+        if (isCollapsed(d) && group.size() > 1)
+            mDrawers[d] = drawer;
+        // Every tab comes back at the size of the one that was showing; the others were parked at stale sizes.
+        if (isCollapsed(d) && front->objectName() != d->objectName())
+        {
+            mSizes[d] = slot;
+            mTabSizes[d->objectName()] = sideways ? slot.width() : slot.height();
+        }
+    }
+}
+
+void DockSidebars::expandGroup(QDockWidget* dock)
+{
+    if (!isCollapsed(dock))
+        return;
+    holdShape(mWindow);
+    std::vector<QDockWidget*> mates;
+    if (auto drawer = mDrawers.find(dock); drawer != mDrawers.end())
+        for (auto& [other, id] : mDrawers)
+            if (id == drawer->second && other != dock && isCollapsed(other))
+                mates.push_back(other);
+    expand(dock);
+    for (QDockWidget* other : mates)
+        expand(other);
+    dock->raise();
+}
+
+void DockSidebars::toggleArea(Qt::DockWidgetArea area)
+{
+    auto strip = mStrips.find(area);
+    std::vector<QDockWidget*> collapsed;
+    if (strip != mStrips.end())
+        for (auto& [dock, tab] : mTabs)
+            if (tab->parentWidget() == strip->second && !mOpen.count(dock))
+                collapsed.push_back(dock);
+    holdShape(mWindow);
+    if (collapsed.empty())
+    {
+        for (const DockGroup& g : openGroups(mWindow, area))
+            collapseGroup(g.current);
+        return;
+    }
+    for (QDockWidget* d : collapsed)
+        expand(d);
+    for (QDockWidget* d : collapsed)
+        if (d->property(kDrawerFront).toBool())
+            d->raise();
+}
+
+QList<QStringList> DockSidebars::collapsedGroups() const
+{
+    std::map<int, QStringList> byId;
+    for (auto& [dock, id] : mDrawers)
+        if (isCollapsed(dock))
+            byId[id] << dock->objectName();
+    QList<QStringList> out;
+    for (auto& [id, names] : byId)
+        if (names.size() > 1)
+            out << names;
+    return out;
+}
+
+void DockSidebars::restoreCollapsedGroups(const QList<QStringList>& groups)
+{
+    for (const QStringList& names : groups)
+    {
+        const int drawer = mNextDrawer++;
+        for (const QString& name : names)
+            if (auto* dock = mWindow->findChild<QDockWidget*>(name); dock && isCollapsed(dock))
+                mDrawers[dock] = drawer;
+    }
 }
 
 bool DockSidebars::isCollapsed(const QDockWidget* dock) const
@@ -1422,10 +1593,19 @@ void DockSidebars::refreshStrips()
     {
         // restoreState drops toolbars its state doesn't name, leaving them unplaced at the window's corner.
         placeStrip(area, bar);
-        bool any = false;
+        bool any = false, collapsed = false;
         for (auto& [dock, tab] : mTabs)
-            any |= tab->parentWidget() == bar;
+            if (tab->parentWidget() == bar)
+            {
+                any = true;
+                collapsed |= !mOpen.count(dock);
+            }
         bar->setVisible(any);
+        if (auto head = mStripHeads.find(area); head != mStripHeads.end())
+        {
+            head->second->setIcon(ui::icon(drawerIcon(area, collapsed)));
+            head->second->setToolTip(collapsed ? "Expand panels" : "Collapse panels");
+        }
     }
 }
 } // namespace lila::ui

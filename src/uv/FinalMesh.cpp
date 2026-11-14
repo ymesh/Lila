@@ -3,6 +3,7 @@
 #include "core/Profile.h"
 #include "geo/Triangulate.h"
 #include "uv/FinalOperator.h"
+#include "uv/Metrics.h"
 #include "uv/OptimizeMath.h"
 
 #include <Eigen/Sparse>
@@ -1636,7 +1637,7 @@ void setDensityArea(Chart& chart, const FinalIsland& isl)
 
 namespace detail
 {
-CageHold::CageHold(const Chart& ch, const FinalIsland& isl, std::span<const glm::dvec2> x0)
+CageHold::CageHold(const Chart& ch, const FinalIsland& isl, std::span<const glm::dvec2> x0, bool whole)
 {
     const size_t V = ch.pos.size();
     std::vector<double> reach(V, 0.0);
@@ -1645,7 +1646,7 @@ CageHold::CageHold(const Chart& ch, const FinalIsland& isl, std::span<const glm:
             reach[isl.cols[k]] = std::max(reach[isl.cols[k]], std::abs(isl.weights[k]));
     std::vector<double> weak(V);
     for (size_t v = 0; v < V; ++v)
-        weak[v] = std::clamp((kHoldReach - reach[v]) / (kHoldReach - kWeakInfluence), 0.0, 1.0);
+        weak[v] = whole ? 1.0 : std::clamp((kHoldReach - reach[v]) / (kHoldReach - kWeakInfluence), 0.0, 1.0);
     std::map<std::pair<Index, Index>, double> w;
     for (const auto& t : ch.tris)
         for (int k = 0; k < 3; ++k)
@@ -1704,7 +1705,7 @@ double CageHold::energy(std::span<const glm::dvec2> x) const
 
 namespace
 {
-OptimizeResult solveHeld(Chart& ch, const FinalIsland& exact, const FinalSolveOptions& o, double holdShare);
+OptimizeResult solveHeld(Chart& ch, const FinalIsland& exact, const FinalSolveOptions& o, double holdShare, bool wholeCage = false);
 } // namespace
 
 OptimizeResult solveFinal(Chart& ch, const FinalIsland& exact, const FinalSolveOptions& o)
@@ -1714,8 +1715,8 @@ OptimizeResult solveFinal(Chart& ch, const FinalIsland& exact, const FinalSolveO
 
 namespace
 {
-/** solveFinal with the cage hold at the given share of the export's stiffness (0: none). */
-OptimizeResult solveHeld(Chart& ch, const FinalIsland& exact, const FinalSolveOptions& o, double holdShare)
+/** solveFinal with the cage hold at the given share of the export's stiffness (0: none), on the barely read vertices or the whole cage. */
+OptimizeResult solveHeld(Chart& ch, const FinalIsland& exact, const FinalSolveOptions& o, double holdShare, bool wholeCage)
 {
     LILA_ZONE();
 
@@ -1793,7 +1794,7 @@ OptimizeResult solveHeld(Chart& ch, const FinalIsland& exact, const FinalSolveOp
         offV[Eigen::Index(c)] = off[c].y;
     }
     std::vector<Coupling> kfc;
-    const detail::CageHold hold(ch, isl, x);
+    const detail::CageHold hold(ch, isl, x, wholeCage);
     double holdScale = 0.0;
     auto solver = std::make_unique<UvFactor>();
     auto factor = [&](const std::vector<double>& wt) {
@@ -2089,9 +2090,53 @@ namespace
 /** Re-solves against neighbours' new uvs after the first solve, for islands still left with slivers. */
 constexpr int kNeighbourRounds = 2;
 
+/** How tangled the island's own layout is: the share of its uv area in triangles that overlap another or are wound against it. */
+double tangled(const Chart& c)
+{
+    std::vector<std::array<glm::dvec2, 3>> tris(c.tris.size());
+    for (size_t i = 0; i < c.tris.size(); ++i)
+        tris[i] = {c.uv[c.tris[i][0]], c.uv[c.tris[i][1]], c.uv[c.tris[i][2]]};
+    std::vector<uint8_t> over;
+    triangleOverlaps(tris, over, c.triFace, true);
+    const double side = c.areaUv() < 0.0 ? -1.0 : 1.0;
+    double bad = 0.0, all = 0.0;
+    for (size_t i = 0; i < tris.size(); ++i)
+    {
+        const double a = side * signedArea2(tris[i][0], tris[i][1], tris[i][2]);
+        all += std::abs(a);
+        if (a < 0.0 || over[i])
+            bad += std::abs(a);
+    }
+    return all > 0.0 ? bad / all : 0.0;
+}
+
 /**
- * Solves one island against its export and keeps the result when it collapses no more than limit; a move back into its
- * tile that would cost it slivers is dropped on its own. False when the solve failed.
+ * The solved island moved back towards where it started until its own layout is no more tangled than it was there: the
+ * export is solved for, but the cage island is what the UV Editor shows and edits. False when only the start is left.
+ */
+bool untangle(Chart& solved, const Chart& start, const FinalIsland& isl, size_t limit)
+{
+    const double allowed = tangled(start);
+    if (tangled(solved) <= allowed)
+        return true;
+    Chart mixed = solved;
+    for (const double t : {0.75, 0.5, 0.25})
+    {
+        for (size_t v = 0; v < mixed.uv.size(); ++v)
+            mixed.uv[v] = glm::mix(start.uv[v], solved.uv[v], t);
+        if (tangled(mixed) <= allowed && collapsedTriangles(isl, mixed) <= limit)
+        {
+            solved = std::move(mixed);
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Solves one island against its export and keeps the result when it collapses no more than limit and leaves the island's
+ * own layout no more tangled; a move back into its tile that would cost it slivers is dropped on its own. False when the
+ * solve failed.
  */
 bool solveIsland(Chart& chart, const FinalIsland& isl, const FinalSolveOptions& opts, size_t limit)
 {
@@ -2124,8 +2169,20 @@ bool solveIsland(Chart& chart, const FinalIsland& isl, const FinalSolveOptions& 
         });
     if (held == Failed)
         return false;
-    if (held == Slivers && looseOk && slivers(loose) < heldSlivers)
+    if (held == Slivers && looseOk && slivers(loose) < heldSlivers && tangled(loose) <= tangled(chart))
         trial = std::move(loose);
+    // An island the solve tangled to open slivers solves again with its whole cage shape held, harder each time.
+    const double allowed = tangled(chart);
+    for (const double share : {0.25, 1.0, 4.0, 16.0})
+    {
+        if (tangled(trial) <= allowed)
+            break;
+        Chart firm = chart;
+        if (solveHeld(firm, isl, opts, share, true).ok)
+            trial = std::move(firm);
+    }
+    if (!untangle(trial, chart, isl, limit))
+        return true;
     // Moving the island alone shifts it against the uvs its neighbours lend its export: that move goes, not the solve.
     if (!opts.usePins || std::ranges::none_of(trial.pinned, [](uint8_t p) { return p != 0; }))
     {

@@ -247,6 +247,53 @@ TEST_CASE("bakeAutoPaintCage: a low's cage stops short of another low lying on i
     CHECK(open > 15.0);
 }
 
+TEST_CASE("bakeAutoPaintCage: a low's cage stops short of its own surface across a fold")
+{
+    newScene();
+    // The skirt and a closed slab 5 cm above its middle as one low (an arm over the torso): the skirt under the slab and
+    // the slab's underside push into the same gap, so each keeps under half of it.
+    geo::PlaneOptions skirtO;
+    skirtO.subdivX = skirtO.subdivZ = 10;
+    geo::Mesh low = geo::makePlane(skirtO);
+    geo::CubeOptions slabO;
+    slabO.width = slabO.depth = 30.0;
+    slabO.height = 2.0;
+    slabO.subdivX = slabO.subdivZ = 3;
+    geo::Mesh slab = geo::makeCube(slabO);
+    for (geo::Index q = 0; q < slab.pointCapacity(); ++q)
+        if (slab.pointValid(q))
+            slab.setPosition(q, slab.position(q) + glm::dvec3(0.0, 6.0, 0.0));
+    low.append(slab);
+    const std::string folded = addMesh("folded_low", std::move(low));
+    geo::CubeOptions boxO;
+    boxO.width = boxO.depth = 140.0;
+    boxO.height = 40.0;
+    const std::string box = addMesh("box_high", geo::makeCube(boxO));
+    pairGroup(folded, box, tempDir("lila_cage_fold"));
+
+    const json r = ops::execute("bakeAutoPaintCage", {{"args", {"pair"}}, {"resolution", 128}});
+    const double frontal = r["frontal"].get<double>();
+    const geo::Mesh& m = *baseMesh(folded);
+    const auto offsets = m.pointAttrs().get<float>(bake::kOffsetAttr);
+    double under = 0.0, open = std::numeric_limits<double>::max();
+    for (geo::Index q = 0; q < m.pointCapacity(); ++q)
+    {
+        if (!m.pointValid(q))
+            continue;
+        const glm::dvec3 at = m.position(q);
+        if (std::abs(at.y) > 0.01)
+            continue;
+        const double push = double(offsets[q]) * frontal;
+        if (std::abs(at.x) < 14.0 && std::abs(at.z) < 14.0)
+            under = std::max(under, push);
+        else if (std::abs(at.x) > 25.0 || std::abs(at.z) > 25.0)
+            open = std::min(open, push);
+    }
+    MESSAGE("skirt push under its own slab " << under << " cm, away from it " << open << " cm");
+    CHECK(under < 2.5);
+    CHECK(open > 15.0);
+}
+
 namespace
 {
 /** The most push (offset times frontal) on a low's base points after an auto paint. */

@@ -41,11 +41,14 @@ void registerBuiltinOverrides(std::map<std::string, Override, std::less<>>& m)
     m["transferAttributes"] = std::move(transfer);
 
     O remesh;
-    remesh.order = {"symmetry", "method"};
+    remesh.order = {"symmetry", "middleSmoothing", "method"};
+    remesh.labels["middleSmoothing"] = "Middle Smoothing";
+    remesh.ranges["middleSmoothing"] = {0.0, 1.0, 0.05, ""};
+    remesh.enabledWhen["middleSmoothing"] = {"symmetry", {"x", "y", "z"}};
     remesh.choices["symmetry"] = {{"off", "Off"}, {"x", "X"}, {"y", "Y"}, {"z", "Z"}};
-    remesh.choices["method"] = {{"patches", "Patches"}, {"grid", "Grid (Flat Sheets)"}};
-    remesh.choiceDocs["method"] = {{"patches", "Loops run unbroken between a few poles. For anything that deforms, gets baked or edited by hand."},
-                                   {"grid", "A straight grid seen down the sheet's normal, for terrain tiles and panels. Closed shapes get Patches."}};
+    remesh.choices["method"] = {{"flow", "Flow"}, {"grid", "Grid (Flat Sheets)"}};
+    remesh.choiceDocs["method"] = {{"flow", "Quads follow the shape; loops run unbroken between a few poles. For anything that deforms, gets baked or edited by hand."},
+                                   {"grid", "A straight grid seen down the sheet's normal, for terrain tiles and panels. Closed shapes get Flow."}};
     for (const char* f : {"targetFaces", "countTolerance", "targetEdgeLength", "adaptivity", "jointDensity", "jointDensityReach", "edgesAround"})
         remesh.sections[f] = "Density";
     for (const char* f : {"useHardEdges", "sharpAngle", "jointPoleAvoidance", "pureQuads", "relaxIterations"})

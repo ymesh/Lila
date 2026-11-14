@@ -1,8 +1,10 @@
 #include "TestUtil.h"
 
+#include "geo/ObjIO.h"
 #include "scene/Skin.h"
 
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 
 using namespace rigtest;
@@ -68,6 +70,8 @@ TEST_CASE("a weight proxy is one sheet over a thick mesh, with loops at the join
 
     // Only the outside: no point near the lining.
     MeshPtr m = outMesh(proxy);
+    if (std::getenv("LILA_PROXY_DUMP"))
+        geo::writeObjFile((std::filesystem::temp_directory_path() / "proxy.obj").string(), *m);
     int nearJoint = 0, total = 0;
     for (geo::Index p = 0; p < m->pointCapacity(); ++p)
     {

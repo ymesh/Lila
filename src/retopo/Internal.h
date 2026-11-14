@@ -278,79 +278,18 @@ LILA_SCENE_API Curvature estimateCurvature(const Surface& s, double coherenceRad
 /** 0 to 1 per vertex: how much it sits in a saddle (crotch, armpit, finger web) at the scale of radius. */
 std::vector<double> saddleAmount(const Surface& s, double radius);
 
-/**
- * Lattice origin per vertex, the lattice point nearest the vertex. shift starts the lattice that fraction of a cell
- * along the field instead, for a differently placed lattice at the same spacing.
- */
-LILA_SCENE_API std::vector<glm::dvec3> solvePositionField(const Surface& s, const std::vector<glm::dvec3>& q, const std::vector<double>& scale,
-                                                          glm::dvec2 shift = glm::dvec2(0.0));
-
-struct Extracted;
-struct ContinuousCharts;
-
-/**
- * The same, from one global seamless parametrization (mixed-integer quadrangulation, Bommes et al. 2009): the surface is
- * cut to a disk through the field's singularities, the parameter jumps across the cuts by quarter turns and whole
- * lattice steps, and singularities land on lattice points. So the lattice only turns at the singularities. Empty, with
- * error set, when it can't be solved. edgeSteps gets, per surface edge, the whole lattice step from its first vertex's
- * lattice point to its second's, for extractMesh. grid gets the quad mesh traced straight from the parametrization's
- * integer grid. foldRetries caps how often a rounding that folds the layout is undone and tried another way; folds gets
- * how many triangles stay folded.
- */
-LILA_SCENE_API std::vector<glm::dvec3> solveSeamlessPositions(const Surface& s, const std::vector<glm::dvec3>& q,
-                                                              const std::vector<double>& scale, std::string* error = nullptr,
-                                                              std::vector<std::array<int, 2>>* edgeSteps = nullptr,
-                                                              Extracted* grid = nullptr, int foldRetries = 0,
-                                                              Index* folds = nullptr, ContinuousCharts* continuous = nullptr);
-
-/**
- * The seamless parametrization before any rounding: per surface triangle the field direction its chart's u axis follows
- * (combed, so neighbours differ by the solve's transitions) and its corners' (u, v) in lattice steps. folded counts the
- * triangles whose chart is flipped or flat. Filled by solveSeamlessPositions when asked, which then stops after the first
- * solve.
- */
-struct ContinuousCharts
-{
-    std::vector<glm::dvec3> dir;
-    std::vector<std::array<glm::dvec2, 3>> chart;
-    Index folded = 0;
-};
-
-/**
- * A quad layout made patch by patch, so it can't fold: field lines traced from every pole and feature corner (a
- * motorcycle graph) split the surface into four-sided patches, each side's lattice steps are made whole with opposite
- * sides equal, and each patch is filled with a regular grid through an embedding that is one to one. Empty mesh, with
- * error set, when it can't be built. targetCells, when positive, is the lattice cell count to scale the steps to.
- * crosses: points (density handle centres) that get four lines out along the field, so the size field there shows in
- * the patches' side counts rather than averaging out inside one patch.
- */
-LILA_SCENE_API Extracted layoutPatches(const Surface& s, const std::vector<glm::dvec3>& q, const std::vector<double>& scale,
-                                       double targetCells = 0.0, std::string* error = nullptr, const std::vector<glm::dvec3>& crosses = {},
-                                       bool seamless = false);
-
-/** Lattice points of i and j (returned and outJ) that coincide best near the two vertices. */
-LILA_SCENE_API glm::dvec3 compatLatticePair(const glm::dvec3& vi, const glm::dvec3& ni, const glm::dvec3& qi, const glm::dvec3& oi, double si,
-                             const glm::dvec3& vj, const glm::dvec3& nj, const glm::dvec3& qj, const glm::dvec3& oj, double sj,
-                             glm::dvec3& outJ);
 /** q1 turned by a multiple of 90 degrees about n1 to lie closest to q0. */
 LILA_SCENE_API glm::dvec3 matchQuarterRotation(const glm::dvec3& q0, const glm::dvec3& q1, const glm::dvec3& n1);
-
-/** What extraction gives back: a polygon mesh plus, per point, the feature it came from. */
-struct Extracted
-{
-    geo::Mesh mesh;
-    std::vector<FeatureKind> feature; // per point
-    std::vector<uint8_t> boundary;    // per point: came from a surface boundary
-};
-LILA_SCENE_API Extracted extractMesh(const Surface& s, const std::vector<glm::dvec3>& q, const std::vector<glm::dvec3>& o,
-                      const std::vector<double>& scale, const std::vector<std::array<int, 2>>* edgeSteps = nullptr);
 
 /** Nearest-point queries against the surface's feature edges, for keeping vertices on creases. */
 class LILA_SCENE_API FeatureLines
 {
 public:
-    /** The surface's feature edges and corners, or with boundaryOnly just its open borders and the corners on them. */
-    void build(const Surface& s, double cellSize, bool boundaryOnly = false);
+    /**
+     * The surface's feature edges and corners; with boundaryOnly just its open borders and the corners on them, with
+     * innerOnly just those off the borders.
+     */
+    void build(const Surface& s, double cellSize, bool boundaryOnly = false, bool innerOnly = false);
     bool empty() const { return mSegs.empty(); }
     /** Closest point on any feature segment within maxDist; false if none. tangent is the segment direction. */
     bool closest(const glm::dvec3& p, double maxDist, glm::dvec3& out, glm::dvec3* tangent = nullptr) const;

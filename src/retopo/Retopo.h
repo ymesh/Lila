@@ -137,23 +137,15 @@ struct DensityHandle
 /** How quadRemesh lays the quads out. */
 enum class RemeshMethod
 {
-    /**
-     * Lines traced from the poles along the edge flow cut the surface into four-sided patches, each filled with a
-     * regular grid: edge loops run unbroken between poles and the center line of a symmetric result is one of them.
-     */
-    Patches,
-    /**
-     * Each point placed from the edge flow nearby: loops break and poles come in pairs more often. Not a command method;
-     * Patches falls back to it, with a note, when its layout fails or comes out with more flaws.
-     */
-    Field,
-    /** A straight grid seen down the sheet's normal, for open sheets like terrain tiles and panels; Patches otherwise. */
+    /** Quads that follow the shape's flow, from one global quad layout: loops run unbroken and poles stay few. */
+    Flow,
+    /** A straight grid seen down the sheet's normal, for open sheets like terrain tiles and panels; Flow otherwise. */
     Grid,
 };
 
 struct QuadRemeshOptions
 {
-    RemeshMethod method = RemeshMethod::Patches;
+    RemeshMethod method = RemeshMethod::Flow;
     int targetFaces = 3000;
     /** Retries at a corrected size until the face count is within this fraction of targetFaces; 0 takes the first. */
     double countTolerance = 0.1;
@@ -170,15 +162,22 @@ struct QuadRemeshOptions
     /** How hard poles are kept out of joints (crotch, armpits, finger webs) onto flatter parts nearby; 0 off. */
     double jointPoleAvoidance = 30.0;
     /** Extra faces at joints (crotch, armpits, finger webs), where the mesh bends: 0 none, 1 about three times as dense there. */
-    double jointDensity = 0.5;
+    double jointDensity = 0.0;
     /** How far Joint Density's extra faces reach from a fold, in faces; they halve every two. */
     double jointDensityReach = 6.0;
     /** Align to edges flagged "hard". */
     bool useHardEdges = true;
+    /** Smooth the simplified working surface first: for stair-stepped sources such as voxel shells, which read as noise in the flow. */
+    bool smoothInput = false;
     /** Also align to edges whose faces meet sharper than this many degrees; negative disables. */
     double sharpAngle = 40.0;
     /** -1 off, 0/1/2 for a mirror plane through the origin across x/y/z: the result is exactly symmetric. */
     int symmetryAxis = -1;
+    /**
+     * With symmetry, how far the faces beside the middle edge loop leave the source to fill a groove along
+     * it (a sternum, a spine), which otherwise dents every row that crosses: 0 stays on the source.
+     */
+    double middleSmoothing = 0.0;
     /** Polylines on (or near) the surface the edge flow should follow. */
     std::vector<std::vector<glm::dvec3>> guides;
     /** Polylines on the surface an edge loop lands on, like a hard edge: the flow follows them and points snap onto them. */
@@ -259,7 +258,7 @@ struct QuadRemeshResult
 {
     geo::Mesh mesh;
     QualityMetrics metrics;
-    /** The layout kept: patches, field, shifted, grid, or seamless for pinned points. */
+    /** The layout kept: flow or grid. */
     std::string layout;
     /** Every layout built, in order, the kept one among them. */
     std::vector<RemeshAttempt> attempts;

@@ -11,7 +11,6 @@ set(LILA_UNITY_SKIP
     src/fbx/FbxImport.cpp
     src/fbx/ImportCommon.cpp
     src/gn/NodeLib.cpp
-    src/retopo/Patches.cpp
     src/scene/AttrCommands.cpp
     src/scene/Drivers.cpp
     src/scene/Morphs.cpp
