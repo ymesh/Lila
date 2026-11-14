@@ -41,6 +41,8 @@ Experimental: nobody has built Lila on Linux yet, and Ubuntu LTS is the only sup
 VCPKG_ROOT=<vcpkg clone> bash build.sh       # or: bash build.sh <dir> <config>
 ```
 
+Tested setups, distro packages, Clang and container builds, and troubleshooting: [BUILD.md](BUILD.md).
+
 ### Unreal
 
 1. Copy `ue/LilaLink` into `<Project>/Plugins/LilaLink` and build the project.

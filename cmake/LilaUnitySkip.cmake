@@ -33,6 +33,11 @@ set(LILA_UNITY_SKIP
     src/ui/UvEditorEdit.cpp
     src/ui/UvEditorPick.cpp
     src/ui/UvEditorView.cpp
+    # Found by the Linux (GCC) build, where unity batches group these with a sibling test whose same-named helpers
+    # (run/outMesh, Role/Shape, loadPhysics) clash through their `using namespace`; any batch that groups them clashes.
+    tests/layout/test_soft_net.cpp
+    tests/puppeteer/test_props.cpp
+    tests/sim/test_grapple_physics.cpp
     tests/test_camera.cpp
     tests/test_imageplane.cpp
     tests/test_normal_frames.cpp

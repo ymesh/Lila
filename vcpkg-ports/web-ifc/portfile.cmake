@@ -25,12 +25,23 @@ web_ifc_dep(spdlog gabime/spdlog 79524ddd08a4ec981b7fea76afd08ee05f83755d 1b3fb0
 web_ifc_dep(stduuid mariusbancila/stduuid 3afe7193facd5d674de709fccc44d5055e144d7a 3e250aa6075c23c555c3859077ce24dccde8f062168b91a70e1c311cd1ae4d10a7b339f5916fab748c684131378d383d7a9556f772a33ab5359ab414b7873c4e)
 web_ifc_dep(unordered_dense martinus/unordered_dense 1c8636e810d7e4a485d17bb9cbd6dccb5fe4e284 5e8a3c95cf99c1f9f63d38c0cf652c3aae84aa180eefbfd17c97ffcbcad04563fb6fc2d56d5608c08f13b8350b7581e5a4f6c52601e576774a75c447692b159a)
 
+set(WEB_IFC_COMPILER_OPTIONS)
+if(VCPKG_TARGET_IS_LINUX AND NOT TARGET_TRIPLET MATCHES "clang")
+    # web-ifc includes <format> (GCC 13+). Ports build with the system compiler, GCC 11 on Enterprise Linux, so this one
+    # takes the compiler Lila's own toolchain file picks (a gcc-toolset) rather than rebuilding every port through it.
+    include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/toolchains/linux-gcc.cmake")
+    if(CMAKE_CXX_COMPILER)
+        list(APPEND WEB_IFC_COMPILER_OPTIONS "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}" "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}")
+    endif()
+endif()
+
 vcpkg_cmake_configure(
     SOURCE_PATH "${SOURCE_PATH}/src/cpp"
     OPTIONS
         -DFETCHCONTENT_FULLY_DISCONNECTED=ON
         -DRELEASE=ON
         ${WEB_IFC_DEP_OPTIONS}
+        ${WEB_IFC_COMPILER_OPTIONS}
 )
 vcpkg_cmake_install()
 vcpkg_cmake_config_fixup(CONFIG_PATH lib/cmake/web-ifc)

@@ -16,8 +16,15 @@ fi
 export LILA_PYTHON_DIR
 export PATH="$LILA_PYTHON_DIR/bin:$PATH"
 
+# LILA_PRESET: the configure preset, default linux (linux-clang: Clang for Lila and its ports, into build-clang).
+# LILA_VCPKG_INSTALLED_DIR: a vcpkg_installed of its own, for a second Linux (a distro container, another compiler) whose
+# packages must not overwrite the default one; both use the x64-linux triplet.
+EXTRA=()
+if [ -n "${LILA_VCPKG_INSTALLED_DIR:-}" ]; then
+    EXTRA+=("-DVCPKG_INSTALLED_DIR=$LILA_VCPKG_INSTALLED_DIR")
+fi
 if [ ! -f "$ROOT/$DIR/build.ninja" ]; then
     # The USD port only knows a Windows Python layout.
-    cmake --preset linux -S "$ROOT" -B "$ROOT/$DIR" -DLILA_USD=OFF
+    cmake --preset "${LILA_PRESET:-linux}" -S "$ROOT" -B "$ROOT/$DIR" -DLILA_USD=OFF "${EXTRA[@]}"
 fi
 cmake --build "$ROOT/$DIR" --config "$CONFIG"

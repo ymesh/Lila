@@ -242,14 +242,14 @@ TEST_CASE("conformCurve keeps a curve live on its surface until released")
     std::string plane = run("polyPlane", {{"width", 200}, {"depth", 200}})[0];
     std::string c = run("curve", {{"type", "poly"}, {"points", pts({D3(-20, 15, 0), D3(0, -6, 4), D3(20, 30, 0)})}, {"name", "OnPlane"}});
     run("conformCurve", {{"args", {c}}, {"mesh", plane}, {"offset", 1.5}});
-    for (const D3& p : splinesOf(c)[0].points)
+    for (const curve::Splines s = splinesOf(c); const D3& p : s[0].points) // s keeps the splines alive for the loop
         CHECK(p.y == doctest::Approx(1.5));
     // Moving the surface carries the curve; moving a point slides it along.
     run("move", {{"args", {plane}}, {"by", {0, 10, 0}}});
-    for (const D3& p : splinesOf(c)[0].points)
+    for (const curve::Splines s = splinesOf(c); const D3& p : s[0].points) // s keeps the splines alive for the loop
         CHECK(p.y == doctest::Approx(11.5));
     run("setAttr", {{"args", {c + ".surfaceOffset", 0.0}}});
-    for (const D3& p : splinesOf(c)[0].points)
+    for (const curve::Splines s = splinesOf(c); const D3& p : s[0].points) // s keeps the splines alive for the loop
         CHECK(p.y == doctest::Approx(10.0));
     // Undo takes the offset change back.
     run("undo");
@@ -257,7 +257,7 @@ TEST_CASE("conformCurve keeps a curve live on its surface until released")
 
     run("conformCurve", {{"args", {c}}, {"release", true}});
     run("move", {{"args", {plane}}, {"by", {0, 10, 0}}});
-    for (const D3& p : splinesOf(c)[0].points)
+    for (const curve::Splines s = splinesOf(c); const D3& p : s[0].points) // s keeps the splines alive for the loop
         CHECK(p.y == doctest::Approx(11.5));
     CHECK_THROWS_AS(run("conformCurve", {{"args", {c}}}), CommandError);
 }

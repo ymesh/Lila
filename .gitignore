@@ -3,10 +3,12 @@
 /build-*/
 /out/
 /vcpkg_installed/
+/vcpkg_installed-*/
 /vcpkg_install.log
 /.deps/
 *.pdb
 *.ilk
+*.log
 
 # Internal local bugs
 /bugs/
