@@ -2,10 +2,13 @@
 
 #include "ui/MenuButtons.h"
 #include "ui/UvEditor.h"
+#include "ui/UvPackPanel.h"
 
 #include <QApplication>
+#include <QDoubleSpinBox>
 #include <QLabel>
 #include <QMenu>
+#include <QSpinBox>
 #include <QSplitter>
 #include <QToolButton>
 
@@ -69,6 +72,24 @@ TEST_CASE("the UV editor stays narrow whatever its status line and pack options 
         CAPTURE(name);
         CHECK(buttonNamed(editor, name));
     }
+}
+
+TEST_CASE("the UV editor reopens with the last texture size and padding")
+{
+    const nlohmann::json before = uvPackOptions();
+    {
+        UvEditor editor;
+        auto* size = editor.findChild<QSpinBox*>("textureSize");
+        auto* padding = editor.findChild<QDoubleSpinBox*>("padding");
+        REQUIRE(size);
+        REQUIRE(padding);
+        size->setValue(4096);
+        padding->setValue(8.0);
+    }
+    UvEditor editor;
+    CHECK(editor.findChild<QSpinBox*>("textureSize")->value() == 4096);
+    CHECK(editor.findChild<QDoubleSpinBox*>("padding")->value() == doctest::Approx(8.0));
+    setUvPackOptions(before);
 }
 
 TEST_CASE("the UV toolkit sits beside a wide editor and below a tall one in two columns")

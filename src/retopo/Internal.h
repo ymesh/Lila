@@ -291,6 +291,7 @@ public:
      */
     void build(const Surface& s, double cellSize, bool boundaryOnly = false, bool innerOnly = false);
     bool empty() const { return mSegs.empty(); }
+    const std::vector<glm::dvec3>& corners() const { return mCorners; }
     /** Closest point on any feature segment within maxDist; false if none. tangent is the segment direction. */
     bool closest(const glm::dvec3& p, double maxDist, glm::dvec3& out, glm::dvec3* tangent = nullptr) const;
     /** Corner points within maxDist; false if none. */

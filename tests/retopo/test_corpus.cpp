@@ -176,8 +176,7 @@ TEST_CASE("corpus: relax")
     }
 }
 
-// Parked: tips sharper than 45 degrees collapse until the field turns at sharp corners.
-TEST_CASE("corpus: quad remesh" * doctest::may_fail())
+TEST_CASE("corpus: quad remesh")
 {
     const char* only = std::getenv("LILA_CORPUS_ONLY");
     for (const Case& c : all())

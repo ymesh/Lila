@@ -447,10 +447,13 @@ bool Parameterizer::parameterize()
     if (m_faceScalingMultiplier && m_faceScalingMultiplier->size() == faceScalingField.size())
         for (size_t f = 0; f < faceScalingField.size(); ++f)
             faceScalingField[f] *= (*m_faceScalingMultiplier)[f];
+    const bool counted = m_uncountedFaces && m_uncountedFaces->size() == m_triangles->size();
     if (m_targetQuadCount > 0.0) {
         // A quad on face f has area (scale * faceScaling[f])^2, so the count is the sum of area over that.
         double quads = 0.0;
         for (size_t f = 0; f < m_triangles->size(); ++f) {
+            if (counted && (*m_uncountedFaces)[f])
+                continue;
             const auto& it = (*m_triangles)[f];
             quads += Vector3::area((*m_vertices)[it[0]], (*m_vertices)[it[1]], (*m_vertices)[it[2]])
                 / (faceScalingField[f] * faceScalingField[f]);
@@ -506,6 +509,8 @@ bool Parameterizer::parameterize()
             for (size_t f = 0; f < limitedScalingField.size(); ++f) {
                 if ((*m_faceSizeLimit)[f] > 0.0 && scale > 0.0)
                     limitedScalingField[f] = std::min(limitedScalingField[f], (*m_faceSizeLimit)[f] / scale);
+                if (counted && (*m_uncountedFaces)[f])
+                    continue;
                 const auto& it = (*m_triangles)[f];
                 const double area = Vector3::area((*m_vertices)[it[0]], (*m_vertices)[it[1]], (*m_vertices)[it[2]]);
                 with += area / (limitedScalingField[f] * limitedScalingField[f]);
@@ -529,8 +534,12 @@ bool Parameterizer::parameterize()
             break;
         }
         double quads = 0.0;
-        for (const auto& uv : cover.triangleUvs)
+        for (size_t f = 0; f < cover.triangleUvs.size(); ++f) {
+            if (counted && (*m_uncountedFaces)[f])
+                continue;
+            const auto& uv = cover.triangleUvs[f];
             quads += .5 * std::fabs((uv[1].x() - uv[0].x()) * (uv[2].y() - uv[0].y()) - (uv[1].y() - uv[0].y()) * (uv[2].x() - uv[0].x()));
+        }
         AutoRemesher::log() << "Cover holds " << quads << " quads of " << wanted << " at scaling " << m_scaling << std::endl;
         const double off = quads > 0.0 ? std::fabs(quads / wanted - 1.0) : 1e9;
         if (closestOff < 0.0 || off < closestOff) {

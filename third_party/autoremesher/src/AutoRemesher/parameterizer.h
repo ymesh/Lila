@@ -116,6 +116,8 @@ public:
      * take the neutral size and don't turn the normals of the vertices they share.
      */
     void setUnsizedFaces(const std::vector<uint8_t>* faces) { m_unsizedFaces = faces; }
+    /** Per triangle, nonzero for faces whose quads the caller drops: they aren't counted towards the target quad count. */
+    void setUncountedFaces(const std::vector<uint8_t>* faces) { m_uncountedFaces = faces; }
     /** Per triangle, a factor on the quad size the curvature adaptivity gives. */
     void setFaceScalingMultiplier(const std::vector<double>* multiplier) { m_faceScalingMultiplier = multiplier; }
     /** Per triangle, the longest quad edge allowed there, as a length; anything not above zero is no limit. */
@@ -161,6 +163,7 @@ private:
     const std::unordered_set<size_t>* m_forcedCorners = nullptr;
     int m_scalingSmoothing = 0;
     const std::vector<uint8_t>* m_unsizedFaces = nullptr;
+    const std::vector<uint8_t>* m_uncountedFaces = nullptr;
     const std::vector<double>* m_faceScalingMultiplier = nullptr;
     const std::vector<double>* m_faceSizeLimit = nullptr;
     std::vector<Vector3> m_field;

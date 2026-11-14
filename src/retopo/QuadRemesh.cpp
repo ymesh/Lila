@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <map>
+#include <numeric>
 #include <chrono>
 #include <climits>
 #include <cmath>
@@ -542,9 +543,9 @@ void closeChainGaps(const geo::Mesh& m, std::vector<std::array<Index, 2>>& chain
 /**
  * Cuts each feature guide into the mesh with the knife, so an edge chain runs exactly along it; returns those edges
  * as point pairs. Guide points are taken onto the surface, a few per source edge apart, so the cut between two of them
- * follows the surface closely.
+ * follows the surface closely. dropped counts the guides that couldn't be cut in.
  */
-std::vector<std::array<Index, 2>> imprintGuides(geo::Mesh& m, const std::vector<std::vector<glm::dvec3>>& guides)
+std::vector<std::array<Index, 2>> imprintGuides(geo::Mesh& m, const std::vector<std::vector<glm::dvec3>>& guides, int& dropped)
 {
     LILA_ZONE();
 
@@ -595,7 +596,10 @@ std::vector<std::array<Index, 2>> imprintGuides(geo::Mesh& m, const std::vector<
             }
         }
         if (points.size() < 2)
+        {
+            ++dropped;
             continue;
+        }
         geo::KnifeOptions ko;
         ko.closed = closed;
         auto borderEdges = [](const geo::Mesh& mesh) {
@@ -611,6 +615,7 @@ std::vector<std::array<Index, 2>> imprintGuides(geo::Mesh& m, const std::vector<
         if (borderEdges(m) > open)
         {
             m = before;
+            ++dropped;
             continue;
         }
         // The cut's own edges, not the diagonals it adds inside the faces it splits: ends and middle on the cut's path.
@@ -652,8 +657,11 @@ std::vector<std::array<Index, 2>> imprintGuides(geo::Mesh& m, const std::vector<
     return out;
 }
 
-/** The same on a working surface: its hard edges, density and pins carry over, and the guides' edges join the hard set. */
-void imprintGuides(Surface& s, const std::vector<std::vector<glm::dvec3>>& guides)
+/**
+ * The same on a working surface: its hard edges, density and pins carry over, and the guides' edges join the hard set.
+ * Returns how many guides couldn't be cut in.
+ */
+int imprintGuides(Surface& s, const std::vector<std::vector<glm::dvec3>>& guides)
 {
     std::vector<Index> sizes(s.tris.size(), 3), corners;
     corners.reserve(s.tris.size() * 3);
@@ -661,11 +669,12 @@ void imprintGuides(Surface& s, const std::vector<std::vector<glm::dvec3>>& guide
         corners.insert(corners.end(), t.begin(), t.end());
     geo::Mesh m = geo::Mesh::fromPolygons(s.pos, sizes, corners);
     if (m.pointCapacity() != Index(s.pos.size()))
-        return;
-    const std::vector<std::array<Index, 2>> cut = imprintGuides(m, guides);
+        return int(guides.size());
+    int dropped = 0;
+    const std::vector<std::array<Index, 2>> cut = imprintGuides(m, guides, dropped);
     Surface out = surfaceFromMesh(m, false);
     if (out.pos.size() < s.pos.size())
-        return;
+        return int(guides.size());
     for (size_t v = 0; v < s.density.size(); ++v)
         out.density[v] = s.density[v];
     out.hard = s.hard;
@@ -673,6 +682,7 @@ void imprintGuides(Surface& s, const std::vector<std::vector<glm::dvec3>>& guide
         out.hard.insert(edgeKey(a, b));
     out.pins = s.pins;
     s = std::move(out);
+    return dropped;
 }
 
 /**
@@ -719,9 +729,22 @@ constexpr double kTriangleRatio = 1.0;
 
 double triangleRatio() { return kTriangleRatio; }
 
+/** A sharp tip cut off the working surface and built back on the result: see clipSharpTips and closeTips. */
+struct ClippedTip
+{
+    /** The cut is the plane across `axis` at `depth` from the tip, out to `radius` from the axis. */
+    glm::dvec3 tip, axis;
+    double depth = 0.0, radius = 0.0;
+    /** The creases running across the tip (a prism's edge between its two corners) the rungs end on; empty for a point. */
+    std::vector<std::array<glm::dvec3, 2>> core;
+    /** The cut's own points on the surface. */
+    std::vector<glm::dvec3> rim;
+};
+
 /** The source surface, its features and the quad size wanted over it, then the working triangles the quads are laid out on. */
 struct Work
 {
+    std::vector<ClippedTip> tips;
     geo::Mesh src;
     std::optional<geo::MeshBvh> bvh;
     bool closed = false;
@@ -742,7 +765,7 @@ struct Work
      * shapes keep Lila's own size field: read across a crease, that measure calls every edge of a cube curved.
      */
     bool stockSizes = false;
-    /** The quads asked of the stock layout, over all of iso. */
+    /** The quads asked of the stock layout, over all of iso off its caps. */
     double stockQuads = 0.0;
     /**
      * A symmetric remesh laid out on the closed whole: iso is the positive half joined to its mirror image, with its edges
@@ -755,8 +778,18 @@ struct Work
      */
     geo::Mesh caps;
     std::optional<geo::MeshBvh> capsBvh;
-    /** The caps' part of iso's area. */
-    double capShare = 0.0;
+    /**
+     * The caps that stand in for a creased shape's flat faces (a bust's cut base): laid out and kept, their rims held as
+     * edge loops like any cap's.
+     */
+    geo::Mesh keptCaps;
+    std::optional<geo::MeshBvh> keptCapsBvh;
+    /** Whether a point of the working triangles lies on a kept cap: they are flat, so on one is on its plane. */
+    bool onKeptCap(const glm::dvec3& p) const
+    {
+        geo::BvhClosest on;
+        return keptCapsBvh && keptCapsBvh->closestPoint(p, on, 1e-4 * h0);
+    }
     /** Whether a point of the capped surface lies on a cap rather than on the source. */
     bool onCap(const glm::dvec3& p) const
     {
@@ -772,6 +805,10 @@ struct Work
     std::optional<geo::MeshBvh> simpleBvh;
     /** The feature lines off the borders, and the borders. */
     FeatureLines creases, border;
+    /** The edges imprinted along edge loop curves: feature edges for the layout to follow, but no crease of the shape. */
+    std::vector<std::array<glm::dvec3, 2>> guideSegs;
+    /** What the result should say about how it was made. */
+    std::vector<std::string> notes;
     Surface iso;
     /** Quad edge length per vertex of iso. */
     std::vector<double> isoSize;
@@ -1003,9 +1040,11 @@ std::unordered_set<uint64_t> symmetrize(Surface& iso, const geo::SymmetryPlane& 
  * Closes an open working surface with a cap over each border loop: a fan to the loop's centre, remeshed to the working
  * triangles' size with the loop left as it is. The border edges are returned, for the layout to hold as edge loops.
  * False when a border isn't a plain loop, or the caps would be a large part of the result (a sheet seen from one side
- * has a border all round it and a cap the size of itself).
+ * has a border all round it and a cap the size of itself). With `border` given, only the loops along it are the
+ * source's own borders; the caps over the others go to `kept`, and those loops are left as they are.
  */
-bool capBorders(Surface& iso, geo::Mesh& caps, std::unordered_set<uint64_t>& chain, double& capShare)
+bool capBorders(Surface& iso, geo::Mesh& caps, std::unordered_set<uint64_t>& chain, const FeatureLines* border = nullptr, double reach = 0.0,
+                geo::Mesh* kept = nullptr)
 {
     constexpr double kLargestShare = 0.3;
     // Each border edge the way its triangle runs it, so the caps face the same way round.
@@ -1025,7 +1064,7 @@ bool capBorders(Surface& iso, geo::Mesh& caps, std::unordered_set<uint64_t>& cha
     if (next.empty())
         return true;
     const double edge = iso.meanEdgeLength();
-    std::vector<Index> capCorners;
+    std::vector<Index> capCorners, keptCorners;
     std::vector<std::array<Index, 3>> added;
     std::vector<glm::dvec3> addedPoints;
     double capArea = 0.0;
@@ -1056,12 +1095,18 @@ bool capBorders(Surface& iso, geo::Mesh& caps, std::unordered_set<uint64_t>& cha
             return false;
         loops.push_back(std::move(loop));
     }
-    capArea = 0.0;
     for (const std::vector<Index>& loop : loops)
     {
+        bool own = true;
+        if (border)
+        {
+            glm::dvec3 q;
+            for (Index v : loop)
+                own = own && border->closest(iso.pos[v], reach, q);
+        }
         // A border left by deleting faces is a sawtooth, and the layout would turn at every tooth. The working border
         // is evened out along itself; the result's border points go back onto the source's own.
-        for (int pass = 0; pass < 12; ++pass)
+        for (int pass = 0; own && pass < 12; ++pass)
         {
             std::vector<glm::dvec3> evened(loop.size());
             for (size_t i = 0; i < loop.size(); ++i)
@@ -1085,7 +1130,6 @@ bool capBorders(Surface& iso, geo::Mesh& caps, std::unordered_set<uint64_t>& cha
         {
             // Against the surface's own direction along the edge.
             triangles.push_back({(i + 1) % loop.size(), i, loop.size()});
-            capArea += 0.5 * glm::length(glm::cross(iso.pos[loop[i]] - centre, iso.pos[loop[(i + 1) % loop.size()]] - centre));
         }
         // No shorter than the loop's own edges, which stay whole: the cap has to meet the surface point for point.
         AutoRemesher::IsotropicRemesher remesher(vertices, triangles);
@@ -1115,22 +1159,577 @@ bool capBorders(Surface& iso, geo::Mesh& caps, std::unordered_set<uint64_t>& cha
         if (met != loop.size())
             return false;
         for (const auto& t : remesher.remeshedTriangles())
+        {
             added.push_back({id[t[0]], id[t[1]], id[t[2]]});
+            std::vector<Index>& corners = own ? capCorners : keptCorners;
+            corners.insert(corners.end(), {id[t[0]], id[t[1]], id[t[2]]});
+        }
         for (size_t i = 0; i < loop.size(); ++i)
             chain.insert(edgeKey(loop[i], loop[(i + 1) % loop.size()]));
     }
-    capShare = capArea / (capArea + surfaceArea);
     iso.pos.insert(iso.pos.end(), addedPoints.begin(), addedPoints.end());
     iso.density.resize(iso.pos.size(), 1.0f);
-    std::vector<Index> sizes(added.size(), 3);
     for (const auto& t : added)
-    {
         iso.tris.push_back(t);
-        capCorners.insert(capCorners.end(), t.begin(), t.end());
-    }
-    caps = geo::Mesh::fromPolygons(iso.pos, sizes, capCorners);
+    caps = geo::Mesh::fromPolygons(iso.pos, std::vector<Index>(capCorners.size() / 3, 3), capCorners);
+    if (kept)
+        *kept = geo::Mesh::fromPolygons(iso.pos, std::vector<Index>(keptCorners.size() / 3, 3), keptCorners);
     iso.buildTopology();
     iso.buildGeometry();
+    return true;
+}
+
+/**
+ * Cuts the sharp tips off a closed creased surface: where three or more creases meet and two of them bound a sector of
+ * a face under 45 degrees (a star prism's points, a blade's tip), lines of the layout held along both sides run
+ * together and the cover collapses all the way up the spike. Each such tip is cut across where its sector is a quad
+ * wide, leaving a hole whose rim is a border to the layout; closeTips builds the tip back on the result. s needs
+ * buildTopology, buildGeometry and detectFeatures, and needs them again when anything was cut.
+ */
+void clipSharpTips(Surface& s, double h, double sharpAngleDeg, std::vector<ClippedTip>& tips)
+{
+    constexpr double kSharpest = 0.7853981633974483, kWidth = 1.0, kDeepest = 6.0, kLargestShare = 0.25;
+    const Index n = s.vertexCount();
+    const double cosSharp = sharpAngleDeg >= 0.0 ? std::cos(glm::radians(sharpAngleDeg)) : -2.0;
+    auto sharp = [&](Index e) {
+        if (s.edgeTriCount[e] != 2)
+            return false;
+        return s.edgeFeature[e] != 0 || glm::dot(s.triNormal[s.edgeTris[e][0]], s.triNormal[s.edgeTris[e][1]]) < cosSharp;
+    };
+    std::vector<std::vector<Index>> around(n);
+    for (Index t = 0; t < Index(s.tris.size()); ++t)
+        for (Index v : s.tris[t])
+            around[v].push_back(t);
+    struct Candidate
+    {
+        double angle;
+        Index v;
+        glm::dvec3 axis;
+    };
+    std::vector<Candidate> candidates;
+    for (Index v = 0; v < n; ++v)
+    {
+        if (s.onBoundary[v])
+            continue;
+        std::unordered_map<Index, Index> edgeTo, byFirst;
+        int creases = 0;
+        for (Index k = s.adjStart[v]; k < s.adjStart[v + 1]; ++k)
+        {
+            edgeTo[s.adj[k]] = s.adjEdge[k];
+            creases += sharp(s.adjEdge[k]);
+        }
+        if (creases < 3)
+            continue;
+        auto sides = [&](Index t, Index& a, Index& b) {
+            const auto& tri = s.tris[t];
+            const int k = tri[0] == v ? 0 : tri[1] == v ? 1 : 2;
+            a = tri[(k + 1) % 3];
+            b = tri[(k + 2) % 3];
+        };
+        for (Index t : around[v])
+        {
+            Index a, b;
+            sides(t, a, b);
+            byFirst[a] = t;
+        }
+        Candidate best{kSharpest, kInvalid, glm::dvec3(0.0)};
+        for (Index start : around[v])
+        {
+            Index a, b;
+            sides(start, a, b);
+            if (!sharp(edgeTo[a]))
+                continue;
+            const Index first = a;
+            double angle = 0.0;
+            bool closed = false;
+            Index t = start;
+            for (size_t guard = 0; guard < around[v].size(); ++guard)
+            {
+                sides(t, a, b);
+                angle += std::acos(std::clamp(glm::dot(glm::normalize(s.pos[a] - s.pos[v]), glm::normalize(s.pos[b] - s.pos[v])), -1.0, 1.0));
+                if (sharp(edgeTo[b]))
+                {
+                    closed = true;
+                    break;
+                }
+                auto next = byFirst.find(b);
+                if (next == byFirst.end())
+                    break;
+                t = next->second;
+            }
+            if (closed && angle > 1e-3 && angle < best.angle)
+                best = {angle, v, glm::normalize(glm::normalize(s.pos[first] - s.pos[v]) + glm::normalize(s.pos[b] - s.pos[v]))};
+        }
+        if (best.v != kInvalid)
+            candidates.push_back(best);
+    }
+    if (candidates.empty())
+        return;
+    std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) { return a.angle < b.angle; });
+    const double total = s.totalArea();
+    // Per vertex, the tip whose cut takes it off.
+    std::vector<int> region(n, -1);
+    std::vector<ClippedTip> cut;
+    for (const Candidate& c : candidates)
+    {
+        if (region[c.v] >= 0)
+            continue;
+        ClippedTip tip;
+        tip.tip = s.pos[c.v];
+        tip.axis = c.axis;
+        tip.depth = std::min(kDeepest * h, 0.5 * kWidth * h / std::tan(0.5 * c.angle));
+        auto along = [&](Index v) { return glm::dot(s.pos[v] - tip.tip, tip.axis); };
+        // What the plane takes off: the points this side of it joined to the tip.
+        std::vector<Index> taken{c.v}, stack{c.v};
+        std::unordered_set<Index> inside{c.v};
+        bool clean = true;
+        double area = 0.0;
+        while (!stack.empty() && clean)
+        {
+            const Index v = stack.back();
+            stack.pop_back();
+            clean = !s.onBoundary[v] && region[v] < 0;
+            area += s.area[v];
+            for (Index k = s.adjStart[v]; k < s.adjStart[v + 1] && clean; ++k)
+            {
+                const Index u = s.adj[k];
+                clean = region[u] < 0;
+                if (along(u) < tip.depth && inside.insert(u).second)
+                {
+                    taken.push_back(u);
+                    stack.push_back(u);
+                }
+            }
+        }
+        if (!clean || area > kLargestShare * total)
+            continue;
+        const int id = int(cut.size());
+        for (Index v : taken)
+            region[v] = id;
+        for (size_t e = 0; e < s.edges.size(); ++e)
+        {
+            const Index a = s.edges[e][0], b = s.edges[e][1];
+            if (region[a] != id || region[b] != id || !sharp(Index(e)))
+                continue;
+            const glm::dvec3 dir = glm::normalize(s.pos[b] - s.pos[a]);
+            if (std::abs(glm::dot(dir, tip.axis)) < 0.5)
+                tip.core.push_back({s.pos[a], s.pos[b]});
+        }
+        cut.push_back(std::move(tip));
+    }
+    if (cut.empty())
+        return;
+    std::unordered_map<uint64_t, Index> onEdge;
+    auto crossing = [&](Index in, Index out) {
+        const uint64_t key = edgeKey(in, out);
+        if (auto it = onEdge.find(key); it != onEdge.end())
+            return it->second;
+        ClippedTip& tip = cut[size_t(region[in])];
+        const double a = glm::dot(s.pos[in] - tip.tip, tip.axis), b = glm::dot(s.pos[out] - tip.tip, tip.axis);
+        const double t = std::clamp((tip.depth - a) / std::max(b - a, 1e-300), 0.0, 1.0);
+        const Index made = Index(s.pos.size());
+        s.pos.push_back(glm::mix(s.pos[in], s.pos[out], t));
+        s.density.push_back(glm::mix(s.density[in], s.density[out], float(t)));
+        tip.radius = std::max(tip.radius, glm::distance(s.pos[made], tip.tip + tip.depth * tip.axis));
+        tip.rim.push_back(s.pos[made]);
+        if (s.hard.contains(key))
+            s.hard.insert(edgeKey(made, out));
+        onEdge[key] = made;
+        return made;
+    };
+    std::vector<std::array<Index, 3>> kept;
+    for (const auto& tri : s.tris)
+    {
+        int in = 0;
+        for (Index v : tri)
+            in += region[v] >= 0;
+        if (in == 0)
+            kept.push_back(tri);
+        if (in == 0 || in == 3)
+            continue;
+        // The part beyond the plane: the points off the tip and the two crossings.
+        std::vector<Index> poly;
+        for (int k = 0; k < 3; ++k)
+        {
+            const Index a = tri[k], b = tri[(k + 1) % 3];
+            if (region[a] < 0)
+                poly.push_back(a);
+            if ((region[a] < 0) != (region[b] < 0))
+                poly.push_back(region[a] >= 0 ? crossing(a, b) : crossing(b, a));
+        }
+        for (size_t k = 1; k + 1 < poly.size(); ++k)
+            kept.push_back({poly[0], poly[k], poly[k + 1]});
+    }
+    s.tris = std::move(kept);
+    tips.insert(tips.end(), cut.begin(), cut.end());
+}
+
+/**
+ * Builds the tips clipSharpTips cut off back onto the result: each hole left round a cut is closed with rungs of faces
+ * running from its rim to the tip's own creases, a ring a quad apart, the last ring on the crease (or the tip point).
+ * Returns how many tips were closed.
+ */
+int closeTips(geo::Mesh& m, const std::vector<ClippedTip>& tips, double h, const geo::MeshBvh& surface)
+{
+    if (tips.empty())
+        return 0;
+    // A cut the extraction closed over: the faces lying on its plane go, and leave its rim.
+    {
+        bool any = false;
+        for (Index f = 0; f < m.faceCapacity(); ++f)
+        {
+            if (!m.faceValid(f))
+                continue;
+            const glm::dvec3 centre = m.faceCentroid(f), normal = m.faceNormal(f);
+            for (const ClippedTip& tip : tips)
+                if (std::abs(glm::dot(centre - tip.tip, tip.axis) - tip.depth) < 0.25 * h &&
+                    glm::distance(centre, tip.tip + tip.depth * tip.axis) < tip.radius && std::abs(glm::dot(normal, tip.axis)) > 0.7)
+                {
+                    m.removeFace(f);
+                    any = true;
+                    break;
+                }
+        }
+        if (any)
+            m.removeAllLoose();
+    }
+    // Each border edge the way its face runs it.
+    std::unordered_map<Index, Index> next;
+    auto trace = [&] {
+        next.clear();
+        for (Index f = 0; f < m.faceCapacity(); ++f)
+            if (m.faceValid(f))
+                m.forEachFaceCorner(f, [&](Index c) {
+                    if (m.isBoundaryEdge(m.cornerEdge(c)))
+                        next[m.cornerPoint(c)] = m.cornerNextPoint(c);
+                });
+    };
+    trace();
+    // Two rim points taken onto the same corner of a cut are one point.
+    {
+        std::vector<Index> target(m.pointCapacity(), kInvalid);
+        bool any = false;
+        for (const auto& [a, b] : next)
+            if (glm::distance(m.position(a), m.position(b)) < 1e-6 * h)
+            {
+                Index to = a;
+                while (target[to] != kInvalid)
+                    to = target[to];
+                if (to != b)
+                {
+                    target[b] = to;
+                    any = true;
+                }
+            }
+        if (any)
+        {
+            for (Index p = 0; p < Index(target.size()); ++p)
+                if (target[p] != kInvalid)
+                    while (target[target[p]] != kInvalid)
+                        target[p] = target[target[p]];
+            geo::weldPoints(m, target);
+            m.removeAllLoose();
+            trace();
+        }
+    }
+    std::vector<std::vector<Index>> loops;
+    std::unordered_set<Index> seen;
+    for (const auto& [start, unused] : next)
+    {
+        if (seen.contains(start))
+            continue;
+        std::vector<Index> loop;
+        Index at = start;
+        while (!seen.contains(at) && next.contains(at))
+        {
+            seen.insert(at);
+            loop.push_back(at);
+            at = next.at(at);
+        }
+        if (at == start && loop.size() >= 3)
+            loops.push_back(std::move(loop));
+    }
+    int closed = 0;
+    std::vector<uint8_t> used(loops.size(), 0);
+    for (const ClippedTip& tip : tips)
+    {
+        const glm::dvec3 middle = tip.tip + tip.depth * tip.axis;
+        for (size_t l = 0; l < loops.size(); ++l)
+        {
+            if (used[l])
+                continue;
+            std::vector<Index>& loop = loops[l];
+            std::vector<uint8_t> atCut(loop.size());
+            size_t count = 0;
+            for (size_t i = 0; i < loop.size(); ++i)
+            {
+                const glm::dvec3 at = m.position(loop[i]);
+                // On the cut's plane and by its rim: the plane alone passes through the next tip's rim too.
+                if (std::abs(glm::dot(at - tip.tip, tip.axis) - tip.depth) > 0.75 * h)
+                    continue;
+                for (size_t k = 0; k < tip.rim.size() && !atCut[i]; ++k)
+                    atCut[i] = glm::distance(at, tip.rim[k]) < 2.5 * h;
+                count += atCut[i];
+            }
+            if (std::getenv("LILA_TIP_LOG") && count > 0)
+            {
+                std::string flags;
+                for (uint8_t f : atCut)
+                    flags += f ? 'x' : '.';
+                std::fprintf(stderr, "tip loop %s\n", flags.c_str());
+            }
+            if (5 * count < 3 * loop.size() || count < 3)
+                continue;
+            if (count < loop.size())
+            {
+                // The rim with a notch in it, where the layout left a face or two out beside the cut: each notch is
+                // closed with one face, and the rim runs straight past it.
+                size_t first = 0;
+                while (!atCut[first] || atCut[(first + loop.size() - 1) % loop.size()])
+                    first = (first + 1) % loop.size();
+                std::vector<Index> rim, notch;
+                bool whole = true;
+                for (size_t n = 0; n < loop.size() && whole; ++n)
+                {
+                    const size_t i = (first + n) % loop.size();
+                    if (!atCut[i])
+                    {
+                        notch.push_back(loop[i]);
+                        whole = notch.size() <= 4;
+                        continue;
+                    }
+                    if (!notch.empty())
+                    {
+                        // Against the border's own direction, from the rim point after the notch back to the one before.
+                        std::vector<Index> face{loop[i]};
+                        face.insert(face.end(), notch.rbegin(), notch.rend());
+                        face.push_back(rim.back());
+                        m.addFace(std::span<const Index>(face));
+                        notch.clear();
+                    }
+                    rim.push_back(loop[i]);
+                }
+                if (!whole)
+                    continue;
+                if (!notch.empty())
+                {
+                    std::vector<Index> face{rim.front()};
+                    face.insert(face.end(), notch.rbegin(), notch.rend());
+                    face.push_back(rim.back());
+                    m.addFace(std::span<const Index>(face));
+                }
+                loop = std::move(rim);
+            }
+            used[l] = 1;
+            // Where each rim point's rungs end: the nearest point of the tip's creases, those close together as one.
+            std::vector<glm::dvec3> ends;
+            std::vector<Index> endPoint, endOf(loop.size());
+            double furthest = 0.0;
+            for (size_t i = 0; i < loop.size(); ++i)
+            {
+                const glm::dvec3 at = m.position(loop[i]);
+                const glm::dvec3 foot = tip.core.empty() ? tip.tip : closestOnSegments(at, tip.core);
+                furthest = std::max(furthest, glm::distance(at, foot));
+                size_t same = ends.size();
+                for (size_t k = 0; k < ends.size() && same == ends.size(); ++k)
+                    if (glm::distance(ends[k], foot) < 0.4 * h)
+                        same = k;
+                if (same == ends.size())
+                {
+                    ends.push_back(foot);
+                    endPoint.push_back(m.addPoint(foot));
+                }
+                endOf[i] = Index(same);
+            }
+            // Along the tip's crease, for the ends that fall between a face's own two.
+            glm::dvec3 along(0.0);
+            for (const auto& [a, b] : tip.core)
+                if (glm::distance(a, b) > glm::length(along))
+                    along = b - a;
+            auto between = [&](Index from, Index to) {
+                std::vector<std::pair<double, Index>> found;
+                const double a = glm::dot(ends[from], along), b = glm::dot(ends[to], along);
+                for (size_t k = 0; k < ends.size(); ++k)
+                    if (const double at = glm::dot(ends[k], along); Index(k) != from && Index(k) != to && at > std::min(a, b) && at < std::max(a, b))
+                        found.push_back({a < b ? at : -at, endPoint[k]});
+                std::sort(found.begin(), found.end());
+                return found;
+            };
+            const int rungs = std::clamp(int(std::lround(furthest / h)), 1, 8);
+            // ring[j][i]: rim point i moved j rungs towards its end.
+            std::vector<std::vector<Index>> ring(size_t(rungs) + 1, std::vector<Index>(loop.size()));
+            for (size_t i = 0; i < loop.size(); ++i)
+            {
+                ring[0][i] = loop[i];
+                ring[size_t(rungs)][i] = endPoint[endOf[i]];
+                for (int j = 1; j < rungs; ++j)
+                {
+                    const glm::dvec3 at = glm::mix(m.position(loop[i]), ends[endOf[i]], double(j) / double(rungs));
+                    geo::BvhClosest on;
+                    ring[size_t(j)][i] = m.addPoint(surface.closestPoint(at, on, 2.0 * h) ? on.point : at);
+                }
+            }
+            // Two rim edges running to the same end close with one quad between them, not a triangle each.
+            std::vector<uint8_t> paired(loop.size(), 0);
+            const size_t last = size_t(rungs) - 1;
+            for (size_t i = 0; i < loop.size() && loop.size() >= 4; ++i)
+            {
+                const size_t before = (i + loop.size() - 1) % loop.size(), k = (i + 1) % loop.size(), after = (k + 1) % loop.size();
+                if (paired[before] || paired[i] || paired[k] || endOf[i] != endOf[k] || endOf[k] != endOf[after] || ring[last][i] == ring[last][k] ||
+                    ring[last][k] == ring[last][after] || ring[last][i] == ring[last][after])
+                    continue;
+                // Not across one of the tip's own creases: the two triangles have to lie in one face of the shape.
+                const glm::dvec3 end = ends[endOf[k]], shared = m.position(ring[last][k]);
+                const glm::dvec3 one = glm::cross(m.position(ring[last][i]) - shared, end - shared), two = glm::cross(end - shared, m.position(ring[last][after]) - shared);
+                if (glm::dot(glm::normalize(one), glm::normalize(two)) < 0.9)
+                    continue;
+                const std::vector<Index> face{ring[last][after], ring[last][k], ring[last][i], endPoint[endOf[k]]};
+                m.addFace(std::span<const Index>(face));
+                paired[i] = paired[k] = 1;
+            }
+            for (size_t i = 0; i < loop.size(); ++i)
+            {
+                const size_t k = (i + 1) % loop.size();
+                for (size_t j = 0; j < size_t(rungs); ++j)
+                {
+                    if (j == last && paired[i])
+                        continue;
+                    // Against the rim edge's own direction, so the new face winds with the one across it.
+                    // The other side of the tip may have a row more: its end on the crease joins this face's last edge.
+                    std::vector<Index> face;
+                    for (Index p : {ring[j][k], ring[j][i], ring[j + 1][i]})
+                        if (std::find(face.begin(), face.end(), p) == face.end())
+                            face.push_back(p);
+                    if (j + 1 == size_t(rungs) && endOf[i] != endOf[k])
+                        for (const auto& [at, p] : between(endOf[i], endOf[k]))
+                            face.push_back(p);
+                    if (std::find(face.begin(), face.end(), ring[j + 1][k]) == face.end())
+                        face.push_back(ring[j + 1][k]);
+                    if (face.size() >= 3)
+                        m.addFace(std::span<const Index>(face));
+                }
+            }
+            ++closed;
+        }
+    }
+    return closed;
+}
+
+/** LILA_ISO_DUMP: the working triangles as an OBJ, their feature edges as lines. */
+void dumpWorking(const Surface& iso)
+{
+    const char* dump = std::getenv("LILA_ISO_DUMP");
+    FILE* f = dump ? std::fopen(dump, "w") : nullptr;
+    if (!f)
+        return;
+    for (const glm::dvec3& p : iso.pos)
+        std::fprintf(f, "v %.9g %.9g %.9g\n", p.x, p.y, p.z);
+    for (const auto& t : iso.tris)
+        std::fprintf(f, "f %d %d %d\n", int(t[0] + 1), int(t[1] + 1), int(t[2] + 1));
+    for (uint64_t key : iso.hard)
+        std::fprintf(f, "l %d %d\n", int(key >> 32) + 1, int(key & 0xffffffffu) + 1);
+    std::fclose(f);
+}
+
+/**
+ * A creased shape whose creases are all rims of flat faces on an otherwise smooth body (a sculpted bust cut flat at the
+ * base): per triangle whether it is the body's, with the flat faces to come off for caps to stand in. False for any other creased shape.
+ * A few stray sharp edges on the body itself (under a crease for every fifty quads' worth of surface) don't count and
+ * come back in `stray`. s needs detectFeatures; h is the quad edge.
+ */
+bool withoutFlatFaces(const Surface& s, double h, std::vector<uint8_t>& body, std::vector<size_t>& stray)
+{
+    const auto why = [](int check) {
+        if (std::getenv("LILA_STAGE_LOG"))
+            std::fprintf(stderr, "flat faces: check %d failed\n", check);
+        return false;
+    };
+    const double tolerance = 0.1 * h;
+    constexpr double kLargestShare = 0.3;
+    const Index nt = Index(s.tris.size());
+    std::vector<Index> parent(nt);
+    std::iota(parent.begin(), parent.end(), Index(0));
+    const auto find = [&](Index x) {
+        while (parent[x] != x)
+            x = parent[x] = parent[parent[x]];
+        return x;
+    };
+    for (size_t e = 0; e < s.edges.size(); ++e)
+        if (s.edgeTriCount[e] == 2 && !s.edgeFeature[e])
+            parent[find(s.edgeTris[e][0])] = find(s.edgeTris[e][1]);
+    std::vector<double> area(nt, 0.0);
+    double total = 0.0;
+    for (Index t = 0; t < nt; ++t)
+    {
+        area[find(t)] += s.triArea[t];
+        total += s.triArea[t];
+    }
+    const Index main = Index(std::max_element(area.begin(), area.end()) - area.begin());
+    if (area[main] < (1.0 - kLargestShare) * total)
+        return why(1);
+    // Every crease has the body on one side and a face on the other.
+    for (size_t e = 0; e < s.edges.size(); ++e)
+        if (s.edgeFeature[e] && !s.edgeBoundary[e])
+        {
+            // An edge the simplifying left with three triangles is no crease of the shape.
+            if (s.edgeTriCount[e] != 2)
+            {
+                stray.push_back(e);
+                continue;
+            }
+            const Index a = find(s.edgeTris[e][0]), b = find(s.edgeTris[e][1]);
+            if (a == main && b == main)
+                stray.push_back(e);
+            else if (a != main && b != main)
+                return why(3);
+        }
+    double strayLength = 0.0;
+    for (size_t e : stray)
+        if (s.edgeTriCount[e] == 2)
+            strayLength += glm::distance(s.pos[s.edges[e][0]], s.pos[s.edges[e][1]]);
+    if (strayLength * h > 0.02 * total)
+        return why(4);
+    // Each face flat, and a disc: one rim, no handle.
+    struct Face
+    {
+        glm::dvec3 normal{0.0}, centre{0.0};
+        std::unordered_set<Index> points;
+        int triangles = 0, edges = 0;
+        /** Holds an edge with three triangles, so its counts say nothing of its shape. */
+        bool tangled = false;
+    };
+    std::unordered_map<Index, Face> faces;
+    for (Index t = 0; t < nt; ++t)
+        if (const Index c = find(t); c != main)
+        {
+            Face& f = faces[c];
+            f.normal += s.triNormal[t] * s.triArea[t];
+            f.centre += (s.pos[s.tris[t][0]] + s.pos[s.tris[t][1]] + s.pos[s.tris[t][2]]) * (s.triArea[t] / 3.0);
+            f.points.insert(s.tris[t].begin(), s.tris[t].end());
+            ++f.triangles;
+        }
+    if (faces.empty())
+        return why(5);
+    for (size_t e = 0; e < s.edges.size(); ++e)
+        for (int k = 0; k < std::min<int>(s.edgeTriCount[e], 2); ++k)
+            if (const Index c = find(s.edgeTris[e][k]); c != main && (k == 0 || find(s.edgeTris[e][0]) != c))
+            {
+                ++faces[c].edges;
+                faces[c].tangled = faces[c].tangled || s.edgeTriCount[e] > 2;
+            }
+    for (auto& [c, f] : faces)
+    {
+        if (area[c] <= 0.0 || (!f.tangled && int(f.points.size()) - f.edges + f.triangles != 1))
+            return why(6);
+        f.centre /= area[c];
+        f.normal = glm::normalize(f.normal);
+        for (Index p : f.points)
+            if (std::abs(glm::dot(s.pos[p] - f.centre, f.normal)) > tolerance)
+                return why(7);
+    }
+    body.resize(nt);
+    for (Index t = 0; t < nt; ++t)
+        body[t] = find(t) == main;
     return true;
 }
 
@@ -1139,9 +1738,10 @@ constexpr double kStockTriangles = 6.0;
 
 /**
  * The stock stages' working triangles. False when the simplified surface turns out to have creases to hold, which the
- * stock isotropic pass can't be told about; s is then spent and has to be read again.
+ * stock isotropic pass can't be told about; s is then spent and has to be read again. Creases that are only the rims
+ * of flat faces are held all the same: the faces come off, the body is laid out as an open shape, and its caps are kept.
  */
-bool prepareStock(Work& w, const QuadRemeshOptions& opts, double faces, double halves, Stopwatch& clock)
+bool prepareStock(Work& w, const QuadRemeshOptions& opts, double faces, double halves, Stopwatch& clock, bool keepCaps)
 {
     LILA_ZONE();
 
@@ -1176,9 +1776,54 @@ bool prepareStock(Work& w, const QuadRemeshOptions& opts, double faces, double h
     };
     fill(s, simpleVertices, simpleTriangles);
     s.detectFeatures(opts.sharpAngle, 75.0, 2.0 * w.h0);
+    bool creased = false;
     for (size_t e = 0; e < s.edges.size(); ++e)
-        if (s.edgeFeature[e] && !s.edgeBoundary[e])
+        creased = creased || (s.edgeFeature[e] && s.edgeTriCount[e] == 2);
+    if (creased)
+    {
+        std::vector<uint8_t> body;
+        std::vector<size_t> stray;
+        if (!keepCaps || std::getenv("LILA_QR_NO_KEPT_CAPS") || !withoutFlatFaces(s, w.h0, body, stray))
             return false;
+        for (size_t e : stray)
+        {
+            s.edgeFeature[e] = 0;
+            for (Index v : s.edges[e])
+                s.feature[v] = FeatureKind::None;
+        }
+        // The stock isotropic pass crumples a flat face made of slivers, so it only sees the body: the source's own
+        // triangles that lie on the simplified body.
+        std::vector<Index> sizes(s.tris.size(), 3), corners;
+        for (const auto& t : s.tris)
+            corners.insert(corners.end(), t.begin(), t.end());
+        const geo::Mesh simplified = geo::Mesh::fromPolygons(s.pos, sizes, corners);
+        const geo::MeshBvh onSimplified(simplified);
+        const Surface source = surfaceFromMesh(w.src, opts.useHardEdges);
+        std::vector<Index> local(source.pos.size(), kInvalid);
+        vertices.clear();
+        triangles.clear();
+        for (const auto& t : source.tris)
+        {
+            geo::BvhClosest hit;
+            if (!onSimplified.closestPoint((source.pos[t[0]] + source.pos[t[1]] + source.pos[t[2]]) / 3.0, hit) || hit.face == kInvalid ||
+                !body[hit.face])
+                continue;
+            std::vector<size_t> tri;
+            for (Index v : t)
+            {
+                if (local[v] == kInvalid)
+                {
+                    local[v] = Index(vertices.size());
+                    vertices.push_back(AutoRemesher::Vector3(source.pos[v].x, source.pos[v].y, source.pos[v].z));
+                }
+                tri.push_back(size_t(local[v]));
+            }
+            triangles.push_back(std::move(tri));
+        }
+        AutoRemesher::AutoRemesher::resample(vertices, triangles, voxel, 4.0 * opts.adaptivity, 180.0, 0.0, 0, nullptr, nullptr, &progress, nullptr,
+                                             nullptr);
+        w.creases.build(s, 0.5 * w.h0, false, true);
+    }
     w.border.build(s, 0.5 * w.h0, true);
     clock.lap("surface");
     {
@@ -1190,34 +1835,42 @@ bool prepareStock(Work& w, const QuadRemeshOptions& opts, double faces, double h
         w.simpleBvh.emplace(w.simple);
     }
     fill(w.iso, vertices, triangles);
+    // Kept caps go on first, so the chain on the symmetry plane runs across them too.
+    if (creased && !capBorders(w.iso, w.caps, w.iso.hard, &w.border, 0.75 * w.h0, &w.keptCaps))
+    {
+        w.iso = Surface();
+        return false;
+    }
     if (w.symmetric)
     {
-        w.iso.hard = symmetrize(w.iso, w.plane, opts.symmetryAxis);
+        const std::unordered_set<uint64_t> chain = symmetrize(w.iso, w.plane, opts.symmetryAxis);
+        w.iso.hard.insert(chain.begin(), chain.end());
         w.wholeLayout = true;
     }
-    if (!w.closed)
+    if (!w.closed && !creased && !capBorders(w.iso, w.caps, w.iso.hard))
     {
-        if (!capBorders(w.iso, w.caps, w.iso.hard, w.capShare))
-        {
-            w.iso = Surface();
-            w.wholeLayout = false;
-            return false;
-        }
-        w.capsBvh.emplace(w.caps);
+        w.iso = Surface();
+        w.wholeLayout = false;
+        return false;
     }
+    if (w.caps.numFaces() > 0)
+        w.capsBvh.emplace(w.caps);
+    if (w.keptCaps.numFaces() > 0)
+        w.keptCapsBvh.emplace(w.keptCaps);
     w.iso.detectFeatures(-1.0, 75.0, 0.0);
     w.isoSize.assign(w.iso.pos.size(), w.h0);
     w.stock = w.stockSizes = true;
-    // The quads on the caps are laid out too and then dropped.
-    w.stockQuads = (opts.targetEdgeLength > 0.0 ? s.totalArea() / (w.h0 * w.h0) : faces * halves) / (1.0 - w.capShare);
+    dumpWorking(w.iso);
+    w.stockQuads = opts.targetEdgeLength > 0.0 ? s.totalArea() / (w.h0 * w.h0) : faces * halves;
     if (std::getenv("LILA_STAGE_LOG"))
-        std::fprintf(stderr, "stock triangles: %zu simplified, %zu working, edge %g\n", s.tris.size(), w.iso.tris.size(), voxel);
+        std::fprintf(stderr, "stock triangles: %zu simplified, %zu working, edge %g, %u cap and %u kept cap triangles, %zu held edges\n", s.tris.size(),
+                     w.iso.tris.size(), voxel, unsigned(w.caps.numFaces()), unsigned(w.keptCaps.numFaces()), w.iso.hard.size());
     Budget::note(std::to_string(w.iso.tris.size()) + " working triangles for about " + std::to_string(int(faces * halves)) + " faces");
     clock.lap("isotropic");
     return true;
 }
 
-void prepareWork(Work& w, const geo::Mesh& source, const QuadRemeshOptions& opts, Stopwatch& clock)
+void prepareWork(Work& w, const geo::Mesh& source, const QuadRemeshOptions& opts, Stopwatch& clock, bool keepCaps = true)
 {
     LILA_ZONE();
 
@@ -1255,7 +1908,7 @@ void prepareWork(Work& w, const geo::Mesh& source, const QuadRemeshOptions& opts
                        !std::getenv("LILA_QR_OWN");
     if (plain)
     {
-        if (prepareStock(w, opts, faces, halves, clock))
+        if (prepareStock(w, opts, faces, halves, clock, keepCaps))
             return;
         s = surfaceFromMesh(w.src, opts.useHardEdges);
         s.pins = opts.pinnedPoints;
@@ -1276,7 +1929,15 @@ void prepareWork(Work& w, const geo::Mesh& source, const QuadRemeshOptions& opts
     // collapse.
     refineSurface(s, triEdge);
     if (!opts.featureGuides.empty())
-        imprintGuides(s, opts.featureGuides);
+    {
+        const std::unordered_set<uint64_t> own = s.hard;
+        if (const int dropped = imprintGuides(s, opts.featureGuides))
+            w.notes.push_back(std::to_string(dropped) + " of " + std::to_string(opts.featureGuides.size()) +
+                              " edge loop curves couldn't be cut into the surface, so the layout doesn't follow them");
+        for (uint64_t key : s.hard)
+            if (!own.contains(key))
+                w.guideSegs.push_back({s.pos[Index(key >> 32)], s.pos[Index(key & 0xffffffffu)]});
+    }
     s.buildTopology();
     s.buildGeometry();
     s.detectFeatures(opts.sharpAngle, 75.0, 2.0 * w.h0);
@@ -1288,8 +1949,30 @@ void prepareWork(Work& w, const geo::Mesh& source, const QuadRemeshOptions& opts
     }
     clock.lap("surface");
 
-    w.border.build(s, 0.5 * w.h0, true);
+    // The working triangles lie on the simplified surface, which keeps the shape but not the sculpted pores that would
+    // read as curvature everywhere. Taken, with the creases, before any tip is cut off: the tips go back on.
+    {
+        std::vector<Index> sizes(s.tris.size(), 3), corners;
+        corners.reserve(s.tris.size() * 3);
+        for (const auto& t : s.tris)
+            corners.insert(corners.end(), t.begin(), t.end());
+        w.simple = geo::Mesh::fromPolygons(s.pos, sizes, corners);
+        w.simpleBvh.emplace(w.simple);
+    }
     w.creases.build(s, 0.5 * w.h0, false, true);
+    if (w.closed && !w.symmetric && opts.pinnedPoints.empty() && !std::getenv("LILA_QR_NO_TIP_CLIP"))
+    {
+        clipSharpTips(s, w.h0, opts.sharpAngle, w.tips);
+        if (!w.tips.empty())
+        {
+            s.buildTopology();
+            s.buildGeometry();
+            s.detectFeatures(opts.sharpAngle, 75.0, 2.0 * w.h0);
+        }
+        if (std::getenv("LILA_STAGE_LOG"))
+            std::fprintf(stderr, "sharp tips cut off: %zu\n", w.tips.size());
+    }
+    w.border.build(s, 0.5 * w.h0, true);
     std::vector<double> target = sizeField(s, w, opts, faces, CurvatureSizing::Triangles);
     if (std::getenv("LILA_STAGE_LOG"))
     {
@@ -1307,16 +1990,6 @@ void prepareWork(Work& w, const geo::Mesh& source, const QuadRemeshOptions& opts
     clock.lap("density");
     for (double& t : target)
         t /= triangleRatio();
-    // The working triangles lie on the simplified surface, which keeps the shape but not the sculpted pores that would
-    // read as curvature everywhere.
-    {
-        std::vector<Index> sizes(s.tris.size(), 3), corners;
-        corners.reserve(s.tris.size() * 3);
-        for (const auto& t : s.tris)
-            corners.insert(corners.end(), t.begin(), t.end());
-        w.simple = geo::Mesh::fromPolygons(s.pos, sizes, corners);
-        w.simpleBvh.emplace(w.simple);
-    }
     w.iso = remeshIsotropic(s, target, *w.simpleBvh, w.creases, w.border);
     w.iso.buildTopology();
     w.iso.buildGeometry();
@@ -1330,6 +2003,8 @@ void prepareWork(Work& w, const geo::Mesh& source, const QuadRemeshOptions& opts
         if (w.iso.edgeFeature[e] && !w.iso.edgeBoundary[e])
             creased += glm::distance(w.iso.pos[w.iso.edges[e][0]], w.iso.pos[w.iso.edges[e][1]]);
     w.stockSizes = creased * w.h0 < 0.02 * w.iso.totalArea() && !std::getenv("LILA_QR_OWN_SIZES");
+    if (std::getenv("LILA_STAGE_LOG"))
+        std::fprintf(stderr, "creased %g of %g, stock sizes %d\n", creased * w.h0, 0.02 * w.iso.totalArea(), int(w.stockSizes));
     if (w.symmetric && !std::getenv("LILA_QR_HALF"))
     {
         // Laid out whole like the stock path: the half joined to its mirror image, its cut an edge chain to hold.
@@ -1352,17 +2027,7 @@ void prepareWork(Work& w, const geo::Mesh& source, const QuadRemeshOptions& opts
         w.wholeLayout = true;
     }
     w.stockQuads = opts.targetEdgeLength > 0.0 ? w.iso.totalArea() / (w.h0 * w.h0) : faces * (w.wholeLayout ? halves : 1.0);
-    if (const char* dump = std::getenv("LILA_ISO_DUMP"))
-        if (FILE* f = std::fopen(dump, "w"))
-        {
-            for (const glm::dvec3& p : w.iso.pos)
-                std::fprintf(f, "v %.9g %.9g %.9g\n", p.x, p.y, p.z);
-            for (const auto& t : w.iso.tris)
-                std::fprintf(f, "f %d %d %d\n", int(t[0] + 1), int(t[1] + 1), int(t[2] + 1));
-            for (uint64_t key : w.iso.hard)
-                std::fprintf(f, "l %d %d\n", int(key >> 32) + 1, int(key & 0xffffffffu) + 1);
-            std::fclose(f);
-        }
+    dumpWorking(w.iso);
     Budget::note(std::to_string(w.iso.tris.size()) + " working triangles for about " + std::to_string(int(faces)) + " faces");
     clock.lap("isotropic");
 }
@@ -1380,8 +2045,8 @@ struct CoverInput
     std::vector<AutoRemesher::Vector3> guidance;
     /** For the stock layout: a factor on its own sizes, and the longest edge allowed, each empty when it does nothing. */
     std::vector<double> sizeFactor, sizeLimit;
-    /** Per triangle, whether it is on a cap. Empty without caps. */
-    std::vector<uint8_t> onCap;
+    /** Per triangle, whether it is on a cap that is dropped, and on any cap at all (dropped or kept). Empty without. */
+    std::vector<uint8_t> onCap, onAnyCap;
     /** The field turned through corners too sharp for it to lie along both sides, and those sides' corners held. */
     std::vector<std::pair<size_t, AutoRemesher::Vector3>> fieldOverrides;
     std::unordered_set<size_t> forcedCorners;
@@ -1460,7 +2125,8 @@ void stockSizes(const Work& w, const QuadRemeshOptions& opts, std::vector<double
     }
 }
 
-void turnSharpCorners(const Surface& iso, CoverInput& in);
+void turnSharpCorners(const Surface& iso, const std::vector<uint8_t>& guideEdge, CoverInput& in);
+std::vector<uint8_t> guideEdges(const Work& w);
 
 AutoRemesher::Vector3 toAr(const glm::dvec3& p) { return AutoRemesher::Vector3(p.x, p.y, p.z); }
 glm::dvec3 fromAr(const AutoRemesher::Vector3& p) { return glm::dvec3(p.x(), p.y(), p.z()); }
@@ -1607,6 +2273,14 @@ CoverInput coverInput(const Work& w, const QuadRemeshOptions& opts, std::string&
         in.onCap.resize(iso.tris.size());
         tbb::parallel_for(size_t(0), iso.tris.size(), [&](size_t t) { in.onCap[t] = w.onCap(centre(t)); });
     }
+    if (w.keptCapsBvh)
+    {
+        in.onAnyCap.resize(iso.tris.size());
+        tbb::parallel_for(size_t(0), iso.tris.size(),
+                          [&](size_t t) { in.onAnyCap[t] = (!in.onCap.empty() && in.onCap[t]) || w.onKeptCap(centre(t)); });
+    }
+    else
+        in.onAnyCap = in.onCap;
 
     // Flow guides: faces the curve passes over follow it.
     if (!opts.guides.empty())
@@ -1703,12 +2377,11 @@ CoverInput coverInput(const Work& w, const QuadRemeshOptions& opts, std::string&
     }
     else if (w.symmetric && !w.wholeLayout)
         in.guidance = symmetricFlow(w, in, error);
-    // Not with edge loop curves: where one crosses a crease or border at a slant, the two make a sharp sector that is
-    // no corner.
-    if (in.guidance.empty() && !w.stock && opts.featureGuides.empty() && !std::getenv("LILA_QR_NO_CORNERS"))
-        turnSharpCorners(iso, in);
+    if (in.guidance.empty() && !w.stock && !std::getenv("LILA_QR_NO_CORNERS"))
+        turnSharpCorners(iso, guideEdges(w), in);
     if (std::getenv("LILA_STAGE_LOG"))
-        std::fprintf(stderr, "sharp corners: %zu triangles turned, %zu sides held\n", in.fieldOverrides.size(), in.forcedCorners.size());
+        std::fprintf(stderr, "sharp corners: %zu triangles turned, %zu sides held, %zu curve segments\n", in.fieldOverrides.size(),
+                     in.forcedCorners.size(), w.guideSegs.size());
     return in;
 }
 
@@ -1727,6 +2400,30 @@ void tameSizes(AutoRemesher::Parameterizer& pz)
     pz.setMaxAspectRatio(1.5);
 }
 
+/** Per edge of the working triangles, whether it lies along an imprinted edge loop curve (on either side of a whole layout). */
+std::vector<uint8_t> guideEdges(const Work& w)
+{
+    const Surface& iso = w.iso;
+    std::vector<uint8_t> out(iso.edges.size(), 0);
+    if (w.guideSegs.empty())
+        return out;
+    tbb::parallel_for(size_t(0), iso.edges.size(), [&](size_t e) {
+        if (!iso.edgeFeature[e] || iso.edgeTriCount[e] != 2)
+            return;
+        glm::dvec3 a = iso.pos[iso.edges[e][0]], b = iso.pos[iso.edges[e][1]];
+        if (w.wholeLayout && w.plane.distance(0.5 * (a + b)) < 0.0)
+        {
+            a = w.plane.reflect(a);
+            b = w.plane.reflect(b);
+        }
+        // Ends and middle: a crease leaving the curve at a slant has its far end off it.
+        const double reach = 0.05 * glm::distance(a, b);
+        auto on = [&](const glm::dvec3& p) { return glm::distance(closestOnSegments(p, w.guideSegs), p) < reach; };
+        out[e] = on(a) && on(b) && on(0.5 * (a + b));
+    });
+    return out;
+}
+
 /**
  * Corners where two feature edges meet at under 45 degrees and no third joins them: turned at a prism's tip, where a
  * third crease runs down the side, the star prism came out with half as many poles again. A quad corner there has one side along U and the other
@@ -1735,7 +2432,7 @@ void tameSizes(AutoRemesher::Parameterizer& pz)
  * round, a quarter turn short of the corner's own angle), and the two sides are held to whichever direction that
  * makes them nearer.
  */
-void turnSharpCorners(const Surface& iso, CoverInput& in)
+void turnSharpCorners(const Surface& iso, const std::vector<uint8_t>& guideEdge, CoverInput& in)
 {
     constexpr double kSharpest = glm::radians(45.0);
     const Index n = iso.vertexCount();
@@ -1744,10 +2441,13 @@ void turnSharpCorners(const Surface& iso, CoverInput& in)
     for (Index t = 0; t < Index(iso.tris.size()); ++t)
         for (Index v : iso.tris[t])
             around[v].push_back(t);
+    // Only creases and borders are a corner's sides: an edge loop curve crossing one at a slant makes a sharp sector
+    // that is no corner.
+    auto side = [&](Index e) { return iso.edgeFeature[e] != 0 && !guideEdge[e]; };
     auto featureBetween = [&](Index a, Index b) {
         for (Index k = iso.adjStart[a]; k < iso.adjStart[a + 1]; ++k)
             if (iso.adj[k] == b)
-                return iso.edgeFeature[iso.adjEdge[k]] != 0;
+                return side(iso.adjEdge[k]);
         return false;
     };
     for (Index v = 0; v < n; ++v)
@@ -1769,7 +2469,7 @@ void turnSharpCorners(const Surface& iso, CoverInput& in)
             byFirst[a] = t;
         }
         for (Index k = iso.adjStart[v]; k < iso.adjStart[v + 1]; ++k)
-            features += iso.edgeFeature[iso.adjEdge[k]] != 0;
+            features += side(iso.adjEdge[k]);
         if (features != 2)
             continue;
         for (Index start : around[v])
@@ -1836,8 +2536,10 @@ void setUp(AutoRemesher::Parameterizer& pz, const CoverInput& in, const Work& w)
         pz.setGradientAdaptivity(4.0 * w.adaptivity);
         tameSizes(pz);
         pz.setTargetQuadCount(w.stockQuads);
+        if (!in.onAnyCap.empty())
+            pz.setUnsizedFaces(&in.onAnyCap);
         if (!in.onCap.empty())
-            pz.setUnsizedFaces(&in.onCap);
+            pz.setUncountedFaces(&in.onCap);
         pz.setFeatureEdges(&in.features);
         if (!in.sizeFactor.empty())
             pz.setFaceScalingMultiplier(&in.sizeFactor);
@@ -2616,12 +3318,265 @@ constexpr double kLoopReach = 0.6;
 /** Longest hole, in edges, the grid's holes are filled across; a longer one means the cover folded over a region. */
 constexpr size_t kMaxGridHole = 24;
 
-/**
- * Closes the grid's holes off the source's borders: an even loop as a ladder of quads, an odd one as a ladder plus a
- * triangle for the pairing to walk off. False when a hole is too long or can't be traced as one loop.
- */
-bool fillGridHoles(const std::vector<glm::dvec3>& points, std::vector<std::vector<Index>>& faces, const Work& w)
+/** One way of closing a hole: its faces, the points it adds inside (indexed on from the soup's own), and what it costs. */
+struct HoleFill
 {
+    std::vector<std::vector<Index>> faces;
+    std::vector<glm::dvec3> added;
+    /**
+     * The irregular points it leaves: its own inner pole and the loop points that end up with three or five faces, with
+     * any other count but four weighing as four of those.
+     */
+    int poles = 0;
+    double unsquare = 0.0;
+
+    bool better(const HoleFill& o) const
+    {
+        // A fill with a corner folded back loses to any without.
+        const bool folded = unsquare >= 10.0, otherFolded = o.unsquare >= 10.0;
+        if (folded != otherFolded)
+            return otherFolded;
+        // A pole weighs as two corners 30 degrees off square: weighed any heavier, the fills that save one start to fold.
+        return 0.5 * double(poles) + unsquare < 0.5 * double(o.poles) + o.unsquare;
+    }
+};
+
+/** Builds a hole's fills over the soup's points, with the fill's own points indexed after them. */
+struct HoleFiller
+{
+    const std::vector<glm::dvec3>& points;
+    const std::vector<Index>& loop;
+    /** Faces each loop point has before the fill. */
+    const std::vector<int>& have;
+
+    glm::dvec3 at(const HoleFill& fill, Index p) const { return p < Index(points.size()) ? points[p] : fill.added[p - points.size()]; }
+
+    Index add(HoleFill& fill, const glm::dvec3& p) const
+    {
+        fill.added.push_back(p);
+        return Index(points.size() + fill.added.size() - 1);
+    }
+
+    void rate(HoleFill& fill, int innerPoles) const
+    {
+        std::unordered_map<Index, int> got;
+        for (const auto& f : fill.faces)
+            for (Index p : f)
+                ++got[p];
+        fill.poles = innerPoles;
+        for (size_t i = 0; i < loop.size(); ++i)
+        {
+            // Two faces round a point is a doublet and six or more a fan, each worse than several plain poles.
+            const int around = have[i] + got[loop[i]];
+            fill.poles += around == 4 ? 0 : around == 3 || around == 5 ? 1 : 4;
+        }
+        fill.unsquare = 0.0;
+        for (const auto& f : fill.faces)
+            for (size_t k = 0; k < f.size(); ++k)
+            {
+                const glm::dvec3 p = at(fill, f[k]), u = at(fill, f[(k + f.size() - 1) % f.size()]) - p, v = at(fill, f[(k + 1) % f.size()]) - p;
+                const double lu = glm::length(u), lv = glm::length(v);
+                const double c = lu > 0.0 && lv > 0.0 ? glm::dot(u, v) / (lu * lv) : -1.0;
+                fill.unsquare += c * c + (c < -0.9 ? 10.0 : 0.0);
+            }
+    }
+
+    /**
+     * A block of quads between four runs of points going round it, each starting where the one before ends; opposite
+     * runs are as long as each other. The points inside are blended from the four runs.
+     */
+    void block(HoleFill& fill, const std::vector<Index>& s0, const std::vector<Index>& s1, const std::vector<Index>& s2,
+               const std::vector<Index>& s3) const
+    {
+        const size_t m = s0.size() - 1, n = s1.size() - 1;
+        std::vector<Index> grid((m + 1) * (n + 1));
+        const glm::dvec3 c00 = at(fill, s0[0]), c10 = at(fill, s0[m]), c11 = at(fill, s1[n]), c01 = at(fill, s3[0]);
+        for (size_t j = 0; j <= n; ++j)
+            for (size_t i = 0; i <= m; ++i)
+            {
+                Index& g = grid[j * (m + 1) + i];
+                if (j == 0)
+                    g = s0[i];
+                else if (i == m)
+                    g = s1[j];
+                else if (j == n)
+                    g = s2[m - i];
+                else if (i == 0)
+                    g = s3[n - j];
+                else
+                {
+                    const double u = double(i) / double(m), v = double(j) / double(n);
+                    g = add(fill, (1.0 - v) * at(fill, s0[i]) + v * at(fill, s2[m - i]) + (1.0 - u) * at(fill, s3[n - j]) + u * at(fill, s1[j]) -
+                                      ((1.0 - u) * (1.0 - v) * c00 + u * (1.0 - v) * c10 + u * v * c11 + (1.0 - u) * v * c01));
+                }
+            }
+        for (size_t j = 0; j < n; ++j)
+            for (size_t i = 0; i < m; ++i)
+                fill.faces.push_back({grid[j * (m + 1) + i], grid[j * (m + 1) + i + 1], grid[(j + 1) * (m + 1) + i + 1], grid[(j + 1) * (m + 1) + i]});
+    }
+
+    /** The loop's points from position a on round to position b. */
+    std::vector<Index> run(size_t a, size_t b) const
+    {
+        std::vector<Index> out{loop[a % loop.size()]};
+        for (size_t k = a % loop.size(); k != b % loop.size();)
+        {
+            k = (k + 1) % loop.size();
+            out.push_back(loop[k]);
+        }
+        return out;
+    }
+
+    /**
+     * The fill the hole's own corners ask for, when it has only corners (three faces there already) and straight points
+     * (two): a block of quads for four corners with opposite sides alike, and for three, five or six a block at each
+     * corner round one pole in the middle. False when the sides' lengths don't allow it.
+     */
+    bool patch(HoleFill& fill) const
+    {
+        std::vector<size_t> corners;
+        for (size_t i = 0; i < loop.size(); ++i)
+        {
+            if (have[i] == 3)
+                corners.push_back(i);
+            else if (have[i] != 2)
+                return false;
+        }
+        const size_t c = corners.size(), n = loop.size();
+        if (c < 3 || c > 6)
+            return false;
+        std::vector<int> side(c);
+        for (size_t i = 0; i < c; ++i)
+            side[i] = int((corners[(i + 1) % c] + n - corners[i]) % n);
+        if (c == 4)
+        {
+            if (side[0] != side[2] || side[1] != side[3])
+                return false;
+            block(fill, run(corners[0], corners[1]), run(corners[1], corners[2]), run(corners[2], corners[3]), run(corners[3], corners[0]));
+            rate(fill, 0);
+            return true;
+        }
+        // Side i is spoke i - 1's length then spoke i + 1's. Stepping by two that closes on itself after an odd count
+        // (all the spokes for three or five corners, every other one for six), which leaves one answer.
+        std::vector<int> spoke(c, 0);
+        for (size_t start = 0; start < (c % 2 ? 1u : 2u); ++start)
+        {
+            int k = 0;
+            size_t j = start;
+            do
+            {
+                k = side[(j + 1) % c] - k;
+                j = (j + 2) % c;
+            } while (j != start);
+            if (k % 2 != 0)
+                return false;
+            spoke[start] = k / 2;
+            for (j = start; (j + 2) % c != start; j = (j + 2) % c)
+                spoke[(j + 2) % c] = side[(j + 1) % c] - spoke[j];
+        }
+        for (int s : spoke)
+            if (s < 1)
+                return false;
+        glm::dvec3 middle(0.0);
+        for (Index p : loop)
+            middle += points[p] / double(n);
+        const Index centre = add(fill, middle);
+        // Each spoke from its side's split point in to the centre.
+        std::vector<size_t> split(c);
+        std::vector<std::vector<Index>> spokes(c);
+        for (size_t i = 0; i < c; ++i)
+        {
+            split[i] = (corners[i] + size_t(spoke[(i + c - 1) % c])) % n;
+            spokes[i].push_back(loop[split[i]]);
+            for (int k = 1; k < spoke[i]; ++k)
+                spokes[i].push_back(add(fill, glm::mix(points[loop[split[i]]], middle, double(k) / double(spoke[i]))));
+            spokes[i].push_back(centre);
+        }
+        for (size_t i = 0; i < c; ++i)
+        {
+            const size_t before = (i + c - 1) % c;
+            std::vector<Index> back(spokes[before].rbegin(), spokes[before].rend());
+            block(fill, run(corners[i], split[i]), spokes[i], back, run(split[before], corners[i]));
+        }
+        rate(fill, 1);
+        return true;
+    }
+
+    /** Ladders of quads across an even loop, one per offset; the best joins `fill`'s faces when it beats it. */
+    void ladders(const std::vector<Index>& ring, const HoleFill& prefix, HoleFill& best, bool& any) const
+    {
+        const size_t n = ring.size(), m = n / 2;
+        for (size_t s = 0; s < m; ++s)
+        {
+            HoleFill fill = prefix;
+            if (n == 4)
+                fill.faces.push_back(ring);
+            else
+                for (size_t i = 0; i + 1 < m; ++i)
+                    fill.faces.push_back({ring[(s + i) % n], ring[(s + i + 1) % n], ring[(s + n - 2 - i) % n], ring[(s + n - 1 - i) % n]});
+            rate(fill, 0);
+            if (!any || fill.better(best))
+                best = std::move(fill);
+            any = true;
+            if (n == 4)
+                break;
+        }
+    }
+
+    /**
+     * The fill that leaves the fewest irregular points, the squarest among those: the hole's own patch, or a ladder of
+     * quads at any offset, with a triangle off any one point first when the loop is odd, for the pairing to walk off.
+     */
+    HoleFill best() const
+    {
+        HoleFill out;
+        bool any = false;
+        if (HoleFill own; patch(own))
+        {
+            out = std::move(own);
+            any = true;
+        }
+        if (loop.size() % 2 == 0)
+            ladders(loop, HoleFill(), out, any);
+        else
+            for (size_t r = 0; r < loop.size(); ++r)
+            {
+                const size_t n = loop.size();
+                HoleFill ear;
+                ear.faces.push_back({loop[r], loop[(r + 1) % n], loop[(r + 2) % n]});
+                std::vector<Index> ring;
+                for (size_t k = 0; k < n; ++k)
+                    if (k != (r + 1) % n)
+                        ring.push_back(loop[k]);
+                if (ring.size() < 4)
+                {
+                    rate(ear, 0);
+                    if (!any || ear.better(out))
+                        out = std::move(ear);
+                    any = true;
+                }
+                else
+                    ladders(ring, ear, out, any);
+            }
+        return out;
+    }
+};
+
+/**
+ * Closes the grid's holes off the source's borders, each with the fill that leaves the fewest irregular points (see
+ * HoleFiller::best). False when a hole is too long or can't be traced as one loop.
+ */
+bool fillGridHoles(std::vector<glm::dvec3>& points, std::vector<std::vector<Index>>& faces, const Work& w)
+{
+    const auto why = [](int check) {
+        if (std::getenv("LILA_HOLE_LOG"))
+            std::fprintf(stderr, "hole fill: check %d failed\n", check);
+        return false;
+    };
+    std::vector<int> faceCount(points.size(), 0);
+    for (const auto& f : faces)
+        for (Index p : f)
+            ++faceCount[p];
     std::unordered_set<uint64_t> half;
     auto dkey = [](Index a, Index b) { return (uint64_t(a) << 32) | b; };
     for (const auto& f : faces)
@@ -2637,37 +3592,155 @@ bool fillGridHoles(const std::vector<glm::dvec3>& points, std::vector<std::vecto
             if (half.contains(dkey(b, a)) || w.border.closest(0.5 * (points[a] + points[b]), 0.25 * w.h0, q))
                 continue;
             if (!next.emplace(b, a).second)
-                return false;
+                return why(1);
         }
-    std::unordered_set<Index> seen;
+    // A gap cut right across a strip, or a notch in the border, leaves chains that start and end on the source's border
+    // instead of loops. Each end goes on to the nearest chain start along the border, which closes them.
+    std::unordered_set<Index> bridged;
+    {
+        std::unordered_set<Index> entered;
+        for (const auto& [from, to] : next)
+            entered.insert(to);
+        std::vector<Index> starts, ends;
+        for (const auto& [from, to] : next)
+        {
+            if (!entered.contains(from))
+                starts.push_back(from);
+            if (!next.contains(to))
+                ends.push_back(to);
+        }
+        // Each chain's end by its start, and its length in points.
+        std::unordered_map<Index, std::pair<Index, int>> chainOf;
+        for (Index st : starts)
+        {
+            Index at = st;
+            int length = 1;
+            for (auto it = next.find(at); it != next.end() && length < 4096; it = next.find(at), ++length)
+                at = it->second;
+            chainOf[at] = {st, length};
+        }
+        // Along the border from the end to the start: their chord's middle is near it (cutting a corner of it at most),
+        // where a chord across the strip has its middle half its length from either side. A short chain straight across
+        // a strip is as near its own start as the next chain's, and is no loop by itself.
+        std::vector<std::tuple<double, Index, Index>> links;
+        for (Index e : ends)
+            for (Index st : starts)
+            {
+                const double d = glm::distance(points[e], points[st]);
+                if (d >= 4.0 * w.h0 || !w.border.closest(0.5 * (points[e] + points[st]), 0.25 * w.h0 + 0.3 * d, q))
+                    continue;
+                if (const auto own = chainOf.find(e); own != chainOf.end() && own->second.first == st && own->second.second < 4)
+                    continue;
+                links.push_back({d, e, st});
+            }
+        std::sort(links.begin(), links.end());
+        std::unordered_set<Index> startTaken;
+        for (const auto& [d, e, st] : links)
+            if (!next.contains(e) && !startTaken.contains(st))
+            {
+                next[e] = st;
+                startTaken.insert(st);
+                bridged.insert(e);
+                bridged.insert(st);
+            }
+    }
+    std::unordered_set<Index> seen, unclosed;
     for (const auto& [start, unused] : next)
     {
         if (seen.contains(start))
             continue;
         std::vector<Index> loop;
         Index at = start;
-        while (!seen.contains(at))
+        bool open = false;
+        while (!open && !seen.contains(at))
         {
             seen.insert(at);
             loop.push_back(at);
             auto it = next.find(at);
             if (it == next.end())
-                return false;
-            at = it->second;
+                open = true;
+            else
+                at = it->second;
+        }
+        // A chain nothing closed (its other side is too far along the border) stays a gap in the border.
+        if (open || unclosed.contains(at))
+        {
+            unclosed.insert(loop.begin(), loop.end());
+            continue;
         }
         if (at != start || loop.size() < 3 || loop.size() > kMaxGridHole)
-            return false;
-        if (loop.size() % 2 == 1)
+            return why(3);
+        // A bridged chain with next to no area between it and the border is the border itself, a little off where it
+        // was looked for: filled, it would be faces lying flat along it.
         {
-            faces.push_back({loop[0], loop[1], loop[2]});
-            loop.erase(loop.begin() + 1);
+            bool bridge = false;
+            glm::dvec3 area(0.0);
+            double round = 0.0;
+            for (size_t i = 0; i < loop.size(); ++i)
+            {
+                const glm::dvec3 a = points[loop[i]], b = points[loop[(i + 1) % loop.size()]];
+                bridge = bridge || bridged.contains(loop[i]);
+                area += 0.5 * glm::cross(a - points[loop[0]], b - points[loop[0]]);
+                round += glm::distance(a, b);
+            }
+            if (bridge && glm::length(area) < 0.02 * w.h0 * round)
+                continue;
         }
-        if (loop.size() == 4)
-            faces.push_back(loop);
-        else if (loop.size() > 4)
-            for (auto& quad : ladder(points, loop))
-                faces.push_back(std::move(quad));
+        std::vector<int> have(loop.size());
+        // A point on the border is whole with two faces round it, not four.
+        for (size_t i = 0; i < loop.size(); ++i)
+            have[i] = faceCount[loop[i]] + (bridged.contains(loop[i]) ? 2 : 0);
+        HoleFill fill;
+        if (std::getenv("LILA_QR_LADDER_HOLES"))
+        {
+            if (loop.size() % 2 == 1)
+            {
+                fill.faces.push_back({loop[0], loop[1], loop[2]});
+                loop.erase(loop.begin() + 1);
+            }
+            if (loop.size() == 4)
+                fill.faces.push_back(loop);
+            else if (loop.size() > 4)
+                for (auto& quad : ladder(points, loop))
+                    fill.faces.push_back(std::move(quad));
+        }
+        else
+            fill = HoleFiller{points, loop, have}.best();
+        if (std::getenv("LILA_HOLE_LOG"))
+        {
+            std::string shape;
+            for (int n : have)
+                shape += char('0' + std::min(n, 9));
+            shape += " crease ";
+            glm::dvec3 on, middle(0.0);
+            for (Index p : loop)
+            {
+                shape += w.creases.closestCorner(points[p], 0.3 * w.h0, on) ? 'C' : w.creases.closest(points[p], 0.3 * w.h0, on) ? 'x' : '.';
+                middle += points[p] / double(loop.size());
+            }
+            int corners = 0;
+            double radius = 0.0;
+            for (Index p : loop)
+                radius = std::max(radius, glm::distance(points[p], middle));
+            for (const glm::dvec3& c : w.creases.corners())
+                corners += glm::distance(c, middle) < 1.5 * radius;
+            shape += " corners near " + std::to_string(corners);
+            std::fprintf(stderr, "hole %zu: %s, %zu faces, %zu points inside, %d irregular\n", have.size(), shape.c_str(), fill.faces.size(),
+                         fill.added.size(), fill.poles);
+        }
+        points.insert(points.end(), fill.added.begin(), fill.added.end());
+        faceCount.resize(points.size(), 0);
+        for (auto& f : fill.faces)
+        {
+            for (Index p : f)
+                ++faceCount[p];
+            faces.push_back(std::move(f));
+        }
     }
+    // A gap left open has to be shallow enough for its points to be taken onto the border.
+    for (Index p : unclosed)
+        if (!w.border.closest(points[p], w.h0, q))
+            return why(4);
     return true;
 }
 
@@ -2709,6 +3782,22 @@ void gridSoup(const Work& w, const std::vector<std::vector<AutoRemesher::Vector2
         }
     if (holes > 0 && !fillGridHoles(points, faces, w))
     {
+        if (std::getenv("LILA_STAGE_LOG"))
+            std::fprintf(stderr, "integer grid: holes not closed, left to the library's extraction\n");
+        if (const char* path = std::getenv("LILA_GRID_DUMP"))
+            if (FILE* f = std::fopen(path, "w"))
+            {
+                for (const glm::dvec3& p : points)
+                    std::fprintf(f, "v %.9g %.9g %.9g\n", p.x, p.y, p.z);
+                for (const auto& face : faces)
+                {
+                    std::fprintf(f, "f");
+                    for (Index v : face)
+                        std::fprintf(f, " %d", int(v + 1));
+                    std::fprintf(f, "\n");
+                }
+                std::fclose(f);
+            }
         points.clear();
         faces.clear();
     }
@@ -2977,6 +4066,21 @@ bool coverSoup(Work& w, const QuadRemeshOptions& opts, std::vector<glm::dvec3>& 
         std::unique_ptr<std::vector<std::vector<AutoRemesher::Vector2>>> uvs = pz.takeTriangleUvs();
         std::vector<std::vector<AutoRemesher::Vector2>> originalUvs = pz.originalTriangleUvs();
         std::vector<size_t> singular = pz.singularVertexIndices();
+        // LILA_UV_DUMP: per working triangle its centre, its area and its area in the cover (signed).
+        if (const char* path = std::getenv("LILA_UV_DUMP"))
+            if (FILE* f = std::fopen(path, "w"))
+            {
+                for (size_t t = 0; t < originalUvs.size(); ++t)
+                {
+                    const auto& uv = originalUvs[t];
+                    const auto& tri = w.iso.tris[t];
+                    const glm::dvec3 c = (w.iso.pos[tri[0]] + w.iso.pos[tri[1]] + w.iso.pos[tri[2]]) / 3.0;
+                    std::fprintf(f, "%g %g %g %g %g %g %g %g %g %g %g\n", c.x, c.y, c.z, w.iso.triArea[t],
+                                 0.5 * ((uv[1].x() - uv[0].x()) * (uv[2].y() - uv[0].y()) - (uv[1].y() - uv[0].y()) * (uv[2].x() - uv[0].x())),
+                                 uv[0].x(), uv[0].y(), uv[1].x(), uv[1].y(), uv[2].x(), uv[2].y());
+                }
+                std::fclose(f);
+            }
         const FeatureLines& border = w.border;
         const double h0 = w.h0;
         if (!std::getenv("LILA_AR_EXTRACT") && !w.stock)
@@ -3017,6 +4121,119 @@ bool coverSoup(Work& w, const QuadRemeshOptions& opts, std::vector<glm::dvec3>& 
 
     }
     return true;
+}
+
+/**
+ * Removes faces left lying flat along a border, hung on it by one edge: a quad that straddled the border of a cap has
+ * its two outer points taken onto the border with the rest, and no area left.
+ */
+void dropBorderFlaps(geo::Mesh& m, double h)
+{
+    std::vector<Index> hung;
+    for (Index f = 0; f < m.faceCapacity(); ++f)
+    {
+        if (!m.faceValid(f) || m.faceArea(f) > 0.02 * h * h)
+            continue;
+        std::vector<Index> loose;
+        bool onBorder = true;
+        for (Index p : m.facePoints(f))
+        {
+            onBorder = onBorder && m.isBoundaryPoint(p);
+            if (m.pointValence(p) == 2)
+                loose.push_back(p);
+        }
+        if (onBorder && loose.size() >= 2)
+            hung.insert(hung.end(), loose.begin(), loose.end());
+    }
+    for (Index p : hung)
+        if (m.pointValid(p))
+            m.removePoint(p);
+    if (!hung.empty())
+        m.removeAllLoose();
+}
+
+/**
+ * Closes up the faces left with no area once their points are on the creases: points taken onto the same spot become
+ * one, and a quad squashed onto a line (two opposite corners together between the other two) goes, those corners one.
+ */
+void closeFlatFaces(geo::Mesh& m, double h)
+{
+    const double together = 1e-6 * h;
+    std::vector<Index> target(m.pointCapacity(), kInvalid), squashed;
+    auto root = [&](Index p) {
+        while (target[p] != kInvalid && target[p] != p)
+            p = target[p];
+        return p;
+    };
+    bool any = false;
+    for (Index f = 0; f < m.faceCapacity(); ++f)
+    {
+        if (!m.faceValid(f) || m.faceArea(f) > 1e-6 * h * h)
+            continue;
+        const std::vector<Index> pts = m.facePoints(f);
+        bool closed = false;
+        for (size_t k = 0; k < pts.size(); ++k)
+        {
+            const Index a = root(pts[k]), b = root(pts[(k + 1) % pts.size()]);
+            if (a != b && glm::distance(m.position(a), m.position(b)) < together)
+            {
+                target[b] = a;
+                closed = any = true;
+            }
+        }
+        if (closed || pts.size() != 4)
+            continue;
+        const double d02 = glm::distance(m.position(pts[0]), m.position(pts[2])), d13 = glm::distance(m.position(pts[1]), m.position(pts[3]));
+        const Index a = root(d02 < d13 ? pts[0] : pts[1]), b = root(d02 < d13 ? pts[2] : pts[3]);
+        if (std::min(d02, d13) > 0.25 * h || a == b || m.isBoundaryPoint(a) != m.isBoundaryPoint(b))
+            continue;
+        target[b] = a;
+        squashed.push_back(f);
+        any = true;
+    }
+    if (!any)
+        return;
+    for (Index f : squashed)
+        m.removeFace(f);
+    for (Index p = 0; p < Index(target.size()); ++p)
+        if (target[p] != kInvalid)
+            target[p] = root(p);
+    geo::weldPoints(m, target);
+    m.removeAllLoose();
+}
+
+/**
+ * Takes the nearest border point onto each corner of the source's border the result's border stops short of: the grid
+ * drops the part cells at a corner its lines don't quite meet in, and the corner comes out cut off. Returns how many.
+ */
+int reachBorderCorners(geo::Mesh& m, const FeatureLines& border, double h)
+{
+    // As far as six quads: a sharp tip is cut by one chord, and its nearest border point is that chord's end however far.
+    // At ten a thin strip starts taking points from the next turn of itself.
+    constexpr double kMissed = 0.3, kReach = 6.0;
+    std::vector<Index> onBorder;
+    for (Index p = 0; p < m.pointCapacity(); ++p)
+        if (m.pointValid(p) && m.isBoundaryPoint(p))
+            onBorder.push_back(p);
+    int moved = 0;
+    for (const glm::dvec3& corner : border.corners())
+    {
+        size_t best = onBorder.size();
+        double bestD = kReach * h;
+        for (size_t i = 0; i < onBorder.size(); ++i)
+            if (const double d = glm::distance(m.position(onBorder[i]), corner); d < bestD)
+            {
+                bestD = d;
+                best = i;
+            }
+        if (best == onBorder.size() || bestD < kMissed * h)
+            continue;
+        m.setPosition(onBorder[best], corner);
+        onBorder[best] = onBorder.back();
+        onBorder.pop_back();
+        ++moved;
+    }
+    return moved;
 }
 
 /** The connected parts of a surface, each with its share of the per-vertex sizes. */
@@ -3205,6 +4422,12 @@ QuadRemeshResult coverRemesh(Work& w, const QuadRemeshOptions& opts, Stopwatch& 
                 at[axis] = 0.0;
                 m.setPosition(p, at);
             }
+    if (refine && !w.stock && !std::getenv("LILA_QR_NO_CORNER_REACH"))
+    {
+        const int reached = reachBorderCorners(m, w.border, h0);
+        if (std::getenv("LILA_STAGE_LOG"))
+            std::fprintf(stderr, "border corners reached: %d\n", reached);
+    }
     std::vector<FeatureKind> feature = pointFeatures(m, w.creases, w.border, 0.3 * h0);
     if (refine)
     {
@@ -3212,6 +4435,15 @@ QuadRemeshResult coverRemesh(Work& w, const QuadRemeshOptions& opts, Stopwatch& 
         freeCreaseFlaps(m, feature, *w.simpleBvh, h0);
         relaxAlongFeatures(m, feature, *w.simpleBvh, w.creases, w.border, h0, opts.relaxIterations, axis);
         unfold(m, feature, src, bvh, *w.simpleBvh, axis, h0);
+        closeFlatFaces(m, h0);
+        dropBorderFlaps(m, h0);
+    }
+    // Once the rims of the cuts are on their planes: before, a rim wanders along the tip's creases and its rungs fold flat.
+    if (!w.tips.empty())
+    {
+        const int closed = closeTips(m, w.tips, h0, *w.simpleBvh);
+        if (std::getenv("LILA_STAGE_LOG"))
+            std::fprintf(stderr, "sharp tips built back: %d of %zu\n", closed, w.tips.size());
     }
     clock.lap("refine");
 
@@ -3269,14 +4501,15 @@ double asymmetry(const geo::Mesh& m, const geo::MeshBvh& bvh, int axis)
     return double(far) / double(n);
 }
 
-QuadRemeshResult quadRemeshOnce(const geo::Mesh& source, const QuadRemeshOptions& opts)
+/** keepCaps false lays a body with flat faces out as any creased shape, without the stock stages. */
+QuadRemeshResult quadRemeshOnce(const geo::Mesh& source, const QuadRemeshOptions& opts, bool keepCaps = true)
 {
     LILA_ZONE();
 
     QuadRemeshResult result;
     Stopwatch clock(result.timings);
     Work w;
-    prepareWork(w, source, opts, clock);
+    prepareWork(w, source, opts, clock, keepCaps);
     if (!w.error.empty())
     {
         result.error = w.error;
@@ -3287,6 +4520,7 @@ QuadRemeshResult quadRemeshOnce(const geo::Mesh& source, const QuadRemeshOptions
             result.notes.push_back("the mesh isn't symmetric across " + std::string(1, char('X' + opts.symmetryAxis)) + " (" +
                                    std::to_string(int(std::lround(100.0 * off))) + "% of it has no mirror image), so this mirrors its +" +
                                    std::string(1, char('X' + opts.symmetryAxis)) + " half; set Symmetry to Off for it");
+    result.notes.insert(result.notes.end(), w.notes.begin(), w.notes.end());
     QuadRemeshResult r = coverRemesh(w, opts, clock);
     if (!r.ok() && !opts.featureGuides.empty())
     {
@@ -3302,6 +4536,19 @@ QuadRemeshResult quadRemeshOnce(const geo::Mesh& source, const QuadRemeshOptions
     {
         result.error = r.error;
         return result;
+    }
+    // The stock extraction now and then folds along a kept cap's rim or in a tight spot the grid traces cleanly.
+    constexpr int kFewFlaws = 3;
+    if (w.keptCapsBvh && r.defects > kFewFlaws)
+    {
+        QuadRemeshResult own = quadRemeshOnce(source, opts, false);
+        if (own.ok() && own.defects < r.defects)
+        {
+            own.attempts.insert(own.attempts.begin(), {r.layout, r.mesh.numFaces(), r.defects, r.metrics.irregular});
+            own.notes.push_back("laid out as a creased shape: with its flat faces as caps the layout left " + std::to_string(r.defects) +
+                                " folds, this way " + std::to_string(own.defects));
+            return own;
+        }
     }
     result.attempts.push_back({r.layout, r.mesh.numFaces(), r.defects, r.metrics.irregular});
     result.mesh = std::move(r.mesh);
@@ -3517,8 +4764,9 @@ QuadRemeshResult cleanest(const geo::Mesh& source, const QuadRemeshOptions& opts
             asked = finer.targetFaces;
         keepOrMerge(result, std::move(again), take);
         if (take)
-            result.notes = {"at " + std::to_string(opts.targetFaces) + " faces the layout folded at thin parts or tight spots, so it was made finer (" +
-                            std::to_string(finer.targetFaces) + " asked)"};
+            result.notes.insert(result.notes.begin(), "at " + std::to_string(opts.targetFaces) +
+                                                          " faces the layout folded at thin parts or tight spots, so it was made finer (" +
+                                                          std::to_string(finer.targetFaces) + " asked)");
         if (result.ok() && !many(result))
             break;
     }

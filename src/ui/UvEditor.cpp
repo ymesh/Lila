@@ -496,7 +496,18 @@ UvEditor::UvEditor(QWidget* parent) : QWidget(parent)
     mPadding->setSuffix(" px");
     mPadding->setToolTip("Padding: texels between islands");
     uvKitRow(packGrid, "Padding", mPadding);
-    mDensity = controls::valueField(0.0, 100000.0, 3, "px/cm", packForm);
+    const json lastPack = uvPackOptions();
+    mResolution->setValue(lastPack.value("resolution", 1024));
+    mPadding->setValue(lastPack.value("padding", 4.0));
+    auto savePackSize = [this] {
+        json o = uvPackOptions();
+        o["resolution"] = mResolution->value();
+        o["padding"] = mPadding->value();
+        setUvPackOptions(o);
+    };
+    connect(mResolution, &QSpinBox::valueChanged, this, savePackSize);
+    connect(mPadding, &QDoubleSpinBox::valueChanged, this, savePackSize);
+    mDensity =controls::valueField(0.0, 100000.0, 3, "px/cm", packForm);
     mDensity->setValue(10.24);
     setSpinDefault(mDensity, 10.24);
     mDensity->setObjectName("texelDensity");
