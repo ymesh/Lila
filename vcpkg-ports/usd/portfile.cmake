@@ -35,6 +35,29 @@ vcpkg_from_github(
         011-hgivulkan-cached-readback.patch
 )
 
+# Clang 21 at -O0 fails about one build in five on Sdf's text file parser ("symbol ... is already defined" for PEGTL's
+# sor<...>::match instances, which change with address randomization); at -O1 and above it never did. Optimize that
+# one file under Clang.
+file(APPEND "${SOURCE_PATH}/pxr/usd/sdf/CMakeLists.txt" [=[
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set_source_files_properties(textFileFormatParser.cpp PROPERTIES COMPILE_OPTIONS "-O1")
+endif()
+]=])
+
+# OpenExec builds with hidden visibility on Linux, tested with GCC only (Apple, the Clang platform, is left out). Clang
+# reads ARCH_EXPORT_TYPE as type_visibility, which leaves the members of the explicitly instantiated templates hidden:
+# libusd_exec.so then fails to load, missing Vdf_VectorImplContiguous<TfToken>'s constructor from libusd_vdf.so. Leave
+# Clang out as Apple is.
+file(READ "${SOURCE_PATH}/pxr/exec/CMakeLists.txt" _exec_cmake)
+string(REPLACE "if(UNIX AND NOT APPLE AND NOT PXR_BUILD_MONOLITHIC)"
+    "if(UNIX AND NOT APPLE AND NOT PXR_BUILD_MONOLITHIC AND NOT CMAKE_CXX_COMPILER_ID MATCHES \"Clang\")"
+    _exec_cmake_fixed "${_exec_cmake}")
+if(_exec_cmake_fixed STREQUAL _exec_cmake)
+    message(FATAL_ERROR "pxr/exec/CMakeLists.txt changed: the Clang visibility fix no longer applies")
+endif()
+file(WRITE "${SOURCE_PATH}/pxr/exec/CMakeLists.txt" "${_exec_cmake_fixed}")
+
 # Changes accompanying 003-fix-dep.patch
 file(REMOVE
     "${SOURCE_PATH}/cmake/modules/FindOpenColorIO.cmake"
