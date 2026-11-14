@@ -3,7 +3,16 @@
 #include "core/Export.h"
 
 #include <volk.h>
+#ifdef _WIN32
 #include <vk_mem_alloc.h>
+#else
+// LilaUI's VMA, built for volk, stays inside LilaUI as it does in the DLL on Windows: exported, it would take the place of
+// the copy in OpenUSD's hgiVulkan (ELF binds a symbol to the first library defining it), whose vmaCreateAllocator then
+// called through function pointers its own setup never gave Lila's.
+#pragma GCC visibility push(hidden)
+#include <vk_mem_alloc.h>
+#pragma GCC visibility pop
+#endif
 
 #include <array>
 #include <cstdint>
