@@ -124,6 +124,22 @@
       "name": "windeployqt",
       "platform": "windows"
     },
+    {
+      "name": "xcb",
+      "platform": "linux"
+    },
+    {
+      "name": "xcb-sm",
+      "platform": "linux"
+    },
+    {
+      "name": "xcb-xlib",
+      "platform": "linux"
+    },
+    {
+      "name": "xrender",
+      "platform": "linux"
+    },
     "zstd"
   ],
   "features": {
