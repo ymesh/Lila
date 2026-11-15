@@ -1,0 +1,53 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Blurred Edge Glow",
+  "description": "A smooth, blurred band along edges, clean with no breakup.",
+  "tags": [
+    "edges",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Edges",
+      "type": "genEdgeWear",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "strength": 2.0,
+        "level": 0.25,
+        "softness": 0.3,
+        "breakup": 0.0,
+        "seed": 341
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Blur",
+      "type": "blur",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "radius": 0.02
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "levels",
+      "name": "Range",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "inLow": 0.0,
+        "inHigh": 0.6
+      }
+    }
+  ]
+}

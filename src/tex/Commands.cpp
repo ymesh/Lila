@@ -8,6 +8,7 @@
 #include "tex/Evaluate.h"
 #include "tex/Interop.h"
 #include "tex/Layers.h"
+#include "tex/PainterImport.h"
 #include "tex/SlangRt.h"
 
 #include <algorithm>
@@ -910,7 +911,7 @@ void registerCommands()
         .name = "texBuildGraph",
         .doc = "Build a material's texture graph from a compact spec, creating its texture set when it doesn't exist: {material, "
                "set, settings, description, nodes: [{name, type, params: {...}, values: {...}, position}], links: "
-               "['A.out -> Output.baseColor', ...]}. The set defaults to <material>Tex. A Material Output named Output is added "
+               "['A.out -> Output.baseColor', ...]}. The set defaults to the one bound to the material, else <material>Tex without the material's M_ prefix. A Material Output named Output is added "
                "when missing; positions are laid out when omitted. Nothing changes unless the whole spec is valid; the error lists "
                "every problem with the valid names. Returns the set, the material, the channels the graph drives and any compile "
                "error.",
@@ -931,12 +932,17 @@ void registerCommands()
             std::string material = spec.value("material", std::string());
             if (material.empty() && spec.contains("settings") && spec["settings"].is_object())
                 material = spec["settings"].value("material", std::string());
-            const std::string name = spec.contains("set") ? spec.value("set", std::string()) : material.empty() ? std::string() : material + "Tex";
+            // With no set named, the one already bound to the material is rebuilt, whatever it is called.
+            const std::string bound = material.empty() ? std::string() : setForMaterial(graph(), material);
+            const std::string name = spec.contains("set") ? spec.value("set", std::string())
+                                     : !bound.empty()     ? bound
+                                     : material.empty()   ? std::string()
+                                                          : defaultSetName(material);
             if (!gn::validIdentifier(name))
                 throw CommandError("texBuildGraph: set '" + name + "' isn't a valid name (letters, digits, underscores); give material or set");
             // Nodes share one namespace, so a set can't be named like its material.
             if (material == name)
-                throw CommandError("texBuildGraph: the set and its material can't both be named " + name + "; leave set out to get " + name + "Tex");
+                throw CommandError("texBuildGraph: the set and its material can't both be named " + name + "; leave set out to get " + defaultSetName(name));
 
             Node* existing = findSet(graph(), name);
             if (!existing && graph().find(name))
@@ -1152,5 +1158,6 @@ void registerCommands()
 
     registerLayerCommands();
     registerInteropCommands();
+    painter::registerPainterCommands();
 }
 } // namespace lila::tex

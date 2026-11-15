@@ -6,16 +6,24 @@
 #define MINIZ_NO_ZLIB_COMPATIBLE_NAMES
 #include <miniz.h>
 #include <webp/decode.h>
+#define STB_IMAGE_STATIC
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_NO_STDIO
+#define STBI_ONLY_PNG
+#define STBI_ONLY_JPEG
+#include <stb_image.h>
 #include <glm/gtc/packing.hpp>
 #include <tbb/parallel_for.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cctype>
 #include <cmath>
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <stdexcept>
 
 namespace lila::image
@@ -162,88 +170,66 @@ void writePngImpl(const fs::path& path, int w, int h, std::span<const float> rgb
         throw std::runtime_error("can't write " + path.string());
 }
 
-Image readPngImpl(const fs::path& path, std::string* err)
+/** The whole file in one read. */
+std::vector<unsigned char> readAll(const fs::path& path)
 {
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f)
+        return {};
+    const std::streamoff size = f.tellg();
+    std::vector<unsigned char> d(size > 0 ? size_t(size) : 0);
+    f.seekg(0);
+    f.read(reinterpret_cast<char*>(d.data()), std::streamsize(d.size()));
+    if (!f)
+        d.resize(size_t(std::max<std::streamsize>(f.gcount(), 0)));
+    return d;
+}
+
+/** PNG (any colour type, bit depth or interlacing) and JPEG through stb_image, as RGBA floats. */
+Image readStbImpl(const fs::path& path, std::string* err)
+{
+    LILA_ZONE();
     auto fail = [&](const std::string& why) {
         if (err)
             *err = path.string() + ": " + why;
         return Image{};
     };
-    std::ifstream f(path, std::ios::binary);
-    std::vector<unsigned char> data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    if (data.size() < 8 || data[1] != 'P' || data[2] != 'N' || data[3] != 'G')
-        return fail("not a PNG");
-    int w = 0, h = 0, bits = 0, channels = 4;
-    std::vector<unsigned char> idat;
-    for (size_t at = 8; at + 12 <= data.size();)
-    {
-        const uint32_t len = be32(&data[at]);
-        if (at + 12 + len > data.size())
-            return fail("truncated");
-        const std::string type(reinterpret_cast<const char*>(&data[at + 4]), 4);
-        const unsigned char* body = &data[at + 8];
-        if (type == "IHDR")
-        {
-            w = int(be32(body));
-            h = int(be32(body + 4));
-            bits = body[8];
-            // Colour types 0 gray, 2 RGB, 4 gray and alpha, 6 RGBA.
-            const int colorType = body[9];
-            channels = colorType == 0 ? 1 : colorType == 2 ? 3 : colorType == 4 ? 2 : colorType == 6 ? 4 : 0;
-            if (channels == 0 || (bits != 8 && bits != 16) || body[12] != 0)
-                return fail("only non-interlaced gray, RGB or RGBA, 8 or 16 bit");
-        }
-        else if (type == "IDAT")
-            idat.insert(idat.end(), body, body + len);
-        at += 12 + len;
-    }
-    if (w <= 0 || h <= 0)
-        return fail("no IHDR");
-    const size_t bpp = size_t(bits / 8) * size_t(channels);
-    const size_t stride = 1 + size_t(w) * bpp;
-    std::vector<unsigned char> raw(stride * size_t(h));
-    mz_ulong rawSize = mz_ulong(raw.size());
-    if (mz_uncompress(raw.data(), &rawSize, idat.data(), mz_ulong(idat.size())) != MZ_OK || rawSize != raw.size())
-        return fail("bad image data");
-
-    std::vector<unsigned char> prev(stride - 1, 0), cur(stride - 1);
+    const std::vector<unsigned char> data = readAll(path);
+    if (data.empty())
+        return fail("can't read the file");
+    const int size = int(std::min<size_t>(data.size(), size_t(INT32_MAX)));
+    int w = 0, h = 0, channels = 0;
+    const bool wide = stbi_is_16_bit_from_memory(data.data(), size);
+    void* pixels = wide ? static_cast<void*>(stbi_load_16_from_memory(data.data(), size, &w, &h, &channels, 4))
+                        : static_cast<void*>(stbi_load_from_memory(data.data(), size, &w, &h, &channels, 4));
+    if (!pixels)
+        return fail(stbi_failure_reason() ? stbi_failure_reason() : "unreadable image");
+    std::unique_ptr<void, void (*)(void*)> owned(pixels, stbi_image_free);
     Image img{w, h, std::vector<float>(size_t(w) * size_t(h) * 4)};
-    for (int y = 0; y < h; ++y)
+    const size_t rowValues = size_t(w) * 4;
+    if (wide)
     {
-        const unsigned char* row = raw.data() + stride * size_t(y);
-        const unsigned char filter = row[0];
-        for (size_t i = 0; i < stride - 1; ++i)
-        {
-            const int a = i >= bpp ? cur[i - bpp] : 0, b = prev[i], c = i >= bpp ? prev[i - bpp] : 0;
-            int pred = 0;
-            switch (filter)
-            {
-            case 1: pred = a; break;
-            case 2: pred = b; break;
-            case 3: pred = (a + b) / 2; break;
-            case 4:
-            {
-                const int p = a + b - c, pa = std::abs(p - a), pb = std::abs(p - b), pc = std::abs(p - c);
-                pred = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
-                break;
-            }
-            default: break;
-            }
-            cur[i] = static_cast<unsigned char>(row[1 + i] + pred);
-        }
-        auto sample = [&](size_t i) { return bits == 16 ? float((cur[2 * i] << 8) | cur[2 * i + 1]) / 65535.0f : float(cur[i]) / 255.0f; };
-        for (size_t x = 0; x < size_t(w); ++x)
-        {
-            float* out = &img.rgba[(size_t(y) * size_t(w) + x) * 4];
-            const size_t at = x * size_t(channels);
-            if (channels >= 3)
-                for (int k = 0; k < 3; ++k)
-                    out[k] = sample(at + size_t(k));
-            else
-                out[0] = out[1] = out[2] = sample(at);
-            out[3] = channels == 4 ? sample(at + 3) : channels == 2 ? sample(at + 1) : 1.0f;
-        }
-        prev.swap(cur);
+        const auto* src = static_cast<const uint16_t*>(pixels);
+        tbb::parallel_for(0, h, [&](int y) {
+            const size_t at = size_t(y) * rowValues;
+            for (size_t i = 0; i < rowValues; ++i)
+                img.rgba[at + i] = float(src[at + i]) * (1.0f / 65535.0f);
+        });
+    }
+    else
+    {
+        static const std::array<float, 256> lut = [] {
+            std::array<float, 256> t{};
+            for (int i = 0; i < 256; ++i)
+                t[size_t(i)] = float(i) / 255.0f;
+            return t;
+        }();
+        const auto* src = static_cast<const uint8_t*>(pixels);
+        tbb::parallel_for(0, h, [&](int y) {
+            const size_t at = size_t(y) * rowValues;
+            for (size_t i = 0; i < rowValues; ++i)
+                img.rgba[at + i] = lut[src[at + i]];
+        });
     }
     return img;
 }
@@ -514,12 +500,6 @@ void putBe16(std::vector<unsigned char>& out, uint16_t v) { out.insert(out.end()
 uint16_t be16(const unsigned char* p) { return uint16_t(p[0] << 8 | p[1]); }
 
 uint16_t quantize16(float v) { return static_cast<uint16_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 65535.0f)); }
-
-std::vector<unsigned char> readAll(const fs::path& path)
-{
-    std::ifstream f(path, std::ios::binary);
-    return std::vector<unsigned char>((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-}
 
 void writeFile(const fs::path& path, const std::vector<unsigned char>& out)
 {
@@ -1275,7 +1255,7 @@ void write(const fs::path& path, const Image& image, const WriteOptions& o)
 
 void write(const fs::path& path, const Image& image, int bits) { write(path, image, WriteOptions{.bits = bits}); }
 
-Image readPng(const fs::path& path, std::string* err) { return readPngImpl(path, err); }
+Image readPng(const fs::path& path, std::string* err) { return readStbImpl(path, err); }
 
 Image readExr(const fs::path& path, std::string* err) { return readExrImpl(path, err); }
 
@@ -1358,12 +1338,23 @@ Image readWebp(const fs::path& path, std::string* err)
 {
     std::ifstream in(path, std::ios::binary);
     const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (bytes.empty())
+    {
+        if (err)
+            *err = "cannot open file";
+        return {};
+    }
+    return decodeWebp(bytes.data(), bytes.size(), err);
+}
+
+Image decodeWebp(const uint8_t* data, size_t size, std::string* err)
+{
     int w = 0, h = 0;
-    uint8_t* px = bytes.empty() ? nullptr : WebPDecodeRGBA(bytes.data(), bytes.size(), &w, &h);
+    uint8_t* px = data && size ? WebPDecodeRGBA(data, size, &w, &h) : nullptr;
     if (!px)
     {
         if (err)
-            *err = bytes.empty() ? "cannot open file" : "not a readable WebP image";
+            *err = "not a readable WebP image";
         return {};
     }
     Image img{w, h, std::vector<float>(size_t(w) * size_t(h) * 4)};

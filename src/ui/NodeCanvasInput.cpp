@@ -201,6 +201,16 @@ void NodeCanvas::mousePressEvent(QMouseEvent* e)
                 runVerb(*backend, "SetActiveViewer", args({mGroup, n->name}));
             return;
         }
+    if (e->button() == Qt::LeftButton && e->modifiers() == Qt::AltModifier)
+        if (NodeItem* n = nodeAt(sp))
+        {
+            bool input = false;
+            if (int s = n->socketAt(sp, input); s >= 0)
+            {
+                disconnectSocket(n, s, input);
+                return;
+            }
+        }
     // Ctrl on a linked input picks its link up rather than starting a cut.
     if (e->button() == Qt::LeftButton && (e->modifiers() & Qt::ControlModifier))
         if (NodeItem* n = nodeAt(sp))

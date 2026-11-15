@@ -446,6 +446,8 @@ void registerTypes()
         {.name = "edgeCount", .type = PlugType::Int, .defaultValue = int64_t(0), .flags = AttrOutput, .doc = "Edges bevelled."},
         {.name = "lostOverrides", .type = PlugType::Int, .defaultValue = int64_t(0), .flags = AttrOutput,
          .doc = "Hand-picked edges no longer found on the input mesh."},
+        {.name = "exportEnabled", .type = PlugType::Bool, .defaultValue = true, .flags = AttrInput | AttrStorable,
+         .doc = "Apply the modifier when exporting."},
     };
     t.create = [] { return std::make_unique<AutoBevelNode>(); };
     types::registerType(std::move(t));

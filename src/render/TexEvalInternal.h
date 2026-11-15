@@ -185,11 +185,15 @@ struct Evaluator::State
 {
     mutable std::mutex mutex;
     std::unique_ptr<Prepared> pending; // guarded
+    /** setExternals asked: the current plan's GPU externals from the next step on. */
+    std::unique_ptr<std::map<std::string, GpuImageRef>> pendingExternals; // guarded
     Stats stats;                       // guarded
     std::map<std::string, LoadedImage> imageCache; // guarded
     std::atomic<bool> done{true};
     /** refreshExternals asked: compare the GPU externals' versions on the next step. */
     std::atomic<bool> refresh{false};
+    /** Texels a ms the loads run at, measured: what spreads a plan's loads over slices. Render thread. */
+    double loadRate = 0.2e6;
     /** trim freed the buffers: whatever runs next runs in full. */
     bool trimmed = false;
 
@@ -315,7 +319,11 @@ struct Evaluator::State
     /** Starts a pass: the rows and columns it computes, aligned for row bands. */
     void startPass(VulkanContext& vk, const Pass& p);
     void allocate(VulkanContext& vk);
-    void recordLoads(VulkanContext& vk, VkCommandBuffer cmd, std::vector<compute::Buffer>& temps);
+    /**
+     * Records the pending loads that fit the slice's budget (always at least one); false while some wait for the next
+     * slice, when nothing that reads them may run yet.
+     */
+    bool recordLoads(VulkanContext& vk, VkCommandBuffer cmd, std::vector<compute::Buffer>& temps, double budgetMs);
     /** Records passes until the budget is used; returns the predicted ms. */
     double recordPasses(VulkanContext& vk, VkCommandBuffer cmd, double budgetMs, Stats& delta);
     /** Records a kernel native's steps from passRow on; false when the slice filled first. */

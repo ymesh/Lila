@@ -29,6 +29,8 @@ struct LILA_SCENE_API SmartMaterial
     std::string description;
     /** material or mask. */
     std::string kind = "material";
+    /** Lowercase words to filter by (metal, stone, stylized...): the file's, or the user's override of them. */
+    std::vector<std::string> tags;
     json layer;
     json masks = json::array();
     std::filesystem::path file;
@@ -47,6 +49,15 @@ LILA_SCENE_API std::vector<SmartMaterial> listSmartMaterials();
 LILA_SCENE_API SmartMaterial loadSmartMaterial(const std::string& nameOrPath);
 /** Throws std::runtime_error when it can't write. */
 LILA_SCENE_API void saveSmartMaterial(const SmartMaterial& m, const std::filesystem::path& path);
+
+/**
+ * Replaces a smart material's tags for this user, kept in <config>/smartmaterials/tags.json so built-in and extension ones
+ * can be retagged too; tags equal to the file's drop the override. Tags are trimmed and lowercased. Throws std::runtime_error.
+ */
+LILA_SCENE_API void setSmartMaterialTags(const std::string& name, const std::vector<std::string>& tags);
+
+/** Tags cleaned up: trimmed, lowercase, no empties or repeats, sorted. */
+LILA_SCENE_API std::vector<std::string> normalizeTags(const std::vector<std::string>& tags);
 
 /**
  * The layer ready to insert into stack: fresh layer and mask ids (instance sources follow), anchor names made unique in the

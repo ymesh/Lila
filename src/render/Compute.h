@@ -6,7 +6,10 @@
 
 #include <chrono>
 #include <cstdint>
+#include <atomic>
 #include <map>
+#include <mutex>
+#include <shared_mutex>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -68,7 +71,9 @@ LILA_UI_API void destroy(VulkanContext& vk, VkPipelineLayout layout);
  * Compute pipelines kept by SPIR-V hash, entry point and a layout key, with their shader modules, so a second user of
  * the same kernel (the next bake, another graph node) creates nothing. Callers give equal layout keys only to layouts
  * that are compatible (same push constant ranges, identically defined set layouts): a cached pipeline is bound with
- * whichever of them the caller has, and the layout it was made with may already be gone. Render thread.
+ * whichever of them the caller has, and the layout it was made with may already be gone. Any thread: the driver's
+ * compile runs outside the lock, so a worker can create pipelines ahead of the render thread without stalling it. Off the
+ * render thread, hold offThreadDeviceUse shared while calling.
  */
 class LILA_UI_API PipelineCache
 {
@@ -83,18 +88,31 @@ public:
                    const char* entry);
     /** Destroys everything; pipelines handed out before are invalid afterwards. */
     void clear(VulkanContext& vk);
+    /** Whether get would create nothing. */
+    bool contains(uint64_t layoutKey, uint64_t codeHash, const char* entry) const;
     size_t hits() const { return mHits; }
     size_t misses() const { return mMisses; }
-    size_t size() const { return mPipelines.size(); }
+    size_t size() const
+    {
+        std::scoped_lock lock(mMutex);
+        return mPipelines.size();
+    }
 
 private:
+    mutable std::mutex mMutex;
     std::map<uint64_t, VkShaderModule> mModules;
     std::map<std::tuple<uint64_t, std::string, uint64_t>, VkPipeline> mPipelines;
-    size_t mHits = 0, mMisses = 0;
+    std::atomic<size_t> mHits = 0, mMisses = 0;
 };
 
-/** The process-wide cache, cleared when the renderer stops. Render thread. */
+/** The process-wide cache, cleared when the renderer stops. */
 LILA_UI_API PipelineCache& sharedPipelines();
+
+/**
+ * Held shared by threads that create device objects off the render thread (after checking Renderer::context is not
+ * null); Renderer::stop holds it exclusively, so the device outlives every such call.
+ */
+LILA_UI_API std::shared_mutex& offThreadDeviceUse();
 
 /** A layout key from what makes layouts compatible: the push constant size and stages, and a tag naming the set layouts. */
 LILA_UI_API uint64_t layoutKey(uint32_t pushBytes, VkShaderStageFlags stages, std::string_view setsTag = {});

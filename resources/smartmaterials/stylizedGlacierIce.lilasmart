@@ -1,0 +1,398 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Stylized Glacier Ice",
+  "description": "Glossy cyan ice with white fracture lines, deep blue hollows and frosted edges.",
+  "tags": [
+    "snow",
+    "crystal",
+    "stylized"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L9",
+    "name": "Stylized Glacier Ice",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Ice",
+        "kind": "procedural",
+        "graph": {
+          "name": "ice",
+          "typeVersion": 1,
+          "inputs": [
+            {
+              "name": "Cells Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 5,
+              "targets": [
+                "Cells1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 3,
+              "targets": [
+                "Clouds2.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 141,
+              "targets": [
+                "Cells1.seed",
+                "Clouds2.seed"
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "name": "baseColor",
+              "type": "color"
+            },
+            {
+              "name": "height",
+              "type": "gray"
+            },
+            {
+              "name": "roughness",
+              "type": "gray"
+            }
+          ],
+          "nodes": [
+            {
+              "name": "GroupInput",
+              "type": "GroupInput",
+              "position": [
+                -800,
+                0
+              ]
+            },
+            {
+              "name": "Cells1",
+              "type": "cells",
+              "position": [
+                -500,
+                0
+              ],
+              "values": {
+                "scale": 5,
+                "mode": "crackle",
+                "width": 0.03,
+                "seed": 141
+              }
+            },
+            {
+              "name": "Clouds2",
+              "type": "clouds",
+              "position": [
+                -350,
+                0
+              ],
+              "values": {
+                "scale": 3,
+                "octaves": 3,
+                "seed": 142
+              }
+            },
+            {
+              "name": "Colorize3",
+              "type": "colorize",
+              "position": [
+                -200,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.0196,
+                      0.1706,
+                      0.448,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.1706,
+                      0.5705,
+                      0.7874,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Color4",
+              "type": "color",
+              "position": [
+                -50,
+                0
+              ],
+              "values": {
+                "color": [
+                  0.6921,
+                  0.89,
+                  1.0,
+                  1
+                ]
+              }
+            },
+            {
+              "name": "Blend5",
+              "type": "blend",
+              "position": [
+                100,
+                0
+              ],
+              "values": {
+                "mode": "normal",
+                "opacity": 1.0
+              }
+            },
+            {
+              "name": "Colorize6",
+              "type": "colorize",
+              "position": [
+                -650,
+                120
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.52,
+                      0.52,
+                      0.52,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.4,
+                      0.4,
+                      0.4,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Constant7",
+              "type": "constant",
+              "position": [
+                -500,
+                120
+              ],
+              "values": {
+                "value": 0.12
+              }
+            },
+            {
+              "name": "GroupOutput",
+              "type": "GroupOutput",
+              "position": [
+                400,
+                0
+              ]
+            }
+          ],
+          "links": [
+            [
+              "Clouds2",
+              "out",
+              "Colorize3",
+              "input"
+            ],
+            [
+              "Color4",
+              "out",
+              "Blend5",
+              "foreground"
+            ],
+            [
+              "Colorize3",
+              "out",
+              "Blend5",
+              "background"
+            ],
+            [
+              "Cells1",
+              "out",
+              "Blend5",
+              "mask"
+            ],
+            [
+              "Blend5",
+              "out",
+              "GroupOutput",
+              "baseColor"
+            ],
+            [
+              "Cells1",
+              "out",
+              "Colorize6",
+              "input"
+            ],
+            [
+              "Colorize6",
+              "out",
+              "GroupOutput",
+              "height"
+            ],
+            [
+              "Constant7",
+              "out",
+              "GroupOutput",
+              "roughness"
+            ]
+          ]
+        },
+        "masks": []
+      },
+      {
+        "id": "L4",
+        "name": "Cavity Shade",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.1005,
+            0.1706,
+            0.6038,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M2",
+            "kind": "generator",
+            "type": "genAoDarken",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.35,
+              "softness": 0.7
+            }
+          },
+          {
+            "id": "M3",
+            "kind": "generator",
+            "type": "genCavityGrime",
+            "mode": "lighten",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.3,
+              "softness": 0.4,
+              "breakup": 0.15,
+              "noiseScale": 6,
+              "seed": 20
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "multiply",
+            "opacity": 0.85
+          }
+        }
+      },
+      {
+        "id": "L6",
+        "name": "Edge Highlight",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.7874,
+            0.9331,
+            1.0,
+            1
+          ],
+          "roughness": 0.5
+        },
+        "masks": [
+          {
+            "id": "M5",
+            "kind": "generator",
+            "type": "genEdgeWear",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.33,
+              "softness": 0.2,
+              "breakup": 0.2,
+              "strength": 2.2,
+              "noiseScale": 5,
+              "seed": 20
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 1.0
+          },
+          "roughness": {
+            "mode": "normal",
+            "opacity": 1.0
+          }
+        }
+      },
+      {
+        "id": "L8",
+        "name": "Top Light",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.5225,
+            0.8276,
+            1.0,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M7",
+            "kind": "generator",
+            "type": "genPositionGradient",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "start": 0.25,
+              "end": 1.0,
+              "breakup": 0.4,
+              "noiseScale": 3,
+              "seed": 0
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.3
+          }
+        }
+      }
+    ],
+    "masks": []
+  }
+}

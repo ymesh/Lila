@@ -1,0 +1,302 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Silk Satin",
+  "description": "Lustrous emerald satin with a smooth sheen running along the threads and faint creases.",
+  "tags": [
+    "fabric",
+    "realistic",
+    "clean"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L2",
+    "name": "Silk Satin",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Satin",
+        "kind": "procedural",
+        "graph": {
+          "name": "satin",
+          "typeVersion": 1,
+          "inputs": [
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 3,
+              "targets": [
+                "Clouds2.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 491,
+              "targets": [
+                "Anisotropic1.seed",
+                "Clouds2.seed"
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "name": "baseColor",
+              "type": "color"
+            },
+            {
+              "name": "roughness",
+              "type": "gray"
+            },
+            {
+              "name": "height",
+              "type": "gray"
+            }
+          ],
+          "nodes": [
+            {
+              "name": "GroupInput",
+              "type": "GroupInput",
+              "position": [
+                -800,
+                0
+              ]
+            },
+            {
+              "name": "Anisotropic1",
+              "type": "anisotropic",
+              "position": [
+                -500,
+                0
+              ],
+              "values": {
+                "scaleX": 1,
+                "scaleY": 256,
+                "octaves": 3,
+                "persistence": 0.5,
+                "seed": 491
+              }
+            },
+            {
+              "name": "Clouds2",
+              "type": "clouds",
+              "position": [
+                -350,
+                0
+              ],
+              "values": {
+                "scale": 3,
+                "octaves": 3,
+                "mode": "ridged",
+                "seed": 492
+              }
+            },
+            {
+              "name": "Colorize3",
+              "type": "colorize",
+              "position": [
+                -200,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.0015,
+                      0.0331,
+                      0.0134,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.0039,
+                      0.0835,
+                      0.0331,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Colorize4",
+              "type": "colorize",
+              "position": [
+                -50,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.22,
+                      0.22,
+                      0.22,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.35,
+                      0.35,
+                      0.35,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Colorize5",
+              "type": "colorize",
+              "position": [
+                100,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.47,
+                      0.47,
+                      0.47,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.53,
+                      0.53,
+                      0.53,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Colorize6",
+              "type": "colorize",
+              "position": [
+                -650,
+                120
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.495,
+                      0.495,
+                      0.495,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.505,
+                      0.505,
+                      0.505,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Blend7",
+              "type": "blend",
+              "position": [
+                -500,
+                120
+              ],
+              "values": {
+                "mode": "overlay",
+                "opacity": 1.0
+              }
+            },
+            {
+              "name": "GroupOutput",
+              "type": "GroupOutput",
+              "position": [
+                400,
+                0
+              ]
+            }
+          ],
+          "links": [
+            [
+              "Clouds2",
+              "out",
+              "Colorize3",
+              "input"
+            ],
+            [
+              "Colorize3",
+              "out",
+              "GroupOutput",
+              "baseColor"
+            ],
+            [
+              "Anisotropic1",
+              "out",
+              "Colorize4",
+              "input"
+            ],
+            [
+              "Colorize4",
+              "out",
+              "GroupOutput",
+              "roughness"
+            ],
+            [
+              "Clouds2",
+              "out",
+              "Colorize5",
+              "input"
+            ],
+            [
+              "Anisotropic1",
+              "out",
+              "Colorize6",
+              "input"
+            ],
+            [
+              "Colorize5",
+              "out",
+              "Blend7",
+              "foreground"
+            ],
+            [
+              "Colorize6",
+              "out",
+              "Blend7",
+              "background"
+            ],
+            [
+              "Blend7",
+              "out",
+              "GroupOutput",
+              "height"
+            ]
+          ]
+        },
+        "masks": []
+      }
+    ],
+    "masks": []
+  }
+}

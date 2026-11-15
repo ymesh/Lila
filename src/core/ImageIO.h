@@ -73,7 +73,7 @@ LILA_FOUNDATION_API void write(const fs::path& path, const Image& image, const W
 /** bits applies to PNG only. */
 LILA_FOUNDATION_API void write(const fs::path& path, const Image& image, int bits = 8);
 
-/** Reads what the writers above write (PNG RGBA 8/16 bit non-interlaced, EXR half or float, TGA 24/32 bit uncompressed). Empty image and *err set on failure. */
+/** Reads what the writers above write (EXR half or float, TGA 24/32 bit uncompressed); readPng also takes JPEG and every PNG variant. Empty image and *err set on failure. */
 LILA_FOUNDATION_API Image readPng(const fs::path& path, std::string* err = nullptr);
 LILA_FOUNDATION_API Image readExr(const fs::path& path, std::string* err = nullptr);
 LILA_FOUNDATION_API Image readTga(const fs::path& path, std::string* err = nullptr);
@@ -82,9 +82,11 @@ LILA_FOUNDATION_API Image readTiff(const fs::path& path, std::string* err = null
 /** The flattened image of an uncompressed 8/16 bit RGB PSD. */
 LILA_FOUNDATION_API Image readPsd(const fs::path& path, std::string* err = nullptr);
 LILA_FOUNDATION_API Image readWebp(const fs::path& path, std::string* err = nullptr);
+/** A WebP image held in memory. */
+LILA_FOUNDATION_API Image decodeWebp(const uint8_t* data, size_t size, std::string* err = nullptr);
 /** The layers of an uncompressed 8/16 bit RGB PSD, bottom first as stored, with their names. */
 LILA_FOUNDATION_API std::vector<std::pair<std::string, Image>> readPsdLayers(const fs::path& path, std::string* err = nullptr);
-/** By extension. */
+/** By extension; anything not named below reads as PNG or JPEG. */
 LILA_FOUNDATION_API Image read(const fs::path& path, std::string* err = nullptr);
 
 /** The extensions write() takes, lowercase without the dot: png, exr, tga, tif, tiff, psd. */

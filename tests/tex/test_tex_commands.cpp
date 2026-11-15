@@ -108,6 +108,15 @@ TEST_CASE("tex: texBuildGraph builds a set from one spec, or reports every probl
     run("texBuildGraph", {{"args", {{{"material", "Brick"}, {"nodes", {{{"name", "N"}, {"type", "bricks"}}}}, {"links", {"N.mask -> Output.height"}}}}}});
     CHECK(run("texGraphInfo", {{"args", {"BrickTex"}}})["nodes"].size() == 2);
 
+    // A set is not a material, so it drops the material's M_ prefix; a rebuild finds the bound set whatever its name.
+    json bricks = {{"nodes", {{{"name", "N"}, {"type", "bricks"}}}}, {"links", {"N.mask -> Output.height"}}};
+    json prefixed = bricks;
+    prefixed["material"] = "M_Wall";
+    CHECK(run("texBuildGraph", {{"args", {prefixed}}})["set"] == "WallTex");
+    run("texCreateSet", {{"args", {"OddName"}}, {"settings", {{"material", "M_Floor"}}}});
+    prefixed["material"] = "M_Floor";
+    CHECK(run("texBuildGraph", {{"args", {prefixed}}})["set"] == "OddName");
+
     json bad = {{"material", "Brick"},
                 {"nodes", {{{"name", "A"}, {"type", "brick"}}, {{"name", "B"}, {"type", "colorize"}, {"values", {{"nothing", 1}}}}}},
                 {"links", {"B.out -> Output.nope", "B.out"}}};

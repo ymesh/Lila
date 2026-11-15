@@ -395,6 +395,56 @@ TEST_CASE("symmetryRebuild mirrors the kept side of an asymmetric mesh")
     }
 }
 
+TEST_CASE("symmetryRebuild moves only points when the halves already pair, so the other half keeps its own UVs")
+{
+    run("newScene");
+    std::string cube = run("polyCube", {{"width", 100.0}, {"height", 100.0}, {"depth", 100.0}, {"subdivisionsX", 2}})[0];
+    run("setSymmetry", {{"args", {cube}}, {"axis", "x"}});
+    run("symmetryCheck", {{"args", {cube}}}); // stores the cube's pairs
+    run("setSymmetry", {{"args", {cube}}, {"axis", "off"}});
+    run("selectComponents", {{"args", {cube}}, {"faces", {findFace(meshOf(cube), [](glm::dvec3 c) { return c.x > 40.0; })}}});
+    run("moveComponents", {{"by", {20.0, 5.0, 0.0}}});
+    run("select", {{"args", {cube}}});
+    run("selectMode", {{"args", {"object"}}});
+
+    const geo::Mesh before = meshOf(cube);
+    const std::span<const glm::vec2> uvBefore = before.cornerAttrs().get<glm::vec2>(geo::attr::uvName(0));
+    REQUIRE_FALSE(uvBefore.empty());
+    REQUIRE_FALSE(exactlyMirrored(before));
+
+    json out = run("symmetryRebuild", {{"args", {cube}}, {"side", "negative"}});
+    CHECK(out[cube].get<int>() == 0);
+    const geo::Mesh after = meshOf(cube);
+    CHECK(exactlyMirrored(after));
+    REQUIRE(after.numFaces() == before.numFaces());
+    REQUIRE(after.numPoints() == before.numPoints());
+    for (Index p = 0; p < before.pointCapacity(); ++p)
+        if (before.pointValid(p) && before.position(p).x <= 0.0)
+            CHECK(after.position(p) == before.position(p));
+    const std::span<const glm::vec2> uvAfter = after.cornerAttrs().get<glm::vec2>(geo::attr::uvName(0));
+    REQUIRE(uvAfter.size() == uvBefore.size());
+    CHECK(std::equal(uvAfter.begin(), uvAfter.end(), uvBefore.begin()));
+}
+
+TEST_CASE("symmetryCheck reports a mirror plane the object's rotation tilts off the world axes")
+{
+    run("newScene");
+    std::string cube = run("polyCube", {{"width", 100.0}, {"height", 100.0}, {"depth", 100.0}, {"subdivisionsX", 2}})[0];
+    run("setSymmetry", {{"args", {cube}}, {"axis", "x"}});
+    CHECK(run("symmetryCheck", {{"args", {cube}}})[cube]["planeTilt"].get<double>() == doctest::Approx(0.0));
+
+    // Turned a little about Y, the halves still mirror each other, across a plane no world-aligned part shares.
+    scene::Graph& g = scene::Graph::current();
+    g.setValue({g.find(cube)->id(), scene::Transform::kRotate, -1}, glm::dvec3(0.0, 0.75, 0.0));
+    const json c = run("symmetryCheck", {{"args", {cube}}})[cube];
+    CHECK(c["maxAsymmetry"].get<double>() < 1e-9);
+    CHECK(c["planeTilt"].get<double>() == doctest::Approx(0.75).epsilon(0.001));
+
+    // A quarter turn puts the plane on another world axis: square again.
+    g.setValue({g.find(cube)->id(), scene::Transform::kRotate, -1}, glm::dvec3(0.0, 90.0, 0.0));
+    CHECK(run("symmetryCheck", {{"args", {cube}}})[cube]["planeTilt"].get<double>() == doctest::Approx(0.0).epsilon(1e-6));
+}
+
 TEST_CASE("symmetryRebuild and symmetryCheck use the plane through the pivot")
 {
     run("newScene");

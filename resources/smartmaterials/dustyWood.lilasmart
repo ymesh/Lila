@@ -3,6 +3,11 @@
   "version": 1,
   "name": "Dusty Wood",
   "description": "Grained wood darkened where occluded, with dust settled on the upward faces.",
+  "tags": [
+    "wood",
+    "realistic",
+    "dirty"
+  ],
   "kind": "material",
   "layer": {
     "id": "L6",

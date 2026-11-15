@@ -1,9 +1,16 @@
 #include "ui/MaterialThumbnails.h"
 
+#include "bake/Backend.h"
+#include "bake/Bake.h"
+#include "bake/BakeInputs.h"
+#include "bake/BakePipeline.h"
+#include "bake/Maps.h"
+#include "core/Log.h"
 #include "core/MainQueue.h"
 #include "core/Paths.h"
 #include "core/PrefStore.h"
 #include "core/Profile.h"
+#include "core/Progress.h"
 #include "geo/Attribute.h"
 #include "geo/Mesh.h"
 #include "geo/Primitives.h"
@@ -13,9 +20,12 @@
 #include "scene/MeshNodes.h"
 #include "scene/Node.h"
 #include "tex/Evaluate.h"
+#include "tex/Generators.h"
+#include "tex/Layers.h"
 #include "tex/Library.h"
 #include "tex/Lint.h"
 #include "tex/Plan.h"
+#include "tex/SmartMaterial.h"
 #include "tex/TextureSet.h"
 #include "ui/Camera.h"
 #include "ui/Environments.h"
@@ -32,6 +42,8 @@
 #include <mutex>
 #include <thread>
 #include <cmath>
+#include <cstring>
+#include <set>
 #include <format>
 #include <fstream>
 #include <stdexcept>
@@ -44,10 +56,14 @@ namespace fs = std::filesystem;
 namespace library = tex::library;
 using json = nlohmann::json;
 
-/** Tiles across the ball's uvs: u runs around it, twice as far as v runs pole to pole, so 4 x 2 keeps texels square. */
-constexpr float kBallTilesU = 4.0f;
-constexpr float kBallTilesV = 2.0f;
-constexpr const char* kVersion = "ball-v1";
+/** A library material's tiles across the ball's uv square, which spans the ball's circumference. */
+constexpr double kBallTiles = 4.0;
+/** The ball's maps and mesh maps, square. */
+constexpr int kBallTexels = 1024;
+/** Centimetres one uv unit spans on the ball (its circumference), so texels stay square. */
+constexpr double kBallUvCm = 2.0 * 3.14159265358979 * 45.0;
+constexpr const char* kVersion = "ball-v2";
+constexpr std::string_view kSmartPrefix = "smart:";
 
 struct Source
 {
@@ -57,9 +73,39 @@ struct Source
     bool isSet = false;
 };
 
+/** A smart material as a set's graph: its layer alone on a fresh stack, or a smart mask on a light fill over a dark base. */
+json smartDocument(const std::string& name)
+{
+    tex::SmartMaterial sm = tex::loadSmartMaterial(name);
+    tex::SetSettings settings = tex::SetSettings::makeDefault();
+    settings.uvWidth = settings.uvHeight = kBallUvCm;
+    tex::LayerStack stack;
+    if (sm.kind == "mask")
+    {
+        stack.base["baseColor"] = json::array({0.04, 0.04, 0.045, 1.0});
+        tex::Layer fill;
+        fill.id = stack.newId('L');
+        fill.name = "Mask";
+        fill.material = {{"baseColor", json::array({0.85, 0.85, 0.85, 1.0})}};
+        fill.masks = tex::instantiateMasks(sm.masks, stack);
+        stack.layers.push_back(std::move(fill));
+    }
+    else
+        stack.layers.push_back(tex::instantiateLayer(sm.layer, stack));
+    tex::StackCompile c = tex::compileStack(stack, settings, tex::Graph{});
+    return {{"graph", c.graph.toJson()}, {"settings", settings.toJson()}};
+}
+
 Source resolve(const std::string& material)
 {
     Source s;
+    if (material.starts_with(kSmartPrefix))
+    {
+        s.doc = smartDocument(material.substr(kSmartPrefix.size()));
+        s.meta.name = material.substr(kSmartPrefix.size());
+        s.isSet = true;
+        return s;
+    }
     if (std::optional<library::Entry> e = library::find(material))
     {
         s.doc = library::document(*e);
@@ -170,15 +216,237 @@ render::Material materialFrom(const tex::EvalResult& res, int w, int h)
     return m;
 }
 
-scene::MeshPtr shaderBall()
+/** A profile point: distance from the axis, height along it, and whether the surface creases there. */
+struct ProfilePoint
+{
+    double radial;
+    double axial;
+    bool hard = false;
+};
+
+/** Polygons gathered for Mesh::fromPolygons, with a uv per corner and the point pairs whose edges are hard. */
+struct Soup
+{
+    std::vector<glm::dvec3> points;
+    std::vector<geo::Index> sizes;
+    std::vector<geo::Index> indices;
+    std::vector<glm::vec2> uvs;
+    std::set<std::pair<geo::Index, geo::Index>> hard;
+};
+
+/**
+ * Revolves a profile, listed from the +axis pole to the -axis pole, about axis through origin. u runs once around, v from
+ * vStart along the profile's length in uv units of kBallUvCm.
+ */
+void revolve(Soup& s, const std::vector<ProfilePoint>& profile, glm::dvec3 origin, glm::dvec3 axis, int segments, double vStart)
+{
+    axis = glm::normalize(axis);
+    const glm::dvec3 e1 = glm::normalize(glm::cross(std::abs(axis.y) < 0.9 ? glm::dvec3(0, 1, 0) : glm::dvec3(1, 0, 0), axis));
+    const glm::dvec3 e2 = glm::cross(axis, e1);
+    std::vector<std::vector<geo::Index>> rings;
+    std::vector<double> v;
+    double along = vStart;
+    for (size_t i = 0; i < profile.size(); ++i)
+    {
+        const ProfilePoint& p = profile[i];
+        if (i > 0)
+            along += std::hypot(p.radial - profile[i - 1].radial, p.axial - profile[i - 1].axial) / kBallUvCm;
+        v.push_back(along);
+        std::vector<geo::Index> ring;
+        const int count = p.radial <= 1e-9 ? 1 : segments;
+        for (int j = 0; j < count; ++j)
+        {
+            const double phi = 2.0 * 3.14159265358979 * double(j) / double(segments);
+            ring.push_back(geo::Index(s.points.size()));
+            s.points.push_back(origin + axis * p.axial + (e1 * std::cos(phi) + e2 * std::sin(phi)) * p.radial);
+        }
+        if (p.hard && count > 1)
+            for (int j = 0; j < count; ++j)
+                s.hard.insert(std::minmax(ring[size_t(j)], ring[size_t((j + 1) % count)]));
+        rings.push_back(std::move(ring));
+    }
+    for (size_t i = 0; i + 1 < rings.size(); ++i)
+        for (int j = 0; j < segments; ++j)
+        {
+            const float u0 = float(j) / float(segments), u1 = float(j + 1) / float(segments), um = (u0 + u1) * 0.5f;
+            const float va = float(v[i]), vb = float(v[i + 1]);
+            auto at = [&](size_t r, int k) { return rings[r].size() == 1 ? rings[r][0] : rings[r][size_t(k % segments)]; };
+            // Counter-clockwise seen from outside: down the profile first, then around.
+            const std::pair<geo::Index, glm::vec2> quad[4] = {
+                {at(i, j), {rings[i].size() == 1 ? um : u0, va}},
+                {at(i + 1, j), {rings[i + 1].size() == 1 ? um : u0, vb}},
+                {at(i + 1, j + 1), {u1, vb}},
+                {at(i, j + 1), {u1, va}},
+            };
+            geo::Index n = 0;
+            for (int k = 0; k < 4; ++k)
+            {
+                if ((k == 2 && rings[i + 1].size() == 1) || (k == 3 && rings[i].size() == 1))
+                    continue;
+                s.indices.push_back(quad[k].first);
+                s.uvs.push_back(quad[k].second);
+                ++n;
+            }
+            s.sizes.push_back(n);
+        }
+}
+
+/** A sphere profile of radius r from polar angle a0 to a1 (degrees from the +axis pole), every step degrees. */
+void arc(std::vector<ProfilePoint>& out, double r, double a0, double a1, double step, bool hardEnds)
+{
+    const int n = std::max(1, int(std::ceil((a1 - a0) / step)));
+    for (int i = 0; i <= n; ++i)
+    {
+        const double a = glm::radians(a0 + (a1 - a0) * double(i) / double(n));
+        out.push_back({r * std::sin(a), r * std::cos(a), hardEnds && (i == 0 || i == n)});
+    }
+}
+
+/**
+ * The preview ball: a 45 cm sphere with a recessed cap, a raised ring and grooves turned towards the camera, on a stepped
+ * pedestal. Both share one non-overlapping uv square, so mesh maps bake on it.
+ */
+scene::MeshPtr previewBall()
 {
     static scene::MeshPtr ball = [] {
-        auto m = std::make_shared<geo::Mesh>(geo::makeSphere({.radius = 50.0, .subdivAxis = 64, .subdivHeight = 32}));
-        for (glm::vec2& uv : m->cornerAttrs().getOrAdd<glm::vec2>(geo::attr::uvName(0)))
-            uv *= glm::vec2(kBallTilesU, kBallTilesV);
+        Soup s;
+        std::vector<ProfilePoint> sphere;
+        arc(sphere, 41.5, 0.0, 15.0, 3.0, true);
+        arc(sphere, 47.0, 15.0, 21.0, 2.0, true);
+        arc(sphere, 45.0, 21.0, 33.0, 3.0, true);
+        arc(sphere, 43.5, 33.0, 35.5, 2.5, true);
+        arc(sphere, 45.0, 35.5, 62.0, 3.0, true);
+        arc(sphere, 43.8, 62.0, 64.0, 2.0, true);
+        arc(sphere, 45.0, 64.0, 180.0, 3.0, true);
+        sphere.front().hard = sphere.back().hard = false;
+        const glm::dvec3 centre(0.0, 54.0, 0.0);
+        const glm::dvec3 facing(std::sin(glm::radians(28.0)) * std::cos(glm::radians(14.0)), std::sin(glm::radians(14.0)),
+                                std::cos(glm::radians(28.0)) * std::cos(glm::radians(14.0)));
+        revolve(s, sphere, centre, facing, 128, 0.02);
+        const std::vector<ProfilePoint> pedestal = {
+            {0.0, 11.0}, {24.0, 11.0, true}, {24.0, 9.5, true}, {31.0, 8.0, true}, {31.0, 5.5, true},
+            {37.0, 5.5, true}, {40.0, 3.0, true}, {40.0, 0.0, true}, {0.0, 0.0},
+        };
+        revolve(s, pedestal, glm::dvec3(0.0), glm::dvec3(0, 1, 0), 128, 0.62);
+
+        auto m = std::make_shared<geo::Mesh>(geo::Mesh::fromPolygons(s.points, s.sizes, s.indices));
+        std::span<glm::vec2> uv = m->cornerAttrs().getOrAdd<glm::vec2>(geo::attr::uvName(0));
+        size_t next = 0;
+        for (geo::Index f = 0; f < m->faceCapacity(); ++f)
+            if (m->faceValid(f))
+                for (geo::Index c : m->faceCorners(f))
+                    uv[c] = s.uvs[next++];
+        std::span<bool> hard = m->edgeAttrs().getOrAdd<bool>(geo::attr::kHard);
+        for (geo::Index e = 0; e < m->edgeCapacity(); ++e)
+            if (m->edgeValid(e))
+                hard[e] = s.hard.contains(std::minmax(m->edgePoint(e, 0), m->edgePoint(e, 1)));
         return scene::MeshPtr(m);
     }();
     return ball;
+}
+
+/** The ball's baked mesh maps (curvature, ao, ...) by bake map id, the external names texture graphs read them under. */
+struct BallMaps
+{
+    std::mutex mutex;
+    bool baked = false;
+    std::map<std::string, image::Image> externals;
+};
+
+BallMaps& ballMaps()
+{
+    static BallMaps m;
+    return m;
+}
+
+/** The ball as its own low and high: the inputs buildInputs would make for a group baking it onto itself. */
+bake::BakeInputs ballBakeInputs()
+{
+    const geo::Mesh& mesh = *previewBall();
+    bake::BakeInputs in;
+    in.project = "PreviewBall";
+    bake::GroupInputs gi;
+    gi.name = "Ball";
+    gi.settings.lows = {"PreviewBall"};
+    bake::HighEntry self;
+    self.self = true;
+    gi.settings.highs = {self};
+    gi.lows.push_back(bake::lowFromMesh(mesh, glm::dmat4(1.0), "PreviewBall"));
+    bake::HighInput high;
+    high.soup = bake::soupFromMesh(mesh, glm::dmat4(1.0), "PreviewBall");
+    high.source = "PreviewBall";
+    high.sourceTriangles = high.soup.triangleCount();
+    gi.highMin = in.highMin = high.soup.boundsMin;
+    gi.highMax = in.highMax = high.soup.boundsMax;
+    gi.frontal = gi.rear = 0.5f;
+    gi.highs.push_back(std::move(high));
+    gi.highNodes = {"PreviewBall"};
+    gi.highSelfLow = {0};
+    in.groups.push_back(std::move(gi));
+    bake::buildLinks(in);
+    return in;
+}
+
+/** Worker: bakes the ball's mesh maps the first time; empty when baking failed (graphs then read their defaults). */
+const std::map<std::string, image::Image>& ballExternals()
+{
+    BallMaps& b = ballMaps();
+    std::scoped_lock lock(b.mutex);
+    if (b.baked)
+        return b.externals;
+    b.baked = true;
+    try
+    {
+        LILA_ZONE_N("materialThumbs::bakeBall");
+        bake::registerBuiltinMaps();
+        bake::ProjectSettings ps = bake::ProjectSettings::defaults();
+        ps.maps.clear();
+        for (const tex::MeshRole& r : tex::meshRoles())
+            if (bake::findMap(r.bakeMap) && std::ranges::none_of(ps.maps, [&](const bake::MapSettings& m) { return m.map == r.bakeMap; }))
+            {
+                bake::MapSettings m;
+                m.map = r.bakeMap;
+                m.suffix = r.bakeMap;
+                ps.maps.push_back(std::move(m));
+            }
+        ps.output.width = ps.output.height = kBallTexels;
+        ps.output.supersampling = 1;
+        ps.output.padding = 8;
+        ps.output.format = "exr";
+        ps.output.name = "{mesh}_{map}_{udim}";
+        bake::BakeInputs in = ballBakeInputs();
+        std::unique_ptr<bake::Backend> backend;
+        try
+        {
+            backend = bake::createBackend(bake::preferredBackend());
+        }
+        catch (const std::exception&)
+        {
+        }
+        if (!backend)
+            backend = bake::createBackend("cpu");
+        backend->prepare(in);
+        std::map<std::string, image::Image> byMap;
+        std::mutex texMutex;
+        bake::BakeOptions opt;
+        opt.folder = std::filesystem::temp_directory_path() / "lila_preview_ball";
+        opt.keepTexture = [&](const bake::TextureBuffer& t) {
+            if (!t.def)
+                return;
+            image::Image img{t.width, t.height, std::vector<float>(t.value.size() * 4)};
+            std::memcpy(img.rgba.data(), t.value.data(), t.value.size() * sizeof(glm::vec4));
+            std::scoped_lock l(texMutex);
+            byMap[t.def->id] = std::move(img);
+        };
+        progress::Scope scope("Preview ball maps", 1.0, progress::Silent);
+        bake::runBake(in, ps, opt, *backend);
+        b.externals = std::move(byMap);
+    }
+    catch (const std::exception& e)
+    {
+        log::warn("Material thumbnails: the preview ball's mesh maps didn't bake ({}); generators read flat maps", e.what());
+    }
+    return b.externals;
 }
 
 void applyLook(render::FrameState& s)
@@ -225,6 +493,8 @@ struct Job
     render::FrameState frame;
     size_t slotCount = 1;
     int size = 256;
+    /** On the preview ball, so graphs read its baked mesh maps. */
+    bool ball = false;
     fs::path copyTo;
 };
 
@@ -271,10 +541,15 @@ bool prepare(const std::string& material, const Options& o, Job& job)
             library::setTiling(g, tiles, tiles);
         }
     }
-    else if (tex::GNode* t = g.node(library::kTilingNode))
+    else if (!src.isSet)
     {
-        t->values["tilesX"] = 1.0;
-        t->values["tilesY"] = 1.0;
+        try
+        {
+            library::setTiling(g, kBallTiles, kBallTiles);
+        }
+        catch (const std::invalid_argument&)
+        {
+        }
     }
 
     job.result.key = keyOf(src, o, meshKey);
@@ -292,14 +567,15 @@ bool prepare(const std::string& material, const Options& o, Job& job)
         if (q.name == "baseColor" || q.name == "roughness" || q.name == "metallic" || q.name == "normal" || q.name == "ao" || q.name == "emissive")
             requests.push_back(q);
     tex::PlanRequest req;
-    req.width = req.height = mesh ? std::max(job.size, 512) : job.size;
+    req.width = req.height = mesh ? std::max(job.size, 512) : kBallTexels;
+    job.ball = !mesh;
     req.outputs = requests;
     job.plan = tex::buildPlan(g, req);
     if (!job.plan.error.empty())
         throw std::runtime_error(job.plan.error);
 
     render::MeshDraw draw;
-    draw.mesh = renderMeshFor(mesh ? mesh : shaderBall(), true);
+    draw.mesh = renderMeshFor(mesh ? mesh : previewBall(), true);
     if (!draw.mesh)
         throw std::runtime_error("no render mesh");
     job.slotCount = mesh ? std::max<size_t>(1, mesh->materialNames().size()) : 1;
@@ -346,7 +622,10 @@ Result execute(Job& job)
     render::Renderer& rend = render::Renderer::get();
     if (!rend.running() && !rend.start())
         throw std::runtime_error("the GPU renderer could not start");
-    tex::EvalResult res = tex::evaluate(job.plan, tex::EvalOptions{}, job.backend);
+    tex::EvalOptions options;
+    if (job.ball)
+        options.externals = ballExternals();
+    tex::EvalResult res = tex::evaluate(job.plan, options, job.backend);
     render::Material mat = materialFrom(res, job.plan.width, job.plan.height);
     job.frame.meshes.edit().front().materials.assign(job.slotCount, mat);
     std::vector<uint8_t> bgra;
@@ -460,8 +739,9 @@ void registerCommands()
     using T = ArgType;
     ops::registerCommand({
         .name = "renderMaterialThumbnail",
-        .doc = "Render a material's thumbnail offscreen on the standard shader ball (or mesh= of the scene, at the material's "
-               "real-world scale) and cache it by graph hash. material is a library id, .lilamat path or texture set; all=True "
+        .doc = "Render a material's thumbnail offscreen on the preview ball (or mesh= of the scene, at the material's "
+               "real-world scale) and cache it by graph hash. material is a library id, .lilamat path, texture set or "
+               "smart:<name> (a smart material or mask); all=True "
                "renders every library material. Returns {file, cached} (a list with all).",
         .positionalDoc = "material",
         .flags = {{"size", "", T::Int, 256, "Image size, px.", {}, {}, 32.0, 2048.0},

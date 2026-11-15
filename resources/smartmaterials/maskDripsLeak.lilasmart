@@ -1,0 +1,54 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Leak Trails",
+  "description": "A few heavy leak trails with stained halos, as from a leaking seam.",
+  "tags": [
+    "drips",
+    "stains",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Trails",
+      "type": "genDrips",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "density": 10,
+        "length": 3,
+        "level": 0.66,
+        "softness": 0.08,
+        "seed": 841
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Halo",
+      "type": "blur",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "radius": 0.004
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "levels",
+      "name": "Range",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "inLow": 0.0,
+        "inHigh": 0.7
+      }
+    }
+  ]
+}

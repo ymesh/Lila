@@ -1,0 +1,57 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Grime Streaks",
+  "description": "Dark grime washed down walls from the crevices above.",
+  "tags": [
+    "drips",
+    "dirt",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Streaks",
+      "type": "genDrips",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "density": 16,
+        "length": 3,
+        "level": 0.62,
+        "softness": 0.3,
+        "seed": 811
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Sources",
+      "type": "genCavityGrime",
+      "mode": "lighten",
+      "opacity": 0.7,
+      "invert": false,
+      "values": {
+        "level": 0.3,
+        "softness": 0.4,
+        "seed": 812
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Occlusion",
+      "type": "genAoDarken",
+      "mode": "multiply",
+      "opacity": 0.4,
+      "invert": true,
+      "values": {
+        "level": 0.3,
+        "softness": 0.9
+      }
+    }
+  ]
+}

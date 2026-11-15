@@ -1,0 +1,368 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Weathered Bone",
+  "description": "Old yellowed bone with porous pits, hairline cracks and earth stains in the hollows.",
+  "tags": [
+    "bone",
+    "realistic",
+    "dirty"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L6",
+    "name": "Weathered Bone",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Bone",
+        "kind": "procedural",
+        "graph": {
+          "name": "bone",
+          "typeVersion": 1,
+          "inputs": [
+            {
+              "name": "Worley Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 20,
+              "targets": [
+                "Worley1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 4,
+              "targets": [
+                "Clouds3.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 551,
+              "targets": [
+                "Worley1.seed",
+                "Anisotropic2.seed",
+                "Clouds3.seed"
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "name": "baseColor",
+              "type": "color"
+            },
+            {
+              "name": "height",
+              "type": "gray"
+            },
+            {
+              "name": "roughness",
+              "type": "gray"
+            }
+          ],
+          "nodes": [
+            {
+              "name": "GroupInput",
+              "type": "GroupInput",
+              "position": [
+                -800,
+                0
+              ]
+            },
+            {
+              "name": "Worley1",
+              "type": "worley",
+              "position": [
+                -500,
+                0
+              ],
+              "values": {
+                "scale": 20,
+                "octaves": 2,
+                "seed": 551
+              }
+            },
+            {
+              "name": "Anisotropic2",
+              "type": "anisotropic",
+              "position": [
+                -350,
+                0
+              ],
+              "values": {
+                "scaleX": 60,
+                "scaleY": 3,
+                "octaves": 2,
+                "seed": 552
+              }
+            },
+            {
+              "name": "Clouds3",
+              "type": "clouds",
+              "position": [
+                -200,
+                0
+              ],
+              "values": {
+                "scale": 4,
+                "octaves": 5,
+                "seed": 553
+              }
+            },
+            {
+              "name": "Colorize4",
+              "type": "colorize",
+              "position": [
+                -50,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.2633,
+                      0.196,
+                      0.1005,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.5705,
+                      0.477,
+                      0.2957,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Colorize5",
+              "type": "colorize",
+              "position": [
+                100,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.46,
+                      0.46,
+                      0.46,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.53,
+                      0.53,
+                      0.53,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Colorize6",
+              "type": "colorize",
+              "position": [
+                -650,
+                120
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.47,
+                      0.47,
+                      0.47,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.53,
+                      0.53,
+                      0.53,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Blend7",
+              "type": "blend",
+              "position": [
+                -500,
+                120
+              ],
+              "values": {
+                "mode": "overlay",
+                "opacity": 1.0
+              }
+            },
+            {
+              "name": "Constant8",
+              "type": "constant",
+              "position": [
+                -350,
+                120
+              ],
+              "values": {
+                "value": 0.75
+              }
+            },
+            {
+              "name": "GroupOutput",
+              "type": "GroupOutput",
+              "position": [
+                400,
+                0
+              ]
+            }
+          ],
+          "links": [
+            [
+              "Clouds3",
+              "out",
+              "Colorize4",
+              "input"
+            ],
+            [
+              "Colorize4",
+              "out",
+              "GroupOutput",
+              "baseColor"
+            ],
+            [
+              "Worley1",
+              "out",
+              "Colorize5",
+              "input"
+            ],
+            [
+              "Anisotropic2",
+              "out",
+              "Colorize6",
+              "input"
+            ],
+            [
+              "Colorize5",
+              "out",
+              "Blend7",
+              "foreground"
+            ],
+            [
+              "Colorize6",
+              "out",
+              "Blend7",
+              "background"
+            ],
+            [
+              "Blend7",
+              "out",
+              "GroupOutput",
+              "height"
+            ],
+            [
+              "Constant8",
+              "out",
+              "GroupOutput",
+              "roughness"
+            ]
+          ]
+        },
+        "masks": []
+      },
+      {
+        "id": "L3",
+        "name": "Earth Stain",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.0509,
+            0.0245,
+            0.01,
+            1
+          ],
+          "roughness": 0.9
+        },
+        "masks": [
+          {
+            "id": "M2",
+            "kind": "generator",
+            "type": "genDirt",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.35,
+              "breakup": 0.7,
+              "seed": 554
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.7
+          }
+        }
+      },
+      {
+        "id": "L5",
+        "name": "Pit Grime",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.0196,
+            0.01,
+            0.0049,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M4",
+            "kind": "generator",
+            "type": "genCavityGrime",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.25,
+              "seed": 555
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.6
+          }
+        }
+      }
+    ],
+    "masks": []
+  }
+}

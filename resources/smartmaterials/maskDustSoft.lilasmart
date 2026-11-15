@@ -1,0 +1,30 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Soft Dust Cover",
+  "description": "An even, soft film of dust over everything facing up.",
+  "tags": [
+    "dust",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Dust",
+      "type": "genDust",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.4,
+        "softness": 0.9,
+        "breakup": 0.15,
+        "aoInfluence": 0.3,
+        "noiseScale": 4,
+        "seed": 211
+      }
+    }
+  ]
+}

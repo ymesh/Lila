@@ -1,0 +1,85 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Damaged Paint",
+  "description": "Paint knocked off in sharp flakes across edges and open areas.",
+  "tags": [
+    "paint",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Edge Chips",
+      "type": "genPaintChips",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.58,
+        "softness": 0.02,
+        "chipScale": 14,
+        "chipWeight": 0.9,
+        "seed": 711
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Flakes",
+      "type": "crystal",
+      "mode": "lighten",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 10,
+        "octaves": 1,
+        "seed": 712
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "filter",
+      "name": "Flake Edge",
+      "type": "threshold",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "threshold": 0.6,
+        "softness": 0.03
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "generator",
+      "name": "Damage Zones",
+      "type": "clouds",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 3,
+        "octaves": 5,
+        "mode": "soft",
+        "contrast": 1.8,
+        "seed": 713
+      }
+    },
+    {
+      "id": "M5",
+      "kind": "filter",
+      "name": "Crisp",
+      "type": "threshold",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "threshold": 0.45,
+        "softness": 0.04
+      }
+    }
+  ]
+}

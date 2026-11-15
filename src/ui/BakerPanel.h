@@ -62,6 +62,22 @@ public:
     void refresh();
     /** Shows a bake result (the bake command's return): stats, warnings and thumbnails, loaded off the main thread. */
     void showResult(const nlohmann::json& result);
+    /** Adds or drops the summary's Lighting row and its button: there while an occlusion result shows under sculpt lighting. */
+    void syncLightingNote();
+    /**
+     * Adds or drops the summary's Preview row and its button: there while a baked result shows and some low is shown without
+     * a modifier its export runs, so the maps preview on a mesh they were not baked for.
+     */
+    void syncPreviewNote();
+    /** Shows the lows the Preview row counts as they export (showExportMesh). */
+    void showExportMesh();
+    /**
+     * Adds or drops the summary's Cache row and its button: there, in the error colour and first, while the shown result's
+     * snapshots did not fit the cache, so those meshes are prepared again on every bake.
+     */
+    void syncCacheNote();
+    /** Sets the snapshot cache pref to what the shown result needed, with headroom. */
+    void raiseSnapshotCache();
     /** Wires the last bake's maps into the lows' materials (bakeAssign) and toasts what went where. */
     void assignResult();
     /** Thumbnails still loading. */
@@ -98,8 +114,12 @@ private:
     void refreshMapSettings();
     /** The selected meshes stop occluding (and, with projection, projecting onto) low, or every low of the group when empty. */
     void unlinkSelected(const std::string& group, const std::string& low, bool projection);
+    /** Unlinks a material from the low, or from every low of the group when low is empty. */
+    void unlinkMaterial(const std::string& group, const std::string& low, const std::string& material, bool projection);
+    /** The materials on the highs (and self lows) of every group in the current group's project. */
+    std::vector<std::string> unlinkableMaterials() const;
     void setUnlinks(const std::string& group, const std::vector<bake::Unlink>& unlinks);
-    /** Selected mesh rows leave their unlink; a selected low row drops its whole unlink. */
+    /** Selected mesh and material rows leave their unlink; a selected low row drops its whole unlink. */
     void removeSelectedUnlinks();
     /** R G B A rows for a channel pack map: each a source map and its channel (or luminance/max), or a constant. */
     void addPackChannels(const std::string& map, const nlohmann::json& channels);
@@ -143,7 +163,18 @@ private:
     int mGraphListener = 0;
     int mExecListener = 0;
     int mBakeListener = 0;
+    int mPrefListener = 0;
     int mArrangeListener = 0;
+    /** The shown result baked an occlusion map, which sculpt lighting all but hides. */
+    bool mResultOcclusion = false;
+    /** Bytes of the shown result's snapshots the cache dropped, and what the cache held then; 0 when all fit. */
+    double mCacheDropped = 0.0, mCacheBudget = 0.0;
+    /** GB the cache was raised to from the row, 0 when not. */
+    double mCacheRaisedTo = 0.0;
+    /** A baked (not planned) result is shown. */
+    bool mResultBaked = false;
+    /** A syncPreviewNote is queued for a modifier that changed. */
+    bool mPreviewPending = false;
     /** The backend of the bake running now, empty when none. */
     std::string mRunningBackend;
     std::string mShownResult;
@@ -233,6 +264,12 @@ private:
     /** The summary and its clear button, above the thumbnails in a splitter. */
     QWidget* mSummaryBox = nullptr;
     QToolButton* mAssign = nullptr;
+    /** Switches the viewport to environment lighting; shown with the summary's Lighting row. */
+    QToolButton* mEnvironmentLighting = nullptr;
+    /** Runs showExportMesh on the lows the Preview row counts; shown with that row. */
+    QToolButton* mShowExportMesh = nullptr;
+    /** Raises the snapshot cache to fit the shown result; shown with the Cache row. */
+    QToolButton* mRaiseCache = nullptr;
     QListWidget* mThumbs = nullptr;
     /** The folder of the result shown, empty before one. */
     QString mResultFolder;

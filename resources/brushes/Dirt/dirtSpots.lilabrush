@@ -1,0 +1,34 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Dirt Spots",
+  "category": "Dirt",
+  "doc": "Scattered round grime spots.",
+  "brush": {
+    "falloff": "constant",
+    "strength": 1.0,
+    "flow": 0.7,
+    "spacing": 0.8,
+    "pressureSize": false,
+    "pressureOpacity": false,
+    "pressureFlow": false,
+    "jitter": {
+      "position": 0.6,
+      "size": 0.5,
+      "opacity": 0.3,
+      "angle": 180
+    },
+    "angle": 0.0,
+    "followStroke": false,
+    "roundness": 1.0,
+    "alpha": "alpha://lila/brush tips/round spots.png",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.0,
+    "seed": 62637
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "normal"
+  }
+}

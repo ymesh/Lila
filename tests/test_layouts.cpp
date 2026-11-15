@@ -212,3 +212,11 @@ TEST_CASE("the Model layout shows the modeling toolkit tab")
     json raise = l->value(json::json_pointer("/preset/raise"), json::array());
     CHECK(std::find(raise.begin(), raise.end(), json("modelingToolkit")) != raise.end());
 }
+
+TEST_CASE("the Bake layout opens the modifier stack in the inspector tabs")
+{
+    std::optional<json> l = layouts::builtIn("Bake");
+    REQUIRE(l);
+    json open = l->value(json::json_pointer("/preset/open"), json::array());
+    CHECK(std::find(open.begin(), open.end(), json("modifierStack")) != open.end());
+}

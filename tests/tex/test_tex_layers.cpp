@@ -2,9 +2,11 @@
 
 #include "bake/BakeNodes.h"
 #include "ops/Command.h"
+#include "ops/Undo.h"
 #include "scene/Graph.h"
 #include "tex/Generators.h"
 #include "tex/Layers.h"
+#include "tex/PaintStrokes.h"
 #include "tex/SmartMaterial.h"
 #include "tex/TextureSet.h"
 
@@ -391,4 +393,80 @@ TEST_CASE("tex layers: set evaluation reads the bake project's live mesh maps, w
     CHECK(std::find(asked.begin(), asked.end(), "Proj:objectNormal") != asked.end());
     checkTexel(up.at("baseColor"), {1, 1, 1});
     CHECK(bakeMapName("worldNormal") == "objectNormal");
+}
+
+TEST_CASE("tex layers: a procedural layer's tiling repeats its content and its exposed settings reach their nodes")
+{
+    run("newScene");
+    run("texCreateSet", {{"args", {"Tiled"}}, {"resolution", 16}});
+    Graph p = Graph::makeGroup("ramp");
+    p.outputs = {{"roughness", PortType::Gray, {}}, {"metallic", PortType::Gray, {}}};
+    p.nodes.push_back({"G", "gradient", {0.0, 0.0}, json::object()});
+    p.nodes.push_back({"C", "constant", {0.0, 0.0}, {{"value", 0.5}}});
+    p.links.push_back({"G", "out", "GroupOutput", "roughness"});
+    p.links.push_back({"C", "out", "GroupOutput", "metallic"});
+    json graph = p.toJson();
+    graph["inputs"] = json::array({{{"name", "Shine"}, {"kind", "param"}, {"type", "float"}, {"default", 0.5}, {"targets", {"C.value"}}}});
+    const std::string id = run("texAddLayer", {{"args", {"Tiled", "procedural"}}, {"graph", graph}})["id"];
+
+    auto at = [](const image::Image& img, int x) { return double(texel(img, x, 8)[0]); };
+    auto out = evalSet("Tiled", 16);
+    // One ramp across: a quarter and three quarters differ.
+    CHECK(at(out.at("roughness"), 4) != doctest::Approx(at(out.at("roughness"), 12)).epsilon(0.05));
+
+    run("texSetLayer", {{"args", {"Tiled", id, {{"tiling", {{"scale", 2.0}}}, {"params", {{"Shine", 0.2}}}}}}});
+    out = evalSet("Tiled", 16);
+    // Two ramps across: the same point of each tile matches.
+    CHECK(at(out.at("roughness"), 4) == doctest::Approx(at(out.at("roughness"), 12)).epsilon(0.02));
+    checkTexel(out.at("metallic"), {0.2f});
+    const json l = run("texLayerStack", {{"args", {"Tiled"}}})["layers"][0];
+    CHECK(l["tiling"]["scale"] == doctest::Approx(2.0));
+    CHECK(l["graph"]["inputs"][0]["default"] == doctest::Approx(0.2));
+    CHECK_THROWS(run("texSetLayer", {{"args", {"Tiled", id, {{"params", {{"Nope", 1}}}}}}}));
+}
+
+TEST_CASE("tex layers: scrolling a field folds its edits into one undo step")
+{
+    run("newScene");
+    run("texCreateSet", {{"args", {"Scroll"}}, {"resolution", 4}});
+    const std::string id = run("texAddLayer", {{"args", {"Scroll", "fill"}}, {"material", {{"roughness", 0.5}}}})["id"];
+    // No setting left on the channel reads as full opacity.
+    auto opacity = [&] {
+        const json l = run("texLayerStack", {{"args", {"Scroll"}}})["layers"][0];
+        const json ch = l.contains("channels") && l["channels"].is_object() ? l["channels"].value("roughness", json::object()) : json::object();
+        return ch.is_object() ? ch.value("opacity", 1.0) : 1.0;
+    };
+    UndoStack& undo = UndoStack::get();
+    const uint64_t before = undo.newestId();
+    ops::setCoalesceKey("wheel:field");
+    for (double v : {0.9, 0.8, 0.7})
+        ops::execute("texSetLayer", {{"args", {"Scroll", id, {{"channels", {{"roughness", {{"opacity", v}}}}}}}}}, CallSource::UI);
+    ops::setCoalesceKey({});
+    CHECK(opacity() == doctest::Approx(0.7));
+    REQUIRE(undo.undo());
+    CHECK(undo.newestId() == before);
+    CHECK(opacity() == doctest::Approx(1.0));
+    // Without a scrolled field every edit is its own step.
+    ops::execute("texSetLayer", {{"args", {"Scroll", id, {{"channels", {{"roughness", {{"opacity", 0.6}}}}}}}}}, CallSource::UI);
+    ops::execute("texSetLayer", {{"args", {"Scroll", id, {{"channels", {{"roughness", {{"opacity", 0.4}}}}}}}}}, CallSource::UI);
+    REQUIRE(undo.undo());
+    CHECK(opacity() == doctest::Approx(0.6));
+}
+
+TEST_CASE("tex layers: a new paint layer points every channel and its mask at its buffers, so strokes never change the graph")
+{
+    run("newScene");
+    run("texCreateSet", {{"args", {"Wired"}}, {"resolution", 4}});
+    const std::string id = run("texAddLayer", {{"args", {"Wired", "paint"}}})["id"].get<std::string>();
+    scene::Node& set = *tex::findSet(scene::Graph::current(), "Wired");
+    const tex::SetSettings settings = tex::readSettings(set);
+    const tex::StackState st = tex::readStack(tex::readGraph(set), settings);
+    const tex::Layer* l = st.stack.find(id);
+    REQUIRE(l);
+    for (const tex::Channel& c : settings.channels)
+        CHECK(l->paint.value(c.name, std::string()) == tex::paint::imageRef(id, c.name));
+    CHECK(l->paint.value("mask", std::string()) == tex::paint::imageRef(id, "mask"));
+    // Unpainted, the layer changes nothing.
+    auto out = evalSet("Wired", 4);
+    REQUIRE(out.contains("baseColor"));
 }

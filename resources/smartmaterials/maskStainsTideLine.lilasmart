@@ -1,0 +1,58 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Tide Line",
+  "description": "A dried band left by a past water level, sharp on top and fading below.",
+  "tags": [
+    "stains",
+    "moisture",
+    "ground",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Band",
+      "type": "genPositionGradient",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "start": 0.45,
+        "end": 0.36,
+        "breakup": 0.1,
+        "noiseScale": 8,
+        "seed": 941
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Below",
+      "type": "genPositionGradient",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "start": 0.15,
+        "end": 0.45,
+        "breakup": 0.0,
+        "seed": 941
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "levels",
+      "name": "Range",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "inLow": 0.45,
+        "inHigh": 0.7
+      }
+    }
+  ]
+}

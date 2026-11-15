@@ -1,0 +1,26 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Thin Areas",
+  "description": "Thin parts of the mesh, where light would pass through.",
+  "tags": [
+    "occlusion",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Thin",
+      "type": "genThickness",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": true,
+      "values": {
+        "level": 0.35,
+        "softness": 0.4
+      }
+    }
+  ]
+}

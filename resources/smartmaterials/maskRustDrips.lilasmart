@@ -1,0 +1,85 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Rust Streaks",
+  "description": "Rust running down from crevices and edges in long streaks.",
+  "tags": [
+    "rust",
+    "drips",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Rust Sources",
+      "type": "genRustSpread",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.55,
+        "softness": 0.2,
+        "breakup": 0.6,
+        "seed": 421
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Run Down",
+      "type": "directionalBlur",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "angle": 90.0,
+        "length": 0.12
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "levels",
+      "name": "Strengthen",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "inLow": 0.15,
+        "inHigh": 0.55
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "generator",
+      "name": "Streaks",
+      "type": "genDrips",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "density": 30,
+        "length": 2,
+        "level": 0.4,
+        "softness": 0.5,
+        "seed": 422
+      }
+    },
+    {
+      "id": "M5",
+      "kind": "generator",
+      "name": "Rust",
+      "type": "genRustSpread",
+      "mode": "lighten",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.55,
+        "softness": 0.2,
+        "breakup": 0.6,
+        "seed": 421
+      }
+    }
+  ]
+}

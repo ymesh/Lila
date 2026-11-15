@@ -1,0 +1,70 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Dust Along Wide Edges",
+  "description": "Dust caught in a broad band along edges and ridges.",
+  "tags": [
+    "dust",
+    "edges",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Edges",
+      "type": "genEdgeWear",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "strength": 1.5,
+        "level": 0.3,
+        "softness": 0.3,
+        "breakup": 0.2,
+        "seed": 241
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Widen",
+      "type": "blur",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "radius": 0.025
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "levels",
+      "name": "Range",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "inLow": 0.12,
+        "inHigh": 0.5
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "generator",
+      "name": "Breakup",
+      "type": "clouds",
+      "mode": "multiply",
+      "opacity": 0.6,
+      "invert": false,
+      "values": {
+        "scale": 5,
+        "octaves": 5,
+        "mode": "soft",
+        "contrast": 1.0,
+        "seed": 242
+      }
+    }
+  ]
+}

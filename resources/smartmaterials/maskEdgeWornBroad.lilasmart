@@ -1,0 +1,30 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Rubbed Edges",
+  "description": "Broad, uneven rubbing on edges and raised areas, like years of handling.",
+  "tags": [
+    "edges",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Rubbed",
+      "type": "genEdgeWear",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "strength": 1.0,
+        "level": 0.2,
+        "softness": 0.35,
+        "breakup": 0.55,
+        "noiseScale": 4,
+        "seed": 391
+      }
+    }
+  ]
+}

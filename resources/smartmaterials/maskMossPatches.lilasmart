@@ -1,0 +1,58 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Scattered Growth Patches",
+  "description": "Irregular patches of growth anywhere the surface faces up, with ragged borders.",
+  "tags": [
+    "moss",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Patches",
+      "type": "clouds",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 6,
+        "octaves": 5,
+        "mode": "billow",
+        "contrast": 1.5,
+        "seed": 521
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Coverage",
+      "type": "histogramScan",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "position": 0.68,
+        "contrast": 0.85
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Upward",
+      "type": "maskFacing",
+      "mode": "multiply",
+      "opacity": 0.8,
+      "invert": false,
+      "values": {
+        "elevation": 60.0,
+        "twoSided": false
+      },
+      "bindings": {
+        "normal": "worldNormal"
+      }
+    }
+  ]
+}

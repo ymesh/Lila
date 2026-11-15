@@ -1,0 +1,57 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Windblown Sand",
+  "description": "Sand blown across top surfaces in streaks along the wind.",
+  "tags": [
+    "sand",
+    "dust",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Settled",
+      "type": "genDust",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.45,
+        "softness": 0.4,
+        "breakup": 0.2,
+        "seed": 611
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Wind Streaks",
+      "type": "directional",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "angle": 10.0,
+        "scaleAlong": 3,
+        "scaleAcross": 20,
+        "octaves": 4,
+        "seed": 612
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "levels",
+      "name": "Range",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "inLow": 0.1,
+        "inHigh": 0.6
+      }
+    }
+  ]
+}

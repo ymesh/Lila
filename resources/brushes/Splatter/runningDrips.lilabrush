@@ -1,0 +1,40 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Running Drips",
+  "category": "Splatter",
+  "doc": "Paint that runs down from the stroke.",
+  "brush": {
+    "falloff": "constant",
+    "strength": 1.0,
+    "flow": 1.0,
+    "spacing": 0.2,
+    "pressureSize": false,
+    "pressureOpacity": false,
+    "pressureFlow": false,
+    "jitter": {
+      "position": 0.0,
+      "size": 0.0,
+      "opacity": 0.0,
+      "angle": 0.0
+    },
+    "angle": 0.0,
+    "followStroke": false,
+    "roundness": 1.0,
+    "alpha": "alpha://lila/shapes/round hard.png",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.0
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "normal"
+  },
+  "particles": {
+    "kind": "drips",
+    "count": 3,
+    "length": 6,
+    "size": 0.2,
+    "rate": 0.4
+  }
+}

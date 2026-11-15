@@ -1,0 +1,32 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Rust in Crevices",
+  "description": "Rust starting in crevices and occluded corners.",
+  "tags": [
+    "rust",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Crevice Rust",
+      "type": "genRustSpread",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "edgeWeight": 0.0,
+        "cavityWeight": 1.6,
+        "aoWeight": 0.8,
+        "level": 0.3,
+        "softness": 0.35,
+        "breakup": 1.3,
+        "noiseScale": 7,
+        "seed": 401
+      }
+    }
+  ]
+}

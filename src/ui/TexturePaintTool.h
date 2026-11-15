@@ -4,6 +4,8 @@
 
 #include <nlohmann/json.hpp>
 
+class QWidget;
+
 namespace lila::ui
 {
 /**
@@ -28,6 +30,19 @@ LILA_UI_API void startTexturePaint();
  * {"brush": brush::BrushSettings JSON, "payload": tex::paint::Payload JSON, "particles": spec or null}.
  */
 LILA_UI_API nlohmann::json texturePaintSettings();
+
+/** The Brush page (the texture paint settings) reparented under parent: one page, which the Texture Set panel hosts. */
+LILA_UI_API QWidget* texturePaintPage(QWidget* parent);
+
+/** The brush preset last applied (tex::brushes id), empty for none. Applying one starts Texture Paint. */
+LILA_UI_API std::string texturePaintPreset();
+LILA_UI_API void applyTexturePaintPreset(const std::string& id);
+/** The brush tip's alpha (brush::alphas path), empty for round. Setting one starts Texture Paint. */
+LILA_UI_API std::string texturePaintAlpha();
+LILA_UI_API void setTexturePaintAlpha(const std::string& alphaPath);
+/** The image the brush paints through, empty unless the Texture source is on. Setting one turns it on and starts Texture Paint. */
+LILA_UI_API std::string texturePaintTexture();
+LILA_UI_API void setTexturePaintTexture(const std::string& file);
 
 /** tex.paint and the paint layer actions (tex.rasterizeLayer, tex.flattenLayer, tex.clearLayer). */
 LILA_UI_API void registerTexturePaintUi();

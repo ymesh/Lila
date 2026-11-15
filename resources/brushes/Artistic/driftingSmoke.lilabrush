@@ -1,0 +1,34 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Drifting Smoke",
+  "category": "Artistic",
+  "doc": "Wisps of smoke that curl and fade.",
+  "brush": {
+    "falloff": "bell",
+    "strength": 1.0,
+    "flow": 0.25,
+    "spacing": 0.2,
+    "pressureSize": false,
+    "pressureOpacity": false,
+    "pressureFlow": false,
+    "jitter": {
+      "position": 0.3,
+      "size": 0.4,
+      "opacity": 0.0,
+      "angle": 180
+    },
+    "angle": 0.0,
+    "followStroke": false,
+    "roundness": 1.0,
+    "alpha": "alpha://lila/brush tips/smoke wisp.png",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.0,
+    "seed": 9691
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "normal"
+  }
+}

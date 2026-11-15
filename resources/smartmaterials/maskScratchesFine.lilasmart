@@ -1,0 +1,30 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Fine Scratches",
+  "description": "Dense, fine scratches in every direction, as on handled metal.",
+  "tags": [
+    "scratches",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Scratches",
+      "type": "scratches",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 10,
+        "count": 8,
+        "length": 0.5,
+        "width": 0.0015,
+        "angleRandom": 1.0,
+        "seed": 1001
+      }
+    }
+  ]
+}

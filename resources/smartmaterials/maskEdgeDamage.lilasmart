@@ -1,0 +1,30 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Battered Edges",
+  "description": "Hard chips and dents knocked out of the edges.",
+  "tags": [
+    "edges",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Chips",
+      "type": "genPaintChips",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.7,
+        "softness": 0.03,
+        "chipScale": 22,
+        "edgeWeight": 1.6,
+        "chipWeight": 0.5,
+        "seed": 301
+      }
+    }
+  ]
+}

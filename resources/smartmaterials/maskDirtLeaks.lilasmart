@@ -1,0 +1,85 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Grime Leaking from Crevices",
+  "description": "Grime collected in crevices and running down below them in streaks.",
+  "tags": [
+    "dirt",
+    "drips",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Crevices",
+      "type": "levels",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": true,
+      "values": {
+        "inLow": 0.5,
+        "inHigh": 0.95
+      },
+      "bindings": {
+        "input": "cavity"
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Run Down",
+      "type": "directionalBlur",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "angle": 90.0,
+        "length": 0.08
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "levels",
+      "name": "Strengthen",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "inLow": 0.15,
+        "inHigh": 0.5
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "generator",
+      "name": "Streaks",
+      "type": "genDrips",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "density": 36,
+        "length": 2,
+        "level": 0.45,
+        "softness": 0.4,
+        "seed": 151
+      }
+    },
+    {
+      "id": "M5",
+      "kind": "generator",
+      "name": "Cavity Grime",
+      "type": "genCavityGrime",
+      "mode": "lighten",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.3,
+        "softness": 0.3,
+        "seed": 152
+      }
+    }
+  ]
+}

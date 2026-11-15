@@ -37,6 +37,15 @@ namespace
 {
 constexpr const char* kStateNames[] = {"active", "frozen", "deactivated", "strengthened"};
 
+/**
+ * A panel's edge length under the garment's particleDistance (cm): the garment's, except that a panel drafted finer than
+ * the standard 2 cm (a finger, a hood) keeps its share of it, so small pieces still mesh with enough cloth to bend.
+ */
+float scaledParticleDistance(const Panel& p, double garmentCm)
+{
+    return float(garmentCm / kCmPerM) * std::min(1.f, p.particleDistance / 0.02f);
+}
+
 json vec2Json(const Vec2& v) { return json::array({v[0], v[1]}); }
 json vec3Json(const Vec3& v) { return json::array({v[0], v[1], v[2]}); }
 Vec2 jsonVec2(const json& j) { return {j.at(0).get<float>(), j.at(1).get<float>()}; }
@@ -392,7 +401,7 @@ private:
         }
         if (const double pd = as<double>(kParticleDistance); pd > 0.0)
             for (Panel& p : g.panels)
-                p.particleDistance = float(pd / kCmPerM);
+                p.particleDistance = scaledParticleDistance(p, pd);
 
         uint64_t meshKey = std::hash<std::string>{}(text);
         hashMix(meshKey, std::hash<double>{}(as<double>(kParticleDistance)));
@@ -792,7 +801,7 @@ NodeType garmentType()
         {.name = "fabric", .type = PlugType::String, .defaultValue = std::string(), .flags = kGarmentIn,
          .doc = "Fabric preset for panels on the garment's first fabric; empty keeps the garment's own.", .category = "Garment"},
         {.name = "particleDistance", .type = PlugType::Float, .defaultValue = 2.0, .flags = kGarmentIn | AttrKeyable,
-         .doc = "Target cloth edge length, cm; 0 uses each panel's own.", .minValue = 0.0, .softMin = 0.3, .softMax = 5.0, .category = "Garment"},
+         .doc = "Target cloth edge length, cm, with small pieces (fingers, hoods) proportionally finer; 0 uses each panel's own.", .minValue = 0.0, .softMin = 0.3, .softMax = 5.0, .category = "Garment"},
         {.name = "simulate", .type = PlugType::Bool, .defaultValue = true, .flags = kGarmentIn,
          .doc = "Drape the garment; off shows the panels where they were placed.", .category = "Simulation"},
         {.name = "frames", .type = PlugType::Int, .defaultValue = int64_t(90), .flags = kGarmentIn,
@@ -1014,7 +1023,7 @@ GarmentInputs garmentInputs(Graph& g, const Node& op)
     }
     if (const double pd = op.as<double>(kParticleDistance); pd > 0.0)
         for (Panel& p : in.garment.panels)
-            p.particleDistance = float(pd / kCmPerM);
+            p.particleDistance = scaledParticleDistance(p, pd);
     in.cloth = buildClothMesh(in.garment);
     in.frames = op.as<int64_t>(kFrames);
     in.key = std::hash<std::string>{}(text);

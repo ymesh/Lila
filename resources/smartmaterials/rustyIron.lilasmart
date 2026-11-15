@@ -3,6 +3,12 @@
   "version": 1,
   "name": "Rusty Iron",
   "description": "Dark iron with rust spreading from crevices and edges (anchor: rust), rust streaks running down walls and grime.",
+  "tags": [
+    "metal",
+    "realistic",
+    "worn",
+    "dirty"
+  ],
   "kind": "material",
   "layer": {
     "id": "L8",

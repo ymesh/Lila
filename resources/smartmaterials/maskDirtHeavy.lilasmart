@@ -1,0 +1,31 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Heavy Grime",
+  "description": "Thick grime covering occluded areas and spreading well onto open surfaces.",
+  "tags": [
+    "dirt",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Grime",
+      "type": "genDirt",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.22,
+        "softness": 0.45,
+        "breakup": 0.55,
+        "aoWeight": 1.4,
+        "cavityWeight": 0.9,
+        "noiseScale": 4,
+        "seed": 141
+      }
+    }
+  ]
+}

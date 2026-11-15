@@ -1,0 +1,56 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Light Oxidation",
+  "description": "A thin, uneven oxidation tarnish over the surface.",
+  "tags": [
+    "rust",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Tarnish",
+      "type": "genRustSpread",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.3,
+        "softness": 0.8,
+        "breakup": 0.6,
+        "noiseScale": 8,
+        "seed": 441
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Variation",
+      "type": "perlin",
+      "mode": "multiply",
+      "opacity": 0.6,
+      "invert": false,
+      "values": {
+        "scale": 6,
+        "octaves": 6,
+        "seed": 442
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "levels",
+      "name": "Range",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "inLow": 0.0,
+        "inHigh": 0.8,
+        "outHigh": 0.75
+      }
+    }
+  ]
+}

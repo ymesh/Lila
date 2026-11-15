@@ -1,0 +1,29 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Moss from Above",
+  "description": "Moss growing over upward-facing surfaces in soft-edged patches.",
+  "tags": [
+    "moss",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Moss",
+      "type": "genMoss",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.55,
+        "softness": 0.3,
+        "breakup": 0.7,
+        "noiseScale": 4,
+        "seed": 501
+      }
+    }
+  ]
+}

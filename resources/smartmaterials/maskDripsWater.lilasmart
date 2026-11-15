@@ -1,0 +1,30 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Water Streaks",
+  "description": "Pale water streaks running down vertical surfaces.",
+  "tags": [
+    "drips",
+    "moisture",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Streaks",
+      "type": "genDrips",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "density": 28,
+        "length": 2,
+        "level": 0.6,
+        "softness": 0.3,
+        "seed": 801
+      }
+    }
+  ]
+}

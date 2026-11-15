@@ -199,6 +199,21 @@ TEST_CASE("texture paint tools: fill by island paints exactly the island's texel
     const image::Image all = gp::readChannel(set.id(), "Q", "metallic");
     CHECK(at(all, seamUv(0, -25, 0))[3] == 1.0f);
     CHECK(at(all, seamUv(1, 25, 0))[3] == 1.0f);
+
+    // By polygon: the quad under the click, the same texels as its island here; by triangle: half of them.
+    auto covered = [&](const char* layer) {
+        const image::Image im = gp::readChannel(set.id(), layer, "roughness");
+        size_t n = 0;
+        for (size_t i = 0; i < size_t(im.width) * size_t(im.height); ++i)
+            n += im.rgba[i * 4 + 3] == 1.0f;
+        return n;
+    };
+    for (const char* by : {"polygon", "triangle"})
+        paintStroke("Panel", by, {{"mesh", "PanelMesh"}, {"payload", {{"kind", "fill"}, {"fillBy", by}, {"at", {-25.0, 0.0, 0.0}}, {"channels", {{"roughness", 1.0}}}}}});
+    const size_t islandTexels = covered("P"), polygonTexels = covered("polygon"), triangleTexels = covered("triangle");
+    CHECK(polygonTexels == islandTexels);
+    CHECK(triangleTexels > islandTexels / 3);
+    CHECK(triangleTexels < islandTexels * 2 / 3);
 }
 
 TEST_CASE("texture paint tools: graph tips and material sources evaluate")

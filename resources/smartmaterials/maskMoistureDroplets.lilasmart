@@ -1,0 +1,71 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Condensation Droplets",
+  "description": "Small beads of condensation on side-facing surfaces.",
+  "tags": [
+    "moisture",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Beads",
+      "type": "cells",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": true,
+      "values": {
+        "scale": 30,
+        "mode": "f1",
+        "width": 0.08,
+        "jitter": 1.0,
+        "seed": 1231
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Bead Size",
+      "type": "threshold",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "threshold": 0.84,
+        "softness": 0.06
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Sides",
+      "type": "maskFacing",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": true,
+      "values": {
+        "elevation": 90.0,
+        "twoSided": false
+      },
+      "bindings": {
+        "normal": "worldNormal"
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "generator",
+      "name": "Fog",
+      "type": "perlin",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 4,
+        "seed": 1232
+      }
+    }
+  ]
+}

@@ -3,6 +3,11 @@
   "version": 1,
   "name": "Mossy Stone",
   "description": "Weathered stone with grime in the cracks and moss growing on top, standing above the stone by height.",
+  "tags": [
+    "stone",
+    "foliage",
+    "realistic"
+  ],
   "kind": "material",
   "layer": {
     "id": "L6",

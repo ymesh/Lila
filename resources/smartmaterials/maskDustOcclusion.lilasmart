@@ -1,0 +1,43 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Dust in Occlusion",
+  "description": "Fine dust gathered in sheltered, occluded areas.",
+  "tags": [
+    "dust",
+    "occlusion",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Occlusion",
+      "type": "genAoDarken",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.3,
+        "softness": 0.6
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Breakup",
+      "type": "clouds",
+      "mode": "multiply",
+      "opacity": 0.5,
+      "invert": false,
+      "values": {
+        "scale": 6,
+        "octaves": 5,
+        "mode": "soft",
+        "contrast": 1.0,
+        "seed": 201
+      }
+    }
+  ]
+}

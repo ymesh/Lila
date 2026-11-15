@@ -430,6 +430,13 @@ std::vector<Field> fields(std::string_view command, const json& fixed)
                 for (size_t i = 0; i < f.choices.size(); ++i)
                     if (auto d = it->second.find(f.choices[i]); d != it->second.end())
                         f.choiceDocs[i] = d->second;
+            if (auto it = o->choiceGroups.find(flag.name); it != o->choiceGroups.end())
+            {
+                f.choiceGroups.assign(f.choices.size(), std::string());
+                for (size_t i = 0; i < f.choices.size(); ++i)
+                    if (auto gr = it->second.find(f.choices[i]); gr != it->second.end())
+                        f.choiceGroups[i] = gr->second;
+            }
             if (auto it = o->labels.find(flag.name); it != o->labels.end())
                 f.label = it->second;
             if (auto it = o->sections.find(flag.name); it != o->sections.end())

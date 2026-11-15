@@ -1,0 +1,434 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Stylized Tree Bark",
+  "description": "Deep vertical bark ridges in warm browns with lit ridge tops and dark violet furrows.",
+  "tags": [
+    "wood",
+    "stylized"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L11",
+    "name": "Stylized Tree Bark",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Bark",
+        "kind": "procedural",
+        "graph": {
+          "name": "bark",
+          "typeVersion": 1,
+          "inputs": [
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 4,
+              "targets": [
+                "Clouds2.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 41,
+              "targets": [
+                "Directional1.seed",
+                "Clouds2.seed"
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "name": "height",
+              "type": "gray"
+            },
+            {
+              "name": "baseColor",
+              "type": "color"
+            },
+            {
+              "name": "roughness",
+              "type": "gray"
+            }
+          ],
+          "nodes": [
+            {
+              "name": "GroupInput",
+              "type": "GroupInput",
+              "position": [
+                -800,
+                0
+              ]
+            },
+            {
+              "name": "Directional1",
+              "type": "directional",
+              "position": [
+                -500,
+                0
+              ],
+              "values": {
+                "angle": 90.0,
+                "scaleAlong": 2,
+                "scaleAcross": 16,
+                "octaves": 3,
+                "persistence": 0.45,
+                "seed": 41
+              }
+            },
+            {
+              "name": "Clouds2",
+              "type": "clouds",
+              "position": [
+                -350,
+                0
+              ],
+              "values": {
+                "scale": 4,
+                "octaves": 3,
+                "mode": "ridged",
+                "seed": 41
+              }
+            },
+            {
+              "name": "Warp3",
+              "type": "warp",
+              "position": [
+                -200,
+                0
+              ],
+              "values": {
+                "mode": "gradient",
+                "intensity": 0.6
+              }
+            },
+            {
+              "name": "Colorize4",
+              "type": "colorize",
+              "position": [
+                -50,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.1,
+                      0.1,
+                      0.1,
+                      1
+                    ]
+                  ],
+                  [
+                    0.35,
+                    [
+                      0.25,
+                      0.25,
+                      0.25,
+                      1
+                    ]
+                  ],
+                  [
+                    0.5,
+                    [
+                      0.6,
+                      0.6,
+                      0.6,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.8,
+                      0.8,
+                      0.8,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Colorize5",
+              "type": "colorize",
+              "position": [
+                100,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.0072,
+                      0.0039,
+                      0.0039,
+                      1
+                    ]
+                  ],
+                  [
+                    0.38,
+                    [
+                      0.022,
+                      0.0085,
+                      0.006,
+                      1
+                    ]
+                  ],
+                  [
+                    0.5,
+                    [
+                      0.1329,
+                      0.0509,
+                      0.022,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.2957,
+                      0.1329,
+                      0.055,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Constant6",
+              "type": "constant",
+              "position": [
+                -650,
+                120
+              ],
+              "values": {
+                "value": 0.9
+              }
+            },
+            {
+              "name": "GroupOutput",
+              "type": "GroupOutput",
+              "position": [
+                400,
+                0
+              ]
+            }
+          ],
+          "links": [
+            [
+              "Directional1",
+              "out",
+              "Warp3",
+              "input"
+            ],
+            [
+              "Clouds2",
+              "out",
+              "Warp3",
+              "warp"
+            ],
+            [
+              "Warp3",
+              "out",
+              "Colorize4",
+              "input"
+            ],
+            [
+              "Colorize4",
+              "out",
+              "GroupOutput",
+              "height"
+            ],
+            [
+              "Warp3",
+              "out",
+              "Colorize5",
+              "input"
+            ],
+            [
+              "Colorize5",
+              "out",
+              "GroupOutput",
+              "baseColor"
+            ],
+            [
+              "Constant6",
+              "out",
+              "GroupOutput",
+              "roughness"
+            ]
+          ]
+        },
+        "masks": []
+      },
+      {
+        "id": "L3",
+        "name": "Colour Variation",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.1329,
+            0.1473,
+            0.0509,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M2",
+            "kind": "generator",
+            "type": "clouds",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "scale": 3,
+              "octaves": 4,
+              "persistence": 0.5,
+              "contrast": 1.4,
+              "seed": 42
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.25
+          }
+        }
+      },
+      {
+        "id": "L6",
+        "name": "Cavity Shade",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.1473,
+            0.0835,
+            0.214,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M4",
+            "kind": "generator",
+            "type": "genAoDarken",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.35,
+              "softness": 0.7
+            }
+          },
+          {
+            "id": "M5",
+            "kind": "generator",
+            "type": "genCavityGrime",
+            "mode": "lighten",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.3,
+              "softness": 0.4,
+              "breakup": 0.15,
+              "noiseScale": 6,
+              "seed": 10
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "multiply",
+            "opacity": 0.85
+          }
+        }
+      },
+      {
+        "id": "L8",
+        "name": "Edge Highlight",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.477,
+            0.2738,
+            0.1329,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M7",
+            "kind": "generator",
+            "type": "genEdgeWear",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.36,
+              "softness": 0.2,
+              "breakup": 0.2,
+              "strength": 2.2,
+              "noiseScale": 5,
+              "seed": 10
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 1.0
+          }
+        }
+      },
+      {
+        "id": "L10",
+        "name": "Top Light",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.3801,
+            0.214,
+            0.1005,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M9",
+            "kind": "generator",
+            "type": "genPositionGradient",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "start": 0.25,
+              "end": 1.0,
+              "breakup": 0.4,
+              "noiseScale": 3,
+              "seed": 0
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.2
+          }
+        }
+      }
+    ],
+    "masks": []
+  }
+}

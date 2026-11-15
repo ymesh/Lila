@@ -225,7 +225,7 @@ void MainWindow::buildMenus()
 
     // The modifier kinds fill in above these rows each time it opens.
     menu("Modifiers", "Modifiers", Area::MenuBar, [](QMenu* m) { fillAddModifierMenu(m, false); }, "", {"Model", "Level"});
-    menus::addActions("Modifiers", {"#Stack", "window.modifierStack", "modifier.applyAll", "mesh.bakeModifierStack", "#Auto Bevel",
+    menus::addActions("Modifiers", {"#Stack", "window.modifierStack", "modifier.applyAll", "mesh.bakeModifierStack", "modifier.showExportMesh", "#Auto Bevel",
                                     "select.foldEdges", "bevel.editEdges", "bevel.applyEdges", "bevel.cancelEdges", "bevel.measureThin",
                                     "bevel.clearOverrides", "bevel.showEdges"});
 

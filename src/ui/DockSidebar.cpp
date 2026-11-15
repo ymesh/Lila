@@ -1076,6 +1076,7 @@ void DockSidebars::reveal(QDockWidget* dock)
                 rememberSize(other);
                 dock->setProperty(kCoveredTab, other->objectName());
             }
+    const bool opened = dock->isHidden() && !dock->isFloating() && !isCollapsed(dock);
     if (isCollapsed(dock))
         expandGroup(dock);
     else
@@ -1085,7 +1086,7 @@ void DockSidebars::reveal(QDockWidget* dock)
     }
     // The dock layout settles after the show, so the tab, size and focus are fixed up once it has.
     QPointer<QDockWidget> d = dock;
-    QTimer::singleShot(0, this, [this, d] {
+    QTimer::singleShot(0, this, [this, d, opened] {
         if (!d || !d->isVisible())
             return;
         d->raise();
@@ -1094,11 +1095,30 @@ void DockSidebars::reveal(QDockWidget* dock)
         else
         {
             restoreSize(d);
+            if (opened)
+                sizeOpenedRow(d);
             ensureUsableSize(d);
         }
         if (QWidget* w = d->widget())
             w->setFocus(Qt::OtherFocusReason);
     });
+}
+
+void DockSidebars::sizeOpenedRow(QDockWidget* dock)
+{
+    if (mWindow->dockWidgetArea(dock) != Qt::BottomDockWidgetArea || dock->property(kHugTabExtent).toBool())
+        return;
+    if (!dock->widget() || !(dock->widget()->sizePolicy().verticalPolicy() & QSizePolicy::GrowFlag))
+        return;
+    // Joining a tab group that was already showing, it takes the group's height.
+    for (QDockWidget* other : mWindow->tabifiedDockWidgets(dock))
+        if (!other->isHidden() && !other->isFloating())
+            return;
+    int want = mWindow->height() * 3 / 10;
+    if (auto it = mTabSizes.find(dock->objectName()); it != mTabSizes.end() && it->second >= 200)
+        want = std::min(it->second, mWindow->height() * 6 / 10);
+    mWindow->resizeDocks({dock}, {want}, Qt::Vertical);
+    Q_EMIT changed();
 }
 
 void DockSidebars::ensureUsableSize(QDockWidget* dock)

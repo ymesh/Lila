@@ -58,9 +58,15 @@ void blurGpu(VulkanContext& vk, VkCommandBuffer cmd, const NativeCall& c)
 }
 } // namespace
 
-void Evaluator::State::recordLoads(VulkanContext& vk, VkCommandBuffer cmd, std::vector<compute::Buffer>& temps)
+bool Evaluator::State::recordLoads(VulkanContext& vk, VkCommandBuffer cmd, std::vector<compute::Buffer>& temps, double budgetMs)
 {
+    LILA_ZONE();
     bool any = false;
+    // A plan's first slice loading every 4K external at once holds the render thread for hundreds of ms, so loads
+    // spread over slices like passes do, at the rate they were measured to run.
+    const double maxTexels = std::max(1.0, budgetMs) * loadRate;
+    double sliceTexels = 0.0;
+    bool deferred = false;
     auto upload = [&](const image::Image& img, size_t b) {
         std::vector<uint16_t> halves;
         if (cur->half[b])
@@ -103,6 +109,19 @@ void Evaluator::State::recordLoads(VulkanContext& vk, VkCommandBuffer cmd, std::
         const size_t b = size_t(d.id);
         if (!load[b])
             continue;
+        if (!cur->unused[b])
+        {
+            const auto [lw, lh] = cur->sizes[b];
+            const Rect r = loadTarget[b] != 0 ? loadRect[b] : Rect::full();
+            const std::array<int, 4> c = r.cover(lw, lh);
+            const double texels = double(std::max(0, c[2] - c[0])) * double(std::max(0, c[3] - c[1]));
+            if (sliceTexels > 0.0 && sliceTexels + texels > maxTexels)
+            {
+                deferred = true;
+                continue;
+            }
+            sliceTexels += texels;
+        }
         load[b] = 0;
         if (cur->unused[b])
             continue;
@@ -195,6 +214,7 @@ void Evaluator::State::recordLoads(VulkanContext& vk, VkCommandBuffer cmd, std::
     }
     if (any)
         compute::memoryBarrier(cmd);
+    return !deferred;
 }
 
 void Evaluator::State::startPass(VulkanContext& vk, const Pass& p)
@@ -225,6 +245,7 @@ void Evaluator::State::startPass(VulkanContext& vk, const Pass& p)
 
 double Evaluator::State::recordPasses(VulkanContext& vk, VkCommandBuffer cmd, double budgetMs, Stats& delta)
 {
+    LILA_ZONE();
     double used = 0.0;
     uint32_t dispatches = 0;
     const VkDeviceSize uniformBytes = uniformValues.size() * sizeof(float);
@@ -510,6 +531,7 @@ double Evaluator::State::runCpuNative(VulkanContext& vk)
 
 void Evaluator::State::recordStores(VulkanContext& vk, VkCommandBuffer cmd, std::vector<compute::Buffer>& temps, Stats& delta)
 {
+    LILA_ZONE();
     for (size_t t = 0; t < cur->stores.size(); ++t)
     {
         if (!storeDirty[t])

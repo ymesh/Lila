@@ -1,0 +1,68 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Concrete Pores",
+  "description": "Air holes and pores dotted over cast concrete.",
+  "tags": [
+    "concrete",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Pores",
+      "type": "cells",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": true,
+      "values": {
+        "scale": 34,
+        "mode": "f1",
+        "width": 0.08,
+        "jitter": 1.0,
+        "seed": 1511
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Pore Size",
+      "type": "threshold",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "threshold": 0.9,
+        "softness": 0.04
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Density",
+      "type": "perlin",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 5,
+        "seed": 1512
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "filter",
+      "name": "Keep",
+      "type": "threshold",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "threshold": 0.2,
+        "softness": 0.05
+      }
+    }
+  ]
+}

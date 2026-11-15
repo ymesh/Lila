@@ -1,0 +1,285 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Worn Copper",
+  "description": "Oxidized copper darkened to brown, with verdigris in the crevices and bright worn edges.",
+  "tags": [
+    "metal",
+    "realistic",
+    "worn"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L7",
+    "name": "Worn Copper",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Copper",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.9551,
+            0.6038,
+            0.448,
+            1
+          ],
+          "roughness": 0.3,
+          "metallic": 1.0,
+          "height": 0.5
+        },
+        "masks": []
+      },
+      {
+        "id": "L2",
+        "name": "Tarnish",
+        "kind": "procedural",
+        "graph": {
+          "name": "oxide",
+          "typeVersion": 1,
+          "inputs": [
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 5,
+              "targets": [
+                "Clouds1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 321,
+              "targets": [
+                "Clouds1.seed"
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "name": "baseColor",
+              "type": "color"
+            },
+            {
+              "name": "roughness",
+              "type": "gray"
+            }
+          ],
+          "nodes": [
+            {
+              "name": "GroupInput",
+              "type": "GroupInput",
+              "position": [
+                -800,
+                0
+              ]
+            },
+            {
+              "name": "Clouds1",
+              "type": "clouds",
+              "position": [
+                -500,
+                0
+              ],
+              "values": {
+                "scale": 5,
+                "octaves": 6,
+                "persistence": 0.6,
+                "seed": 321
+              }
+            },
+            {
+              "name": "Colorize2",
+              "type": "colorize",
+              "position": [
+                -350,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.1473,
+                      0.0331,
+                      0.0134,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.448,
+                      0.1065,
+                      0.0397,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Colorize3",
+              "type": "colorize",
+              "position": [
+                -200,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.6,
+                      0.6,
+                      0.6,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.38,
+                      0.38,
+                      0.38,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "GroupOutput",
+              "type": "GroupOutput",
+              "position": [
+                400,
+                0
+              ]
+            }
+          ],
+          "links": [
+            [
+              "Clouds1",
+              "out",
+              "Colorize2",
+              "input"
+            ],
+            [
+              "Colorize2",
+              "out",
+              "GroupOutput",
+              "baseColor"
+            ],
+            [
+              "Clouds1",
+              "out",
+              "Colorize3",
+              "input"
+            ],
+            [
+              "Colorize3",
+              "out",
+              "GroupOutput",
+              "roughness"
+            ]
+          ]
+        },
+        "masks": []
+      },
+      {
+        "id": "L4",
+        "name": "Verdigris",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.0732,
+            0.2633,
+            0.1706,
+            1
+          ],
+          "metallic": 0.0,
+          "roughness": 0.9,
+          "height": 0.53
+        },
+        "masks": [
+          {
+            "id": "M3",
+            "kind": "generator",
+            "type": "genRustSpread",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "edgeWeight": 0.1,
+              "cavityWeight": 1.2,
+              "aoWeight": 0.6,
+              "level": 0.4,
+              "softness": 0.3,
+              "breakup": 0.9,
+              "noiseScale": 6,
+              "seed": 322
+            }
+          }
+        ],
+        "heightBlend": {
+          "enabled": true,
+          "sharpness": 0.6,
+          "influence": 1.0
+        }
+      },
+      {
+        "id": "L6",
+        "name": "Edge Highlight",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.9551,
+            0.5705,
+            0.3931,
+            1
+          ],
+          "roughness": 0.25,
+          "metallic": 1.0
+        },
+        "masks": [
+          {
+            "id": "M5",
+            "kind": "generator",
+            "type": "genEdgeWear",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.32,
+              "softness": 0.25,
+              "breakup": 0.6,
+              "strength": 2.2,
+              "noiseScale": 5,
+              "seed": 323
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 1.0
+          },
+          "roughness": {
+            "mode": "normal",
+            "opacity": 1.0
+          },
+          "metallic": {
+            "mode": "normal",
+            "opacity": 1.0
+          }
+        }
+      }
+    ],
+    "masks": []
+  }
+}

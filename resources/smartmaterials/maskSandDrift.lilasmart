@@ -1,0 +1,60 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Sand Drifts at the Base",
+  "description": "Sand banked up against the base and caught on ledges.",
+  "tags": [
+    "sand",
+    "ground",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Bank",
+      "type": "genPositionGradient",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "start": 0.3,
+        "end": 0.0,
+        "breakup": 0.3,
+        "noiseScale": 3,
+        "seed": 621
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Ledges",
+      "type": "genDust",
+      "mode": "lighten",
+      "opacity": 0.6,
+      "invert": false,
+      "values": {
+        "level": 0.6,
+        "softness": 0.3,
+        "seed": 622
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Grains",
+      "type": "dirt",
+      "mode": "multiply",
+      "opacity": 0.5,
+      "invert": false,
+      "values": {
+        "scale": 20,
+        "amount": 0.8,
+        "contrast": 1.5,
+        "grain": 1.0,
+        "seed": 623
+      }
+    }
+  ]
+}

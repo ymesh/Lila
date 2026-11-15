@@ -1,4 +1,5 @@
 #include "tex/Evaluate.h"
+#include "tex/PaintStrokes.h"
 
 #include "core/Paths.h"
 #include "core/Profile.h"
@@ -168,6 +169,12 @@ EvalResult evaluateCpu(const Plan& plan, const EvalOptions& options)
             auto it = options.externals.find(b.name);
             if (it != options.externals.end() && it->second.width > 0)
                 sourced[size_t(b.id)] = it->second;
+            else if (std::string channel; paint::parseExternalName(b.name, nullptr, &channel))
+            {
+                // A paint channel never painted covers nothing; a mask never painted masks nothing.
+                const float v = channel == paint::kMaskChannel ? 1.0f : 0.0f;
+                sourced[size_t(b.id)] = image::Image{1, 1, {v, v, v, v}};
+            }
             else
             {
                 image::Image img{plan.width, plan.height, std::vector<float>(size_t(plan.width) * plan.height * 4)};

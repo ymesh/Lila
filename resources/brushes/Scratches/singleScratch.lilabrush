@@ -1,0 +1,40 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Single Scratch",
+  "category": "Scratches",
+  "doc": "One thin scratch line; pressure sets the width.",
+  "brush": {
+    "falloff": "sharp",
+    "strength": 1.0,
+    "flow": 1.0,
+    "spacing": 0.05,
+    "pressureSize": true,
+    "pressureOpacity": false,
+    "pressureFlow": false,
+    "jitter": {
+      "position": 0.0,
+      "size": 0.0,
+      "opacity": 0.0,
+      "angle": 0.0
+    },
+    "angle": 0.0,
+    "followStroke": true,
+    "roundness": 0.3,
+    "alpha": "",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.4,
+    "radius": 3.0,
+    "pressureCurve": {
+      "size": {
+        "floor": 0.0,
+        "exponent": 1.5
+      }
+    }
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "normal"
+  }
+}

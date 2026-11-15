@@ -5,12 +5,14 @@
 
 #include "render/GpuImage.h"
 #include "scene/Graph.h"
+#include "tex/Graph.h"
 #include "tex/PaintStrokes.h"
 #include "tex/PaintSurface.h"
 
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -58,6 +60,8 @@ LILA_UI_API void rasterize(scene::Graph& g, scene::Node& set, const std::string&
  * cancelled by the next change to the buffer.
  */
 LILA_UI_API void beginLive(scene::Graph& g, scene::Node& set, const std::string& buffer, StrokePtr header);
+/** Builds the stroke pipelines on the render thread without waiting, so the first stroke doesn't stall on them. Nothing while the renderer is stopped. */
+LILA_UI_API void prewarm();
 LILA_UI_API void liveDabs(scene::NodeId set, const std::string& buffer, std::span<const Dab> dabs);
 /** Puts the pages back as they were before the live stroke. */
 LILA_UI_API void cancelLive(scene::NodeId set, const std::string& buffer);
@@ -158,6 +162,19 @@ LILA_UI_API void removeChangeListener(int id);
 LILA_UI_API std::string targetLayer(scene::Node& set, const std::string& requested, bool create);
 /** Points a stack paint layer's channel images at the buffer (texSetLayer), so the stack composites what is painted. */
 LILA_UI_API void wireLayer(scene::Node& set, const std::string& layer, const std::vector<std::string>& channels);
+
+/**
+ * The set's graph as it will be once a stroke paints layer's channels: layer wired to its buffers for them, or with an
+ * empty layer, a new paint layer on top wired for them (as Texture Paint adds one). nullopt when that changes nothing or
+ * the set has no usable stack. For compiling the next graph ahead of the stroke.
+ */
+LILA_UI_API std::optional<tex::Graph> wiredGraph(scene::Node& set, const std::string& layer, const std::vector<std::string>& channels);
+
+/**
+ * Builds in the background what the first stroke on a mesh would otherwise build as it starts: the mesh's ray tree, its
+ * paint meshes (whole and for the set's material) and the surface atlases of the set's tiles. Main thread; returns at once.
+ */
+LILA_UI_API void prewarmTarget(scene::Graph& g, scene::Node& set, const std::string& meshPath);
 
 /** texPaintStroke, texRasterize, texFlattenLayer, texClearLayer, texPaintInfo; and installSync. */
 LILA_UI_API void registerCommands();

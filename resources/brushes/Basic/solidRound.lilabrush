@@ -1,0 +1,33 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Solid Round",
+  "category": "Basic",
+  "doc": "A round tip with no falloff at all.",
+  "brush": {
+    "falloff": "constant",
+    "strength": 1.0,
+    "flow": 1.0,
+    "spacing": 0.06,
+    "pressureSize": false,
+    "pressureOpacity": false,
+    "pressureFlow": false,
+    "jitter": {
+      "position": 0.0,
+      "size": 0.0,
+      "opacity": 0.0,
+      "angle": 0.0
+    },
+    "angle": 0.0,
+    "followStroke": false,
+    "roundness": 1.0,
+    "alpha": "",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.0
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "normal"
+  }
+}

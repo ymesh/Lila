@@ -191,6 +191,22 @@ std::vector<const CommandDef*> all()
     return {defs.begin(), defs.end()};
 }
 
+namespace
+{
+std::string sCoalesceKey;
+struct LastCoalesced
+{
+    std::string key;
+    std::string command;
+    uint64_t step = 0;
+} sLastCoalesced;
+} // namespace
+
+void setCoalesceKey(std::string key)
+{
+    sCoalesceKey = std::move(key);
+}
+
 json execute(std::string_view name, const json& call, CallSource source)
 {
     LILA_ZONE();
@@ -215,15 +231,32 @@ json execute(std::string_view name, const json& call, CallSource source)
     ++gExecuteDepth;
     gRunning.push_back(&args);
     const uint64_t cancelsBefore = progress::cancelledCount();
+    bool coalesced = false;
+    const uint64_t stepBefore = UndoStack::get().newestId();
     try
     {
         if (def->undoable)
         {
+            UndoStack& undo = UndoStack::get();
+            // The same scrolled control running the same command again replaces its last step instead of adding one.
+            const bool coalesce = top && source == CallSource::UI && !sCoalesceKey.empty();
+            const bool reopened = coalesce && sLastCoalesced.key == sCoalesceKey && sLastCoalesced.command == def->name &&
+                                  undo.newestId() == sLastCoalesced.step && !undo.chunkOpen() && undo.reopenNewest(def->name);
+            struct CloseReopened
+            {
+                bool on;
+                ~CloseReopened()
+                {
+                    if (on)
+                        UndoStack::get().closeChunk();
+                }
+            } closeReopened{reopened};
             UndoChunk chunk(def->name);
             const size_t mark = UndoStack::get().openEdits();
             try
             {
                 result = def->run(args);
+                coalesced = coalesce;
             }
             catch (...)
             {
@@ -250,6 +283,9 @@ json execute(std::string_view name, const json& call, CallSource source)
     }
     gRunning.pop_back();
     --gExecuteDepth;
+    // Only a step this run made can be folded into next time: a run that changed nothing leaves an older step newest.
+    if (coalesced)
+        sLastCoalesced = UndoStack::get().newestId() > stepBefore ? LastCoalesced{sCoalesceKey, def->name, UndoStack::get().newestId()} : LastCoalesced{};
     if (top && !executeListeners().empty())
         notifyExecute({name, call, source, true, true});
 

@@ -1,0 +1,44 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Dirt in Cavities",
+  "description": "Grime packed into crevices and recesses, lightly broken up.",
+  "tags": [
+    "dirt",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Cavity Grime",
+      "type": "genCavityGrime",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.25,
+        "softness": 0.5,
+        "breakup": 0.4,
+        "noiseScale": 12,
+        "seed": 101
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Spill",
+      "type": "genDirt",
+      "mode": "lighten",
+      "opacity": 0.7,
+      "invert": false,
+      "values": {
+        "level": 0.4,
+        "softness": 0.6,
+        "breakup": 0.6,
+        "seed": 102
+      }
+    }
+  ]
+}

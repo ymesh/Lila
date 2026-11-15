@@ -1,0 +1,29 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Light Dusting",
+  "description": "A faint, thin dusting on top surfaces for a barely used look.",
+  "tags": [
+    "dust",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Dust",
+      "type": "genDust",
+      "mode": "normal",
+      "opacity": 0.6,
+      "invert": false,
+      "values": {
+        "level": 0.55,
+        "softness": 0.6,
+        "breakup": 0.5,
+        "noiseScale": 8,
+        "seed": 221
+      }
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 // The Tailor menu, and the garment's Attribute Editor section listing its panels and seams.
 
+#include "Blocks.h"
 #include "Tailor.h"
 #include "TailorCore.h"
 
@@ -150,6 +151,16 @@ void registerUi(ext::Context& ctx)
                               {.order = {"as", "contentPath", "skeleton", "skeletalMesh", "material"},
                                .labels = {{"as", "Send As"}},
                                .choices = {{"as", {{"clothAsset", "Cloth Asset"}, {"skeletalMesh", "Skeletal Mesh + Cloth"}, {"skinnedMesh", "Skinned Mesh, No Cloth"}}}}});
+    {
+        ops::options::Override blockBox;
+        for (const Block& b : blocks())
+        {
+            blockBox.choices["block"].push_back({b.id, b.label});
+            blockBox.choiceGroups["block"][b.id] = b.category;
+        }
+        blockBox.editors = {{"block", "grouped"}};
+        ops::options::setOverride("tailorCreateBlock", std::move(blockBox));
+    }
     ops::options::setOverride("tailorBake", {.labels = {{"clothMask", "Cloth Mask"}}});
     actions::add(ctx, {.id = "tailor.live", .label = "Live Drape", .category = "Tailor",
                        .doc = "Keep the selected garment simulating in real time.", .python = "tailorLive('Garment')",

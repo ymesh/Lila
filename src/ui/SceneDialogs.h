@@ -107,8 +107,8 @@ private:
     /** Drops the scene from the recent files pref and the list. */
     void removeRecent(QTreeWidgetItem* item);
     /**
-     * The band over the examples: the news card, opening on the newest item not yet seen, and beside it the showcase
-     * entry shown fewest times, or an invitation to send work in while the feed has none running.
+     * The middle column: the news card, opening on the newest item not yet seen, and under it the showcase entry shown
+     * fewest times, or a placeholder while the feed has none running.
      */
     void showNews(const std::vector<news::Item>& items);
     /** Shows the news item at mNewsShown. */
@@ -119,7 +119,7 @@ private:
 
     Hooks mHooks;
     QWidget* mNews = nullptr;
-    QHBoxLayout* mNewsBand = nullptr;
+    QVBoxLayout* mNewsBand = nullptr;
     QPointer<QWidget> mNewsCard;
     QPointer<QWidget> mShowcaseCard;
     std::vector<std::string> mSeenBefore;
@@ -129,7 +129,6 @@ private:
     size_t mNewsShown = 0;
     QTreeWidget* mList = nullptr;
     QListWidget* mExamples = nullptr;
-    QWidget* mExamplesArea = nullptr;
     std::vector<io::examples::Example> mExampleList;
     std::vector<io::samples::Sample> mSampleList;
     QElapsedTimer mReclaimFocus;

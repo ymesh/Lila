@@ -1,0 +1,462 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Poured Concrete",
+  "description": "Grey cast concrete with tiny air pores, blotchy curing stains and faint water marks.",
+  "tags": [
+    "concrete",
+    "realistic"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L6",
+    "name": "Poured Concrete",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Concrete",
+        "kind": "procedural",
+        "graph": {
+          "name": "concrete",
+          "typeVersion": 1,
+          "inputs": [
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 6,
+              "targets": [
+                "Clouds1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Cells Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 70,
+              "targets": [
+                "Cells3.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 411,
+              "targets": [
+                "Clouds1.seed",
+                "Cells3.seed"
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "name": "baseColor",
+              "type": "color"
+            },
+            {
+              "name": "height",
+              "type": "gray"
+            },
+            {
+              "name": "roughness",
+              "type": "gray"
+            }
+          ],
+          "nodes": [
+            {
+              "name": "GroupInput",
+              "type": "GroupInput",
+              "position": [
+                -800,
+                0
+              ]
+            },
+            {
+              "name": "Clouds1",
+              "type": "clouds",
+              "position": [
+                -500,
+                0
+              ],
+              "values": {
+                "scale": 6,
+                "octaves": 6,
+                "persistence": 0.6,
+                "seed": 411
+              }
+            },
+            {
+              "name": "Colorize2",
+              "type": "colorize",
+              "position": [
+                -350,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.1193,
+                      0.1193,
+                      0.1128,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.2633,
+                      0.2633,
+                      0.2429,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Cells3",
+              "type": "cells",
+              "position": [
+                -200,
+                0
+              ],
+              "values": {
+                "scale": 70,
+                "mode": "f1",
+                "seed": 412
+              }
+            },
+            {
+              "name": "Threshold4",
+              "type": "threshold",
+              "position": [
+                -50,
+                0
+              ],
+              "values": {
+                "threshold": 0.08,
+                "softness": 0.04
+              }
+            },
+            {
+              "name": "Invert5",
+              "type": "invert",
+              "position": [
+                100,
+                0
+              ],
+              "values": {}
+            },
+            {
+              "name": "Color6",
+              "type": "color",
+              "position": [
+                -650,
+                120
+              ],
+              "values": {
+                "color": [
+                  0.0272,
+                  0.0272,
+                  0.0272,
+                  1
+                ]
+              }
+            },
+            {
+              "name": "Blend7",
+              "type": "blend",
+              "position": [
+                -500,
+                120
+              ],
+              "values": {
+                "mode": "normal",
+                "opacity": 1.0
+              }
+            },
+            {
+              "name": "Colorize8",
+              "type": "colorize",
+              "position": [
+                -350,
+                120
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.5,
+                      0.5,
+                      0.5,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.35,
+                      0.35,
+                      0.35,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Colorize9",
+              "type": "colorize",
+              "position": [
+                -200,
+                120
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.49,
+                      0.49,
+                      0.49,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.51,
+                      0.51,
+                      0.51,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Blend10",
+              "type": "blend",
+              "position": [
+                -50,
+                120
+              ],
+              "values": {
+                "mode": "overlay",
+                "opacity": 1.0
+              }
+            },
+            {
+              "name": "Colorize11",
+              "type": "colorize",
+              "position": [
+                100,
+                120
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.95,
+                      0.95,
+                      0.95,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.82,
+                      0.82,
+                      0.82,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "GroupOutput",
+              "type": "GroupOutput",
+              "position": [
+                400,
+                0
+              ]
+            }
+          ],
+          "links": [
+            [
+              "Clouds1",
+              "out",
+              "Colorize2",
+              "input"
+            ],
+            [
+              "Cells3",
+              "out",
+              "Threshold4",
+              "input"
+            ],
+            [
+              "Threshold4",
+              "out",
+              "Invert5",
+              "input"
+            ],
+            [
+              "Color6",
+              "out",
+              "Blend7",
+              "foreground"
+            ],
+            [
+              "Colorize2",
+              "out",
+              "Blend7",
+              "background"
+            ],
+            [
+              "Invert5",
+              "out",
+              "Blend7",
+              "mask"
+            ],
+            [
+              "Blend7",
+              "out",
+              "GroupOutput",
+              "baseColor"
+            ],
+            [
+              "Invert5",
+              "out",
+              "Colorize8",
+              "input"
+            ],
+            [
+              "Clouds1",
+              "out",
+              "Colorize9",
+              "input"
+            ],
+            [
+              "Colorize8",
+              "out",
+              "Blend10",
+              "foreground"
+            ],
+            [
+              "Colorize9",
+              "out",
+              "Blend10",
+              "background"
+            ],
+            [
+              "Blend10",
+              "out",
+              "GroupOutput",
+              "height"
+            ],
+            [
+              "Clouds1",
+              "out",
+              "Colorize11",
+              "input"
+            ],
+            [
+              "Colorize11",
+              "out",
+              "GroupOutput",
+              "roughness"
+            ]
+          ]
+        },
+        "masks": []
+      },
+      {
+        "id": "L3",
+        "name": "Water Marks",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.0732,
+            0.0732,
+            0.0684,
+            1
+          ],
+          "roughness": 0.75
+        },
+        "masks": [
+          {
+            "id": "M2",
+            "kind": "generator",
+            "type": "genDrips",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "density": 20,
+              "length": 3,
+              "level": 0.6,
+              "seed": 413
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.35
+          },
+          "roughness": {
+            "mode": "normal",
+            "opacity": 0.35
+          }
+        }
+      },
+      {
+        "id": "L5",
+        "name": "Dirt",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.0331,
+            0.0272,
+            0.0196,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M4",
+            "kind": "generator",
+            "type": "genDirt",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.4,
+              "seed": 414
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.5
+          }
+        }
+      }
+    ],
+    "masks": []
+  }
+}

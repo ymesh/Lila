@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
+#include <map>
 #include <numeric>
 #include <unordered_map>
 
@@ -742,7 +743,39 @@ void decimateSurface(Surface& s, Index targetTris)
     s.tris.resize(count / 3);
     for (size_t t = 0; t < count / 3; ++t)
         s.tris[t] = {dst[t * 3], dst[t * 3 + 1], dst[t * 3 + 2]};
+    dropFins(s);
     compactSurface(s);
+}
+
+int dropFins(Surface& s)
+{
+    auto sorted = [](std::array<Index, 3> t) {
+        std::sort(t.begin(), t.end());
+        return t;
+    };
+    std::map<std::array<Index, 3>, size_t> first;
+    std::vector<uint8_t> dead(s.tris.size(), 0);
+    for (size_t t = 0; t < s.tris.size(); ++t)
+    {
+        const auto& f = s.tris[t];
+        if (f[0] == f[1] || f[1] == f[2] || f[2] == f[0])
+        {
+            dead[t] = 1;
+            continue;
+        }
+        const auto [it, fresh] = first.try_emplace(sorted(f), t);
+        if (fresh)
+            continue;
+        dead[it->second] = dead[t] = 1;
+        first.erase(it);
+    }
+    size_t kept = 0;
+    for (size_t t = 0; t < s.tris.size(); ++t)
+        if (!dead[t])
+            s.tris[kept++] = s.tris[t];
+    const int dropped = int(s.tris.size() - kept);
+    s.tris.resize(kept);
+    return dropped;
 }
 
 void compactSurface(Surface& s)

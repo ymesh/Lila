@@ -832,6 +832,74 @@ struct BorderTurn
     std::complex<double> w;
 };
 
+/** Where the least rotation of a cyclic sequence starts. */
+size_t leastRotation(const std::vector<std::pair<int64_t, int64_t>>& s)
+{
+    const size_t n = s.size();
+    size_t i = 0, j = 1, k = 0;
+    while (i < n && j < n && k < n)
+    {
+        const auto& a = s[(i + k) % n];
+        const auto& b = s[(j + k) % n];
+        if (a == b)
+        {
+            ++k;
+            continue;
+        }
+        (a > b ? i : j) += k + 1;
+        if (i == j)
+            ++j;
+        k = 0;
+    }
+    return std::min(i, j);
+}
+
+/**
+ * Puts a border loop (its groups, and per edge its surface length l and proxy length u) in the order its edge lengths
+ * single out: of every start and both directions, the one whose sequence of lengths sorts first. True when that walks the
+ * loop backwards. An island and its mirror image, which walk their borders opposite ways, come out in the same order.
+ */
+bool canonicalLoop(std::vector<Index>& loop, std::vector<double>& l, std::vector<double>& u)
+{
+    const size_t n = loop.size();
+    double longest = 0.0;
+    for (size_t i = 0; i < n; ++i)
+        longest = std::max({longest, l[i], u[i]});
+    if (!(longest > 0.0))
+        return false;
+    // Coarse enough that a mirror image's float noise rounds away.
+    const double unit = longest * 1e-6;
+    std::vector<std::pair<int64_t, int64_t>> fwd(n), back(n);
+    for (size_t i = 0; i < n; ++i)
+        fwd[i] = {std::llround(l[i] / unit), std::llround(u[i] / unit)};
+    // Backwards, edge i runs from group n - 1 - i to the one before it.
+    auto edgeBack = [n](size_t i) { return (2 * n - 2 - i) % n; };
+    for (size_t i = 0; i < n; ++i)
+        back[i] = fwd[edgeBack(i)];
+    const size_t sf = leastRotation(fwd), sb = leastRotation(back);
+    bool reversed = false;
+    for (size_t k = 0; k < n; ++k)
+        if (const auto &a = fwd[(sf + k) % n], &b = back[(sb + k) % n]; a != b)
+        {
+            reversed = b < a;
+            break;
+        }
+    std::vector<Index> loop2(n);
+    std::vector<double> l2(n), u2(n);
+    for (size_t k = 0; k < n; ++k)
+    {
+        const size_t g = reversed ? n - 1 - (sb + k) % n : (sf + k) % n;
+        const size_t e = reversed ? edgeBack((sb + k) % n) : (sf + k) % n;
+        loop2[k] = loop[g];
+        l2[k] = l[e];
+        u2[k] = u[e];
+    }
+    loop = std::move(loop2);
+    l = std::move(l2);
+    u = std::move(u2);
+    return reversed;
+}
+
 /**
  * Where an island's border bunches up in uv (a bevel's corner points all carry the one cage uv of the corner they
  * replaced, and subdivision keeps uv corners while it rounds the surface), the run and enough of its neighbours spread
@@ -918,6 +986,9 @@ std::vector<BorderBlend> respaceBorder(const Mesh& m, const Islands& is, Index i
         }
         if (!known)
             continue;
+        // A mirrored island walks its border the other way, and the scan below depends on where it starts and which way
+        // it goes: the one order the edge lengths single out respaces a mirrored island as its mirror.
+        const double handed = canonicalLoop(loop, l, u) ? -1.0 : 1.0;
         auto bad = [&](size_t i) { return u[i] < kBunched * l[i]; };
         // Start on the edge farthest from any run, so no window wraps past the scan's start.
         const size_t far = n + 1;
@@ -984,7 +1055,7 @@ std::vector<BorderBlend> respaceBorder(const Mesh& m, const Islands& is, Index i
         }
         std::sort(windows.begin(), windows.end());
         std::vector<double> share, targets, param;
-        const double orient = apx < 0.0 ? -1.0 : 1.0;
+        const double orient = handed * (apx < 0.0 ? -1.0 : 1.0);
         // The uv polyline turns where the cage's border turns, and so does the proxy. Where the window's own border takes
         // that turn at one point on the surface (a bevel's corner patch can move it along the border), that point lands on
         // the polyline's turn and the others spread on either side of it.
@@ -1046,7 +1117,7 @@ std::vector<BorderBlend> respaceBorder(const Mesh& m, const Islands& is, Index i
         };
         // A notch turns sharply into the island at a bunch and back at its next sharp turn while the proxy runs straight;
         // left on the polyline, the fill folds the cells beside the first turn onto the border.
-        const double sideUv = auv < 0.0 ? -1.0 : 1.0;
+        const double sideUv = handed * (auv < 0.0 ? -1.0 : 1.0);
         auto turnNotch = [&](size_t a, size_t b) {
             std::vector<double> arc(b - a + 2, 0.0);
             double reach = 0.0;
@@ -1680,7 +1751,83 @@ void addSpacingProxies(Mesh& m)
     }
 }
 
-/** Replaces each uv island's interior with the harmonic fill of its border, in every layer using those islands. */
+/**
+ * Whether the fit would fold the island: a face corner turning against the island's winding that turned with it before.
+ * A folded island puts two of its faces on the same texels.
+ */
+bool foldsIsland(const Mesh& m, const Islands& is, Index island, std::span<const glm::vec2> set, std::span<const BorderBlend> blends,
+                 std::span<const BorderTurn> turns, std::span<const CornerApex> apexes, const System& s, const Factor* f)
+{
+    std::unordered_map<Index, glm::dvec2> fitted;
+    auto value = [&](Index g) {
+        const auto it = fitted.find(g);
+        return it != fitted.end() ? it->second : groupValue(set, is.groupCorners[g]);
+    };
+    // The same steps, in the same order, as the fit applies them.
+    std::vector<glm::dvec2> moved(blends.size());
+    for (size_t k = 0; k < blends.size(); ++k)
+        moved[k] = glm::mix(value(blends[k].a), value(blends[k].b), blends[k].t);
+    for (size_t k = 0; k < blends.size(); ++k)
+        fitted[blends[k].group] = moved[k];
+    moved.resize(turns.size());
+    for (size_t k = 0; k < turns.size(); ++k)
+    {
+        const std::complex<double> v = cx(value(turns[k].group)) * turns[k].w + cx(value(turns[k].pivot)) * (1.0 - turns[k].w);
+        moved[k] = {v.real(), v.imag()};
+    }
+    for (size_t k = 0; k < turns.size(); ++k)
+        fitted[turns[k].group] = moved[k];
+    moved.resize(apexes.size());
+    for (size_t k = 0; k < apexes.size(); ++k)
+    {
+        const std::complex<double> v = cx(value(apexes[k].group)) + (cx(value(apexes[k].b)) - cx(value(apexes[k].a))) * apexes[k].lift;
+        moved[k] = {v.real(), v.imag()};
+    }
+    for (size_t k = 0; k < apexes.size(); ++k)
+        fitted[apexes[k].group] = moved[k];
+    if (f)
+    {
+        Eigen::MatrixXd xb(Eigen::Index(s.border.size()), 2);
+        for (size_t k = 0; k < s.border.size(); ++k)
+        {
+            const glm::dvec2 v = value(s.border[k]);
+            xb(Eigen::Index(k), 0) = v.x;
+            xb(Eigen::Index(k), 1) = v.y;
+        }
+        const Eigen::MatrixXd xi = f->ldlt.solve(s.b * xb);
+        if (xi.allFinite())
+            for (size_t k = 0; k < s.interior.size(); ++k)
+                fitted[s.interior[k]] = {xi(Eigen::Index(k), 0), xi(Eigen::Index(k), 1)};
+    }
+
+    // A corner that turned the island's way before and turns against it after has folded its face over a neighbour.
+    double area = 0.0;
+    for (Index face : is.faces[island])
+    {
+        const std::vector<Index> fc = m.faceCorners(face);
+        for (size_t i = 1; i + 1 < fc.size(); ++i)
+        {
+            const glm::dvec2 u0 = set[fc[0]], u1 = glm::dvec2(set[fc[i]]) - u0, u2 = glm::dvec2(set[fc[i + 1]]) - u0;
+            area += u1.x * u2.y - u1.y * u2.x;
+        }
+    }
+    const double side = area < 0.0 ? -1.0 : 1.0;
+    auto turn = [side](glm::dvec2 a, glm::dvec2 b, glm::dvec2 c) { return side * ((b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x)); };
+    bool folds = false;
+    for (Index face : is.faces[island])
+        m.forEachFaceCorner(face, [&](Index c) {
+            const Index a = m.cornerPrev(c), b = m.cornerNext(c);
+            if (turn(set[a], set[c], set[b]) > 0.0 &&
+                turn(value(is.groupOfCorner[a]), value(is.groupOfCorner[c]), value(is.groupOfCorner[b])) < 0.0)
+                folds = true;
+        });
+    return folds;
+}
+
+/**
+ * Replaces each uv island's interior with the harmonic fill of its border, in every layer using those islands. An island
+ * the fit would fold over itself keeps its blended uvs.
+ */
 void fitSurface(Mesh& m)
 {
     LILA_ZONE();
@@ -1724,6 +1871,13 @@ void fitSurface(Mesh& m)
             std::vector<glm::vec2> moved(blends.size());
             // The island's orientation, all openCorners reads of the layout, is the same before and after respacing.
             const std::vector<CornerApex> apexes = openCorners(m, is, island, set, blends);
+            const System s = systemOf(m, is, island);
+            std::shared_ptr<const Factor> f;
+            if (!s.interior.empty() && !s.border.empty())
+                if (f = factorCache().get(s.a); !f->ok)
+                    f.reset();
+            if (foldsIsland(m, is, island, set, blends, turns, apexes, s, f.get()))
+                return;
             if (!record)
                 for (std::span<glm::vec2> uv : spans)
                 {
@@ -1743,11 +1897,6 @@ void fitSurface(Mesh& m)
                         for (Index c : is.groupCorners[turns[k].group])
                             uv[c] = turned[k];
                 }
-            const System s = systemOf(m, is, island);
-            std::shared_ptr<const Factor> f;
-            if (!s.interior.empty() && !s.border.empty())
-                if (f = factorCache().get(s.a); !f->ok)
-                    f.reset();
             if (record)
             {
                 record->islands[island] = recordIsland(is, blends, turns, apexes, s, f);

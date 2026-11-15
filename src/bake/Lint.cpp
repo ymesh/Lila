@@ -701,6 +701,121 @@ void triangulation(scene::Graph& g, const GroupInputs& gi, LintReport& r)
     }
 }
 
+/** A shown face whose texel, read at the face centre's own uv, was baked at least this many texels away along the surface is counted. */
+constexpr double kPreviewSlideTexels = 16.0;
+
+/**
+ * A low shown without the modifiers its export runs (a Subdivision left off in the viewport) previews its maps on a mesh
+ * they were not baked for: where the exported uvs differ from the shown mesh's, the viewport reads texels baked somewhere
+ * else. Per shown face, the point the export has at the face centre's uv against the centre itself, along the surface.
+ */
+void previewMesh(scene::Graph& g, const GroupInputs& gi, const ProjectSettings& ps, LintReport& r)
+{
+    for (const std::string& name : gi.settings.lows)
+    {
+        scene::Node* n = meshNamed(g, name);
+        if (!n)
+            continue;
+        const scene::MeshPtr shown = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh), exported = exportedMesh(g, n->id());
+        if (!shown || !exported || shown == exported)
+            continue;
+        const std::span<const glm::vec2> uvShown = shown->cornerAttrs().get<glm::vec2>("uv0"), uvExported = exported->cornerAttrs().get<glm::vec2>("uv0");
+        if (uvShown.empty() || uvExported.empty())
+            continue;
+        std::string exportOnly;
+        for (scene::NodeId id : scene::modifiers::stack(g, n->id()))
+            if (const scene::ModifierNode* m = scene::modifiers::asModifier(g.node(id)); m && m->as<bool>(m->enabledAttr) != scene::modifiers::exportEnabled(*m))
+                exportOnly += (exportOnly.empty() ? "" : ", ") + m->name();
+        if (exportOnly.empty())
+            continue;
+
+        const geo::Triangulation tris = geo::triangulate(*exported);
+        // Exported triangles by the uv cells their bounds touch.
+        constexpr int kCells = 256;
+        std::vector<std::vector<geo::Index>> cells(size_t(kCells) * kCells);
+        auto cell = [](float v) { return std::clamp(int(std::floor((v - std::floor(v)) * kCells)), 0, kCells - 1); };
+        double uvA = 0.0, worldA = 0.0;
+        for (geo::Index t = 0; t < tris.triangleCount(); ++t)
+        {
+            const geo::Index* c = &tris.corners[size_t(t) * 3];
+            const glm::vec2 a = uvExported[c[0]], b = uvExported[c[1]], d = uvExported[c[2]];
+            const glm::vec2 lo = glm::min(a, glm::min(b, d)), hi = glm::max(a, glm::max(b, d));
+            // A triangle across a tile border is left out: its uvs wrap.
+            if (std::floor(lo.x) != std::floor(hi.x) || std::floor(lo.y) != std::floor(hi.y))
+                continue;
+            for (int y = cell(lo.y); y <= cell(hi.y); ++y)
+                for (int x = cell(lo.x); x <= cell(hi.x); ++x)
+                    cells[size_t(y) * kCells + x].push_back(t);
+            uvA += 0.5 * std::abs(double(b.x - a.x) * (d.y - a.y) - double(d.x - a.x) * (b.y - a.y));
+            worldA += 0.5 * glm::length(glm::cross(exported->position(exported->cornerPoint(c[1])) - exported->position(exported->cornerPoint(c[0])),
+                                                   exported->position(exported->cornerPoint(c[2])) - exported->position(exported->cornerPoint(c[0]))));
+        }
+        if (!(uvA > 0.0) || !(worldA > 0.0))
+            continue;
+        const double texelsPerCm = std::sqrt(uvA * double(ps.output.width) * ps.output.height / worldA);
+        const geo::MeshBvh bvh(*exported);
+
+        size_t off = 0;
+        double worst = 0.0;
+        json faces = json::array();
+        for (geo::Index f = 0; f < shown->faceCapacity(); ++f)
+        {
+            if (!shown->faceValid(f))
+                continue;
+            glm::dvec3 centre(0.0);
+            glm::dvec2 uv(0.0);
+            double count = 0.0;
+            shown->forEachFaceCorner(f, [&](geo::Index c) {
+                centre += shown->position(shown->cornerPoint(c));
+                uv += glm::dvec2(uvShown[c]);
+                count += 1.0;
+            });
+            centre /= count;
+            uv /= count;
+            // Where the export has that uv; the nearest, where its islands overlap.
+            double slide = -1.0;
+            for (geo::Index t : cells[size_t(cell(float(uv.y))) * kCells + cell(float(uv.x))])
+            {
+                const geo::Index* c = &tris.corners[size_t(t) * 3];
+                const glm::dvec2 a = uvExported[c[0]], e1 = glm::dvec2(uvExported[c[1]]) - a, e2 = glm::dvec2(uvExported[c[2]]) - a, d = uv - a;
+                const double det = e1.x * e2.y - e1.y * e2.x;
+                if (std::abs(det) < 1e-18)
+                    continue;
+                const double u = (d.x * e2.y - d.y * e2.x) / det, v = (e1.x * d.y - e1.y * d.x) / det;
+                if (u < -1e-6 || v < -1e-6 || u + v > 1.0 + 1e-6)
+                    continue;
+                const glm::dvec3 pa = exported->position(exported->cornerPoint(c[0]));
+                const glm::dvec3 at = pa + (exported->position(exported->cornerPoint(c[1])) - pa) * u + (exported->position(exported->cornerPoint(c[2])) - pa) * v;
+                const double far = glm::length(at - centre);
+                slide = slide < 0.0 ? far : std::min(slide, far);
+            }
+            if (slide < 0.0)
+                continue;
+            // The export's surface sits off the shown one where it rounds it; only the way along the surface is a slide.
+            geo::BvhClosest near;
+            if (bvh.closestPoint(centre, near))
+                slide = std::sqrt(std::max(0.0, slide * slide - near.distance * near.distance));
+            const double texels = slide * texelsPerCm;
+            if (texels < kPreviewSlideTexels)
+                continue;
+            ++off;
+            worst = std::max(worst, texels);
+            if (faces.size() < kMaxComponents)
+                faces.push_back(f);
+        }
+        if (off)
+        {
+            char buf[320];
+            std::snprintf(buf, sizeof buf,
+                          "%zu face(s) of the mesh as shown read texels baked up to %.0f texels (%.2g cm) away: %s runs on export only. "
+                          "Show Export Mesh previews the maps on the mesh they were baked for",
+                          off, worst, worst / texelsPerCm, exportOnly.c_str());
+            r.issues.push_back({"previewMesh", "warning", gi.name, n->path(), buf,
+                                {{"faces", off}, {"maxTexels", worst}, {"maxCm", worst / texelsPerCm}, {"faceIds", faces}, {"exportOnly", exportOnly}}});
+        }
+    }
+}
+
 void cageTopology(scene::Graph& g, const GroupInputs& gi, LintReport& r)
 {
     const GroupSettings& s = gi.settings;
@@ -759,7 +874,8 @@ std::vector<std::string> LintReport::lines() const
 const std::vector<std::string>& lintChecks()
 {
     static const std::vector<std::string> checks = {"hardEdges",  "uvOverlap", "uvMissing",       "texelDensity", "mirroredTangents",
-                                                    "highRange", "cageContainment", "triangulation", "cageTopology"};
+                                                    "highRange", "cageContainment", "triangulation", "cageTopology",
+                                                    "previewMesh"};
     return checks;
 }
 
@@ -795,7 +911,7 @@ LintReport lintInputs(const BakeInputs& in, const ProjectSettings& ps, const Bac
     return r;
 }
 
-void lintScene(scene::Graph& g, const BakeInputs& in, LintReport& r, const LintOptions& o)
+void lintScene(scene::Graph& g, const BakeInputs& in, const ProjectSettings& ps, LintReport& r, const LintOptions& o)
 {
     for (const GroupInputs& gi : in.groups)
     {
@@ -804,6 +920,8 @@ void lintScene(scene::Graph& g, const BakeInputs& in, LintReport& r, const LintO
             triangulation(g, gi, r);
         if (wanted(o, "cageTopology"))
             cageTopology(g, gi, r);
+        if (wanted(o, "previewMesh"))
+            previewMesh(g, gi, ps, r);
     }
 }
 
@@ -899,7 +1017,7 @@ void explainModifierIssues(scene::Graph& g, LintReport& r, const ProjectSettings
 LintReport lint(scene::Graph& g, const BakeInputs& in, const ProjectSettings& ps, const Backend* backend, const LintOptions& o)
 {
     LintReport r = lintInputs(in, ps, backend, o);
-    lintScene(g, in, r, o);
+    lintScene(g, in, ps, r, o);
     explainModifierIssues(g, r, ps);
     return r;
 }

@@ -157,6 +157,12 @@ LILA_FOUNDATION_API std::vector<const CommandDef*> all();
 /** `call` is {"args": [...], flag: value, ...}, flags by long or short name. Main thread only. Throws CommandError. */
 LILA_FOUNDATION_API json execute(std::string_view name, const json& call, CallSource source = CallSource::Script);
 
+/**
+ * Names the UI control being scrolled (empty when none). While it stays the same, repeated undoable UI calls of one
+ * command fold into the newest undo step, so scrolling a field is one step back to where it started.
+ */
+LILA_FOUNDATION_API void setCoalesceKey(std::string key);
+
 /** The arguments of the innermost command running now, or null outside any. */
 LILA_FOUNDATION_API const Args* currentArgs();
 

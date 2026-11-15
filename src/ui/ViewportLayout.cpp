@@ -5,26 +5,65 @@
 #include "ops/Command.h"
 #include "scene/Graph.h"
 #include "scene/Isolation.h"
+#include "ui/MenuContext.h"
 #include "ui/NodeLookup.h"
+#include "ui/TextureGraphUi.h"
 #include "ui/ViewportToolbar.h"
 #include "ui/ViewportWidget.h"
 
 #include <QCursor>
 #include <QEvent>
 #include <QGridLayout>
+#include <QHBoxLayout>
 #include <QPointer>
+#include <QSplitter>
+
+#include <algorithm>
 
 namespace lila::ui
 {
+namespace
+{
+constexpr const char* kPrefTextureView = "/viewport/textureView";
+
+ViewportLayout*& mainLayout()
+{
+    static ViewportLayout* layout = nullptr;
+    return layout;
+}
+} // namespace
+
+ViewportLayout* ViewportLayout::main() { return mainLayout(); }
+
+ViewportLayout* ViewportLayout::of(const QWidget* inside)
+{
+    for (const QWidget* w = inside; w; w = w->parentWidget())
+        if (auto* layout = qobject_cast<const ViewportLayout*>(w))
+            return const_cast<ViewportLayout*>(layout);
+    return nullptr;
+}
+
 ViewportLayout::ViewportLayout(QWidget* parent) : QWidget(parent)
 {
-    mGrid = new QGridLayout(this);
+    if (!mainLayout())
+        mainLayout() = this;
+    connect(this, &QObject::destroyed, [this] {
+        if (mainLayout() == this)
+            mainLayout() = nullptr;
+    });
+    auto* root = new QHBoxLayout(this);
+    root->setContentsMargins(0, 0, 0, 0);
+    mSplit = new QSplitter(Qt::Horizontal, this);
+    mSplit->setChildrenCollapsible(false);
+    root->addWidget(mSplit);
+    mViewsBox = new QWidget(mSplit);
+    mGrid = new QGridLayout(mViewsBox);
     mGrid->setContentsMargins(0, 0, 0, 0);
     mGrid->setSpacing(2);
     const char* views[4] = {"top", "persp", "front", "right"};
     for (int i = 0; i < 4; ++i)
     {
-        mPanels[i] = new ViewportPanel(this);
+        mPanels[i] = new ViewportPanel(mViewsBox);
         mViews[i] = mPanels[i]->view();
         mViews[i]->setView(views[i]);
         mViews[i]->installEventFilter(this);
@@ -35,6 +74,11 @@ ViewportLayout::ViewportLayout(QWidget* parent) : QWidget(parent)
     relayout();
 
     QPointer<ViewportLayout> self(this);
+    mTextureView = TextureView(std::clamp(PrefStore::get().value<int>("general", kPrefTextureView, 0), 0, 2));
+    menuContext::onChanged([self] {
+        if (self)
+            self->applyTextureView();
+    });
     scene::isolation::setActiveProvider([self]() -> const scene::isolation::Set* {
         return self && self->mActive ? &self->mActive->isolation() : nullptr;
     });
@@ -145,6 +189,33 @@ void ViewportLayout::relayout()
         mPanels[i]->setVisible(mQuad || mViews[i] == mActive);
     if (mActive)
         mActive->setFocus();
+}
+
+void ViewportLayout::setTextureView(TextureView mode)
+{
+    if (mode == mTextureView)
+        return;
+    mTextureView = mode;
+    PrefStore::get().set("general", kPrefTextureView, int(mode));
+    applyTextureView();
+    Q_EMIT textureViewChanged();
+}
+
+void ViewportLayout::applyTextureView()
+{
+    const bool texturing = menuContext::layoutSet() == "Texture";
+    const bool show2d = texturing && mTextureView != TextureView::View3D;
+    if (show2d && !mTexture2d)
+    {
+        mTexture2d = new Texture2DView(mSplit);
+        mSplit->addWidget(mTexture2d);
+        mSplit->setStretchFactor(0, 1);
+        mSplit->setStretchFactor(1, 1);
+        mSplit->setSizes({width() / 2, width() / 2});
+    }
+    if (mTexture2d)
+        mTexture2d->setVisible(show2d);
+    mViewsBox->setVisible(!texturing || mTextureView != TextureView::View2D);
 }
 
 void ViewportLayout::setQuad(bool on)

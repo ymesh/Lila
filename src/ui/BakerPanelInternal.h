@@ -113,6 +113,12 @@ constexpr int kFoldKeyRole = Qt::UserRole + 5;
 constexpr int kComponentsRole = Qt::UserRole + 6;
 /** A Results thumbnail's bake output (the bake result's entry) as JSON. */
 constexpr int kOutputRole = Qt::UserRole + 7;
+/** Marks the summary's Lighting row. */
+constexpr int kLightingNoteRole = Qt::UserRole + 8;
+/** Marks the summary's Preview row. */
+constexpr int kPreviewNoteRole = Qt::UserRole + 9;
+/** Marks the summary's Cache row. */
+constexpr int kCacheNoteRole = Qt::UserRole + 10;
 /** Drag payload of Results thumbnails: a JSON array of their bake outputs. */
 inline constexpr const char* kOutputsMime = "application/x-lila-bake-outputs";
 

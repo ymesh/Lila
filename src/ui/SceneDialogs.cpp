@@ -324,25 +324,6 @@ private:
     int mNotches = 0;
 };
 
-/** Holds the examples grid at a whole number of rows, so a card is never cut off at the bottom edge. */
-class WholeRows : public QWidget
-{
-public:
-    WholeRows(QListWidget* list, QWidget* parent) : QWidget(parent), mList(list) { mList->setParent(this); }
-
-protected:
-    void resizeEvent(QResizeEvent*) override
-    {
-        const int row = std::max(1, mList->gridSize().height());
-        const int frame = 2 * mList->frameWidth();
-        const int rows = std::max(1, (height() - frame) / row);
-        mList->setGeometry(0, 0, width(), std::min(height(), rows * row + frame));
-    }
-
-private:
-    QListWidget* mList;
-};
-
 QString qpath(const fs::path& p)
 {
     return QString::fromStdWString(p.wstring());
@@ -571,6 +552,9 @@ void RecoveryDialog::finish(Choice c)
 namespace
 {
 constexpr int kRecentWidth = 320;
+/** News, the showcase and the changelog share this column width. */
+constexpr int kMiddleWidth = 520;
+constexpr QSize kShowcaseSize{kMiddleWidth, 190};
 
 /** The Essentials link: a solid accent button, the one coloured control on the welcome page. */
 class EssentialsButton : public QPushButton
@@ -630,6 +614,65 @@ protected:
 
 QFrame* makeSupportCard(QWidget* parent);
 
+/** A light that runs once round the target's rounded border after delayMs, then removes itself. */
+class BorderSweep : public QWidget
+{
+public:
+    BorderSweep(QWidget* target, int delayMs, int durationMs, qreal radius) : QWidget(target), mRadius(radius)
+    {
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_NoSystemBackground);
+        setGeometry(target->rect());
+        mAnim.setStartValue(0.0);
+        mAnim.setEndValue(1.0);
+        mAnim.setDuration(durationMs);
+        mAnim.setEasingCurve(QEasingCurve::InOutSine);
+        connect(&mAnim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v) {
+            mT = v.toReal();
+            update();
+        });
+        connect(&mAnim, &QVariantAnimation::finished, this, &QObject::deleteLater);
+        QTimer::singleShot(delayMs, this, [this] { mAnim.start(); });
+        raise();
+        show();
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        if (mT <= 0)
+            return;
+        constexpr qreal kTail = 0.4;
+        constexpr int kSteps = 48;
+        QPainterPath path;
+        path.addRoundedRect(QRectF(rect()).adjusted(1, 1, -1, -1), mRadius, mRadius);
+        // The head runs past the end so the tail follows it all the way round and out.
+        const qreal head = mT * (1 + kTail);
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        QColor c = themeColor("brightText");
+        for (int i = 0; i < kSteps; ++i)
+        {
+            const qreal a = std::min(head - kTail * i / kSteps, 1.0), b = std::max(head - kTail * (i + 1) / kSteps, 0.0);
+            if (a <= b)
+                continue;
+            const qreal fall = std::pow(1.0 - qreal(i) / kSteps, 1.6);
+            const QLineF seg(path.pointAtPercent(b), path.pointAtPercent(a));
+            c.setAlphaF(float(0.25 * fall));
+            p.setPen(QPen(c, 4, Qt::SolidLine, Qt::FlatCap));
+            p.drawLine(seg);
+            c.setAlphaF(float(0.9 * fall));
+            p.setPen(QPen(c, 1.5, Qt::SolidLine, Qt::FlatCap));
+            p.drawLine(seg);
+        }
+    }
+
+private:
+    QVariantAnimation mAnim;
+    qreal mRadius;
+    qreal mT = 0;
+};
+
 /** The welcome page's title row: the app icon and name on the left, the support card and Essentials button on the right. */
 QWidget* makeWelcomeHeader(QWidget* parent, QPushButton*& essentials)
 {
@@ -662,7 +705,7 @@ QWidget* makeWelcomeHeader(QWidget* parent, QPushButton*& essentials)
 class NewsCard : public QFrame
 {
 public:
-    static constexpr QSize kBanner{192, 108};
+    static constexpr QSize kBanner{240, 135};
 
     NewsCard(const news::Item& item, bool fresh, int index, int count, const std::function<void(int)>& step, QWidget* parent)
         : QFrame(parent), mUrl(QString::fromStdString(item.url))
@@ -762,14 +805,12 @@ private:
 class ShowcaseCard : public QWidget
 {
 public:
-    static constexpr QSize kSize{260, NewsCard::kBanner.height() + 2};
-
-    ShowcaseCard(const news::Item& item, const QPixmap& art, QWidget* parent)
+    ShowcaseCard(const news::Item& item, const QPixmap& art, QSize size, QWidget* parent)
         : QWidget(parent), mArt(art), mTitle(QString::fromStdString(item.title)),
           mUrl(QString::fromStdString(item.url.empty() ? item.authorUrl : item.url))
     {
         setObjectName("showcaseCard");
-        setFixedSize(kSize);
+        setFixedSize(size);
         setAttribute(Qt::WA_Hover);
         mBy = item.author.empty() ? QString::fromStdString(item.body) : "by " + QString::fromStdString(item.author);
         if (!item.author.empty())
@@ -836,6 +877,73 @@ private:
     QString mBy;
     QString mUrl;
 };
+
+/** The newest changelog section: version, date and its first few changes; a click opens the full changelog. */
+class ChangelogCard : public QFrame
+{
+public:
+    static constexpr int kShown = 4;
+
+    ChangelogCard(const news::Release& release, std::function<void()> open, QWidget* parent) : QFrame(parent), mOpen(std::move(open))
+    {
+        setObjectName("newsCard");
+        setCursor(Qt::PointingHandCursor);
+        setToolTip("Open the full changelog");
+        auto* column = new QVBoxLayout(this);
+        column->setContentsMargins(16, 12, 16, 12);
+        column->setSpacing(4);
+
+        auto* top = new QHBoxLayout;
+        auto* title = new QLabel("What's New", this);
+        title->setObjectName("newsTitle");
+        top->addWidget(title);
+        top->addStretch(1);
+        QStringList meta{QString::fromStdString(release.version)};
+        if (const QDate d = QDate::fromString(QString::fromStdString(release.date), Qt::ISODate); d.isValid())
+            meta << QLocale().toString(d, QLocale::LongFormat);
+        auto* metaLabel = new QLabel(meta.join("  ·  "), this);
+        metaLabel->setObjectName("newsMeta");
+        top->addWidget(metaLabel);
+        column->addLayout(top);
+        column->addSpacing(2);
+
+        const int shown = std::min(int(release.changes.size()), kShown);
+        for (int i = 0; i < shown; ++i)
+        {
+            auto* line = new QLabel(QString::fromUtf8("•  ") + QString::fromStdString(release.changes[size_t(i)]), this);
+            line->setObjectName("newsBody");
+            line->setWordWrap(true);
+            column->addWidget(line);
+        }
+        column->addSpacing(4);
+        const int more = int(release.changes.size()) - shown;
+        auto* footer = new QLabel(more > 0 ? QString::fromUtf8("%1 more  ·  Full changelog  →").arg(more) : QString::fromUtf8("Full changelog  →"), this);
+        footer->setObjectName("changelogLink");
+        column->addWidget(footer);
+    }
+
+protected:
+    void mousePressEvent(QMouseEvent* e) override
+    {
+        if (e->button() == Qt::LeftButton && mOpen)
+            mOpen();
+    }
+
+private:
+    std::function<void()> mOpen;
+};
+
+/** The newest release in the docs' changelog page, or an empty one when the docs have no changelog yet. */
+news::Release latestChangelogRelease()
+{
+    const std::optional<docs::Root> root = docs::currentRoot();
+    if (!root)
+        return {};
+    QFile f(QString::fromStdWString((root->dir / "docs" / "changelog.md").wstring()));
+    if (!f.open(QIODevice::ReadOnly))
+        return {};
+    return news::latestRelease(f.readAll().toStdString());
+}
 
 /** A tabler icon drawn in a theme colour other than the icon tint, at size logical pixels. */
 QPixmap tintedIcon(const QString& name, const QColor& color, int size, qreal dpr)
@@ -954,6 +1062,7 @@ StartupDialog::StartupDialog(Hooks hooks, bool welcome, QWidget* parent) : QDial
                           "QLabel#newsMeta, QLabel#newsBody { color: %5; }"
                           "QLabel#newsTitle { color: %4; font-size: 11pt; font-weight: 600; }"
                           "QLabel#newsFresh { color: %8; font-weight: 600; }"
+                          "QLabel#changelogLink { color: %4; font-weight: 600; }"
                           "QFrame#supportCard { background: %6; border: 1px solid %2; border-radius: 6px; }"
                           "QLabel#supportLead { color: %5; font-size: 10pt; }"
                           "QTreeWidget#startupRecent, QListWidget#welcomeExamples { activate-on-singleclick: 1; }")
@@ -1033,14 +1142,26 @@ StartupDialog::StartupDialog(Hooks hooks, bool welcome, QWidget* parent) : QDial
         leftLayout->addWidget(mList, 1);
         body->addWidget(left);
 
+        // What's happening with Lila in the middle, examples down the right: opened in the first sessions, rarely after.
+        auto* middle = new QVBoxLayout;
+        middle->setSpacing(12);
+        body->addLayout(middle);
+        mNews = new QWidget(this);
+        mNews->setFixedWidth(kMiddleWidth);
+        mNewsBand = new QVBoxLayout(mNews);
+        mNewsBand->setContentsMargins(0, 0, 0, 0);
+        mNewsBand->setSpacing(12);
+        middle->addWidget(mNews);
+        if (const news::Release release = latestChangelogRelease(); !release.version.empty())
+            middle->addWidget(new ChangelogCard(release, [this] {
+                reject();
+                docs::open("changelog");
+            }, this));
+        middle->addStretch(1);
+
         auto* right = new QVBoxLayout;
         right->setSpacing(8);
         body->addLayout(right);
-        mNews = new QWidget(this);
-        mNewsBand = new QHBoxLayout(mNews);
-        mNewsBand->setContentsMargins(0, 0, 0, 14);
-        mNewsBand->setSpacing(12);
-        right->addWidget(mNews);
         right->addWidget(makeHeading(this, "Examples"));
 
         mExamples = new WholeRowList(this);
@@ -1086,10 +1207,8 @@ StartupDialog::StartupDialog(Hooks hooks, bool welcome, QWidget* parent) : QDial
                 item->setData(Qt::DecorationRole, QPixmap(qpath(x.thumbnail)));
             mExampleList.push_back(x);
         }
-        mExamplesArea = new WholeRows(mExamples, this);
-        mExamplesArea->setFixedWidth(examplesWidth(3));
-        mNews->setFixedWidth(examplesWidth(3));
-        right->addWidget(mExamplesArea, 1);
+        mExamples->setFixedWidth(examplesWidth(1));
+        right->addWidget(mExamples, 1);
 
         showNews(news::cached());
         QPointer<StartupDialog> self = this;
@@ -1145,7 +1264,7 @@ StartupDialog::StartupDialog(Hooks hooks, bool welcome, QWidget* parent) : QDial
         if (open)
             open({});
     });
-    resize(welcome ? QSize(20 + kRecentWidth + 24 + examplesWidth(3) + 20, 900) : QSize(560, 420));
+    resize(welcome ? QSize(20 + kRecentWidth + 24 + kMiddleWidth + 24 + examplesWidth(1) + 20, 900) : QSize(560, 420));
     qApp->installEventFilter(this);
 }
 
@@ -1181,7 +1300,7 @@ void StartupDialog::showNews(const std::vector<news::Item>& items)
     }
     delete mShowcaseCard;
     if (shown != showcase.end())
-        mShowcaseCard = new ShowcaseCard(*shown, QPixmap(news::imageFile(*shown)), mNews);
+        mShowcaseCard = new ShowcaseCard(*shown, QPixmap(news::imageFile(*shown)), kShowcaseSize, mNews);
     else
         mShowcaseCard = makeShowcasePlaceholder();
     mNewsBand->addWidget(mShowcaseCard);
@@ -1190,15 +1309,14 @@ void StartupDialog::showNews(const std::vector<news::Item>& items)
 
 QWidget* StartupDialog::makeShowcasePlaceholder()
 {
-    news::Item invite;
-    invite.title = "Your art here";
-    invite.body = "Made something in Lila? Send it in.";
-    invite.url = "https://lila-3d.github.io/";
+    news::Item placeholder;
+    placeholder.title = "Community art";
+    placeholder.body = "Placeholder";
     QPixmap art;
     for (const io::examples::Example& x : mExampleList)
         if (x.name == "Trim Frieze" && !x.thumbnail.empty())
             art = QPixmap(qpath(x.thumbnail));
-    return new ShowcaseCard(invite, art, mNews);
+    return new ShowcaseCard(placeholder, art, kShowcaseSize, mNews);
 }
 
 void StartupDialog::showNewsItem()
@@ -1234,17 +1352,20 @@ void StartupDialog::present()
     QRect area = screen ? screen->availableGeometry() : QRect(0, 0, 1600, 900);
     // Never bigger than the screen: the page scrolls instead.
     resize(size().boundedTo(area.size() * 0.92));
-    if (mExamplesArea)
-    {
-        // Ends at the examples' last whole row instead of leaving a band under them.
-        layout()->activate();
-        const int row = std::max(1, mExamples->gridSize().height());
-        const int rows = mExamplesArea->height() - 2 * mExamples->frameWidth();
-        if (rows > row)
-            resize(width(), height() - rows % row);
-    }
     move(area.center() - QPoint(width() / 2, height() / 2));
     show();
+    if (mWelcome)
+    {
+        // Draws the eye along the header on opening: round the support card, then round Essentials.
+        int delay = 350;
+        if (auto* support = findChild<QFrame*>("supportCard"))
+        {
+            new BorderSweep(support, delay, 1100, 6);
+            delay += 850;
+        }
+        if (auto* essentials = findChild<QPushButton*>("startupEssentials"))
+            new BorderSweep(essentials, delay, 1100, 6);
+    }
     raise();
     activateWindow();
     mList->setFocus();

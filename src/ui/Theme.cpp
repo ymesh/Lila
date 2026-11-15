@@ -507,6 +507,14 @@ QString appStyleSheet(const themes::Theme& t)
         QToolButton[role="push"]:checked { background: $sel; color: $selText; }
         QToolButton[role="push"]:disabled { color: $disabled; }
         QToolButton[role="push"][popupMode="1"] { padding-right: 24px; }
+        QComboBox[role="inline"], QAbstractSpinBox[role="inline"] { background: transparent; border: 1px solid transparent; color: $dim; padding: 1px 4px; }
+        QComboBox[role="inline"]:hover, QAbstractSpinBox[role="inline"]:hover { background: $field; color: $text; }
+        QAbstractSpinBox[role="inline"]:focus { background: $field; color: $text; border-color: $focus; }
+        QComboBox[role="inline"]::drop-down { width: 0; border: none; }
+        QToolButton[role="inline"] { background: transparent; border: 1px solid transparent; border-radius: 4px; color: $dim; padding: 1px 4px; text-align: right; }
+        QToolButton[role="inline"]:hover { background: $field; color: $text; }
+        QToolButton[role="inline"]::menu-indicator { image: none; width: 0; }
+        QComboBox[role="inline"]::down-arrow { image: none; width: 0; }
         QToolButton[role="overflow"] { background: transparent; color: $dim; text-align: left; padding: 4px 10px; border-radius: 6px; }
         QToolButton[role="overflow"]:hover { background: $hover; color: $text; }
         QToolButton[role="overflow"]::menu-indicator { image: none; width: 0; }

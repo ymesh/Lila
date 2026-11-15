@@ -350,6 +350,7 @@ void BakerPanel::refresh()
         if (!last.is_null() && last.dump() != mShownResult)
             showResult(last);
     }
+    syncPreviewNote();
 }
 
 void BakerPanel::refreshProjects()
@@ -665,6 +666,12 @@ void BakerPanel::refreshDetails()
                 auto* mesh = new QTreeWidgetItem(row, {qs(shortName(m))});
                 mesh->setIcon(0, icon("box"));
                 mesh->setToolTip(0, qs(m));
+            }
+            for (const std::string& m : u.materials)
+            {
+                auto* material = new QTreeWidgetItem(row, {qs(m)});
+                material->setIcon(0, icon("palette"));
+                material->setToolTip(0, QString("Material: every high with faces of %1").arg(qs(m)));
             }
             row->setExpanded(!mUnlinksCollapsed.contains(row->text(0)));
         }
@@ -987,6 +994,57 @@ void BakerPanel::unlinkSelected(const std::string& group, const std::string& low
     setUnlinks(group, all);
 }
 
+void BakerPanel::unlinkMaterial(const std::string& group, const std::string& low, const std::string& material, bool projection)
+{
+    scene::Node* n = findNode(group);
+    if (!n || !bake::isGroup(*n) || material.empty())
+        return;
+    std::vector<bake::Unlink> all = bake::groupSettings(*n).unlinks;
+    const std::vector<std::string> lows = low.empty() ? std::vector<std::string>{} : std::vector<std::string>{low};
+    auto same = std::ranges::find_if(all, [&](const bake::Unlink& u) { return u.lows == lows && u.projection == projection; });
+    if (same == all.end())
+        all.push_back({.lows = lows, .materials = {material}, .projection = projection});
+    else if (std::ranges::find(same->materials, material) == same->materials.end())
+        same->materials.push_back(material);
+    setUnlinks(group, all);
+}
+
+std::vector<std::string> BakerPanel::unlinkableMaterials() const
+{
+    scene::Graph& g = graph();
+    scene::Node* grp = findNode(currentGroup());
+    scene::Node* project = grp && bake::isGroup(*grp) ? bake::groupProject(g, *grp) : nullptr;
+    if (!project)
+        return {};
+    std::set<std::string> out;
+    auto add = [&](const std::string& mesh) {
+        scene::Node* n = findNode(mesh);
+        if (!n || !n->type().isA("mesh"))
+            return;
+        try
+        {
+            const scene::PlugValue v = g.value({n->id(), scene::MeshNode::kOutMesh, -1});
+            if (const scene::MeshPtr* m = std::get_if<scene::MeshPtr>(&v); m && *m)
+                for (const auto& [slot, faces] : scene::materials::slotUsage(**m))
+                    if (faces > 0)
+                        out.insert(slot);
+        }
+        catch (const std::exception&)
+        {
+        }
+    };
+    for (scene::NodeId id : bake::groupsOf(g, project->id()))
+    {
+        const bake::GroupSettings s = bake::groupSettings(*g.node(id));
+        for (const bake::HighEntry& h : s.highs)
+            if (h.self)
+                std::ranges::for_each(s.lows, add);
+            else if (h.file.empty())
+                add(h.node);
+    }
+    return {out.begin(), out.end()};
+}
+
 void BakerPanel::removeSelectedUnlinks()
 {
     scene::Node* n = findNode(currentGroup());
@@ -1000,11 +1058,18 @@ void BakerPanel::removeSelectedUnlinks()
         if (row && row->isSelected())
             continue;
         bake::Unlink u = all[size_t(i)];
+        // Child rows are the meshes, then the materials.
+        const int meshes = int(u.meshes.size());
         if (row)
-            for (int m = int(u.meshes.size()) - 1; m >= 0; --m)
-                if (QTreeWidgetItem* mesh = row->child(m); mesh && mesh->isSelected())
-                    u.meshes.erase(u.meshes.begin() + m);
-        if (!u.meshes.empty())
+            for (int c = meshes + int(u.materials.size()) - 1; c >= 0; --c)
+                if (QTreeWidgetItem* child = row->child(c); child && child->isSelected())
+                {
+                    if (c < meshes)
+                        u.meshes.erase(u.meshes.begin() + c);
+                    else
+                        u.materials.erase(u.materials.begin() + (c - meshes));
+                }
+        if (!u.empty())
             keep.push_back(std::move(u));
     }
     setUnlinks(currentGroup(), keep);

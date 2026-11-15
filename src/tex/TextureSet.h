@@ -88,6 +88,10 @@ LILA_SCENE_API void registerCommands();
 
 LILA_SCENE_API scene::Node* findSet(scene::Graph& g, std::string_view name);
 LILA_SCENE_API std::vector<std::string> setNames(scene::Graph& g);
+/** The set whose material setting names the material; empty when none does. */
+LILA_SCENE_API std::string setForMaterial(scene::Graph& g, std::string_view material);
+/** The name a material's new set gets: the material's name without its M_ or MI_ prefix, plus Tex. */
+LILA_SCENE_API std::string defaultSetName(std::string_view material);
 /** Throw std::invalid_argument when the stored JSON is unreadable. */
 LILA_SCENE_API Graph readGraph(const scene::Node& set);
 LILA_SCENE_API SetSettings readSettings(const scene::Node& set);

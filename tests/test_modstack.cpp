@@ -157,6 +157,44 @@ TEST_CASE("modifiers turned off for export are skipped by exporters only")
     (void)arr;
 }
 
+TEST_CASE("a stack re-run for export hands back the same mesh until something it is made from changes")
+{
+    run("newScene");
+    std::string cube = run("polyCube")[0];
+    std::string sub = run("addModifier", {{"args", {cube}}, {"kind", "subdivision"}});
+    scene::Graph& g = scene::Graph::current();
+    scene::NodeId mesh = g.find(cube)->id();
+    run("setAttr", {{"args", {sub + ".enabled", false}}});
+
+    // The same object, so what is kept per mesh downstream (bake snapshots, subdivided highs) is found again.
+    const scene::MeshPtr first = scene::modifiers::exportMesh(g, mesh);
+    REQUIRE(validFaces(first) == 24);
+    CHECK(scene::modifiers::exportMesh(g, mesh) == first);
+    run("select", {{"args", {cube}}});
+    CHECK(scene::modifiers::exportMesh(g, mesh) == first);
+
+    // A setting of the re-run modifier.
+    run("setAttr", {{"args", {sub + ".levels", 2}}});
+    const scene::MeshPtr finer = scene::modifiers::exportMesh(g, mesh);
+    CHECK(finer != first);
+    CHECK(validFaces(finer) == 96);
+    run("undo");
+    CHECK(validFaces(scene::modifiers::exportMesh(g, mesh)) == 24);
+
+    // The mesh under the stack.
+    const scene::MeshPtr before = scene::modifiers::exportMesh(g, mesh);
+    run("selectComponents", {{"args", {cube}}, {"faces", {0}}});
+    run("moveComponents", {{"by", {0.0, 5.0, 0.0}}});
+    const scene::MeshPtr moved = scene::modifiers::exportMesh(g, mesh);
+    CHECK(moved != before);
+    CHECK(moved->bounds().max.y != doctest::Approx(before->bounds().max.y));
+    run("selectMode", {{"args", {"object"}}});
+
+    // Another modifier joining the stack.
+    run("addModifier", {{"args", {cube}}, {"kind", "array"}, {"params", {{"count", 2}}}});
+    CHECK(validFaces(scene::modifiers::exportMesh(g, mesh)) == 48);
+}
+
 TEST_CASE("meshOf and stackSource walk the chain")
 {
     run("newScene");

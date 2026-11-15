@@ -1216,6 +1216,9 @@ void registerCommands(ext::Context& ctx)
             for (Panel& p : gm.panels)
                 for (int k = 0; k < 3; ++k)
                     p.origin[k] += offset[k];
+            for (GarmentPin& p : gm.pins)
+                for (int k = 0; k < 3; ++k)
+                    p.target[k] += offset[k];
             return createGarment(gm, a.get<std::string>("block"), a, "tailorCreateBlock");
         },
         .examples = {"tailorCreateBlock(block='tunic', collider='Body')"},

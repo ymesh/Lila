@@ -752,7 +752,7 @@ QWidget* nodePanel(QWidget* parent, const json& node, SetFn set)
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(3);
     const std::string name = node.value("name", "");
-    QString title = qs(node.value("label", node.value("type", ""))) + "  (" + qs(name) + ")";
+    QString title = qs(node.value("label", node.value("type", ""))) + (name.empty() ? QString() : "  (" + qs(name) + ")");
     QLabel* head = heading(w, title);
     head->setToolTip(qs(node.value("type", "")) + (node.contains("category") ? ", " + qs(node["category"].get<std::string>()) : QString()));
     v->addWidget(head);

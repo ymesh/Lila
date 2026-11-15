@@ -1,0 +1,58 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Runoff Below Top Edges",
+  "description": "Runoff stains hanging from the top of the object, fading as they fall.",
+  "tags": [
+    "drips",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Runs",
+      "type": "directional",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "angle": 90.0,
+        "scaleAlong": 2,
+        "scaleAcross": 40,
+        "octaves": 4,
+        "seed": 821
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Run Width",
+      "type": "threshold",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "threshold": 0.55,
+        "softness": 0.2
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "From Top",
+      "type": "genPositionGradient",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "start": 0.45,
+        "end": 1.0,
+        "breakup": 0.5,
+        "noiseScale": 10,
+        "seed": 822
+      }
+    }
+  ]
+}

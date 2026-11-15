@@ -399,6 +399,7 @@ const std::unordered_map<std::string_view, std::string_view>& defaultIcons()
     {"modifier.weightedNormals", "arrow-up-from-arc"},
     {"window.modifierStack", "stack-front"},
     {"modifier.applyAll", "checks"},
+    {"modifier.showExportMesh", "package-export"},
     {"mesh.bakeModifierStack", "stack-pop"},
     {"select.foldEdges", "line"},
     {"bevel.editEdges", "border-corner-rounded"},

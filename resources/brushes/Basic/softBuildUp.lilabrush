@@ -1,0 +1,33 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Soft Build-Up",
+  "category": "Basic",
+  "doc": "Very low flow: colour deepens with every pass.",
+  "brush": {
+    "falloff": "smooth",
+    "strength": 1.0,
+    "flow": 0.1,
+    "spacing": 0.05,
+    "pressureSize": false,
+    "pressureOpacity": false,
+    "pressureFlow": false,
+    "jitter": {
+      "position": 0.0,
+      "size": 0.0,
+      "opacity": 0.0,
+      "angle": 0.0
+    },
+    "angle": 0.0,
+    "followStroke": false,
+    "roundness": 1.0,
+    "alpha": "",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.0
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "normal"
+  }
+}

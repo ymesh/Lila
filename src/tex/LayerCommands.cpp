@@ -9,6 +9,7 @@
 #include "scene/Graph.h"
 #include "scene/Node.h"
 #include "tex/NodeDef.h"
+#include "tex/PaintStrokes.h"
 #include "tex/Ports.h"
 
 #include <algorithm>
@@ -406,6 +407,39 @@ json saveSmart(const Args& a)
     }
     return paths::toUtf8(path);
 }
+
+/** A procedural layer's exposed settings: each param input's default and every node value it targets. Throws CommandError. */
+void applyGraphParams(Layer& l, const json& params)
+{
+    if (!params.is_object())
+        throw CommandError("texSetLayer: params is {name: value}");
+    if (l.kind != LayerKind::Procedural || !l.graph.is_object())
+        throw CommandError("texSetLayer: only procedural layers have params");
+    json& inputs = l.graph["inputs"];
+    json& nodes = l.graph["nodes"];
+    for (const auto& [key, value] : params.items())
+    {
+        json* in = nullptr;
+        if (inputs.is_array())
+            for (json& i : inputs)
+                if (i.value("name", "") == key && (i.value("kind", "") == "param" || i.contains("targets")))
+                    in = &i;
+        if (!in)
+            throw CommandError("texSetLayer: " + l.id + " has no setting " + key);
+        (*in)["default"] = value;
+        for (const json& t : in->value("targets", json::array()))
+        {
+            const std::string target = t.get<std::string>();
+            const auto dot = target.find('.');
+            if (dot == std::string::npos || !nodes.is_array())
+                continue;
+            for (json& n : nodes)
+                if (n.value("name", "") == target.substr(0, dot))
+                    n["values"][target.substr(dot + 1)] = value;
+        }
+    }
+}
+
 } // namespace
 
 void registerLayerCommands()
@@ -471,6 +505,16 @@ void registerLayerCommands()
             l.filterValues = flagJson(a, "values", json::object());
             if (a.has("channels"))
                 l = patched(l, json{{"channels", a.flags["channels"]}}, "texAddLayer");
+            // A paint layer points every channel and its mask at its buffers from the start, so a stroke only changes
+            // pixels: wiring them on the first stroke would change the graph and re-evaluate the whole stack.
+            if (l.kind == LayerKind::Paint)
+            {
+                for (const Channel& c : s.settings.channels)
+                    if (!l.paint.contains(c.name))
+                        l.paint[c.name] = paint::imageRef(l.id, c.name);
+                if (!l.paint.contains(paint::kMaskChannel))
+                    l.paint[paint::kMaskChannel] = paint::imageRef(l.id, paint::kMaskChannel);
+            }
             checkLayer(s, l);
             const std::string id = l.id;
             insertLayer(s, std::move(l), a);
@@ -536,7 +580,8 @@ void registerLayerCommands()
         .name = "texSetLayer",
         .doc = "Change a layer: props is a merge patch over its JSON (texLayerStack shows it): name, enabled, channels {channel: {enabled, mode, "
                "opacity}}, material {channel: value, or null to drop it}, paint {channel or mask: image}, graph, source, filter, filterValues, "
-               "anchor, heightBlend {enabled, sharpness, influence}, masks, kind. Returns the layer.",
+               "anchor, heightBlend {enabled, sharpness, influence}, tiling {scale, rotation, offsetX, offsetY}, masks, kind; params {name: value} "
+               "sets a procedural layer's exposed settings (its graph's param inputs and the node values they target). Returns the layer.",
         .positionalDoc = "set layer props",
         .run = [](const Args& a) -> json {
             Session s = open(a, "texSetLayer");
@@ -544,6 +589,8 @@ void registerLayerCommands()
             if (a.positional.size() < 3)
                 throw CommandError("texSetLayer: props required");
             Layer next = patched(l, a.positional[2], "texSetLayer");
+            if (const json& props = a.positional[2]; props.is_object() && props.contains("params"))
+                applyGraphParams(next, props["params"]);
             if (next.kind != LayerKind::Folder && !next.children.empty())
                 throw CommandError("texSetLayer: only folders have children");
             checkLayer(s, next);
@@ -686,13 +733,52 @@ void registerLayerCommands()
 
     ops::registerCommand({
         .name = "texSmartMaterials",
-        .doc = "The smart materials and masks in the libraries: name, kind, description, tier and file.",
+        .doc = "The smart materials and masks in the libraries: name, kind, description, tags, tier and file. tags= keeps those with every "
+               "tag given.",
+        .flags = {{"tags", "", T::List, nullptr, "Only those carrying all of these tags."}},
         .undoable = false,
-        .run = [](const Args&) -> json {
+        .run = [](const Args& a) -> json {
+            const std::vector<std::string> want = normalizeTags(a.get<std::vector<std::string>>("tags", {}));
             json out = json::array();
             for (const SmartMaterial& m : listSmartMaterials())
-                out.push_back({{"name", m.name}, {"kind", m.kind}, {"description", m.description}, {"tier", m.tier}, {"file", paths::toUtf8(m.file)}});
+            {
+                if (!std::ranges::all_of(want, [&](const std::string& t) { return std::ranges::binary_search(m.tags, t); }))
+                    continue;
+                out.push_back({{"name", m.name}, {"kind", m.kind}, {"description", m.description}, {"tags", m.tags}, {"tier", m.tier},
+                               {"file", paths::toUtf8(m.file)}});
+            }
             return out;
+        },
+    });
+
+    ops::registerCommand({
+        .name = "texSetSmartMaterialTags",
+        .doc = "Set, add or remove a smart material's or mask's tags, for you only (built-in ones too). Returns its tags.",
+        .positionalDoc = "smartMaterial",
+        .flags = {{"tags", "", T::List, nullptr, "Replace its tags with these."},
+                  {"add", "", T::List, nullptr, "Tags to add."},
+                  {"remove", "", T::List, nullptr, "Tags to remove."}},
+        .undoable = false,
+        .run = [](const Args& a) -> json {
+            if (a.positional.empty() || !a.positional[0].is_string())
+                throw CommandError("texSetSmartMaterialTags: give a smart material name");
+            SmartMaterial m;
+            try
+            {
+                m = loadSmartMaterial(a.positional[0].get<std::string>());
+            }
+            catch (const std::exception& e)
+            {
+                throw CommandError(std::string("texSetSmartMaterialTags: ") + e.what());
+            }
+            std::vector<std::string> tags = a.has("tags") ? a.get<std::vector<std::string>>("tags") : m.tags;
+            for (const std::string& t : a.get<std::vector<std::string>>("add", {}))
+                tags.push_back(t);
+            tags = normalizeTags(tags);
+            for (const std::string& t : normalizeTags(a.get<std::vector<std::string>>("remove", {})))
+                std::erase(tags, t);
+            setSmartMaterialTags(m.name, tags);
+            return tags;
         },
     });
 }

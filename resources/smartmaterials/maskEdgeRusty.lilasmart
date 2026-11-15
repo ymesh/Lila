@@ -1,0 +1,49 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Rust-Eaten Edges",
+  "description": "Rust creeping in from the edges in blotchy patches.",
+  "tags": [
+    "edges",
+    "rust",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Edge Rust",
+      "type": "genRustSpread",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "edgeWeight": 1.8,
+        "cavityWeight": 0.1,
+        "aoWeight": 0.0,
+        "level": 0.25,
+        "softness": 0.35,
+        "breakup": 1.1,
+        "noiseScale": 7,
+        "seed": 361
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Pitting",
+      "type": "dirt",
+      "mode": "multiply",
+      "opacity": 0.6,
+      "invert": false,
+      "values": {
+        "scale": 10,
+        "amount": 0.7,
+        "contrast": 2.0,
+        "grain": 0.8,
+        "seed": 362
+      }
+    }
+  ]
+}

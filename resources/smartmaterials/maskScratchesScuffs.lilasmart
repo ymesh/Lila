@@ -1,0 +1,69 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Scuff Marks",
+  "description": "Short, soft scuffs in clusters, as from shoes and crates.",
+  "tags": [
+    "scratches",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Scuffs",
+      "type": "anisotropic",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scaleX": 6,
+        "scaleY": 48,
+        "octaves": 3,
+        "seed": 1031
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Scuff Width",
+      "type": "threshold",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "threshold": 0.62,
+        "softness": 0.1
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Clusters",
+      "type": "clouds",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 4,
+        "octaves": 5,
+        "mode": "soft",
+        "contrast": 1.8,
+        "seed": 1032
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "filter",
+      "name": "Soften",
+      "type": "blur",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "radius": 0.002
+      }
+    }
+  ]
+}

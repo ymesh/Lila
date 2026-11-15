@@ -1,0 +1,163 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Chipped Painted Steel",
+  "description": "Olive-green industrial paint over steel, flaking at the edges with rust blooming in the chips.",
+  "tags": [
+    "metal",
+    "paint",
+    "realistic",
+    "worn"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L10",
+    "name": "Chipped Painted Steel",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Steel",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.214,
+            0.214,
+            0.214,
+            1
+          ],
+          "roughness": 0.45,
+          "metallic": 1.0,
+          "height": 0.5
+        },
+        "masks": []
+      },
+      {
+        "id": "L3",
+        "name": "Rust Bloom",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.0732,
+            0.0134,
+            0.0039,
+            1
+          ],
+          "metallic": 0.0,
+          "roughness": 0.9
+        },
+        "masks": [
+          {
+            "id": "M2",
+            "kind": "generator",
+            "type": "genRustSpread",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.5,
+              "breakup": 1.0,
+              "seed": 571
+            }
+          }
+        ]
+      },
+      {
+        "id": "L7",
+        "name": "Paint",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.0331,
+            0.047,
+            0.0153,
+            1
+          ],
+          "metallic": 0.0,
+          "roughness": 0.65,
+          "height": 0.52
+        },
+        "masks": [
+          {
+            "id": "M4",
+            "kind": "fill",
+            "value": 1.0,
+            "mode": "normal"
+          },
+          {
+            "id": "M5",
+            "kind": "generator",
+            "type": "genPaintChips",
+            "mode": "subtract",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.72,
+              "softness": 0.03,
+              "chipScale": 16,
+              "seed": 572
+            }
+          },
+          {
+            "id": "M6",
+            "kind": "generator",
+            "type": "genEdgeWear",
+            "mode": "subtract",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.32,
+              "softness": 0.1,
+              "breakup": 0.8,
+              "seed": 572
+            }
+          }
+        ]
+      },
+      {
+        "id": "L9",
+        "name": "Grime",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.0049,
+            0.0039,
+            0.0031,
+            1
+          ],
+          "roughness": 0.9,
+          "metallic": 0.0
+        },
+        "masks": [
+          {
+            "id": "M8",
+            "kind": "generator",
+            "type": "genDirt",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.4,
+              "seed": 573
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.6
+          },
+          "roughness": {
+            "mode": "normal",
+            "opacity": 0.6
+          },
+          "metallic": {
+            "mode": "normal",
+            "opacity": 0.6
+          }
+        }
+      }
+    ],
+    "masks": []
+  }
+}

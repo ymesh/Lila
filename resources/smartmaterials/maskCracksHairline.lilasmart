@@ -1,0 +1,55 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Hairline Cracks",
+  "description": "Sparse hairline cracks wandering across the surface.",
+  "tags": [
+    "cracks",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Cracks",
+      "type": "cells",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 7,
+        "mode": "crackle",
+        "width": 0.03,
+        "jitter": 1.0,
+        "seed": 1101
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Breaks",
+      "type": "perlin",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 6,
+        "octaves": 4,
+        "seed": 1102
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "levels",
+      "name": "Range",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "inLow": 0.1,
+        "inHigh": 0.45
+      }
+    }
+  ]
+}

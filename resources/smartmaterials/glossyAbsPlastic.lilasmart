@@ -1,0 +1,223 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Glossy ABS Plastic",
+  "description": "Moulded white plastic with a light satin texture and faint fingerprint smudges.",
+  "tags": [
+    "plastic",
+    "realistic",
+    "clean"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L3",
+    "name": "Glossy ABS Plastic",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Plastic",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.6383,
+            0.6383,
+            0.6038,
+            1
+          ],
+          "roughness": 0.25,
+          "metallic": 0.0,
+          "height": 0.5
+        },
+        "masks": []
+      },
+      {
+        "id": "L2",
+        "name": "Satin Texture",
+        "kind": "procedural",
+        "graph": {
+          "name": "texture",
+          "typeVersion": 1,
+          "inputs": [
+            {
+              "name": "Grain Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 60,
+              "targets": [
+                "Dirt1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 6,
+              "targets": [
+                "Clouds3.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 531,
+              "targets": [
+                "Dirt1.seed",
+                "Clouds3.seed"
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "name": "height",
+              "type": "gray"
+            },
+            {
+              "name": "roughness",
+              "type": "gray"
+            }
+          ],
+          "nodes": [
+            {
+              "name": "GroupInput",
+              "type": "GroupInput",
+              "position": [
+                -800,
+                0
+              ]
+            },
+            {
+              "name": "Dirt1",
+              "type": "dirt",
+              "position": [
+                -500,
+                0
+              ],
+              "values": {
+                "scale": 60,
+                "amount": 0.5,
+                "contrast": 1.0,
+                "grain": 1.0,
+                "seed": 531
+              }
+            },
+            {
+              "name": "Colorize2",
+              "type": "colorize",
+              "position": [
+                -350,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.497,
+                      0.497,
+                      0.497,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.503,
+                      0.503,
+                      0.503,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Clouds3",
+              "type": "clouds",
+              "position": [
+                -200,
+                0
+              ],
+              "values": {
+                "scale": 6,
+                "contrast": 1.8,
+                "seed": 532
+              }
+            },
+            {
+              "name": "Colorize4",
+              "type": "colorize",
+              "position": [
+                -50,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.22,
+                      0.22,
+                      0.22,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.4,
+                      0.4,
+                      0.4,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "GroupOutput",
+              "type": "GroupOutput",
+              "position": [
+                400,
+                0
+              ]
+            }
+          ],
+          "links": [
+            [
+              "Dirt1",
+              "out",
+              "Colorize2",
+              "input"
+            ],
+            [
+              "Colorize2",
+              "out",
+              "GroupOutput",
+              "height"
+            ],
+            [
+              "Clouds3",
+              "out",
+              "Colorize4",
+              "input"
+            ],
+            [
+              "Colorize4",
+              "out",
+              "GroupOutput",
+              "roughness"
+            ]
+          ]
+        },
+        "masks": []
+      }
+    ],
+    "masks": []
+  }
+}

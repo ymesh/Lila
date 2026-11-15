@@ -29,6 +29,7 @@ add_executable(lila_tests
     test_array_group.cpp
     test_docs.cpp
     test_dds.cpp
+    test_image_read.cpp
     test_samples.cpp
     test_user_docs.cpp
     test_transfer.cpp
@@ -110,7 +111,8 @@ target_link_libraries(lila_tests PRIVATE miniz::miniz)
 # test_pointcloud writes an E57 to read back.
 find_package(E57Format CONFIG REQUIRED)
 target_link_libraries(lila_tests PRIVATE E57Format)
-target_compile_definitions(lila_tests PRIVATE LILA_TEST_E57_DATA="${CMAKE_SOURCE_DIR}/tests/data/e57" LILA_TEST_3DTILES_DATA="${CMAKE_SOURCE_DIR}/tests/data/3dtiles")
+target_compile_definitions(lila_tests PRIVATE LILA_TEST_E57_DATA="${CMAKE_SOURCE_DIR}/tests/data/e57" LILA_TEST_3DTILES_DATA="${CMAKE_SOURCE_DIR}/tests/data/3dtiles"
+                                             LILA_TEST_IMAGE_DATA="${CMAKE_SOURCE_DIR}/tests/data/image")
 # The batch run tests start real lilabatch workers.
 add_dependencies(lila_tests lilabatch)
 add_test(NAME lila_tests COMMAND lila_tests)

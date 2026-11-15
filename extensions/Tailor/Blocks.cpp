@@ -1566,6 +1566,338 @@ Garment overalls(const Body& body, const OverallsParams& p, std::vector<BlockAnc
     return g;
 }
 
+namespace
+{
+/** Where a hand is: its wrist, the unit direction to the fingertips and the unit direction out of its back. */
+struct HandFrame
+{
+    Vec3 wrist, dir, back;
+};
+
+/**
+ * The hand on side s (+1 the body's left), `span` from wrist to fingertips: the measured one when the body has it, else
+ * the end of the mannequin's arm.
+ */
+HandFrame handFrame(const Body& body, float s, float span)
+{
+    auto dot = [](const Vec3& a, const Vec3& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+    auto mirrored = [s](const Vec3& v) { return Vec3{s * v[0], v[1], v[2]}; };
+    HandFrame f;
+    if (dot(body.handDir, body.handDir) > 0.5f)
+    {
+        f.dir = mirrored(body.handDir);
+        f.wrist = add3(mirrored(body.handTip), mul3(f.dir, -span));
+    }
+    else
+    {
+        const float chestA = body.chest / (std::numbers::pi_v<float> * 1.72f);
+        const float sx = std::max(body.shoulderWidth * 0.5f, chestA + 0.06f) - 0.045f;
+        f.dir = {s * std::cos(body.armAngle), -std::sin(body.armAngle), 0.f};
+        f.wrist = add3({s * sx, body.shoulderY() - 0.065f, 0.f}, mul3(f.dir, body.armLength));
+    }
+    if (dot(body.handBack, body.handBack) > 0.5f)
+        f.back = mirrored(body.handBack);
+    else
+    {
+        // Up, squared to the arm; outward for an arm that hangs straight down.
+        const Vec3 up = std::abs(f.dir[1]) < 0.95f ? Vec3{0.f, 1.f, 0.f} : Vec3{s, 0.f, 0.f};
+        f.back = norm3(add3(up, mul3(f.dir, -dot(up, f.dir))));
+    }
+    return f;
+}
+
+/**
+ * One glove on the arm at side s (+1 the body's left): a back and a palm, the pattern's y running from the cuff's edge
+ * to the fingertips and the thumb on the side that faces forward. Sewn everywhere but the cuff and any open tips.
+ */
+void addGlove(Garment& g, const Body& body, const HandwearParams& p, float s, const char* side)
+{
+    const float k = body.torso() / 1.8f;
+    const float cuff = std::clamp(p.cuffLength, 0.02f, 0.6f);
+    const float w = 0.115f * k * (1.f + std::max(p.ease, 0.f)), hw = 0.5f * w;
+    // Narrower at the wrist than across the palm, which is what keeps a glove on the hand.
+    const float wristHw = 0.86f * hw, wristRise = 0.025f * k;
+    const float cuffHw = wristHw * (1.f + std::clamp(p.cuffFlare, 0.f, 2.f));
+    const float share = std::clamp(p.fingerLength, 0.2f, 1.f);
+    const bool open = share < 0.999f;
+    const float palmY = cuff + 0.105f * k;
+
+    Builder b;
+    // Runs of outline sewn to the other panel; the cuff's edge (0 to 1) and open tips fall between them.
+    std::vector<std::pair<int, int>> sewn;
+    b.add(-cuffHw, 0.f);
+    int from = b.add(cuffHw, 0.f);
+    b.add(wristHw, cuff);
+    b.add(hw, cuff + wristRise);
+
+    // Thumb: a lobe leaving the side at 40 degrees, its base centre a little inside the edge.
+    const float a = 0.7f, tw = 0.0175f * k * (1.f + 0.5f * std::max(p.ease, 0.f)), inset = 0.02f * k;
+    const Vec2 d{std::sin(a), std::cos(a)}, pr{std::cos(a), -std::sin(a)};
+    const Vec2 base{hw - inset, cuff + 0.03f * k};
+    const float tOuter = (inset - pr[0] * tw) / d[0], tInner = (inset + pr[0] * tw) / d[0];
+    const float tipT = open ? std::max(0.085f * k * share, tInner + 0.012f * k) : 0.085f * k - tw;
+    auto thumbAt = [&](float sideSign, float t) { return Vec2{base[0] + sideSign * pr[0] * tw + d[0] * t, base[1] + sideSign * pr[1] * tw + d[1] * t}; };
+    const Vec2 o0 = thumbAt(1.f, tOuter), o1 = thumbAt(1.f, tipT), i1 = thumbAt(-1.f, tipT), i0 = thumbAt(-1.f, tInner);
+    b.add(o0[0], o0[1]);
+    const int thumbOut = b.add(o1[0], o1[1]);
+    if (open)
+    {
+        sewn.push_back({from, thumbOut});
+        from = b.add(i1[0], i1[1]);
+    }
+    else
+        b.arc({base[0] + d[0] * tipT, base[1] + d[1] * tipT}, tw, tw, -a, -a + std::numbers::pi_v<float>, true);
+    b.add(i0[0], i0[1]);
+
+    if (p.fingers)
+    {
+        const float fw = w / 4.f, gap = 0.004f * k;
+        const float lengths[4] = {0.072f, 0.082f, 0.075f, 0.058f};
+        for (int i = 0; i < 4; ++i)
+        {
+            const float r = hw - fw * float(i) - (i > 0 ? 0.5f * gap : 0.f);
+            const float l = hw - fw * float(i + 1) + (i < 3 ? 0.5f * gap : 0.f);
+            const float rad = 0.5f * (r - l), len = std::max(lengths[i] * k * share, rad + 0.005f);
+            if (i > 0)
+                b.add(r, palmY);
+            if (open)
+            {
+                sewn.push_back({from, b.add(r, palmY + len)});
+                from = b.add(l, palmY + len);
+            }
+            else
+            {
+                b.add(r, palmY + len - rad);
+                b.arc({0.5f * (r + l), palmY + len - rad}, rad, rad, 0.f, std::numbers::pi_v<float>, true);
+            }
+            if (i < 3)
+                b.add(l, palmY);
+        }
+    }
+    else if (open)
+    {
+        sewn.push_back({from, b.add(hw, palmY + 0.085f * k * share)});
+        from = b.add(-hw, palmY + 0.085f * k * share);
+    }
+    else
+    {
+        b.add(hw, palmY);
+        b.arc({0.f, palmY}, hw, 0.085f * k, 0.f, std::numbers::pi_v<float>, true);
+    }
+    b.add(-hw, cuff + wristRise);
+    b.add(-wristHw, cuff);
+    sewn.push_back({from, 0});
+    const int n = int(b.pts.size());
+
+    const HandFrame hand = handFrame(body, s, 0.187f * k);
+    const Vec3& dir = hand.dir;
+    const Vec3& back = hand.back;
+    const Vec3 edge = add3(hand.wrist, mul3(dir, -cuff));
+    const float gap = 0.055f;
+
+    // The drafted outline has its thumb at +x; whichever panel's +x faces forward takes it, the other its mirror.
+    const int pa = int(g.panels.size()), pm = pa + 1;
+    const bool left = s > 0.f;
+    Panel A = makePanel(std::string(left ? "Glove Back" : "Glove Palm") + side, b.pts);
+    Panel M = makePanel(std::string(left ? "Glove Palm" : "Glove Back") + side, mirrorX(b.pts));
+    A.particleDistance = M.particleDistance = 0.006f * std::max(k, 0.6f);
+    // Elastic at the wrist: the cloth there rests smaller than the hand, so the glove grips instead of sliding off.
+    A.shrinkSpots = M.shrinkSpots = {{{0.f, cuff}, 1.15f * wristHw, 0.8f}};
+    place(A, add3(edge, mul3(back, left ? gap : -gap)), dir, mul3(back, left ? 1.f : -1.f), 0.f);
+    place(M, add3(edge, mul3(back, left ? -gap : gap)), dir, mul3(back, left ? -1.f : 1.f), 0.f);
+    g.panels.push_back(std::move(A));
+    g.panels.push_back(std::move(M));
+    // Pinned either side of the wrist, and of the arm at a long cuff's edge: nothing else stops a glove sliding off a
+    // hand that hangs down.
+    const float sideA = left ? 1.f : -1.f;
+    for (const auto& [along, radius] : {std::pair{cuff, std::max(0.04f, 0.036f * k)}, std::pair{0.01f, std::max(0.05f, 0.045f * k)}})
+    {
+        if (along < cuff && cuff < 0.12f)
+            continue;
+        const Vec3 axis = add3(edge, mul3(dir, along));
+        g.pins.push_back({pa, {0.f, along}, add3(axis, mul3(back, sideA * radius))});
+        g.pins.push_back({pm, {0.f, along}, add3(axis, mul3(back, -sideA * radius))});
+    }
+    for (const auto& [r0, r1] : sewn)
+    {
+        const SeamSide run{pa, r0, r1};
+        g.seams.push_back(seam({run}, {mirrorRun(run, n, pm)}));
+    }
+}
+
+/** Leg girth at height y above the floor, for a body of scale k: ankle, calf and knee. */
+float legGirth(float y, float k)
+{
+    const float t = std::clamp((y / k - 0.1f) / 0.32f, 0.f, 1.f);
+    return k * (0.235f + (0.36f - 0.235f) * t);
+}
+
+/**
+ * One shoe or boot centred on x = cx: a side profile (A, facing -X) and its mirror (M, facing +X) seamed down the
+ * centre front and the heel, their lower edges sewn round a sole, or to each other without one.
+ */
+void addShoe(Garment& g, const Body& body, const FootwearParams& p, float sideSign, const char* side)
+{
+    const float k = body.torso() / 1.8f;
+    const float pointed = std::clamp(p.toe, 0.f, 1.f), ease = 1.f + std::max(p.ease, 0.f);
+    const bool measured = body.footLength > 0.f;
+    const float cx = sideSign * (measured ? body.footX : body.hip * 0.1f);
+    const float fit = measured ? body.footLength + 0.015f * k : 0.28f * k;
+    const float footLen = std::clamp(p.length > 0.f ? p.length : fit, 0.1f, 0.6f) + 0.05f * k * pointed;
+    const float across = measured ? std::clamp(body.footWidth / (0.1f * k), 0.6f, 1.8f) : 1.f;
+    const float top = std::clamp(p.height, 0.05f * k, std::max(0.06f * k, body.crotchY() * 0.62f));
+
+    // Sole: heel at the pattern origin, toe up +y, the same either side of its centre line so both halves sew alike.
+    const int half = 36;
+    auto soleHalfWidth = [&](float u) {
+        const float ball = std::clamp((u - 0.15f) / 0.5f, 0.f, 1.f), tip = std::clamp((u - 0.6f) / 0.4f, 0.f, 1.f);
+        const float wide = (0.036f + 0.014f * ball * ball * (3.f - 2.f * ball)) * k * ease * across * (1.f - 0.55f * pointed * tip);
+        return wide * std::pow(std::max(0.f, 1.f - (2.f * u - 1.f) * (2.f * u - 1.f)), 0.3f);
+    };
+    Builder sb;
+    for (int i = 0; i <= half; ++i)
+        sb.add(i == 0 || i == half ? 0.f : soleHalfWidth(float(i) / float(half)), footLen * float(i) / float(half));
+    for (int i = half - 1; i >= 1; --i)
+        sb.add(-soleHalfWidth(float(i) / float(half)), footLen * float(i) / float(half));
+    const float bottom = p.sole ? runLength(sb.pts, 0, half) : footLen + 0.02f * k;
+
+    // Profile, counter-clockwise from the heel: along the bottom, up round the toe, back over the instep, up the front
+    // of the leg, across the opening and down the back.
+    // The toe box is deep enough that both sides and the sole go round the foot's girth.
+    const float toeH = 0.085f * k * (1.f - 0.3f * pointed), toeR = std::min(0.03f * k, 0.45f * toeH);
+    const float xb = 0.5f * (bottom - footLen) + 0.005f * k;
+    const bool low = top < toeH + 0.05f * k;
+    const float ankleHw = 0.5f * legGirth(0.1f * k, k) * ease;
+    auto legHw = [&](float y) { return 0.5f * legGirth(y, k) * ease; };
+    auto frontX = [&](float hwAt) { return xb + ankleHw + 0.6f * (hwAt - ankleHw); };
+    auto backX = [&](float hwAt) { return xb - 0.4f * (hwAt - ankleHw); };
+    Builder b;
+    b.add(0.f, 0.f);
+    b.add(bottom, 0.f);
+    b.add(bottom, toeH - toeR);
+    b.arc({bottom - toeR, toeH - toeR}, toeR, toeR, 0.f, 0.5f * std::numbers::pi_v<float>, true);
+    const Vec2 toeTop{bottom - toeR, toeH};
+    int topF = 0, topB = 0;
+    if (low)
+    {
+        const float openHw = p.opening > 0.f ? 0.5f * p.opening : 0.15f * k * ease;
+        const float xf = std::min(xb + openHw, bottom - toeR - 0.04f * k);
+        for (const Vec2& q : bezier(toeTop, {0.5f * (xf + toeTop[0]), toeH}, {xf, top}))
+            b.add(q[0], q[1]);
+        topF = b.add(xf, top);
+        topB = b.add(xb, top);
+    }
+    else
+    {
+        const float openHw = p.opening > 0.f ? 0.5f * p.opening : legHw(top);
+        const Vec2 instep{xb + ankleHw, std::min(top - 0.03f * k, toeH + 0.05f * k)};
+        for (const Vec2& q : bezier(toeTop, {instep[0], toeH}, instep))
+            b.add(q[0], q[1]);
+        b.add(instep[0], instep[1]);
+        // The shaft follows the calf where it is tall enough to reach it.
+        const float stations[3] = {0.2f * k, 0.33f * k, 0.45f * k};
+        for (float y : stations)
+            if (y > instep[1] + 0.03f * k && y < top - 0.03f * k)
+                b.add(frontX(legHw(y)), y);
+        topF = b.add(frontX(openHw), top);
+        topB = b.add(backX(openHw), top);
+        for (int i = 2; i >= 0; --i)
+            if (stations[i] > instep[1] + 0.03f * k && stations[i] < top - 0.03f * k)
+                b.add(backX(legHw(stations[i])), stations[i]);
+        b.add(xb, instep[1]);
+    }
+    b.add(0.f, 0.035f * k);
+    const int n = int(b.pts.size());
+
+    const float heelZ = (measured ? body.heelZ : -0.085f * k) - 0.005f * k;
+    const float gap = std::max(0.055f * k, 0.5f * legGirth(top, k) * ease / std::numbers::pi_v<float> + 0.02f);
+    const int a = int(g.panels.size()), m = a + 1;
+    const bool left = sideSign > 0.f;
+    Panel pa = makePanel(std::string(left ? "Shoe Inner" : "Shoe Outer") + side, b.pts);
+    Panel pm = makePanel(std::string(left ? "Shoe Outer" : "Shoe Inner") + side, mirrorX(b.pts));
+    pa.particleDistance = pm.particleDistance = 0.012f;
+    if (!p.sole && !low)
+    {
+        // A sock's cuff: elastic round the top, so the leg holds it up.
+        const float mid = 0.5f * (b.pts[size_t(topF)][0] + b.pts[size_t(topB)][0]);
+        const float radius = 0.6f * (b.pts[size_t(topF)][0] - b.pts[size_t(topB)][0]);
+        pa.shrinkSpots = {{{mid, top}, radius, 0.8f}};
+        pm.shrinkSpots = {{{-mid, top}, radius, 0.8f}};
+    }
+    const float z0 = heelZ - 0.5f * (bottom - footLen);
+    place(pa, {cx - gap, 0.006f, z0}, {0.f, 1.f, 0.f}, {-1.f, 0.f, 0.f}, 0.f);
+    place(pm, {cx + gap, 0.006f, z0}, {0.f, 1.f, 0.f}, {1.f, 0.f, 0.f}, 0.f);
+    if (!low)
+    {
+        // A shaft is pinned either side of the leg at its top, so it stands instead of slumping to the ankle. The leg
+        // leans in from the foot towards the hip as it goes up.
+        const float lean = std::clamp((top - 0.08f * k) / std::max(body.crotchY() - 0.08f * k, 0.1f), 0.f, 1.f);
+        const float legX = cx + (sideSign * body.hip * 0.096f - cx) * lean;
+        const float radius = 0.5f * legGirth(top, k) * ease / std::numbers::pi_v<float> + 0.008f;
+        const Vec2 mid{0.5f * (b.pts[size_t(topF)][0] + b.pts[size_t(topB)][0]), top - 0.01f};
+        g.pins.push_back({a, mid, {legX - radius, 0.006f + mid[1], z0 + mid[0]}});
+        g.pins.push_back({m, {-mid[0], mid[1]}, {legX + radius, 0.006f + mid[1], z0 + mid[0]}});
+    }
+    g.panels.push_back(std::move(pa));
+    g.panels.push_back(std::move(pm));
+
+    const SeamSide lower{a, 0, 1};
+    if (!p.sole)
+    {
+        const SeamSide round{a, topB, topF};
+        g.seams.push_back(seam({round}, {mirrorRun(round, n, m)}));
+        return;
+    }
+    const SeamSide front{a, 1, topF}, heel{a, topB, 0};
+    g.seams.push_back(seam({front}, {mirrorRun(front, n, m)}));
+    g.seams.push_back(seam({heel}, {mirrorRun(heel, n, m)}));
+
+    const int sp = int(g.panels.size());
+    Panel sole = makePanel(std::string("Sole") + side, sb.pts);
+    sole.particleDistance = 0.012f;
+    sole.fabric = 1;
+    // Face down under the foot, toe forward: the pattern's +x is the body's +X.
+    place(sole, {cx, 0.f, heelZ}, {0.f, 0.f, 1.f}, {0.f, -1.f, 0.f}, 0.f);
+    // Pinned where it lies: a sole is flat on the floor under the foot, and loose it squeezes out from between them.
+    for (const float u : {0.04f, 0.25f, 0.5f, 0.75f, 0.96f})
+        for (const float across01 : {-0.6f, 0.f, 0.6f})
+        {
+            const Vec2 at{across01 * soleHalfWidth(u), u * footLen};
+            g.pins.push_back({sp, at, placePatternPoint(sole, at)});
+        }
+    g.panels.push_back(std::move(sole));
+    g.seams.push_back(seam({{sp, 0, half}}, {mirrorRun(lower, n, m)}));
+    g.seams.push_back(seam({{sp, half, 0}}, {lower}));
+}
+} // namespace
+
+Garment handwear(const Body& body, const HandwearParams& p)
+{
+    Garment g;
+    addGlove(g, body, p, 1.f, " L");
+    addGlove(g, body, p, -1.f, " R");
+    return cutFrom(std::move(g), p.fabric);
+}
+
+Garment footwear(const Body& body, const FootwearParams& p)
+{
+    Garment g;
+    addShoe(g, body, p, 1.f, " L");
+    addShoe(g, body, p, -1.f, " R");
+    std::vector<int> soles;
+    for (size_t k = 0; k < g.panels.size(); ++k)
+        if (g.panels[k].fabric == 1)
+            soles.push_back(int(k));
+    g = cutFrom(std::move(g), p.fabric);
+    if (const Fabric* f = findFabric("Sole"); f && !soles.empty())
+    {
+        g.fabrics.push_back(*f);
+        for (int k : soles)
+            g.panels[size_t(k)].fabric = 1;
+    }
+    return g;
+}
+
 // Registry
 
 namespace
@@ -1672,26 +2004,34 @@ std::vector<Field<P>> overShoulderFields()
 std::vector<Block> makeBlocks()
 {
     std::vector<Block> out;
+    // Each run of blocks is stamped with its category once it is in.
+    size_t stamped = 0;
+    auto category = [&](const char* name) {
+        for (; stamped < out.size(); ++stamped)
+            out[stamped].category = name;
+    };
     out.push_back(makeBlock<TeeParams>("tee", "T-Shirt", topFields<TeeParams>(), plain(&tee)));
+    out.push_back(makeBlock<RaglanTeeParams>("raglanTee", "Raglan Tee", topFields<RaglanTeeParams>(), [](const Body& b, const RaglanTeeParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
+    out.push_back(makeBlock<ShirtParams>("shirt", "Shirt", topFields<ShirtParams>(), [](const Body& b, const ShirtParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
+    out.push_back(makeBlock<PoetShirtParams>("poetShirt", "Poet Shirt", topFields<PoetShirtParams>(), [](const Body& b, const PoetShirtParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
     out.push_back(makeBlock<TunicParams>("tunic", "Tunic", topFields<TunicParams>(), plain(&tunic)));
     out.push_back(makeBlock<RobeParams>("robe", "Robe", topFields<RobeParams>(), plain(&robe)));
-    out.push_back(makeBlock<RaglanTeeParams>("raglanTee", "Raglan Tee", topFields<RaglanTeeParams>(), [](const Body& b, const RaglanTeeParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
-    out.push_back(makeBlock<MarieBlouseParams>("marieBlouse", "Marie-Sleeve Blouse", topFields<MarieBlouseParams>(), [](const Body& b, const MarieBlouseParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
-    out.push_back(makeBlock<FlounceSleeveTopParams>("flounceSleeveTop", "Flounce-Sleeve Top", topFields<FlounceSleeveTopParams>(), [](const Body& b, const FlounceSleeveTopParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
-    out.push_back(makeBlock<SlitSleeveTopParams>("slitSleeveTop", "Slit-Sleeve Top", topFields<SlitSleeveTopParams>(), [](const Body& b, const SlitSleeveTopParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
-    out.push_back(makeBlock<TieredSleeveBlouseParams>("tieredSleeveBlouse", "Tiered-Sleeve Blouse", topFields<TieredSleeveBlouseParams>(), [](const Body& b, const TieredSleeveBlouseParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
-    out.push_back(makeBlock<PetalSleeveTopParams>("petalSleeveTop", "Petal-Sleeve Top", topFields<PetalSleeveTopParams>(), [](const Body& b, const PetalSleeveTopParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
-    out.push_back(makeBlock<CapeSleeveTopParams>("capeSleeveTop", "Cape-Sleeve Top", topFields<CapeSleeveTopParams>(), [](const Body& b, const CapeSleeveTopParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
     out.push_back(makeBlock<DropShoulderTopParams>("dropShoulderTop", "Drop-Shoulder Top", topFields<DropShoulderTopParams>(), [](const Body& b, const DropShoulderTopParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
-    out.push_back(makeBlock<ShirtParams>("shirt", "Shirt", topFields<ShirtParams>(), [](const Body& b, const ShirtParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
+    out.push_back(makeBlock<BatwingTopParams>("batwingTop", "Batwing Top", topFields<BatwingTopParams>(), [](const Body& b, const BatwingTopParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
+    out.push_back(makeBlock<BellSleeveDressParams>("bellSleeveDress", "Bell-Sleeve Dress", topFields<BellSleeveDressParams>(), [](const Body& b, const BellSleeveDressParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
+    category("Tops");
     out.push_back(makeBlock<PeasantBlouseParams>("peasantBlouse", "Peasant Blouse", topFields<PeasantBlouseParams>(), [](const Body& b, const PeasantBlouseParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
     out.push_back(makeBlock<PuffBlouseParams>("puffBlouse", "Puff-Sleeve Blouse", topFields<PuffBlouseParams>(), [](const Body& b, const PuffBlouseParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
-    out.push_back(makeBlock<PoetShirtParams>("poetShirt", "Poet Shirt", topFields<PoetShirtParams>(), [](const Body& b, const PoetShirtParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
-    out.push_back(makeBlock<BellSleeveDressParams>("bellSleeveDress", "Bell-Sleeve Dress", topFields<BellSleeveDressParams>(), [](const Body& b, const BellSleeveDressParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
+    out.push_back(makeBlock<MarieBlouseParams>("marieBlouse", "Marie-Sleeve Blouse", topFields<MarieBlouseParams>(), [](const Body& b, const MarieBlouseParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
+    out.push_back(makeBlock<TieredSleeveBlouseParams>("tieredSleeveBlouse", "Tiered-Sleeve Blouse", topFields<TieredSleeveBlouseParams>(), [](const Body& b, const TieredSleeveBlouseParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
+    out.push_back(makeBlock<LegOfMuttonParams>("legOfMuttonBlouse", "Leg-of-Mutton Blouse", topFields<LegOfMuttonParams>(), [](const Body& b, const LegOfMuttonParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
+    out.push_back(makeBlock<FlounceSleeveTopParams>("flounceSleeveTop", "Flounce-Sleeve Top", topFields<FlounceSleeveTopParams>(), [](const Body& b, const FlounceSleeveTopParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
+    out.push_back(makeBlock<SlitSleeveTopParams>("slitSleeveTop", "Slit-Sleeve Top", topFields<SlitSleeveTopParams>(), [](const Body& b, const SlitSleeveTopParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
+    out.push_back(makeBlock<PetalSleeveTopParams>("petalSleeveTop", "Petal-Sleeve Top", topFields<PetalSleeveTopParams>(), [](const Body& b, const PetalSleeveTopParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
+    out.push_back(makeBlock<CapeSleeveTopParams>("capeSleeveTop", "Cape-Sleeve Top", topFields<CapeSleeveTopParams>(), [](const Body& b, const CapeSleeveTopParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
     out.push_back(makeBlock<FlutterTopParams>("flutterTop", "Flutter-Sleeve Top", topFields<FlutterTopParams>(), [](const Body& b, const FlutterTopParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
     out.push_back(makeBlock<CapSleeveTopParams>("capSleeveTop", "Cap-Sleeve Top", topFields<CapSleeveTopParams>(), [](const Body& b, const CapSleeveTopParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
-    out.push_back(makeBlock<BatwingTopParams>("batwingTop", "Batwing Top", topFields<BatwingTopParams>(), [](const Body& b, const BatwingTopParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
-    out.push_back(makeBlock<LegOfMuttonParams>("legOfMuttonBlouse", "Leg-of-Mutton Blouse", topFields<LegOfMuttonParams>(), [](const Body& b, const LegOfMuttonParams& p, std::vector<BlockAnchor>*) { return top(b, p); }));
+    category("Blouses");
     out.push_back(makeBlock<TrousersParams>("trousers", "Trousers",
                                             {{"length", &TrousersParams::length, 0.3f, 1.2f},
                                              {"ease", &TrousersParams::ease, 0.f, 0.6f},
@@ -1703,41 +2043,7 @@ std::vector<Block> makeBlocks()
                                           {"ease", &SkirtParams::ease, 0.f, 0.5f},
                                           {"flare", &SkirtParams::flare, 0.f, 1.f}},
                                          plain(&skirt)));
-    out.push_back(makeBlock<HoodParams>("hood", "Hood",
-                                        {{"depth", &HoodParams::depth, 0.2f, 0.5f}, {"height", &HoodParams::height, 0.25f, 0.6f}},
-                                        plain(&hood)));
-    out.push_back(makeBlock<CloakParams>("cloak", "Cloak", drapeFields<CloakParams>(), plain(&cloak)));
-    out.push_back(makeBlock<CapeParams>("cape", "Cape", drapeFields<CapeParams>(), plain(&cape)));
-    out.push_back(makeBlock<PonchoParams>("poncho", "Poncho", overShoulderFields<PonchoParams>(), plain(&poncho)));
-    out.push_back(makeBlock<TabardParams>("tabard", "Tabard", overShoulderFields<TabardParams>(), plain(&tabard)));
-    out.push_back(makeBlock<BeltParams>("belt", "Belt",
-                                        {{"height", &BeltParams::height, -0.3f, 0.2f},
-                                         {"width", &BeltParams::width, 0.01f, 0.2f},
-                                         {"ease", &BeltParams::ease, 0.f, 0.5f},
-                                         {"fitRadius", &BeltParams::fitRadius, 0.f, 0.6f},
-                                         {"buckle", &BeltParams::buckle}},
-                                        Generator<BeltParams>(&belt)));
-    out.push_back(makeBlock<SackParams>("sack", "Sack",
-                                        {{"width", &SackParams::width, 0.1f, 2.f}, {"height", &SackParams::height, 0.1f, 2.f}},
-                                        plain(&sack)));
-    out.push_back(makeBlock<BannerParams>("banner", "Banner / Flag",
-                                          {{"width", &BannerParams::width, 0.1f, 5.f},
-                                           {"height", &BannerParams::height, 0.1f, 5.f},
-                                           {"vertical", &BannerParams::vertical},
-                                           {"tail", &BannerParams::tail, 0.f, 2.f}},
-                                          plain(&banner)));
-    out.push_back(makeBlock<TentParams>("tent", "Tent",
-                                        {{"radius", &TentParams::radius, 0.3f, 5.f},
-                                         {"height", &TentParams::height, 0.3f, 5.f},
-                                         {"sides", &TentParams::sides, 3, 16},
-                                         {"door", &TentParams::door}},
-                                        plain(&tent)));
-    out.push_back(makeBlock<OutfitParams>("cloakTunicBelt", "Tunic, Belt and Hooded Cloak",
-                                          {{"tunicLength", &OutfitParams::tunicLength, 0.5f, 1.3f},
-                                           {"cloakLength", &OutfitParams::cloakLength, 0.4f, 1.5f},
-                                           {"beltEase", &OutfitParams::beltEase, 0.f, 0.3f},
-                                           {"hood", &OutfitParams::hood}},
-                                          Generator<OutfitParams>(&cloakTunicBelt)));
+    category("Bottoms");
     out.push_back(makeBlock<OnesieParams>("onesie", "Onesie",
                                           {{"ease", &OnesieParams::ease, 0.f, 1.f},
                                            {"sleeveLength", &OnesieParams::sleeveLength, 0.f, 0.75f},
@@ -1787,11 +2093,83 @@ std::vector<Block> makeBlocks()
                                              {"bibPocket", &OverallsParams::bibPocket},
                                              {"kneePatches", &OverallsParams::kneePatches}},
                                             Generator<OverallsParams>(&overalls)));
+    category("Suits");
+    out.push_back(makeBlock<CloakParams>("cloak", "Cloak", drapeFields<CloakParams>(), plain(&cloak)));
+    out.push_back(makeBlock<CapeParams>("cape", "Cape", drapeFields<CapeParams>(), plain(&cape)));
+    out.push_back(makeBlock<PonchoParams>("poncho", "Poncho", overShoulderFields<PonchoParams>(), plain(&poncho)));
+    out.push_back(makeBlock<TabardParams>("tabard", "Tabard", overShoulderFields<TabardParams>(), plain(&tabard)));
+    category("Outerwear");
+    auto handBlock = [&]<class P>(const char* id, const char* label, P*) {
+        out.push_back(makeBlock<P>(id, label,
+                                   {{"cuffLength", &P::cuffLength, 0.02f, 0.6f},
+                                    {"cuffFlare", &P::cuffFlare, 0.f, 2.f},
+                                    {"ease", &P::ease, 0.f, 0.6f},
+                                    {"fingers", &P::fingers},
+                                    {"fingerLength", &P::fingerLength, 0.2f, 1.f}},
+                                   [](const Body& b, const P& p, std::vector<BlockAnchor>*) { return handwear(b, p); }));
+    };
+    handBlock("gloves", "Gloves", static_cast<GlovesParams*>(nullptr));
+    handBlock("gauntlets", "Gauntlets", static_cast<GauntletsParams*>(nullptr));
+    handBlock("operaGloves", "Opera Gloves", static_cast<OperaGlovesParams*>(nullptr));
+    handBlock("fingerlessGloves", "Fingerless Gloves", static_cast<FingerlessGlovesParams*>(nullptr));
+    handBlock("mittens", "Mittens", static_cast<MittensParams*>(nullptr));
+    category("Hands");
+    auto footBlock = [&]<class P>(const char* id, const char* label, P*) {
+        out.push_back(makeBlock<P>(id, label,
+                                   {{"length", &P::length, 0.f, 0.6f},
+                                    {"height", &P::height, 0.05f, 0.6f},
+                                    {"opening", &P::opening, 0.f, 1.f},
+                                    {"ease", &P::ease, 0.f, 0.6f},
+                                    {"toe", &P::toe, 0.f, 1.f},
+                                    {"sole", &P::sole}},
+                                   [](const Body& b, const P& p, std::vector<BlockAnchor>*) { return footwear(b, p); }));
+    };
+    footBlock("shoes", "Shoes", static_cast<ShoesParams*>(nullptr));
+    footBlock("slippers", "Slippers", static_cast<SlippersParams*>(nullptr));
+    footBlock("socks", "Socks", static_cast<SocksParams*>(nullptr));
+    footBlock("ankleBoots", "Ankle Boots", static_cast<AnkleBootsParams*>(nullptr));
+    footBlock("boots", "Boots", static_cast<BootsParams*>(nullptr));
+    footBlock("kneeBoots", "Knee Boots", static_cast<KneeBootsParams*>(nullptr));
     out.push_back(makeBlock<BootieParams>("booties", "Booties",
                                           {{"length", &BootieParams::length, 0.15f, 0.6f},
                                            {"height", &BootieParams::height, 0.1f, 0.6f},
                                            {"opening", &BootieParams::opening, 0.2f, 1.f}},
                                           plain(&booties)));
+    category("Feet");
+    out.push_back(makeBlock<HoodParams>("hood", "Hood",
+                                        {{"depth", &HoodParams::depth, 0.2f, 0.5f}, {"height", &HoodParams::height, 0.25f, 0.6f}},
+                                        plain(&hood)));
+    out.push_back(makeBlock<BeltParams>("belt", "Belt",
+                                        {{"height", &BeltParams::height, -0.3f, 0.2f},
+                                         {"width", &BeltParams::width, 0.01f, 0.2f},
+                                         {"ease", &BeltParams::ease, 0.f, 0.5f},
+                                         {"fitRadius", &BeltParams::fitRadius, 0.f, 0.6f},
+                                         {"buckle", &BeltParams::buckle}},
+                                        Generator<BeltParams>(&belt)));
+    category("Accessories");
+    out.push_back(makeBlock<SackParams>("sack", "Sack",
+                                        {{"width", &SackParams::width, 0.1f, 2.f}, {"height", &SackParams::height, 0.1f, 2.f}},
+                                        plain(&sack)));
+    out.push_back(makeBlock<BannerParams>("banner", "Banner / Flag",
+                                          {{"width", &BannerParams::width, 0.1f, 5.f},
+                                           {"height", &BannerParams::height, 0.1f, 5.f},
+                                           {"vertical", &BannerParams::vertical},
+                                           {"tail", &BannerParams::tail, 0.f, 2.f}},
+                                          plain(&banner)));
+    out.push_back(makeBlock<TentParams>("tent", "Tent",
+                                        {{"radius", &TentParams::radius, 0.3f, 5.f},
+                                         {"height", &TentParams::height, 0.3f, 5.f},
+                                         {"sides", &TentParams::sides, 3, 16},
+                                         {"door", &TentParams::door}},
+                                        plain(&tent)));
+    category("Props");
+    out.push_back(makeBlock<OutfitParams>("cloakTunicBelt", "Tunic, Belt and Hooded Cloak",
+                                          {{"tunicLength", &OutfitParams::tunicLength, 0.5f, 1.3f},
+                                           {"cloakLength", &OutfitParams::cloakLength, 0.4f, 1.5f},
+                                           {"beltEase", &OutfitParams::beltEase, 0.f, 0.3f},
+                                           {"hood", &OutfitParams::hood}},
+                                          Generator<OutfitParams>(&cloakTunicBelt)));
+    category("Outfits");
     return out;
 }
 

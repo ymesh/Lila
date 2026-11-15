@@ -151,6 +151,69 @@ int pickShowcase(const std::vector<Item>& showcase, const json& views)
     return best;
 }
 
+namespace
+{
+std::string_view trimmed(std::string_view s)
+{
+    while (!s.empty() && (s.front() == ' ' || s.front() == '\t'))
+        s.remove_prefix(1);
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r'))
+        s.remove_suffix(1);
+    return s;
+}
+
+/** Markdown inline marks dropped: [text](url) keeps its text, and *, _ and ` go. */
+std::string plainInline(std::string_view s)
+{
+    std::string out;
+    for (size_t i = 0; i < s.size(); ++i)
+    {
+        const char c = s[i];
+        if (c == '[')
+        {
+            const size_t close = s.find("](", i);
+            const size_t end = close == std::string_view::npos ? close : s.find(')', close);
+            if (end != std::string_view::npos)
+            {
+                out += plainInline(s.substr(i + 1, close - i - 1));
+                i = end;
+                continue;
+            }
+        }
+        if (c == '*' || c == '`' || (c == '_' && (i == 0 || i + 1 == s.size() || s[i - 1] == ' ' || s[i + 1] == ' ')))
+            continue;
+        out += c;
+    }
+    return out;
+}
+} // namespace
+
+Release latestRelease(std::string_view markdown)
+{
+    Release r;
+    bool inside = false;
+    while (!markdown.empty())
+    {
+        const size_t nl = markdown.find('\n');
+        const std::string_view line = trimmed(markdown.substr(0, nl));
+        markdown.remove_prefix(nl == std::string_view::npos ? markdown.size() : nl + 1);
+        if (line.starts_with("## "))
+        {
+            if (inside)
+                break;
+            inside = true;
+            const std::string_view heading = trimmed(line.substr(3));
+            const size_t dash = heading.find(" - ");
+            r.version = std::string(trimmed(heading.substr(0, dash)));
+            if (dash != std::string_view::npos)
+                r.date = std::string(trimmed(heading.substr(dash + 3)));
+        }
+        else if (inside && (line.starts_with("- ") || line.starts_with("* ")))
+            r.changes.push_back(plainInline(trimmed(line.substr(2))));
+    }
+    return r;
+}
+
 std::vector<std::string> seenIds()
 {
     std::vector<std::string> out;

@@ -1,0 +1,55 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Soft Grime Halo",
+  "description": "A soft halo of grime around recesses and contact areas, no hard lines.",
+  "tags": [
+    "dirt",
+    "occlusion",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Occlusion",
+      "type": "genAoDarken",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.25,
+        "softness": 0.7
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Soften",
+      "type": "blur",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "radius": 0.02
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Grime Noise",
+      "type": "dirt",
+      "mode": "multiply",
+      "opacity": 0.6,
+      "invert": false,
+      "values": {
+        "scale": 4,
+        "amount": 0.6,
+        "contrast": 1.5,
+        "grain": 0.3,
+        "seed": 161
+      }
+    }
+  ]
+}

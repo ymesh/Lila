@@ -4,6 +4,7 @@
 #include "ui/Theme.h"
 
 #include "ui/FontPicker.h"
+#include "ui/GroupedChoice.h"
 #include "ui/CodeEdit.h"
 #include "ui/MultilineEdit.h"
 #include "ui/NodePicker.h"
@@ -294,7 +295,18 @@ FlagFieldWidgets makeFlagField(const opt::Field& f, const json& value, std::func
             };
             break;
         }
-        auto* combo = new QComboBox(parent);
+        QComboBox* combo = nullptr;
+        if (f.editor == "grouped" && f.choiceGroups.size() == f.choices.size())
+        {
+            auto* grouped = new GroupedChoice(parent);
+            QStringList groups;
+            for (const std::string& g : f.choiceGroups)
+                groups << QString::fromStdString(g);
+            grouped->setGroups(groups);
+            combo = grouped;
+        }
+        else
+            combo = new QComboBox(parent);
         for (size_t i = 0; i < f.choices.size(); ++i)
             combo->addItem(flagChoiceLabel(f, i), QString::fromStdString(f.choices[i]));
         auto select = [combo](const json& v) {

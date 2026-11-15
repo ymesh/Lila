@@ -1,0 +1,307 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Dark Walnut",
+  "description": "Finished dark walnut with wavy fine grain, warm figure and a satin sheen.",
+  "tags": [
+    "wood",
+    "realistic",
+    "clean"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L4",
+    "name": "Dark Walnut",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Walnut",
+        "kind": "procedural",
+        "graph": {
+          "name": "walnut",
+          "typeVersion": 1,
+          "inputs": [
+            {
+              "name": "Noise Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 3,
+              "targets": [
+                "Perlin2.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 361,
+              "targets": [
+                "Directional1.seed",
+                "Perlin2.seed"
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "name": "baseColor",
+              "type": "color"
+            },
+            {
+              "name": "height",
+              "type": "gray"
+            },
+            {
+              "name": "roughness",
+              "type": "gray"
+            }
+          ],
+          "nodes": [
+            {
+              "name": "GroupInput",
+              "type": "GroupInput",
+              "position": [
+                -800,
+                0
+              ]
+            },
+            {
+              "name": "Directional1",
+              "type": "directional",
+              "position": [
+                -500,
+                0
+              ],
+              "values": {
+                "angle": 0.0,
+                "scaleAlong": 3,
+                "scaleAcross": 70,
+                "octaves": 5,
+                "persistence": 0.55,
+                "seed": 361
+              }
+            },
+            {
+              "name": "Perlin2",
+              "type": "perlin",
+              "position": [
+                -350,
+                0
+              ],
+              "values": {
+                "scale": 3,
+                "octaves": 3,
+                "seed": 362
+              }
+            },
+            {
+              "name": "Warp3",
+              "type": "warp",
+              "position": [
+                -200,
+                0
+              ],
+              "values": {
+                "mode": "gradient",
+                "intensity": 0.5
+              }
+            },
+            {
+              "name": "Colorize4",
+              "type": "colorize",
+              "position": [
+                -50,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.0049,
+                      0.0027,
+                      0.0015,
+                      1
+                    ]
+                  ],
+                  [
+                    0.5,
+                    [
+                      0.0174,
+                      0.0072,
+                      0.0035,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.047,
+                      0.0174,
+                      0.0072,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Colorize5",
+              "type": "colorize",
+              "position": [
+                100,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.49,
+                      0.49,
+                      0.49,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.51,
+                      0.51,
+                      0.51,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Colorize6",
+              "type": "colorize",
+              "position": [
+                -650,
+                120
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.32,
+                      0.32,
+                      0.32,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.45,
+                      0.45,
+                      0.45,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "GroupOutput",
+              "type": "GroupOutput",
+              "position": [
+                400,
+                0
+              ]
+            }
+          ],
+          "links": [
+            [
+              "Directional1",
+              "out",
+              "Warp3",
+              "input"
+            ],
+            [
+              "Perlin2",
+              "out",
+              "Warp3",
+              "warp"
+            ],
+            [
+              "Warp3",
+              "out",
+              "Colorize4",
+              "input"
+            ],
+            [
+              "Colorize4",
+              "out",
+              "GroupOutput",
+              "baseColor"
+            ],
+            [
+              "Warp3",
+              "out",
+              "Colorize5",
+              "input"
+            ],
+            [
+              "Colorize5",
+              "out",
+              "GroupOutput",
+              "height"
+            ],
+            [
+              "Warp3",
+              "out",
+              "Colorize6",
+              "input"
+            ],
+            [
+              "Colorize6",
+              "out",
+              "GroupOutput",
+              "roughness"
+            ]
+          ]
+        },
+        "masks": []
+      },
+      {
+        "id": "L3",
+        "name": "Recess Darkening",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.3185,
+            0.2633,
+            0.214,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M2",
+            "kind": "generator",
+            "type": "genAoDarken",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.4
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "multiply",
+            "opacity": 0.6
+          }
+        }
+      }
+    ],
+    "masks": []
+  }
+}

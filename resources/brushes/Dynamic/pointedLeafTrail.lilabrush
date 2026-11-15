@@ -1,0 +1,34 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Pointed Leaf Trail",
+  "category": "Dynamic",
+  "doc": "Pointed leaves angled off the stroke.",
+  "brush": {
+    "falloff": "constant",
+    "strength": 1.0,
+    "flow": 1.0,
+    "spacing": 1.0,
+    "pressureSize": false,
+    "pressureOpacity": false,
+    "pressureFlow": false,
+    "jitter": {
+      "position": 0.0,
+      "size": 0.2,
+      "opacity": 0.0,
+      "angle": 20
+    },
+    "angle": 45.0,
+    "followStroke": true,
+    "roundness": 1.0,
+    "alpha": "alpha://lila/organic/pointed leaf.png",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.0,
+    "seed": 21506
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "normal"
+  }
+}

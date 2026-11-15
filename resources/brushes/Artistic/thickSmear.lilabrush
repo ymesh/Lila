@@ -1,0 +1,33 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Thick Smear",
+  "category": "Artistic",
+  "doc": "Heavy paint smeared with ridged edges.",
+  "brush": {
+    "falloff": "smooth",
+    "strength": 1.0,
+    "flow": 1.0,
+    "spacing": 0.05,
+    "pressureSize": false,
+    "pressureOpacity": false,
+    "pressureFlow": false,
+    "jitter": {
+      "position": 0.0,
+      "size": 0.0,
+      "opacity": 0.0,
+      "angle": 0.0
+    },
+    "angle": 0.0,
+    "followStroke": true,
+    "roundness": 1.0,
+    "alpha": "alpha://lila/stylized/paint smear.png",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.0
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "normal"
+  }
+}

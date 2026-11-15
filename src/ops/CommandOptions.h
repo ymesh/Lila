@@ -41,6 +41,8 @@ struct Field
     std::vector<std::string> choiceLabels; // same size as choices
     /** Each choice's own doc, same size as choices; empty where neither an override nor the flag's doc gives one. */
     std::vector<std::string> choiceDocs;
+    /** Each choice's group for the "grouped" editor, same size as choices; empty when the choices are not grouped. */
+    std::vector<std::string> choiceGroups;
     std::string doc;
     double min = std::numeric_limits<double>::quiet_NaN();
     double max = std::numeric_limits<double>::quiet_NaN();
@@ -51,7 +53,8 @@ struct Field
     /**
      * A Text field's editor: "multiline" (a box of several lines), "code" (monospace, applied on Ctrl+Enter), "font" (font
      * pickers) or "uvSet" (the selected meshes' uv sets, given to every flag named uvSet); empty is one line. A Choice
-     * field's editor: "segmented" (one strip of its values, for modes); empty is a dropdown.
+     * field's editor: "segmented" (one strip of its values, for modes) or "grouped" (a long list picked by group, with a
+     * search; the groups come from Override::choiceGroups); empty is a dropdown.
      */
     std::string editor;
     /** A Text or List field naming scene nodes: their type (FlagDef::nodeType), drawn as a node picker. */
@@ -70,6 +73,7 @@ struct Override
     std::map<std::string, std::string> sections;
     std::map<std::string, std::vector<std::pair<std::string, std::string>>> choices; // flag -> (value, label)
     std::map<std::string, std::map<std::string, std::string>> choiceDocs;            // flag -> value -> its doc
+    std::map<std::string, std::map<std::string, std::string>> choiceGroups;          // flag -> value -> its group
     struct Range
     {
         double min, max, step;

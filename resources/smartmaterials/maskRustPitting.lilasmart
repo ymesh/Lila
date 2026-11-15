@@ -1,0 +1,72 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Pitted Corrosion",
+  "description": "Small corrosion pits clustering into rough spots.",
+  "tags": [
+    "rust",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Pits",
+      "type": "cells",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": true,
+      "values": {
+        "scale": 26,
+        "mode": "f1",
+        "width": 0.08,
+        "jitter": 1.0,
+        "seed": 451
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Pit Size",
+      "type": "threshold",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "threshold": 0.78,
+        "softness": 0.1
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Spread",
+      "type": "genRustSpread",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.35,
+        "softness": 0.5,
+        "breakup": 1.0,
+        "seed": 452
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "generator",
+      "name": "Cores",
+      "type": "genRustSpread",
+      "mode": "lighten",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.6,
+        "softness": 0.15,
+        "breakup": 1.0,
+        "seed": 452
+      }
+    }
+  ]
+}

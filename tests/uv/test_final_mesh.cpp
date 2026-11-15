@@ -9,6 +9,7 @@
 
 #include <doctest/doctest.h>
 
+#include <array>
 #include <chrono>
 #include <map>
 #include <cmath>
@@ -1111,5 +1112,147 @@ TEST_CASE("final mesh: cage uvs the export barely reads stay with their neighbou
         const glm::dvec2 sb = before[i].uvMax() - before[i].uvMin(), sa = after[i].uvMax() - after[i].uvMin();
         INFO("island " << i << ", grows " << std::max(sa.x / sb.x, sa.y / sb.y));
         CHECK(std::max(sa.x / sb.x, sa.y / sb.y) < 1.1);
+    }
+}
+
+namespace
+{
+/**
+ * A stepped block beside the X plane and its mirror image, every face an island of its own sized by its edges, the
+ * mirror's islands laid out as the mirror of the block's. Thin faces sit next to big ones, so two levels of
+ * subdivision stretch their borders and Fit Surface respaces them.
+ */
+geo::Mesh mirroredSteps()
+{
+    const glm::dvec3 points[] = {{2.512, -0.283, 1.45},  {9.503, -0.267, 1.595},  {9.41, 0.275, 1.392},   {2.486, 0.261, 1.49},
+                                 {9.536, 0.281, -1.458}, {2.522, 0.26, -1.486},   {9.442, -0.307, -1.552}, {2.546, -0.305, -1.582},
+                                 {2.511, 0.574, 1.454},  {9.433, 0.541, 1.605},   {9.614, 0.564, -1.403}, {2.583, 0.54, -1.598},
+                                 {2.537, -0.295, 1.667}, {9.434, -0.308, 1.693},  {9.445, 0.283, 1.69},   {2.587, 0.307, 1.648}};
+    const Index faces[][4] = {{12, 13, 14, 15}, {8, 9, 10, 11}, {5, 4, 6, 7},  {7, 6, 1, 0},   {1, 6, 4, 2},   {7, 0, 3, 5},   {3, 2, 9, 8},
+                              {2, 4, 10, 9},    {4, 5, 11, 10}, {5, 3, 8, 11}, {0, 1, 13, 12}, {1, 2, 14, 13}, {2, 3, 15, 14}, {3, 0, 12, 15}};
+    const Index n = Index(std::size(points));
+    geo::Mesh m;
+    for (const double side : {1.0, -1.0})
+        for (const glm::dvec3& p : points)
+            m.addPoint(p * glm::dvec3(side, 1.0, 1.0));
+    std::vector<std::array<glm::vec2, 4>> uvs;
+    float x = 0.0f;
+    for (const auto& f : faces)
+    {
+        const float w = float(glm::length(points[f[1]] - points[f[0]]) * 0.02), h = float(glm::length(points[f[3]] - points[f[0]]) * 0.02);
+        uvs.push_back({glm::vec2(x, 0.0f), glm::vec2(x + w, 0.0f), glm::vec2(x + w, h), glm::vec2(x, h)});
+        x += w + 0.01f;
+    }
+    std::vector<Index> made;
+    for (const auto& f : faces)
+        made.push_back(m.addFace({f[0], f[1], f[2], f[3]}));
+    // The mirror turns each face round, so its corners run the other way.
+    for (const auto& f : faces)
+        made.push_back(m.addFace({f[3] + n, f[2] + n, f[1] + n, f[0] + n}));
+    std::span<glm::vec2> uv = m.cornerAttrs().add("uv0", geo::AttrType::Float2).values<glm::vec2>();
+    for (size_t k = 0; k < made.size(); ++k)
+    {
+        const std::vector<Index> fc = m.faceCorners(made[k]);
+        const bool mirror = k >= std::size(faces);
+        for (size_t a = 0; a < 4; ++a)
+        {
+            const glm::vec2 v = uvs[k % std::size(faces)][mirror ? 3 - a : a];
+            uv[fc[a]] = mirror ? glm::vec2(2.0f - v.x, v.y) : v;
+        }
+    }
+    return m;
+}
+
+/** Face corners whose uv turns against their face's winding: a folded or concave face. */
+size_t uvFoldedCorners(const geo::Mesh& m)
+{
+    const std::span<const glm::vec2> uv = m.cornerAttrs().get<glm::vec2>("uv0");
+    size_t folded = 0;
+    for (Index f = 0; f < m.faceCapacity(); ++f)
+    {
+        if (!m.faceValid(f))
+            continue;
+        const std::vector<Index> fc = m.faceCorners(f);
+        auto turn = [&](size_t a) {
+            const glm::dvec2 p = uv[fc[(a + fc.size() - 1) % fc.size()]], q = uv[fc[a]], r = uv[fc[(a + 1) % fc.size()]];
+            return (q.x - p.x) * (r.y - q.y) - (q.y - p.y) * (r.x - q.x);
+        };
+        double area = 0.0;
+        for (size_t a = 0; a < fc.size(); ++a)
+            area += turn(a);
+        for (size_t a = 0; a < fc.size(); ++a)
+            folded += turn(a) * area < -1e-12 ? 1 : 0;
+    }
+    return folded;
+}
+} // namespace
+
+TEST_CASE("final mesh: fit surface gives a mirrored island the mirror of its uvs")
+{
+    const geo::Mesh cage = mirroredSteps();
+    const geo::Mesh blend = geo::subdivide(cage, {.levels = 2, .uvs = geo::SubdivideUvs::Blend});
+    const geo::Mesh fit = geo::subdivide(cage, {.levels = 2, .uvs = geo::SubdivideUvs::FitSurface});
+    REQUIRE(fit.cornerCapacity() == blend.cornerCapacity());
+    const std::span<const glm::vec2> ub = blend.cornerAttrs().get<glm::vec2>("uv0"), uf = fit.cornerAttrs().get<glm::vec2>("uv0");
+
+    auto key = [](const glm::dvec3& p) { return std::array<long long, 3>{std::llround(p.x * 1e5), std::llround(p.y * 1e5), std::llround(p.z * 1e5)}; };
+    std::map<std::array<long long, 3>, Index> pointAt;
+    for (Index p = 0; p < fit.pointCapacity(); ++p)
+        if (fit.pointValid(p))
+            pointAt[key(fit.position(p))] = p;
+    // Per point and face, the corner there: a mirrored corner is the one at the mirrored point of the mirrored face.
+    std::map<std::set<Index>, Index> faceOf;
+    for (Index f = 0; f < fit.faceCapacity(); ++f)
+        if (fit.faceValid(f))
+        {
+            std::set<Index> pts;
+            fit.forEachFaceCorner(f, [&](Index c) { pts.insert(fit.cornerPoint(c)); });
+            faceOf[pts] = f;
+        }
+    double moved = 0.0, worst = 0.0;
+    size_t paired = 0;
+    for (Index f = 0; f < fit.faceCapacity(); ++f)
+    {
+        if (!fit.faceValid(f) || fit.position(fit.cornerPoint(fit.faceCorner(f))).x < 0.0)
+            continue;
+        std::set<Index> pts;
+        std::map<Index, Index> mirrorOf;
+        bool ok = true;
+        fit.forEachFaceCorner(f, [&](Index c) {
+            const auto it = pointAt.find(key(fit.position(fit.cornerPoint(c)) * glm::dvec3(-1.0, 1.0, 1.0)));
+            ok = ok && it != pointAt.end();
+            if (ok)
+            {
+                pts.insert(it->second);
+                mirrorOf[fit.cornerPoint(c)] = it->second;
+            }
+        });
+        REQUIRE(ok);
+        REQUIRE(faceOf.count(pts));
+        const Index g = faceOf[pts];
+        fit.forEachFaceCorner(f, [&](Index c) {
+            fit.forEachFaceCorner(g, [&](Index d) {
+                if (fit.cornerPoint(d) != mirrorOf[fit.cornerPoint(c)])
+                    return;
+                const glm::dvec2 a = glm::dvec2(uf[c]) - glm::dvec2(ub[c]), b = glm::dvec2(uf[d]) - glm::dvec2(ub[d]);
+                moved = std::max(moved, glm::length(a));
+                worst = std::max(worst, glm::length(a - glm::dvec2(-b.x, b.y)));
+                ++paired;
+            });
+        });
+    }
+    MESSAGE("fit moved uvs by up to " << moved << "; mirrored corners disagree by up to " << worst << " over " << paired << " corners");
+    CHECK(paired > 800);
+    // The fit has to be doing something here for the comparison to mean anything.
+    CHECK(moved > 0.005);
+    CHECK(worst < 1e-4);
+}
+
+TEST_CASE("final mesh: fit surface never folds a face blend left unfolded")
+{
+    for (const geo::Mesh& cage : {mirroredSteps(), lidPlate(0.4, 2), plate(0.4, 2)})
+    {
+        REQUIRE(uvFoldedCorners(geo::subdivide(cage, {.levels = 2, .uvs = geo::SubdivideUvs::Blend})) == 0);
+        CHECK(uvFoldedCorners(geo::subdivide(cage, {.levels = 2, .uvs = geo::SubdivideUvs::FitSurface})) == 0);
     }
 }

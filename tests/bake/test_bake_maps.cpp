@@ -548,6 +548,17 @@ TEST_CASE("links: a self high projects only onto its own low; unlinked meshes st
     ops::execute("bakeGroup", {{"args", {"g"}}, {"unlinks", json::array({json{{"lows", {f2}}, {"meshes", {roof}}}})}});
     CHECK(ops::execute("bakeGroup", {{"args", {"g"}}})["unlinks"].size() == 1);
     CHECK(ao() == doctest::Approx(1.0f).epsilon(0.01));
+
+    // The same by the lid's material, which follows a rename.
+    ops::execute("bakeGroup", {{"args", {"g"}}, {"unlinks", json::array()}});
+    ops::execute("createMaterial", {{"args", {"M_Lid"}}});
+    ops::execute("assignMaterial", {{"args", {"M_Lid", roof}}});
+    CHECK(ao() < 0.5f);
+    ops::execute("bakeGroup", {{"args", {"g"}}, {"unlinks", json::array({json{{"materials", {"M_Lid"}}}})}});
+    CHECK(ao() == doctest::Approx(1.0f).epsilon(0.01));
+    ops::execute("renameMaterial", {{"args", {"M_Lid", "M_Roof"}}});
+    CHECK(ops::execute("bakeGroup", {{"args", {"g"}}})["unlinks"][0]["materials"] == json::array({"M_Roof"}));
+    CHECK(ao() == doctest::Approx(1.0f).epsilon(0.01));
 }
 
 TEST_CASE("AO: a point buried inside another high isn't black")

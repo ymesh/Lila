@@ -1,0 +1,42 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Tight Contact Shadow",
+  "description": "Only the tightest contact areas and deep corners.",
+  "tags": [
+    "occlusion",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Contact",
+      "type": "genAoDarken",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.25,
+        "softness": 0.2
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Crevices",
+      "type": "levels",
+      "mode": "lighten",
+      "opacity": 0.6,
+      "invert": true,
+      "values": {
+        "inLow": 0.7,
+        "inHigh": 0.9
+      },
+      "bindings": {
+        "input": "cavity"
+      }
+    }
+  ]
+}

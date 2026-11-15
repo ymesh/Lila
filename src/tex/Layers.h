@@ -100,6 +100,17 @@ struct LILA_SCENE_API Mask
     static Mask fromJson(const json& j);
 };
 
+/** How a procedural layer's content repeats: tiles across the texture, turned (degrees) and shifted (in tiles). */
+struct LayerTiling
+{
+    double scale = 1.0;
+    double rotation = 0.0;
+    double offsetX = 0.0;
+    double offsetY = 0.0;
+
+    bool identity() const { return scale == 1.0 && rotation == 0.0 && offsetX == 0.0 && offsetY == 0.0; }
+};
+
 struct HeightBlend
 {
     bool enabled = false;
@@ -130,6 +141,8 @@ struct LILA_SCENE_API Layer
     std::string anchor;
     /** Mixes the layer in by height as well as mask (needs its height channel on). */
     HeightBlend heightBlend;
+    /** Procedural: repeats the content. */
+    LayerTiling tiling;
     std::vector<Mask> masks;
     /** Folder: bottom first. */
     std::vector<Layer> children;

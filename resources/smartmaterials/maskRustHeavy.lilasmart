@@ -1,0 +1,58 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Heavy Corrosion",
+  "description": "Rust covering most of the surface, leaving only scattered clean islands.",
+  "tags": [
+    "rust",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Rust",
+      "type": "genRustSpread",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.3,
+        "softness": 0.35,
+        "breakup": 1.0,
+        "noiseScale": 4,
+        "seed": 461
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Spread",
+      "type": "clouds",
+      "mode": "lighten",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 4,
+        "octaves": 5,
+        "mode": "billow",
+        "contrast": 1.5,
+        "seed": 462
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "filter",
+      "name": "Coverage",
+      "type": "histogramScan",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "position": 0.72,
+        "contrast": 0.7
+      }
+    }
+  ]
+}

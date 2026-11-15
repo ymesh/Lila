@@ -1,0 +1,71 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Concrete Weather Streaks",
+  "description": "Dark weather streaks hanging below ledges on concrete and stone walls.",
+  "tags": [
+    "concrete",
+    "drips",
+    "stains",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Ledges",
+      "type": "genDust",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.6,
+        "softness": 0.3,
+        "breakup": 0.3,
+        "seed": 1521
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Run Down",
+      "type": "directionalBlur",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "angle": 90.0,
+        "length": 0.1
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Streak Texture",
+      "type": "directional",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "angle": 90.0,
+        "scaleAlong": 3,
+        "scaleAcross": 30,
+        "octaves": 4,
+        "seed": 1522
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "levels",
+      "name": "Range",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "inLow": 0.02,
+        "inHigh": 0.35
+      }
+    }
+  ]
+}

@@ -1,0 +1,600 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Stylized Dirt Path",
+  "description": "Warm trodden earth scattered with pale pebbles and shaded with soft painted blotches.",
+  "tags": [
+    "ground",
+    "stylized"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L9",
+    "name": "Stylized Dirt Path",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Earth",
+        "kind": "procedural",
+        "graph": {
+          "name": "dirt",
+          "typeVersion": 1,
+          "inputs": [
+            {
+              "name": "Pebble Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 16,
+              "targets": [
+                "Cells3.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Pebble Size",
+              "kind": "param",
+              "type": "float",
+              "default": 0.78,
+              "targets": [
+                "Threshold7.threshold"
+              ],
+              "min": 0.0,
+              "max": 1.0
+            },
+            {
+              "name": "Pebble Spacing",
+              "kind": "param",
+              "type": "float",
+              "default": 0.5,
+              "targets": [
+                "Threshold9.threshold"
+              ],
+              "min": 0.0,
+              "max": 1.0
+            },
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 4,
+              "targets": [
+                "Clouds1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 111,
+              "targets": [
+                "Clouds1.seed",
+                "Cells3.seed",
+                "Perlin4.seed",
+                "Perlin8.seed"
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "name": "baseColor",
+              "type": "color"
+            },
+            {
+              "name": "height",
+              "type": "gray"
+            },
+            {
+              "name": "roughness",
+              "type": "gray"
+            }
+          ],
+          "nodes": [
+            {
+              "name": "GroupInput",
+              "type": "GroupInput",
+              "position": [
+                -800,
+                0
+              ]
+            },
+            {
+              "name": "Clouds1",
+              "type": "clouds",
+              "position": [
+                -500,
+                0
+              ],
+              "values": {
+                "scale": 4,
+                "octaves": 4,
+                "seed": 111
+              }
+            },
+            {
+              "name": "Colorize2",
+              "type": "colorize",
+              "position": [
+                -350,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.1065,
+                      0.047,
+                      0.022,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.2633,
+                      0.1193,
+                      0.047,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Cells3",
+              "type": "cells",
+              "position": [
+                -200,
+                0
+              ],
+              "values": {
+                "scale": 16,
+                "mode": "f1",
+                "jitter": 1.0,
+                "seed": 112
+              }
+            },
+            {
+              "name": "Perlin4",
+              "type": "perlin",
+              "position": [
+                -50,
+                0
+              ],
+              "values": {
+                "scale": 9,
+                "octaves": 3,
+                "seed": 113
+              }
+            },
+            {
+              "name": "Warp5",
+              "type": "warp",
+              "position": [
+                100,
+                0
+              ],
+              "values": {
+                "mode": "gradient",
+                "intensity": 0.35
+              }
+            },
+            {
+              "name": "Invert6",
+              "type": "invert",
+              "position": [
+                -650,
+                120
+              ],
+              "values": {}
+            },
+            {
+              "name": "Threshold7",
+              "type": "threshold",
+              "position": [
+                -500,
+                120
+              ],
+              "values": {
+                "threshold": 0.78,
+                "softness": 0.04
+              }
+            },
+            {
+              "name": "Perlin8",
+              "type": "perlin",
+              "position": [
+                -350,
+                120
+              ],
+              "values": {
+                "scale": 5,
+                "octaves": 2,
+                "seed": 114
+              }
+            },
+            {
+              "name": "Threshold9",
+              "type": "threshold",
+              "position": [
+                -200,
+                120
+              ],
+              "values": {
+                "threshold": 0.5,
+                "softness": 0.05
+              }
+            },
+            {
+              "name": "Blend10",
+              "type": "blend",
+              "position": [
+                -50,
+                120
+              ],
+              "values": {
+                "mode": "multiply",
+                "opacity": 1.0
+              }
+            },
+            {
+              "name": "Color11",
+              "type": "color",
+              "position": [
+                100,
+                120
+              ],
+              "values": {
+                "color": [
+                  0.448,
+                  0.3424,
+                  0.233,
+                  1
+                ]
+              }
+            },
+            {
+              "name": "Blend12",
+              "type": "blend",
+              "position": [
+                -650,
+                240
+              ],
+              "values": {
+                "mode": "normal",
+                "opacity": 1.0
+              }
+            },
+            {
+              "name": "Colorize13",
+              "type": "colorize",
+              "position": [
+                -500,
+                240
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.45,
+                      0.45,
+                      0.45,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.55,
+                      0.55,
+                      0.55,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Colorize14",
+              "type": "colorize",
+              "position": [
+                -350,
+                240
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.0,
+                      0.0,
+                      0.0,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.3,
+                      0.3,
+                      0.3,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Blend15",
+              "type": "blend",
+              "position": [
+                -200,
+                240
+              ],
+              "values": {
+                "mode": "add",
+                "opacity": 1.0
+              }
+            },
+            {
+              "name": "Constant16",
+              "type": "constant",
+              "position": [
+                -50,
+                240
+              ],
+              "values": {
+                "value": 0.92
+              }
+            },
+            {
+              "name": "GroupOutput",
+              "type": "GroupOutput",
+              "position": [
+                400,
+                0
+              ]
+            }
+          ],
+          "links": [
+            [
+              "Clouds1",
+              "out",
+              "Colorize2",
+              "input"
+            ],
+            [
+              "Cells3",
+              "out",
+              "Warp5",
+              "input"
+            ],
+            [
+              "Perlin4",
+              "out",
+              "Warp5",
+              "warp"
+            ],
+            [
+              "Warp5",
+              "out",
+              "Invert6",
+              "input"
+            ],
+            [
+              "Invert6",
+              "out",
+              "Threshold7",
+              "input"
+            ],
+            [
+              "Perlin8",
+              "out",
+              "Threshold9",
+              "input"
+            ],
+            [
+              "Threshold7",
+              "out",
+              "Blend10",
+              "foreground"
+            ],
+            [
+              "Threshold9",
+              "out",
+              "Blend10",
+              "background"
+            ],
+            [
+              "Color11",
+              "out",
+              "Blend12",
+              "foreground"
+            ],
+            [
+              "Colorize2",
+              "out",
+              "Blend12",
+              "background"
+            ],
+            [
+              "Blend10",
+              "out",
+              "Blend12",
+              "mask"
+            ],
+            [
+              "Blend12",
+              "out",
+              "GroupOutput",
+              "baseColor"
+            ],
+            [
+              "Clouds1",
+              "out",
+              "Colorize13",
+              "input"
+            ],
+            [
+              "Blend10",
+              "out",
+              "Colorize14",
+              "input"
+            ],
+            [
+              "Colorize14",
+              "out",
+              "Blend15",
+              "foreground"
+            ],
+            [
+              "Colorize13",
+              "out",
+              "Blend15",
+              "background"
+            ],
+            [
+              "Blend15",
+              "out",
+              "GroupOutput",
+              "height"
+            ],
+            [
+              "Constant16",
+              "out",
+              "GroupOutput",
+              "roughness"
+            ]
+          ]
+        },
+        "masks": []
+      },
+      {
+        "id": "L3",
+        "name": "Colour Variation",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.0732,
+            0.0331,
+            0.0174,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M2",
+            "kind": "generator",
+            "type": "clouds",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "scale": 3,
+              "octaves": 4,
+              "persistence": 0.5,
+              "contrast": 1.4,
+              "seed": 113
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.3
+          }
+        }
+      },
+      {
+        "id": "L6",
+        "name": "Cavity Shade",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.214,
+            0.1193,
+            0.1706,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M4",
+            "kind": "generator",
+            "type": "genAoDarken",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.35,
+              "softness": 0.7
+            }
+          },
+          {
+            "id": "M5",
+            "kind": "generator",
+            "type": "genCavityGrime",
+            "mode": "lighten",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.3,
+              "softness": 0.4,
+              "breakup": 0.15,
+              "noiseScale": 6,
+              "seed": 17
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "multiply",
+            "opacity": 0.85
+          }
+        }
+      },
+      {
+        "id": "L8",
+        "name": "Top Light",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.5225,
+            0.2957,
+            0.1329,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M7",
+            "kind": "generator",
+            "type": "genPositionGradient",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "start": 0.25,
+              "end": 1.0,
+              "breakup": 0.4,
+              "noiseScale": 3,
+              "seed": 0
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.25
+          }
+        }
+      }
+    ],
+    "masks": []
+  }
+}

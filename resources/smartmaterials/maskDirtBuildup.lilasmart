@@ -1,0 +1,71 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Grime Buildup on Upper Faces",
+  "description": "Greasy grime settling on upward faces and in their corners.",
+  "tags": [
+    "dirt",
+    "dust",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Upward",
+      "type": "maskFacing",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "elevation": 90.0,
+        "twoSided": false
+      },
+      "bindings": {
+        "normal": "worldNormal"
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "levels",
+      "name": "Range",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "inLow": 0.4,
+        "inHigh": 0.9
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Corners",
+      "type": "genAoDarken",
+      "mode": "multiply",
+      "opacity": 0.6,
+      "invert": true,
+      "values": {
+        "level": 0.5,
+        "softness": 0.8
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "generator",
+      "name": "Grime Noise",
+      "type": "dirt",
+      "mode": "multiply",
+      "opacity": 0.8,
+      "invert": false,
+      "values": {
+        "scale": 4,
+        "amount": 0.6,
+        "contrast": 2.0,
+        "grain": 0.4,
+        "seed": 191
+      }
+    }
+  ]
+}

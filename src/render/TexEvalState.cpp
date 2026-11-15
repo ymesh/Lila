@@ -371,6 +371,7 @@ bool Evaluator::State::anyWork() const
 
 void Evaluator::State::allocate(VulkanContext& vk)
 {
+    LILA_ZONE();
     ensurePassLayout(vk);
     sub.init(vk);
     if (!pool)

@@ -1,0 +1,58 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Old Paint Wear",
+  "description": "Paint worn thin on edges and in large tired patches.",
+  "tags": [
+    "paint",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Thin Patches",
+      "type": "clouds",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 4,
+        "octaves": 5,
+        "mode": "billow",
+        "contrast": 1.3,
+        "seed": 702
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Coverage",
+      "type": "histogramScan",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "position": 0.7,
+        "contrast": 0.6
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Edges",
+      "type": "genEdgeWear",
+      "mode": "lighten",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "strength": 1.6,
+        "level": 0.3,
+        "softness": 0.3,
+        "breakup": 0.6,
+        "seed": 701
+      }
+    }
+  ]
+}

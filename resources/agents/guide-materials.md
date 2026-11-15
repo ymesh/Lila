@@ -38,7 +38,7 @@ r = texBuildGraph(spec, assign=["Rock"])   # {set, material, channels, nodes, li
 
 Spec rules:
 
-- `material` names the material slot; `set` defaults to `<material>Tex` (a set and its material can't share a name). Rebuilding with the same material replaces the graph and keeps the set's settings unless `settings` changes them.
+- `material` names the material slot; `set` defaults to the set already bound to the material, else `<material>Tex` without the material's `M_` prefix (`M_Rock` gets `RockTex`; a set and its material can't share a name). Rebuilding with the same material replaces the graph and keeps the set's settings unless `settings` changes them.
 - `nodes[].type` is a type from the catalogue below. `params` are the node's settings; `values` are unlinked input values. A node named `Output` of type `materialOutput` is added when missing.
 - Material Output inputs: `baseColor`, `roughness`, `metallic`, `normal`, `height`, `ao`, `emissive`, `opacity`, and `material` (a whole material; channels linked directly win over it). Unlinked channels take their `values` on Output.
 - Links are `"Node.output -> Node.input"`, `[from, to]` or `[fromNode, fromSocket, toNode, toSocket]`. An input takes one link.

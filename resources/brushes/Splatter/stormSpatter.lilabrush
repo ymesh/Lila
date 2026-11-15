@@ -1,0 +1,40 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Storm Spatter",
+  "category": "Splatter",
+  "doc": "A burst of small drops around the brush.",
+  "brush": {
+    "falloff": "smooth",
+    "strength": 1.0,
+    "flow": 1.0,
+    "spacing": 0.5,
+    "pressureSize": false,
+    "pressureOpacity": false,
+    "pressureFlow": false,
+    "jitter": {
+      "position": 0.0,
+      "size": 0.0,
+      "opacity": 0.0,
+      "angle": 0.0
+    },
+    "angle": 0.0,
+    "followStroke": false,
+    "roundness": 1.0,
+    "alpha": "alpha://lila/shapes/round soft.png",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.0
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "normal"
+  },
+  "particles": {
+    "kind": "rain",
+    "count": 14,
+    "size": 0.08,
+    "spread": 2.5,
+    "rate": 1.0
+  }
+}

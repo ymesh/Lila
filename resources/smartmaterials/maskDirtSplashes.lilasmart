@@ -1,0 +1,58 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Mud Splashes",
+  "description": "Speckled mud splashes thrown up onto the lower part of a surface.",
+  "tags": [
+    "dirt",
+    "ground",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Specks",
+      "type": "dirt",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 10,
+        "amount": 0.35,
+        "contrast": 6.0,
+        "grain": 0.2,
+        "seed": 171
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Lower Part",
+      "type": "genPositionGradient",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "start": 0.5,
+        "end": 0.0,
+        "breakup": 0.6,
+        "noiseScale": 6,
+        "seed": 172
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "filter",
+      "name": "Spread",
+      "type": "dilate",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "radius": 0.002
+      }
+    }
+  ]
+}

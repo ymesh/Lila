@@ -1,0 +1,58 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Fine Paint Cracks",
+  "description": "A fine craquelure of cracks through aged paint, strongest in patches.",
+  "tags": [
+    "paint",
+    "cracks",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Craquelure",
+      "type": "cells",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 28,
+        "mode": "crackle",
+        "width": 0.05,
+        "jitter": 0.9,
+        "seed": 721
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Aged Areas",
+      "type": "clouds",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 3,
+        "octaves": 5,
+        "mode": "soft",
+        "contrast": 1.5,
+        "seed": 722
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "levels",
+      "name": "Range",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "inLow": 0.05,
+        "inHigh": 0.8
+      }
+    }
+  ]
+}

@@ -1520,7 +1520,7 @@ void ViewportHeader::refresh()
         mCamera->setToolTip("Camera: " + camera + "\nRight-click to select it");
         layoutItems();
     }
-    if (auto* layout = qobject_cast<ViewportLayout*>(parentWidget() ? parentWidget()->parentWidget() : nullptr); layout && mQuad)
+    if (auto* layout = ViewportLayout::of(this); layout && mQuad)
     {
         QSignalBlocker block(mQuad);
         mQuad->setChecked(layout->quad());
@@ -1698,7 +1698,7 @@ void ViewportHeader::resizeEvent(QResizeEvent* e)
     QWidget::resizeEvent(e);
     layoutItems();
     // The panel resizes when the layout switches between one and four views.
-    if (auto* layout = qobject_cast<ViewportLayout*>(parentWidget() ? parentWidget()->parentWidget() : nullptr); layout && mQuad)
+    if (auto* layout = ViewportLayout::of(this); layout && mQuad)
     {
         QSignalBlocker block(mQuad);
         mQuad->setChecked(layout->quad());

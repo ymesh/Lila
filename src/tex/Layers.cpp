@@ -470,15 +470,28 @@ private:
             bind(name, {}, {}, lp + "/graph");
             GNode& n = subNode(s, "Content", kGroupType, {-400.0, 0.0});
             n.values["group"] = name;
+            // Each output resampled through the layer's tiling, so the content repeats without editing its graph.
+            auto tiled = [&](const std::string& socket, double yy) -> Src {
+                if (l.tiling.identity())
+                    return {"Content", socket};
+                GNode& t = subNode(s, "Tiling_" + socket, "layerTiling", {-200.0, yy});
+                t.values = {{"tiles", l.tiling.scale}, {"rotation", l.tiling.rotation}, {"offsetX", l.tiling.offsetX}, {"offsetY", l.tiling.offsetY}};
+                for (const char* k : {"tiles", "rotation", "offsetX", "offsetY"})
+                    bind(s.g.name, t.name, k, lp + "/tiling/" + (std::string_view(k) == "tiles" ? std::string("scale") : std::string(k)));
+                subLink(s, {"Content", socket}, t.name, "input");
+                return {t.name, "out"};
+            };
+            double ty = 0.0;
             for (const Channel* c : outs)
             {
                 if (content.output(c->name))
-                    out(*c, {"Content", c->name});
+                    out(*c, tiled(c->name, ty));
                 else
                     mWarnings.push_back(l.id + ": its graph has no " + c->name + " output");
+                ty += 120.0;
             }
             if (content.output("mask"))
-                contentMask = Src{"Content", "mask"};
+                contentMask = tiled("mask", ty);
             break;
         }
         case LayerKind::Filter:
@@ -791,8 +804,11 @@ bool parseMaskKind(std::string_view s, MaskKind* out)
 
 const std::vector<std::string>& layerBlendModes()
 {
-    static const std::vector<std::string> modes = {"normal",  "add",    "subtract", "multiply",  "screen",   "overlay",
-                                                   "darken",  "lighten", "difference", "softLight", "addSigned"};
+    // Same order as layerBlend's mode options: the shader takes the index.
+    static const std::vector<std::string> modes = {"normal",     "add",        "subtract",  "multiply",    "screen",     "overlay",
+                                                   "darken",     "lighten",    "difference", "softLight",  "addSigned",  "colorBurn",
+                                                   "linearBurn", "colorDodge", "hardLight",  "vividLight", "linearLight", "pinLight",
+                                                   "exclusion",  "divide",     "saturation", "color",      "value"};
     return modes;
 }
 
@@ -893,6 +909,8 @@ json Layer::toJson() const
     }
     if (!anchor.empty())
         j["anchor"] = anchor;
+    if (!tiling.identity())
+        j["tiling"] = {{"scale", tiling.scale}, {"rotation", tiling.rotation}, {"offsetX", tiling.offsetX}, {"offsetY", tiling.offsetY}};
     if (heightBlend.enabled || heightBlend.sharpness != 0.8 || heightBlend.influence != 1.0)
         j["heightBlend"] = {{"enabled", heightBlend.enabled}, {"sharpness", heightBlend.sharpness}, {"influence", heightBlend.influence}};
     if (!masks.empty())
@@ -949,6 +967,13 @@ Layer Layer::fromJson(const json& j)
         l.anchor = field<std::string>(j, "anchor", "");
         if (!l.anchor.empty() && !gn::validIdentifier(l.anchor))
             throw std::invalid_argument("anchor names are identifiers, not '" + l.anchor + "'");
+        if (auto it = j.find("tiling"); it != j.end() && it->is_object())
+        {
+            l.tiling.scale = std::max(0.001, field<double>(*it, "scale", 1.0));
+            l.tiling.rotation = field<double>(*it, "rotation", 0.0);
+            l.tiling.offsetX = field<double>(*it, "offsetX", 0.0);
+            l.tiling.offsetY = field<double>(*it, "offsetY", 0.0);
+        }
         if (auto it = j.find("heightBlend"); it != j.end() && it->is_object())
         {
             l.heightBlend.enabled = field<bool>(*it, "enabled", false);

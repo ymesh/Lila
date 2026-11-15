@@ -1,0 +1,33 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Dashed Line",
+  "category": "Pattern",
+  "doc": "Dashes along the stroke.",
+  "brush": {
+    "falloff": "constant",
+    "strength": 1.0,
+    "flow": 1.0,
+    "spacing": 2.0,
+    "pressureSize": false,
+    "pressureOpacity": false,
+    "pressureFlow": false,
+    "jitter": {
+      "position": 0.0,
+      "size": 0.0,
+      "opacity": 0.0,
+      "angle": 0.0
+    },
+    "angle": 0.0,
+    "followStroke": true,
+    "roundness": 1.0,
+    "alpha": "alpha://lila/brush tips/running stitch.png",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.0
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "normal"
+  }
+}

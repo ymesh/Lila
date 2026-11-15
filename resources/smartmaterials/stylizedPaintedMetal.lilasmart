@@ -1,0 +1,211 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Stylized Painted Metal",
+  "description": "Bold red enamel over steel, chipped to silver at the edges with dark grimy seams.",
+  "tags": [
+    "metal",
+    "paint",
+    "stylized",
+    "worn"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L13",
+    "name": "Stylized Painted Metal",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Steel",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.448,
+            0.477,
+            0.5225,
+            1
+          ],
+          "roughness": 0.35,
+          "metallic": 1.0,
+          "height": 0.5
+        },
+        "masks": []
+      },
+      {
+        "id": "L5",
+        "name": "Paint",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.5225,
+            0.0134,
+            0.01,
+            1
+          ],
+          "metallic": 0.0,
+          "roughness": 0.45,
+          "height": 0.52
+        },
+        "masks": [
+          {
+            "id": "M2",
+            "kind": "fill",
+            "value": 1.0,
+            "mode": "normal"
+          },
+          {
+            "id": "M3",
+            "kind": "generator",
+            "type": "genEdgeWear",
+            "mode": "subtract",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.28,
+              "softness": 0.08,
+              "breakup": 0.5,
+              "noiseScale": 6,
+              "seed": 29
+            }
+          },
+          {
+            "id": "M4",
+            "kind": "generator",
+            "type": "genPaintChips",
+            "mode": "subtract",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.78,
+              "softness": 0.03,
+              "chipScale": 14,
+              "seed": 29
+            }
+          }
+        ]
+      },
+      {
+        "id": "L7",
+        "name": "Colour Variation",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.2633,
+            0.0072,
+            0.01,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M6",
+            "kind": "generator",
+            "type": "clouds",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "scale": 3,
+              "octaves": 4,
+              "persistence": 0.5,
+              "contrast": 1.4,
+              "seed": 221
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.3
+          }
+        }
+      },
+      {
+        "id": "L10",
+        "name": "Cavity Shade",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.1329,
+            0.0732,
+            0.1329,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M8",
+            "kind": "generator",
+            "type": "genAoDarken",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.35,
+              "softness": 0.7
+            }
+          },
+          {
+            "id": "M9",
+            "kind": "generator",
+            "type": "genCavityGrime",
+            "mode": "lighten",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.3,
+              "softness": 0.4,
+              "breakup": 0.15,
+              "noiseScale": 6,
+              "seed": 29
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "multiply",
+            "opacity": 0.85
+          }
+        }
+      },
+      {
+        "id": "L12",
+        "name": "Top Light",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            1.0,
+            0.1706,
+            0.1005,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M11",
+            "kind": "generator",
+            "type": "genPositionGradient",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "start": 0.25,
+              "end": 1.0,
+              "breakup": 0.4,
+              "noiseScale": 3,
+              "seed": 0
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.25
+          }
+        }
+      }
+    ],
+    "masks": []
+  }
+}

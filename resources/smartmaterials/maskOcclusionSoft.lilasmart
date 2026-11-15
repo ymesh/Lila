@@ -1,0 +1,26 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Soft Occlusion",
+  "description": "Broad, soft ambient occlusion for gentle shading.",
+  "tags": [
+    "occlusion",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Occlusion",
+      "type": "genAoDarken",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.4,
+        "softness": 1.0
+      }
+    }
+  ]
+}

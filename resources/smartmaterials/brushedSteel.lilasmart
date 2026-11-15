@@ -1,0 +1,306 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Brushed Steel",
+  "description": "Bright steel with fine linear brushing in the roughness and faint smudges.",
+  "tags": [
+    "metal",
+    "realistic",
+    "clean"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L4",
+    "name": "Brushed Steel",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Steel",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.6739,
+            0.6921,
+            0.7106,
+            1
+          ],
+          "roughness": 0.3,
+          "metallic": 1.0,
+          "height": 0.5
+        },
+        "masks": []
+      },
+      {
+        "id": "L2",
+        "name": "Brushing",
+        "kind": "procedural",
+        "graph": {
+          "name": "brushed",
+          "typeVersion": 1,
+          "inputs": [
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 301,
+              "targets": [
+                "Anisotropic1.seed"
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "name": "roughness",
+              "type": "gray"
+            },
+            {
+              "name": "height",
+              "type": "gray"
+            }
+          ],
+          "nodes": [
+            {
+              "name": "GroupInput",
+              "type": "GroupInput",
+              "position": [
+                -800,
+                0
+              ]
+            },
+            {
+              "name": "Anisotropic1",
+              "type": "anisotropic",
+              "position": [
+                -500,
+                0
+              ],
+              "values": {
+                "scaleX": 2,
+                "scaleY": 180,
+                "octaves": 4,
+                "persistence": 0.6,
+                "seed": 301
+              }
+            },
+            {
+              "name": "Colorize2",
+              "type": "colorize",
+              "position": [
+                -350,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.22,
+                      0.22,
+                      0.22,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.4,
+                      0.4,
+                      0.4,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Colorize3",
+              "type": "colorize",
+              "position": [
+                -200,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.495,
+                      0.495,
+                      0.495,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.505,
+                      0.505,
+                      0.505,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "GroupOutput",
+              "type": "GroupOutput",
+              "position": [
+                400,
+                0
+              ]
+            }
+          ],
+          "links": [
+            [
+              "Anisotropic1",
+              "out",
+              "Colorize2",
+              "input"
+            ],
+            [
+              "Colorize2",
+              "out",
+              "GroupOutput",
+              "roughness"
+            ],
+            [
+              "Anisotropic1",
+              "out",
+              "Colorize3",
+              "input"
+            ],
+            [
+              "Colorize3",
+              "out",
+              "GroupOutput",
+              "height"
+            ]
+          ]
+        },
+        "masks": []
+      },
+      {
+        "id": "L3",
+        "name": "Smudges",
+        "kind": "procedural",
+        "graph": {
+          "name": "smudges",
+          "typeVersion": 1,
+          "inputs": [
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 4,
+              "targets": [
+                "Clouds1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 302,
+              "targets": [
+                "Clouds1.seed"
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "name": "roughness",
+              "type": "gray"
+            }
+          ],
+          "nodes": [
+            {
+              "name": "GroupInput",
+              "type": "GroupInput",
+              "position": [
+                -800,
+                0
+              ]
+            },
+            {
+              "name": "Clouds1",
+              "type": "clouds",
+              "position": [
+                -500,
+                0
+              ],
+              "values": {
+                "scale": 4,
+                "contrast": 1.5,
+                "seed": 302
+              }
+            },
+            {
+              "name": "Colorize2",
+              "type": "colorize",
+              "position": [
+                -350,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.25,
+                      0.25,
+                      0.25,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.45,
+                      0.45,
+                      0.45,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "GroupOutput",
+              "type": "GroupOutput",
+              "position": [
+                400,
+                0
+              ]
+            }
+          ],
+          "links": [
+            [
+              "Clouds1",
+              "out",
+              "Colorize2",
+              "input"
+            ],
+            [
+              "Colorize2",
+              "out",
+              "GroupOutput",
+              "roughness"
+            ]
+          ]
+        },
+        "masks": [],
+        "channels": {
+          "roughness": {
+            "mode": "normal",
+            "opacity": 0.35
+          }
+        }
+      }
+    ],
+    "masks": []
+  }
+}

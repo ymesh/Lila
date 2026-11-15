@@ -438,7 +438,8 @@ void registerGroupCommands()
         .name = "bakeLint",
         .doc = "Check a bake project before baking: hard edges off UV seams, overlapping UVs (also across groups writing one "
                "texture), missing or collapsed UVs, islands off their mesh's texel density, mirrored islands against tangent signs, "
-               "lows with no high in range, highs outside the cage and cage topology; non-planar faces whose triangulation depends "
+               "lows with no high in range, highs outside the cage, cage topology and lows shown without a modifier their export "
+               "runs, where the viewport reads texels baked elsewhere (previewMesh); non-planar faces whose triangulation depends "
                "on the exporter only when checks names triangulation. Problems too small to show in the map are left out. bake runs it first and lists its warnings. Returns {issues: [{check, severity, group, mesh, message, "
                "data}], warnings, checks, distances: [{group, frontal, rear, frontalAuto, rearAuto, measured}]} (Auto distances are "
                "measured against the highs when highs is on).",

@@ -1,0 +1,70 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Dirt Spots",
+  "description": "Scattered dark spots of dirt across the whole surface, denser in occlusion.",
+  "tags": [
+    "dirt",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Spots",
+      "type": "cells",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": true,
+      "values": {
+        "scale": 18,
+        "mode": "f1",
+        "width": 0.08,
+        "jitter": 1.0,
+        "seed": 181
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Spot Size",
+      "type": "threshold",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "threshold": 0.82,
+        "softness": 0.08
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Clusters",
+      "type": "clouds",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 4,
+        "octaves": 5,
+        "mode": "soft",
+        "contrast": 1.6,
+        "seed": 182
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "generator",
+      "name": "Occlusion",
+      "type": "genAoDarken",
+      "mode": "screen",
+      "opacity": 0.3,
+      "invert": false,
+      "values": {
+        "level": 0.4
+      }
+    }
+  ]
+}

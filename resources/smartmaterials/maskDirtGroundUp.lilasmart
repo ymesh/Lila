@@ -1,0 +1,71 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Dirt Rising from the Ground",
+  "description": "Dirt splashed up from the ground, thick at the base and thinning with height.",
+  "tags": [
+    "dirt",
+    "ground",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Ground",
+      "type": "genPositionGradient",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "start": 0.5,
+        "end": 0.0,
+        "breakup": 0.5,
+        "noiseScale": 5,
+        "seed": 131
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Grain",
+      "type": "dirt",
+      "mode": "multiply",
+      "opacity": 0.7,
+      "invert": false,
+      "values": {
+        "scale": 5,
+        "amount": 0.7,
+        "contrast": 2.5,
+        "grain": 0.6,
+        "seed": 132
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Occluded Dirt",
+      "type": "genDirt",
+      "mode": "lighten",
+      "opacity": 0.5,
+      "invert": false,
+      "values": {
+        "level": 0.4,
+        "seed": 133
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "levels",
+      "name": "Range",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "inLow": 0.1,
+        "inHigh": 0.6
+      }
+    }
+  ]
+}

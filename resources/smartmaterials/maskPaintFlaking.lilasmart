@@ -1,0 +1,71 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Flaking Paint",
+  "description": "Large flakes peeling away in clusters, as on weathered boards.",
+  "tags": [
+    "paint",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Flakes",
+      "type": "cells",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": true,
+      "values": {
+        "scale": 8,
+        "mode": "f1",
+        "width": 0.08,
+        "jitter": 1.0,
+        "seed": 741
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Flake Shape",
+      "type": "threshold",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "threshold": 0.5,
+        "softness": 0.02
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Peeling Zones",
+      "type": "clouds",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 3,
+        "octaves": 5,
+        "mode": "billow",
+        "contrast": 2.0,
+        "seed": 742
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "filter",
+      "name": "Crisp",
+      "type": "threshold",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "threshold": 0.3,
+        "softness": 0.02
+      }
+    }
+  ]
+}

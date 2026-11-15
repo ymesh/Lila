@@ -12,6 +12,8 @@
 #include "scene/MeshNodes.h"
 
 #include <algorithm>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace lila::scene::modifiers
 {
@@ -173,6 +175,68 @@ bool exportEnabled(const Node& modifier)
     return a < 0 || modifier.as<bool>(a);
 }
 
+std::vector<NodeId> shownUnlikeExport(Graph& g, NodeId mesh)
+{
+    std::vector<NodeId> out;
+    for (NodeId id : stack(g, mesh))
+        if (const auto* mod = static_cast<const ModifierNode*>(g.node(id)); mod->as<bool>(mod->enabledAttr) != exportEnabled(*mod))
+            out.push_back(id);
+    return out;
+}
+
+namespace
+{
+/** One mesh's export as last re-run: valid while the re-run starts from the same mesh, through the same modifiers. */
+struct ExportEntry
+{
+    MeshPtr input;
+    std::vector<NodeId> rerun;
+    MeshPtr result;
+};
+
+/**
+ * Re-running a stack for export makes a new mesh each time, which nothing downstream can tell from a changed one: a bake
+ * would snapshot and subdivide every such mesh again. Kept per mesh until one of its re-run modifiers changes.
+ */
+struct ExportCache
+{
+    Graph* graph = nullptr;
+    std::unordered_map<NodeId, ExportEntry> entries;
+};
+
+ExportCache& exportCache(Graph& g)
+{
+    static ExportCache cache;
+    if (cache.graph != &g)
+    {
+        cache.entries.clear();
+        cache.graph = &g;
+        g.addListener([](Change c, NodeId id) {
+            if (c == Change::Selection || c == Change::Renamed)
+                return;
+            if (c != Change::Value)
+            {
+                cache.entries.clear();
+                return;
+            }
+            std::erase_if(cache.entries, [id](const auto& e) {
+                return e.first == id || std::find(e.second.rerun.begin(), e.second.rerun.end(), id) != e.second.rerun.end();
+            });
+        });
+    }
+    return cache;
+}
+
+/** Modifiers that are a function of their input mesh and own settings alone, so their re-run can be kept. */
+bool keepsExport(const ModifierNode& mod)
+{
+    static const std::unordered_set<std::string> kinds = {"mirrorModifier",      "subdivisionModifier",     "bevelModifier",    "arrayModifier",
+                                                         "triangulateModifier", "weightedNormalsModifier", "solidifyModifier", "decimateModifier",
+                                                         "autoBevelModifier"};
+    return mod.apply && kinds.contains(mod.type().name);
+}
+} // namespace
+
 MeshPtr exportMesh(Graph& g, NodeId mesh)
 {
     LILA_ZONE();
@@ -197,6 +261,16 @@ MeshPtr exportMesh(Graph& g, NodeId mesh)
 
     auto* first = static_cast<ModifierNode*>(g.node(*split));
     MeshPtr cur = first->as<MeshPtr>(first->inAttr);
+    const MeshPtr input = cur;
+    const std::vector<NodeId> rerun(split, mods.end());
+    bool keep = true;
+    for (NodeId id : rerun)
+        if (const auto* mod = static_cast<const ModifierNode*>(g.node(id)); exportEnabled(*mod) && !keepsExport(*mod))
+            keep = false;
+    ExportCache& cache = exportCache(g);
+    if (keep)
+        if (const auto it = cache.entries.find(mesh); it != cache.entries.end() && it->second.input == input && it->second.rerun == rerun)
+            return it->second.result;
     deformEval::CpuOnly cpu;
     for (auto it = split; it != mods.end(); ++it)
     {
@@ -216,6 +290,7 @@ MeshPtr exportMesh(Graph& g, NodeId mesh)
         catch (const std::exception& e)
         {
             log::warn("{}: {}", mod->path(), e.what());
+            keep = false;
         }
     }
     if (cur && geo::hasFitSpacing(*cur))
@@ -224,6 +299,8 @@ MeshPtr exportMesh(Graph& g, NodeId mesh)
         geo::removeFitSpacing(*bare);
         cur = bare;
     }
+    if (keep && cur)
+        cache.entries[mesh] = {input, rerun, cur};
     return cur;
 }
 
@@ -299,6 +376,29 @@ void registerStackCommands()
             for (const PlugRef& d : dsts)
                 g.connect({copy->id(), copy->outAttr, -1}, d);
             return copy->path();
+        },
+    });
+
+    ops::registerCommand({
+        .name = "showExportMesh",
+        .doc = "Show meshes as they export: every modifier's viewport state takes its export state, so a Subdivision left off in the "
+               "viewport but on for export runs in both, and baked maps preview on the mesh they were baked for. Returns the "
+               "modifiers changed.",
+        .positionalDoc = "meshes",
+        .run = [](const Args& a) -> json {
+            Graph& g = graph();
+            json changed = json::array();
+            for (const std::string& name : a.objects())
+            {
+                const NodeId mesh = meshNamed(name, "showExportMesh").id();
+                for (NodeId id : shownUnlikeExport(g, mesh))
+                {
+                    const auto* mod = static_cast<const ModifierNode*>(g.node(id));
+                    g.setValue({id, mod->enabledAttr, -1}, exportEnabled(*mod));
+                    changed.push_back(mod->path());
+                }
+            }
+            return changed;
         },
     });
 

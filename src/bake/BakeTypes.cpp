@@ -201,15 +201,19 @@ HighEntry HighEntry::fromJson(const json& j)
     return h;
 }
 
-json Unlink::toJson() const { return {{"lows", lows}, {"meshes", meshes}, {"occlusion", occlusion}, {"projection", projection}}; }
+json Unlink::toJson() const
+{
+    return {{"lows", lows}, {"meshes", meshes}, {"materials", materials}, {"occlusion", occlusion}, {"projection", projection}};
+}
 
 Unlink Unlink::fromJson(const json& j)
 {
     Unlink u;
     if (!j.is_object())
-        throw std::invalid_argument("an unlink is an object: {lows, meshes, occlusion, projection}");
+        throw std::invalid_argument("an unlink is an object: {lows, meshes, materials, occlusion, projection}");
     u.lows = strings(j, "lows");
     u.meshes = strings(j, "meshes");
+    u.materials = strings(j, "materials");
     read(j, "occlusion", u.occlusion);
     read(j, "projection", u.projection);
     return u;

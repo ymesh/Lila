@@ -24,7 +24,9 @@
 #include "ui/MaterialDraw.h"
 #include "ui/OutlinerFilter.h"
 #include "ui/SpinScrub.h"
+#include "tex/TextureSet.h"
 #include "ui/TextureCache.h"
+#include "ui/TextureGraphUi.h"
 #include "ui/TexturePicker.h"
 #include "ui/UiCommands.h"
 #include "ui/UiCommon.h"
@@ -284,6 +286,41 @@ bool hasTextureMaps(const scene::Node& material)
         if (!material.as<std::string>(channel.second).empty())
             return true;
     return false;
+}
+
+/** The texture set drawing a material in the viewport, and the material's map slots it replaces there. */
+struct BoundSet
+{
+    std::string name;
+    std::set<int> replaced;
+};
+
+BoundSet boundSet(const scene::Node& material)
+{
+    scene::Graph& g = scene::Graph::current();
+    if (!PrefStore::get().value<bool>("general", "/texture/liveViewport", true))
+        return {};
+    BoundSet out{textureSetForSlot(g, material.name()), {}};
+    scene::Node* set = out.name.empty() ? nullptr : tex::findSet(g, out.name);
+    if (!set)
+        return {};
+    try
+    {
+        const tex::SetSettings s = tex::readSettings(*set);
+        if (s.channel("baseColor"))
+            out.replaced.insert(kBaseColorMap);
+        if (s.channel("normal"))
+            out.replaced.insert(kNormalMap);
+        if (s.channel("emissive"))
+            out.replaced.insert(kEmissiveMap);
+        // The set's occlusion, roughness and metallic draw from one packed image, so any of them takes all four slots.
+        if (s.channel("ao") || s.channel("roughness") || s.channel("metallic"))
+            out.replaced.insert({kAmbientOcclusionMap, kRoughnessMap, kMetallicMap, kOrmMap});
+    }
+    catch (const std::exception&)
+    {
+    }
+    return out;
 }
 
 /** The selected rows' materials, in list order; the default row has none. */
@@ -925,6 +962,13 @@ void MaterialEditor::rebuild()
         });
     };
 
+    // Read once per refresh, ahead of the rows that show it.
+    auto bound = std::make_shared<BoundSet>();
+    mUpdaters.push_back([this, bound] {
+        if (scene::Node* m = current())
+            *bound = boundSet(*m);
+    });
+
     auto texture = [&](const char* text, const char* channel, int attr) {
         QLabel* l = label(text);
         auto* box = new ImagePicker(nullptr, text, mBody);
@@ -985,9 +1029,17 @@ void MaterialEditor::rebuild()
                     opts->setVisible(!m->as<std::string>(attr).empty());
             });
         }
-        mUpdaters.push_back([this, box, attr] {
-            if (scene::Node* m = current())
-                box->setValue(m->as<std::string>(attr));
+        mUpdaters.push_back([this, box, l, attr, bound] {
+            scene::Node* m = current();
+            if (!m)
+                return;
+            box->setValue(m->as<std::string>(attr));
+            // The slot stays editable under a texture set: it is what draws again once the set is unbound.
+            const bool replaced = bound->replaced.contains(attr);
+            l->setEnabled(!replaced);
+            const QString tip = replaced ? QString("Not drawn: texture set %1 supplies this map in the viewport.").arg(qs(bound->name)) : QString();
+            l->setToolTip(tip);
+            box->setToolTip(tip);
         });
     };
 
@@ -1109,6 +1161,36 @@ void MaterialEditor::rebuild()
     }
 
     section("Surface");
+    QLabel* setLabel = label("Texture Set");
+    auto* setButton = new QPushButton(mBody);
+    setButton->setObjectName("materialTextureSet");
+    setButton->setToolTip("The texture set drawing this material in the viewport. Its channels replace the dimmed map slots "
+                          "below. Click to open it in the Texture Graph.");
+    auto* unbind = new QToolButton(mBody);
+    unbind->setObjectName("materialTextureSetUnbind");
+    unbind->setIcon(icon("x"));
+    unbind->setToolTip("Unbind: the material draws its own maps again. The texture set is kept.");
+    auto* setRow = new QHBoxLayout;
+    setRow->setContentsMargins(0, 0, 0, 0);
+    setRow->setSpacing(3);
+    setRow->addWidget(setButton);
+    setRow->addWidget(unbind);
+    setRow->addStretch(1);
+    grid->addLayout(setRow, row++, 1, 1, 2);
+    connect(setButton, &QPushButton::clicked, this, [bound] {
+        if (!bound->name.empty())
+            openTextureSet(bound->name);
+    });
+    connect(unbind, &QToolButton::clicked, this, [bound] {
+        if (!bound->name.empty())
+            runUi("texSetSettings", {{"args", json::array({bound->name, {{"material", ""}}})}});
+    });
+    mUpdaters.push_back([setLabel, setButton, unbind, bound] {
+        setLabel->setVisible(!bound->name.empty());
+        setButton->setVisible(!bound->name.empty());
+        unbind->setVisible(!bound->name.empty());
+        setButton->setText(qs(bound->name));
+    });
     color("Base Color", kBaseColor);
     texture("Base Color Map", "baseColor", kBaseColorMap);
     slider("Metallic", kMetallic, 0.0, 1.0);

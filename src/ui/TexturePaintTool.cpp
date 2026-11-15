@@ -17,11 +17,14 @@
 #include "ops/Command.h"
 #include "ops/Undo.h"
 #include "render/GpuImage.h"
+#include "scene/Components.h"
 #include "scene/Graph.h"
 #include "scene/Materials.h"
 #include "scene/MeshNodes.h"
 #include "ui/Actions.h"
 #include "ui/ColorPopup.h"
+#include "ui/Controls.h"
+#include "ui/Icons.h"
 #include "ui/TexLive.h"
 #include "ui/TextureSetPanel.h"
 #include "ui/UiCommon.h"
@@ -35,6 +38,8 @@
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
+#include <QFileInfo>
+#include <QMenu>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QInputDialog>
@@ -77,18 +82,35 @@ struct ToolKind
     const char* id;
     const char* label;
     const char* tip;
+    const char* icon;
 };
 constexpr ToolKind kTools[] = {
-    {"paint", "Paint", "Paints the checked channels (or a library material's)."},
-    {"direction", "Direction", "Writes the stroke's direction: a normal tilt, or a flow map in another channel."},
-    {"normal", "Normal", "Sculpts the normal with RNM: bumps from the tip, or a normal map stamp."},
-    {"smudge", "Smudge", "Drags the paint along the stroke."},
-    {"blur", "Blur", "Softens the paint."},
-    {"sharpen", "Sharpen", "Crispens the paint."},
-    {"clone", "Clone", "Copies from the clone source: Ctrl+Alt+click sets it."},
-    {"heal", "Heal", "Clones detail, keeping the colour around it: Ctrl+Alt+click sets the source."},
-    {"fill", "Fill", "Click to fill a UV island, a material, the mesh or the selected faces."},
-    {"project", "Projection", "Paint on the screen-space paint buffer, then Enter projects it into every visible texel."},
+    {"paint", "Paint", "Paints the checked channels (or a library material's).", "brush"},
+    {"direction", "Direction", "Writes the stroke's direction: a normal tilt, or a flow map in another channel.", "direction-sign"},
+    {"normal", "Normal", "Sculpts the normal with RNM: bumps from the tip, or a normal map stamp.", "ripple"},
+    {"smudge", "Smudge", "Drags the paint along the stroke.", "hand-finger"},
+    {"blur", "Blur", "Softens the paint.", "blur"},
+    {"sharpen", "Sharpen", "Crispens the paint.", "focus-2"},
+    {"clone", "Clone", "Copies from the clone source: Ctrl+Alt+click sets it.", "copy"},
+    {"heal", "Heal", "Clones detail, keeping the colour around it: Ctrl+Alt+click sets the source.", "bandage"},
+    {"fill", "Fill", "Click to fill what the Fill mode picks (the highlight shows it); drag a box to fill everything in it.", "bucket-droplet"},
+    {"project", "Projection", "Paint on the screen-space paint buffer, then Enter projects it into every visible texel.", "photo"},
+};
+
+/** What a fill click (or a drag's box) fills, in the panel's order. */
+struct FillMode
+{
+    const char* id;
+    const char* icon;
+    const char* tip;
+};
+constexpr FillMode kFillModes[] = {
+    {"triangle", "triangle", "Triangle: the triangle under the cursor"},
+    {"polygon", "square", "Polygon: the face under the cursor"},
+    {"island", "puzzle", "UV Island: the uv island under the cursor"},
+    {"material", "palette", "Material: every face with the material under the cursor"},
+    {"mesh", "cube", "Mesh: the whole painted surface of the mesh"},
+    {"selection", "pointer", "Selection: the selected faces"},
 };
 
 struct TexturePaintSettings
@@ -117,9 +139,16 @@ struct TexturePaintSettings
     float intensity = 1.0f;
     std::string stampImage;
     std::string fillBy = "island";
-    /** Library material painted through the stroke (material brush); empty for the channel values. */
+    /** What the stroke paints: "values" (the channel values), "material" (a library material) or "texture" (an image). */
+    std::string source = "values";
+    /** Library material painted through the stroke (material brush). */
     std::string material;
+    /** Image painted through the stroke, sampled in uv. */
+    std::string sourceImage;
+    /** Material or texture tiles per uv unit. */
     float materialScale = 1.0f;
+    /** The preset last applied, for the brush row and the library; empty once none was. */
+    std::string presetId;
     json tip;
     /** drips, rain, sparks, or empty. */
     std::string particles;
@@ -173,8 +202,11 @@ tp::Payload payloadFor(const TexturePaintSettings& s, bool erase)
     p.amount = s.amount;
     p.facingFade = s.facingFade;
     p.fillBy = s.fillBy;
-    if (!s.material.empty() && (s.tool == "paint" || s.tool == "fill" || s.tool == "project"))
+    const bool sourced = s.tool == "paint" || s.tool == "fill" || s.tool == "project";
+    if (sourced && s.source == "material" && !s.material.empty())
         p.source = {{"library", s.material}, {"resolution", 512}, {"scale", s.materialScale}};
+    else if (sourced && s.source == "texture" && !s.sourceImage.empty())
+        p.source = {{"node", "layerImage"}, {"values", {{"file", s.sourceImage}}}, {"resolution", 1024}, {"scale", s.materialScale}};
     if (!s.tip.is_null())
         p.tip = s.tip;
     return p;
@@ -211,6 +243,8 @@ void applyPreset(TexturePaintSettings& s, const tex::brushes::Preset& p)
     s.fillBy = pay.value("fillBy", std::string("island"));
     s.material = pay.contains("source") ? pay["source"].value("library", std::string()) : std::string();
     s.materialScale = pay.contains("source") ? pay["source"].value("scale", 1.0f) : 1.0f;
+    s.source = s.material.empty() ? "values" : "material";
+    s.presetId = p.id;
     s.tip = pay.contains("tip") ? pay["tip"] : json();
     s.particles = p.particles.is_object() ? p.particles.value("kind", std::string()) : std::string();
     s.particleSpec = p.particles.is_object() ? p.particles : json::object();
@@ -232,9 +266,11 @@ scene::Node* setForFace(scene::Graph& g, const geo::Mesh& mesh, geo::Index face)
     return names.size() == 1 ? tex::findSet(g, names.front()) : nullptr;
 }
 
+/** A number field; a 0 to 1 amount gets the slider fill every bounded amount in Lila has. */
 QDoubleSpinBox* settingSpin(QWidget* parent, double lo, double hi, double step, int decimals, const QString& tip = {})
 {
-    auto* s = new QDoubleSpinBox(parent);
+    auto* s = lo >= 0.0 && hi <= 1.0 ? new controls::SliderField(parent) : new QDoubleSpinBox(parent);
+    s->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     s->setRange(lo, hi);
     s->setSingleStep(step);
     s->setDecimals(decimals);
@@ -245,36 +281,105 @@ QDoubleSpinBox* settingSpin(QWidget* parent, double lo, double hi, double step, 
 class TexturePaintPanel final : public QWidget
 {
 public:
-    std::function<void()> onChanged, onClosed, onNewLayer, onCommit, onClearBuffer, onLoadImage, onLoadStencil, onClearStencil;
+    std::function<void()> onChanged, onNewLayer, onCommit, onClearBuffer, onLoadImage, onLoadStencil, onClearStencil;
 
-    explicit TexturePaintPanel(QWidget* parent) : QWidget(parent, Qt::Tool)
+    explicit TexturePaintPanel(QWidget* parent) : QWidget(parent)
     {
-        setWindowTitle("Texture Paint");
+        setObjectName("texturePaintPage");
         auto* col = new QVBoxLayout(this);
+        col->setContentsMargins(4, 2, 4, 4);
+        col->setSpacing(6);
+        auto* head = new QHBoxLayout;
+        head->setSpacing(4);
+        mBrush = new QToolButton(this);
+        mBrush->setObjectName("brushPreset");
+        controls::setRole(mBrush, "row");
+        mBrush->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        mBrush->setIconSize(QSize(16, 16));
+        mBrush->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        mBrush->setToolTip("Brush: pick another in the library's Brushes");
+        connect(mBrush, &QToolButton::clicked, this, [] { textureSets::showLibrary("brushes"); });
+        head->addWidget(mBrush, 1);
+        auto* more = new QToolButton(this);
+        more->setObjectName("brushMore");
+        more->setIcon(icon("dots"));
+        more->setAutoRaise(true);
+        more->setPopupMode(QToolButton::InstantPopup);
+        more->setToolTip("More: paint layer and preset commands");
+        more->setStyleSheet("QToolButton::menu-indicator { image: none; width: 0; }");
+        auto* moreMenu = new QMenu(more);
+        moreMenu->addAction("New Paint Layer", this, [this] { call(onNewLayer); });
+        moreMenu->addSeparator();
+        moreMenu->addAction("Rasterize Layer", this, [] { actions::run(json("tex.rasterizeLayer")); });
+        moreMenu->addAction("Flatten Layer", this, [] { actions::run(json("tex.flattenLayer")); });
+        moreMenu->addAction("Clear Layer", this, [] { actions::run(json("tex.clearLayer")); });
+        moreMenu->addSeparator();
+        moreMenu->addAction("Save Brush Preset...", this, [this] { savePresetAs(); });
+        more->setMenu(moreMenu);
+        head->addWidget(more);
+        col->addLayout(head);
         mTarget = new QLabel(this);
         mTarget->setWordWrap(true);
+        controls::setRole(mTarget, "dim");
         col->addWidget(mTarget);
         auto* form = new QFormLayout;
-        mPreset = new QComboBox(this);
-        mPreset->setToolTip("Brush presets: built-in, extension packs, yours and the workspace's");
-        mPreset->addItem("(presets)", QString());
-        for (const tex::brushes::Preset& p : tex::brushes::all())
-            mPreset->addItem(QString::fromStdString((p.category.empty() ? "" : p.category + " / ") + p.name), QString::fromStdString(p.id));
-        form->addRow("Preset", mPreset);
-        mTool = new QComboBox(this);
+        form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        std::vector<QWidget*> tiles;
         for (const ToolKind& t : kTools)
         {
-            mTool->addItem(t.label, t.id);
-            mTool->setItemData(mTool->count() - 1, t.tip, Qt::ToolTipRole);
+            auto* b = new QToolButton(this);
+            b->setObjectName(QString("tool:") + t.id);
+            b->setIcon(icon(t.icon));
+            b->setIconSize(QSize(18, 18));
+            b->setToolButtonStyle(Qt::ToolButtonIconOnly);
+            b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            b->setMinimumWidth(24);
+            b->setCheckable(true);
+            b->setFocusPolicy(Qt::NoFocus);
+            b->setToolTip(QString("%1: %2").arg(t.label, t.tip));
+            controls::setRole(b, "tile");
+            const std::string id = t.id;
+            connect(b, &QToolButton::clicked, this, [this, id] {
+                texturePaintState().tool = id;
+                syncTools();
+                changed();
+            });
+            mTools.push_back(b);
+            tiles.push_back(b);
         }
-        form->addRow("Tool", mTool);
+        // One icon strip: the brush row above names the current tool, the tooltips name the rest.
+        col->addWidget(controls::grid(tiles, int(std::size(kTools)), this));
+        mSource = new controls::Segmented(this);
+        mSource->setObjectName("brushSource");
+        mSource->add("Values", {}, "Paint the channel values below", 0);
+        mSource->add("Material", {}, "Paint a library material's channels through the stroke", 1);
+        mSource->add("Texture", {}, "Paint an image through the stroke: pick one in the library's Textures", 2);
+        connect(mSource, &controls::Segmented::picked, this, [this](int id) {
+            texturePaintState().source = id == 1 ? "material" : id == 2 ? "texture" : "values";
+            if (id == 1 && texturePaintState().material.empty())
+                texturePaintState().material = mMaterial->currentData().toString().toStdString();
+            if (id == 2 && texturePaintState().sourceImage.empty())
+                textureSets::showLibrary("textures");
+            changed();
+        });
+        mSourceRow = new QWidget(this);
+        auto* sourceBox = new QHBoxLayout(mSourceRow);
+        sourceBox->setContentsMargins(0, 0, 0, 0);
+        sourceBox->addWidget(mSource, 1);
+        col->addWidget(mSourceRow);
         for (size_t i = 0; i < texturePaintState().channels.size(); ++i)
         {
             ChannelValue& c = texturePaintState().channels[i];
-            auto* row = new QHBoxLayout;
-            auto* on = new QCheckBox(c.label, this);
-            row->addWidget(on, 1);
+            // The label in the right-aligned column like every row; the box leads the field so the boxes line up.
+            auto* on = new QCheckBox(this);
+            on->setObjectName(QString("channel:") + c.name);
+            on->setToolTip(QString("%1: paint this channel").arg(c.label));
             mOn.push_back(on);
+            auto* field = new QWidget(this);
+            auto* fieldRow = new QHBoxLayout(field);
+            fieldRow->setContentsMargins(0, 0, 0, 0);
+            fieldRow->setSpacing(6);
+            fieldRow->addWidget(on);
             connect(on, &QCheckBox::toggled, this, [this, i](bool v) {
                 texturePaintState().channels[i].on = v;
                 changed();
@@ -284,14 +389,22 @@ public:
                 auto* swatch = new QPushButton(this);
                 swatch->setFixedSize(44, 20);
                 swatch->setToolTip("Pick the colour this channel paints");
-                row->addWidget(swatch);
-                row->addWidget(colorPopup::eyedropperButton(this, [this, i](const glm::dvec3& c) {
+                auto* bright = new colorPopup::ValueSlider(this);
+                bright->setToolTip("Brightness");
+                bright->dragged = [this, i](const glm::dvec3& lin) {
+                    texturePaintState().channels[i].value = glm::vec3(glm::clamp(lin, 0.0, 1.0));
+                    sync();
+                    changed();
+                };
+                fieldRow->addWidget(colorPopup::withEyedropper(swatch, [this, i](const glm::dvec3& c) {
                     const glm::dvec3 s = colorMath::toSrgb(glm::clamp(c, 0.0, 1.0));
                     texturePaintState().channels[i].value = {fromDisplay(float(s.x)), fromDisplay(float(s.y)), fromDisplay(float(s.z))};
                     sync();
                     changed();
-                }));
+                }, bright), 1);
+                form->addRow(c.label, field);
                 mSwatch.push_back(swatch);
+                mBright.push_back(bright);
                 mValue.push_back(nullptr);
                 connect(swatch, &QPushButton::clicked, this, [this, i, swatch] {
                     ChannelValue& cv = texturePaintState().channels[i];
@@ -308,27 +421,34 @@ public:
             else
             {
                 auto* v = settingSpin(this, 0.0, 1.0, 0.05, 3);
-                row->addWidget(v);
+                fieldRow->addWidget(v, 1);
+                form->addRow(c.label, field);
                 mValue.push_back(v);
                 mSwatch.push_back(nullptr);
+                mBright.push_back(nullptr);
                 connect(v, &QDoubleSpinBox::valueChanged, this, [this, i](double x) {
                     texturePaintState().channels[i].value = glm::vec3(float(x));
                     changed();
                 });
             }
-            form->addRow(row);
         }
         mMaterial = new QComboBox(this);
-        mMaterial->setToolTip("Paint a library material's channels through the stroke instead of the values above");
-        mMaterial->addItem("(channel values)", QString());
+        mMaterial->setToolTip("The library material the stroke paints");
         for (const tex::library::Entry& e : tex::library::all())
             if (e.tier != "scene")
                 mMaterial->addItem(QString::fromStdString(e.meta.name), QString::fromStdString(e.id));
-        mMaterialScale = settingSpin(this, 0.05, 64.0, 0.25, 2, "Material tiles per uv unit");
-        auto* matRow = new QHBoxLayout;
-        matRow->addWidget(mMaterial, 1);
-        matRow->addWidget(mMaterialScale);
-        form->addRow("Material", matRow);
+        mMaterialRow = addRow(form, "Material", mMaterial);
+        mTexture = new QToolButton(this);
+        mTexture->setObjectName("brushTexture");
+        controls::setRole(mTexture, "row");
+        mTexture->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        mTexture->setIcon(icon("photo"));
+        mTexture->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        mTexture->setToolTip("The image the stroke paints: pick another in the library's Textures");
+        connect(mTexture, &QToolButton::clicked, this, [] { textureSets::showLibrary("textures"); });
+        mTextureRow = addRow(form, "Texture", mTexture);
+        mMaterialScale = settingSpin(this, 0.05, 64.0, 0.25, 2, "Tiles per uv unit");
+        mScaleRow = addRow(form, "Scale", mMaterialScale);
         mBlend = new QComboBox(this);
         mBlend->addItems({"Normal", "Erase", "Add", "Subtract", "Multiply"});
         form->addRow("Blend", mBlend);
@@ -365,11 +485,10 @@ public:
         filterRow->addWidget(mFilterRadius);
         filterRow->addWidget(mAmount);
         mFilterRow = addRow(form, "Filter", filterRow);
-        mFillBy = new QComboBox(this);
-        mFillBy->addItem("UV island", "island");
-        mFillBy->addItem("Material", "material");
-        mFillBy->addItem("Mesh", "mesh");
-        mFillBy->addItem("Selected faces", "selection");
+        mFillBy = new controls::Segmented(this);
+        mFillBy->setObjectName("fillBy");
+        for (size_t f = 0; f < std::size(kFillModes); ++f)
+            mFillBy->add({}, kFillModes[f].icon, kFillModes[f].tip, int(f));
         mFillRow = addRow(form, "Fill", mFillBy);
         mParticles = new QComboBox(this);
         mParticles->addItem("None", QString());
@@ -423,6 +542,7 @@ public:
         mRadius = new QSpinBox(this);
         mRadius->setRange(1, 2000);
         mRadius->setSuffix(" px");
+        mRadius->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         form->addRow("Radius", mRadius);
         mStrength = settingSpin(this, 0.0, 1.0, 0.05, 3);
         form->addRow("Strength", mStrength);
@@ -440,25 +560,6 @@ public:
         mStrokeOptions = new brush::ui::StrokeOptions(this, []() -> brush::BrushSettings& { return texturePaintState().stroke; }, [this] { changed(); });
         col->addWidget(mStrokeOptions);
 
-        auto* buttons = new QHBoxLayout;
-        auto* newLayer = new QPushButton("New Layer", this);
-        newLayer->setToolTip("Add a paint layer to the set's stack and paint into it");
-        auto* raster = new QPushButton("Rasterize", this);
-        raster->setToolTip("Rebuild the layer's pixels from its strokes");
-        auto* flatten = new QPushButton("Flatten", this);
-        flatten->setToolTip("Keep the layer's pixels and drop its stroke records");
-        auto* clear = new QPushButton("Clear", this);
-        clear->setToolTip("Drop the layer's strokes and pixels");
-        auto* savePreset = new QPushButton("Save Preset", this);
-        savePreset->setToolTip("Save these settings as a brush preset in your brushes folder");
-        for (QPushButton* b : {newLayer, raster, flatten, clear, savePreset})
-            buttons->addWidget(b);
-        col->addLayout(buttons);
-        connect(newLayer, &QPushButton::clicked, this, [this] { call(onNewLayer); });
-        connect(raster, &QPushButton::clicked, this, [] { actions::run(json("tex.rasterizeLayer")); });
-        connect(flatten, &QPushButton::clicked, this, [] { actions::run(json("tex.flattenLayer")); });
-        connect(clear, &QPushButton::clicked, this, [] { actions::run(json("tex.clearLayer")); });
-        connect(savePreset, &QPushButton::clicked, this, [this] { savePresetAs(); });
         connect(browseStamp, &QPushButton::clicked, this, [this] {
             const QString f = ui::fileDialog::getOpenFileName(this, "Normal Map Stamp", mStamp->text(), "Images (*.png *.exr *.tga *.tif *.tiff *.psd)");
             if (!f.isEmpty())
@@ -467,21 +568,6 @@ public:
             changed();
         });
 
-        connect(mPreset, &QComboBox::activated, this, [this](int i) {
-            const QString id = mPreset->itemData(i).toString();
-            if (id.isEmpty())
-                return;
-            if (auto p = tex::brushes::find(id.toStdString()))
-            {
-                applyPreset(texturePaintState(), *p);
-                sync();
-                changed();
-            }
-        });
-        connect(mTool, &QComboBox::currentIndexChanged, this, [this](int i) {
-            texturePaintState().tool = mTool->itemData(i).toString().toStdString();
-            changed();
-        });
         connect(mMaterial, &QComboBox::currentIndexChanged, this, [this](int i) {
             texturePaintState().material = mMaterial->itemData(i).toString().toStdString();
             changed();
@@ -507,8 +593,8 @@ public:
         });
         connect(mFilterRadius, &QDoubleSpinBox::valueChanged, this, [this](double v) { set(texturePaintState().filterRadius, float(v)); });
         connect(mAmount, &QDoubleSpinBox::valueChanged, this, [this](double v) { set(texturePaintState().amount, float(v)); });
-        connect(mFillBy, &QComboBox::currentIndexChanged, this, [this](int i) {
-            texturePaintState().fillBy = mFillBy->itemData(i).toString().toStdString();
+        connect(mFillBy, &controls::Segmented::picked, this, [this](int i) {
+            texturePaintState().fillBy = kFillModes[std::clamp(i, 0, int(std::size(kFillModes)) - 1)].id;
             changed();
         });
         connect(mParticles, &QComboBox::currentIndexChanged, this, [this](int i) {
@@ -564,14 +650,20 @@ public:
 
     void setTarget(const QString& text) { mTarget->setText(text); }
 
+    void syncTools()
+    {
+        for (size_t i = 0; i < mTools.size(); ++i)
+            mTools[i]->setChecked(texturePaintState().tool == kTools[i].id);
+    }
+
     void sync()
     {
         const TexturePaintSettings& s = texturePaintState();
-        const QSignalBlocker b0(mTool), b1(mBlend), b2(mTilt), b3(mRadius), b4(mStrength), b5(mFalloff), b6(mOcclusion), b7(mMirror);
+        syncTools();
+        const QSignalBlocker b1(mBlend), b2(mTilt), b3(mRadius), b4(mStrength), b5(mFalloff), b6(mOcclusion), b7(mMirror);
         const QSignalBlocker b8(mMaterial), b9(mMaterialScale), b10(mFlow), b11(mNormalMode), b12(mIntensity), b13(mStamp), b14(mFilterRadius);
-        const QSignalBlocker b15(mAmount), b16(mFillBy), b17(mParticles), b18(mBufferBrush), b19(mBufferScale), b20(mTransform), b21(mWarp);
+        const QSignalBlocker b15(mAmount), b17(mParticles), b18(mBufferBrush), b19(mBufferScale), b20(mTransform), b21(mWarp);
         const QSignalBlocker b22(mAuto), b23(mFacing);
-        mTool->setCurrentIndex(std::max(0, mTool->findData(QString::fromStdString(s.tool))));
         mBlend->setCurrentIndex(int(s.blend));
         mTilt->setValue(s.tilt);
         mFlow->setCurrentText(QString::fromStdString(s.flowChannel));
@@ -580,7 +672,9 @@ public:
         mStamp->setText(QString::fromStdString(s.stampImage));
         mFilterRadius->setValue(s.filterRadius);
         mAmount->setValue(s.amount);
-        mFillBy->setCurrentIndex(std::max(0, mFillBy->findData(QString::fromStdString(s.fillBy))));
+        for (size_t f = 0; f < std::size(kFillModes); ++f)
+            if (s.fillBy == kFillModes[f].id)
+                mFillBy->setCurrent(int(f));
         mParticles->setCurrentIndex(std::max(0, mParticles->findData(QString::fromStdString(s.particles))));
         mMaterial->setCurrentIndex(std::max(0, mMaterial->findData(QString::fromStdString(s.material))));
         mMaterialScale->setValue(s.materialScale);
@@ -595,6 +689,15 @@ public:
         mFalloff->setCurrentIndex(std::max(0, mFalloff->findData(QString::fromStdString(s.stroke.falloff))));
         mOcclusion->setChecked(s.occlusion);
         mMirror->setChecked(s.stroke.mirror);
+        mSource->setCurrent(s.source == "material" ? 1 : s.source == "texture" ? 2 : 0);
+        mTexture->setText(s.sourceImage.empty() ? QString("None") : QFileInfo(QString::fromStdString(s.sourceImage)).completeBaseName());
+        const ToolKind* kind = &kTools[0];
+        for (const ToolKind& t : kTools)
+            if (s.tool == t.id)
+                kind = &t;
+        mBrush->setIcon(icon(kind->icon));
+        std::optional<tex::brushes::Preset> preset = s.presetId.empty() ? std::nullopt : tex::brushes::find(s.presetId);
+        mBrush->setText(preset ? QString::fromStdString(preset->name) : QString(kind->label));
         for (size_t i = 0; i < s.channels.size(); ++i)
         {
             const QSignalBlocker b(mOn[i]);
@@ -610,19 +713,13 @@ public:
                 // The swatch shows the painted colour (data), not chrome.
                 mSwatch[i]->setStyleSheet(QString("background-color: %1; border: 1px solid #888;")
                                               .arg(QColor::fromRgbF(toDisplay(v.r), toDisplay(v.g), toDisplay(v.b)).name()));
+                if (mBright[i])
+                    mBright[i]->setColor(glm::dvec3(v));
             }
         }
         showForTool();
         if (mStrokeOptions)
             mStrokeOptions->sync();
-    }
-
-protected:
-    void closeEvent(QCloseEvent* e) override
-    {
-        QWidget::closeEvent(e);
-        if (onClosed)
-            onClosed();
     }
 
 private:
@@ -653,10 +750,23 @@ private:
     {
         const std::string& t = texturePaintState().tool;
         const bool values = t == "paint" || t == "fill" || t == "project";
+        const std::string& source = texturePaintState().source;
         for (QCheckBox* on : mOn)
             on->setEnabled(values || filterTool(t));
-        mMaterial->setEnabled(values);
-        mMaterialScale->setEnabled(values && !texturePaintState().material.empty());
+        // The channel values only paint with the Values source; the others say which channels they write.
+        for (QWidget* w : mValue)
+            if (w)
+                w->setEnabled(values && source == "values");
+        for (QWidget* w : mSwatch)
+            if (w)
+                w->setEnabled(values && source == "values");
+        for (QWidget* w : mBright)
+            if (w)
+                w->setEnabled(values && source == "values");
+        showRow(mSourceRow, values);
+        showRow(mMaterialRow, values && source == "material");
+        showRow(mTextureRow, values && source == "texture");
+        showRow(mScaleRow, values && source != "values");
         showRow(mDirRow, t == "direction");
         showRow(mNormalRow, t == "normal");
         showRow(mStampRow, t == "normal" && texturePaintState().normalMode == "stamp");
@@ -706,7 +816,9 @@ private:
         try
         {
             ops::execute("texSaveBrushPreset", call, CallSource::UI);
-            mPreset->addItem("User / " + name, name);
+            texturePaintState().presetId = name.toStdString();
+            textureSets::refreshLibrary();
+            sync();
         }
         catch (const std::exception& e)
         {
@@ -715,11 +827,15 @@ private:
     }
 
     QLabel* mTarget = nullptr;
-    QComboBox* mPreset = nullptr;
-    QComboBox* mTool = nullptr;
+    QToolButton* mBrush = nullptr;
+    controls::Segmented* mSource = nullptr;
+    QToolButton* mTexture = nullptr;
+    QWidget *mSourceRow = nullptr, *mMaterialRow = nullptr, *mTextureRow = nullptr, *mScaleRow = nullptr;
+    std::vector<QToolButton*> mTools;
     std::vector<QCheckBox*> mOn;
     std::vector<QDoubleSpinBox*> mValue;
     std::vector<QPushButton*> mSwatch;
+    std::vector<colorPopup::ValueSlider*> mBright;
     QComboBox* mMaterial = nullptr;
     QDoubleSpinBox* mMaterialScale = nullptr;
     QComboBox* mBlend = nullptr;
@@ -730,7 +846,7 @@ private:
     QLineEdit* mStamp = nullptr;
     QDoubleSpinBox* mFilterRadius = nullptr;
     QDoubleSpinBox* mAmount = nullptr;
-    QComboBox* mFillBy = nullptr;
+    controls::Segmented* mFillBy = nullptr;
     QComboBox* mParticles = nullptr;
     QComboBox* mBufferBrush = nullptr;
     QDoubleSpinBox* mBufferScale = nullptr;
@@ -748,6 +864,30 @@ private:
     QCheckBox* mMirror = nullptr;
     brush::ui::StrokeOptions* mStrokeOptions = nullptr;
 };
+
+/** The Brush page the Texture Set panel hosts; the tool wires its buttons while it runs. */
+QPointer<TexturePaintPanel> gPage;
+
+TexturePaintPanel* brushPage()
+{
+    if (!gPage)
+        gPage = new TexturePaintPanel(nullptr);
+    return gPage;
+}
+
+void ensureTexturePaint()
+{
+    if (!viewportTools::active() || std::string(viewportTools::active()->name()) != "texturePaint")
+        startTexturePaint();
+}
+
+void brushChanged()
+{
+    saveTexturePaintSettings();
+    if (gPage)
+        gPage->sync();
+    viewportTools::requestRedraw();
+}
 
 /** What the brush is over: a mesh, the texture set its face's material binds, and the hit in the mesh's object space. */
 struct Target
@@ -805,6 +945,8 @@ public:
 
     void activate() override
     {
+        rp::prewarm();
+        warmTargets();
         mAlive = std::make_shared<bool>(true);
         mControls.activate();
         mActiveListener = textureSets::addActiveLayerListener([this](const std::string& setName, const std::string& layer) {
@@ -818,7 +960,8 @@ public:
             updatePanel();
             viewportTools::requestRedraw();
         });
-        mPanel = new TexturePaintPanel(mainWindow());
+        textureSets::showBrushPage(true);
+        mPanel = brushPage();
         mPanel->onChanged = [] { viewportTools::requestRedraw(); };
         mPanel->onNewLayer = [this] { newLayer(); };
         mPanel->onCommit = [this] { commitBuffer(); };
@@ -833,13 +976,7 @@ public:
             mStencilImage.reset();
             viewportTools::requestRedraw();
         };
-        mPanel->onClosed = [] {
-            QTimer::singleShot(0, [] {
-                if (viewportTools::active() && std::string(viewportTools::active()->name()) == "texturePaint")
-                    viewportTools::set(nullptr);
-            });
-        };
-        mPanel->show();
+        mPanel->sync();
         updatePanel();
     }
 
@@ -853,9 +990,12 @@ public:
         mAlive.reset();
         if (mPanel)
         {
-            mPanel->onClosed = nullptr;
-            mPanel->deleteLater();
+            for (std::function<void()>* fn : {&mPanel->onNewLayer, &mPanel->onCommit, &mPanel->onClearBuffer, &mPanel->onLoadImage,
+                                              &mPanel->onLoadStencil, &mPanel->onClearStencil})
+                *fn = nullptr;
+            mPanel->setTarget({});
         }
+        textureSets::showBrushPage(false);
     }
 
     bool ownsBrushRadius() const override { return true; }
@@ -884,7 +1024,10 @@ public:
         }
         if (tool == "fill")
         {
-            fill(*t);
+            // The fill waits for the release: a drag instead boxes every region in it.
+            mFillPress = *t;
+            mMarqueeFrom = mMarqueeTo = e->position();
+            mMarquee = false;
             return true;
         }
         beginStroke(*t, e, view);
@@ -907,8 +1050,24 @@ public:
             flush();
             return true;
         }
+        if (mFillPress && (e->buttons() & Qt::LeftButton))
+        {
+            mMarqueeTo = e->position();
+            mMarquee = mMarquee || (mMarqueeTo - mMarqueeFrom).manhattanLength() > 4;
+            viewportTools::requestRedraw();
+            return true;
+        }
         if (e->buttons() == Qt::NoButton)
+        {
             mOver = pick(mHover, view);
+            if (mOver && mOver->set != kNoNode && mOver->set != mWarmedSet)
+                if (scene::Node* set = scene::Graph::current().node(mOver->set))
+                {
+                    mWarmedSet = set->id();
+                    warmGraph(*set);
+                }
+            updateFillHover();
+        }
         viewportTools::requestRedraw();
         return false;
     }
@@ -929,8 +1088,27 @@ public:
             viewportTools::requestRedraw();
             return true;
         }
+        if (mFillPress)
+        {
+            const Target t = *mFillPress;
+            mFillPress.reset();
+            if (mMarquee)
+                fillBox(t, QRectF(mMarqueeFrom, mMarqueeTo).normalized(), view);
+            else
+                fill(t);
+            mMarquee = false;
+            mFillKey.clear();
+            updateFillHover();
+            viewportTools::requestRedraw();
+            return true;
+        }
         if (mStroking)
+        {
             endStroke();
+            // mOver stops following the mouse while a button is down; left alone, the ring is drawn back at the stroke's start.
+            mHover = e->position();
+            mOver = pick(mHover, view);
+        }
         return true;
     }
 
@@ -995,6 +1173,8 @@ public:
                 status.keys = {{"Ctrl+Alt+click", "set source"}};
         }
         drawToolStatus(p, view, status);
+        if (st.tool == "fill")
+            drawFill(p, view);
 
         const QPointF at = mControls.anchor(brush::ui::ringPosition(mStroke, mHover));
         std::optional<brush::ui::CursorSurface> surface;
@@ -1087,6 +1267,67 @@ private:
     }
 
     /** The layer strokes go to, adding a paint layer (pointed at its paint) when the set has none. */
+    /**
+     * What the first stroke would build as it starts, built ahead in the background: every textured mesh's ray tree, paint
+     * meshes and atlases, and each set's next graph compiled (the paint layer the stroke adds or wires).
+     */
+    void warmTargets()
+    {
+        scene::Graph& g = scene::Graph::current();
+        g.evaluate();
+        for (const std::string& name : tex::setNames(g))
+        {
+            scene::Node* set = tex::findSet(g, name);
+            if (!set)
+                continue;
+            const std::string material = rp::setMaterial(*set);
+            for (NodeId id : g.nodes())
+            {
+                scene::Node* n = g.node(id);
+                if (!n || !n->type().isA("mesh"))
+                    continue;
+                scene::MeshPtr m = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+                if (!m || !m->numFaces())
+                    continue;
+                const auto& names = m->materialNames();
+                if (std::find(names.begin(), names.end(), material) != names.end())
+                    rp::prewarmTarget(g, *set, n->path());
+            }
+            warmGraph(*set);
+        }
+    }
+
+    /** Compiles in the background the graph the next stroke on set gives it: a new paint layer, or the target one wired for the stroke's channels. */
+    void warmGraph(scene::Node& set)
+    {
+        std::string layer = textureSets::activeLayer(set.name());
+        if (layer.empty())
+            if (auto known = gLayers.find(set.id()); known != gLayers.end())
+                layer = known->second;
+        if (layer.empty())
+            layer = rp::targetLayer(set, "", false);
+        std::vector<std::string> channels;
+        if (layer.empty())
+        {
+            // createLayer wires every channel and the mask.
+            for (const tex::Channel& c : tex::readSettings(set).channels)
+                channels.push_back(c.name);
+            channels.push_back(tex::paint::kMaskChannel);
+        }
+        else
+        {
+            tp::Payload p = payloadFor(texturePaintState(), false);
+            filterChannels(p, set);
+            channels = p.written();
+        }
+        if (std::optional<tex::Graph> next = rp::wiredGraph(set, layer, channels))
+            texLive::warm(set.name(), *next);
+        // A layer never painted has 1x1 stand-ins for its buffers; sizing them now replans and loads the set here,
+        // in the background, instead of on the first stroke's press.
+        if (!layer.empty() && rp::bufferInfo(set.id(), layer).value("sizes", json::object()).empty())
+            rp::rasterize(scene::Graph::current(), set, layer);
+    }
+
     std::string layerFor(scene::Node& set)
     {
         // The Texture Set panel's active paint layer wins.
@@ -1158,6 +1399,136 @@ private:
         p.channels.clear();
         for (const tex::Channel& c : tex::readSettings(set).channels)
             p.channels[c.name] = glm::vec3(0.0f);
+    }
+
+    /** The paintable triangles a fill seeded at tri covers in the current Fill mode. Ascending. */
+    static std::vector<uint32_t> fillRegion(const tp::PaintMesh& pm, uint32_t tri, NodeId mesh)
+    {
+        const std::string& by = texturePaintState().fillBy;
+        if (tri >= pm.triangleCount())
+            return {};
+        if (by == "mesh")
+            return pm.allTriangles();
+        if (by == "island")
+            return pm.islandOf(tri);
+        if (by == "material")
+            return pm.materialOf(tri);
+        if (by == "selection")
+        {
+            const std::vector<uint32_t> faces = scene::components::selected(mesh, scene::ComponentMode::Face);
+            return faces.empty() ? std::vector<uint32_t>{} : pm.ofFaces(faces);
+        }
+        if (by == "polygon")
+        {
+            const uint32_t face = pm.faces[tri];
+            return pm.ofFaces(std::span<const uint32_t>(&face, 1));
+        }
+        return pm.paintable[tri] ? std::vector<uint32_t>{tri} : std::vector<uint32_t>{};
+    }
+
+    /** Keeps the highlighted region on what a click would fill; recomputed only when the hover leaves it. */
+    void updateFillHover()
+    {
+        const TexturePaintSettings& st = texturePaintState();
+        if (st.tool != "fill" || !mOver || mOver->set == kNoNode || !mOver->paint)
+        {
+            mFillTris.clear();
+            mFillKey.clear();
+            return;
+        }
+        const uint32_t tri = uint32_t(mOver->hit.triangle);
+        const std::string key = std::to_string(mOver->mesh) + "|" + st.fillBy;
+        if (key == mFillKey && st.fillBy != "triangle" && std::binary_search(mFillTris.begin(), mFillTris.end(), tri))
+            return;
+        mFillKey = key;
+        mFillPaint = mOver->paint;
+        mFillWorld = mOver->world;
+        mFillTris = fillRegion(*mOver->paint, tri, mOver->mesh);
+    }
+
+    /** The region under the cursor tinted (front faces only), and the box while dragging one. */
+    void drawFill(OverlayPainter& p, const ViewInfo& view)
+    {
+        constexpr size_t kMaxShown = 200000;
+        const glm::vec4 tint(1.0f, 1.0f, 1.0f, 0.22f);
+        if (!mMarquee && mFillPaint && !mFillTris.empty() && mFillTris.size() <= kMaxShown)
+        {
+            const tp::PaintMesh& pm = *mFillPaint;
+            for (uint32_t t : mFillTris)
+            {
+                const glm::dvec3 a(mFillWorld * glm::dvec4(glm::dvec3(pm.positions[3 * t]), 1.0));
+                const glm::dvec3 b(mFillWorld * glm::dvec4(glm::dvec3(pm.positions[3 * t + 1]), 1.0));
+                const glm::dvec3 c(mFillWorld * glm::dvec4(glm::dvec3(pm.positions[3 * t + 2]), 1.0));
+                if (glm::dot(glm::cross(b - a, c - a), view.eye - a) <= 0.0)
+                    continue;
+                const auto pa = view.project(a), pb = view.project(b), pc = view.project(c);
+                if (pa && pb && pc)
+                    p.triangle(*pa, *pb, *pc, tint);
+            }
+        }
+        if (mMarquee)
+        {
+            const QRectF r = QRectF(mMarqueeFrom, mMarqueeTo).normalized();
+            p.rect(r, glm::vec4(1.0f, 1.0f, 1.0f, 0.08f));
+            p.polyline({r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft()}, 1.0f, glm::vec4(1.0f, 1.0f, 1.0f, 0.8f), true);
+        }
+    }
+
+    /** Fills every region with a front-facing triangle centred in the box (visible ones only with occlusion on). */
+    void fillBox(const Target& t, const QRectF& box, const ViewInfo& view)
+    {
+        if (!t.paint)
+            return;
+        const tp::PaintMesh& pm = *t.paint;
+        const bool occlusion = texturePaintState().occlusion && pm.bvh;
+        const glm::dmat4 inv = glm::inverse(t.world);
+        const glm::dvec3 eyeObj(inv * glm::dvec4(view.eye, 1.0));
+        std::vector<uint32_t> tris;
+        for (uint32_t tri = 0; tri < pm.triangleCount(); ++tri)
+        {
+            if (!pm.paintable[tri] || std::binary_search(tris.begin(), tris.end(), tri))
+                continue;
+            const glm::dvec3 a(pm.positions[3 * tri]), b(pm.positions[3 * tri + 1]), c(pm.positions[3 * tri + 2]);
+            const glm::dvec3 centre = (a + b + c) / 3.0;
+            if (glm::dot(glm::cross(b - a, c - a), eyeObj - centre) <= 0.0)
+                continue;
+            const auto at = view.project(glm::dvec3(t.world * glm::dvec4(centre, 1.0)));
+            if (!at || !box.contains(*at))
+                continue;
+            if (occlusion)
+            {
+                const glm::dvec3 dir = centre - eyeObj;
+                geo::BvhHit hit;
+                if (pm.bvh->raycast(eyeObj, glm::normalize(dir), hit) && hit.t < glm::length(dir) * 0.999 &&
+                    hit.triangle < pm.triangleCount() && pm.faces[uint32_t(hit.triangle)] != pm.faces[tri])
+                    continue;
+            }
+            std::vector<uint32_t> add = fillRegion(pm, tri, t.mesh);
+            std::vector<uint32_t> merged;
+            std::set_union(tris.begin(), tris.end(), add.begin(), add.end(), std::back_inserter(merged));
+            tris = std::move(merged);
+            if (texturePaintState().fillBy == "mesh" || texturePaintState().fillBy == "selection")
+                break;
+        }
+        if (tris.empty())
+            return;
+        scene::Graph& g = scene::Graph::current();
+        scene::Node* set = g.node(t.set);
+        if (!set)
+            return;
+        const std::string layer = layerFor(*set);
+        json payload = payloadFor(texturePaintState(), false).toJson();
+        payload["triangles"] = tris;
+        try
+        {
+            ops::execute("texPaintStroke",
+                         {{"args", {set->name(), layer}}, {"stroke", {{"mesh", t.meshPath}, {"brush", texturePaintState().stroke.toJson()}, {"payload", payload}}}},
+                         CallSource::UI);
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("Texture paint: {}", e.what());
+        }
     }
 
     void fill(const Target& t)
@@ -1338,6 +1709,8 @@ private:
             log::warn("Texture paint: {}", e.what());
             rp::cancelLive(mTarget.set, mLayer);
         }
+        // The stroke may have wired new channels; the next hover compiles what the stroke after it would add.
+        mWarmedSet = kNoNode;
         viewportTools::requestRedraw();
     }
 
@@ -1355,12 +1728,12 @@ private:
         if (!mPanel)
             return;
         scene::Graph& g = scene::Graph::current();
-        QString text = "Hover a mesh whose material has a texture set.";
+        QString text = "No texture set under the brush";
         if (scene::Node* set = g.node(mStroking ? mTarget.set : (mOver ? mOver->set : kNoNode)))
         {
             auto it = gLayers.find(set->id());
-            text = QString("Set %1, layer %2").arg(QString::fromStdString(set->name()),
-                                                   it != gLayers.end() ? QString::fromStdString(it->second) : QString("(new on first stroke)"));
+            text = QString("%1 / %2").arg(QString::fromStdString(set->name()),
+                                               it != gLayers.end() ? QString::fromStdString(it->second) : QString("new paint layer"));
         }
         mPanel->setTarget(text);
     }
@@ -1752,6 +2125,16 @@ private:
     std::shared_ptr<bool> mAlive;
     int mActiveListener = 0;
     QPointer<TexturePaintPanel> mPanel;
+    /** The set the hover last compiled the next graph for. */
+    NodeId mWarmedSet = kNoNode;
+    /** Fill: the region a click fills, on the hovered mesh, and the press waiting to become a click or a box. */
+    std::vector<uint32_t> mFillTris;
+    std::shared_ptr<const tp::PaintMesh> mFillPaint;
+    glm::dmat4 mFillWorld{1.0};
+    std::string mFillKey;
+    std::optional<Target> mFillPress;
+    QPointF mMarqueeFrom, mMarqueeTo;
+    bool mMarquee = false;
     QPointF mHover;
     std::optional<Target> mOver;
     Target mTarget;
@@ -1825,6 +2208,50 @@ std::optional<std::pair<std::string, std::string>> actionTarget()
 } // namespace
 
 void startTexturePaint() { viewportTools::set(std::make_unique<TexturePaintTool>()); }
+
+QWidget* texturePaintPage(QWidget* parent)
+{
+    TexturePaintPanel* page = brushPage();
+    page->setParent(parent);
+    return page;
+}
+
+std::string texturePaintPreset() { return texturePaintState().presetId; }
+
+void applyTexturePaintPreset(const std::string& id)
+{
+    std::optional<tex::brushes::Preset> p = tex::brushes::find(id);
+    if (!p)
+    {
+        log::warn("Texture paint: no brush preset {}", id);
+        return;
+    }
+    applyPreset(texturePaintState(), *p);
+    brushChanged();
+    ensureTexturePaint();
+}
+
+std::string texturePaintAlpha() { return texturePaintState().stroke.alphaPath; }
+
+void setTexturePaintAlpha(const std::string& alphaPath)
+{
+    texturePaintState().stroke.alphaPath = alphaPath;
+    brushChanged();
+    ensureTexturePaint();
+}
+
+std::string texturePaintTexture() { return texturePaintState().source == "texture" ? texturePaintState().sourceImage : std::string(); }
+
+void setTexturePaintTexture(const std::string& file)
+{
+    TexturePaintSettings& s = texturePaintState();
+    s.sourceImage = file;
+    s.source = "texture";
+    if (s.tool != "paint" && s.tool != "fill" && s.tool != "project")
+        s.tool = "paint";
+    brushChanged();
+    ensureTexturePaint();
+}
 
 nlohmann::json texturePaintSettings()
 {

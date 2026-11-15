@@ -1,0 +1,556 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Muddy Ground",
+  "description": "Dark wet soil with small stones and glossy puddles collecting in the low spots.",
+  "tags": [
+    "ground",
+    "realistic",
+    "dirty"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L5",
+    "name": "Muddy Ground",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Soil",
+        "kind": "procedural",
+        "graph": {
+          "name": "soil",
+          "typeVersion": 1,
+          "inputs": [
+            {
+              "name": "Pebble Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 22,
+              "targets": [
+                "Cells3.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Pebble Size",
+              "kind": "param",
+              "type": "float",
+              "default": 0.82,
+              "targets": [
+                "Threshold7.threshold"
+              ],
+              "min": 0.0,
+              "max": 1.0
+            },
+            {
+              "name": "Pebble Spacing",
+              "kind": "param",
+              "type": "float",
+              "default": 0.6,
+              "targets": [
+                "Threshold9.threshold"
+              ],
+              "min": 0.0,
+              "max": 1.0
+            },
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 5,
+              "targets": [
+                "Clouds1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 421,
+              "targets": [
+                "Clouds1.seed",
+                "Cells3.seed",
+                "Perlin4.seed",
+                "Perlin8.seed"
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "name": "baseColor",
+              "type": "color"
+            },
+            {
+              "name": "height",
+              "type": "gray"
+            },
+            {
+              "name": "roughness",
+              "type": "gray"
+            }
+          ],
+          "nodes": [
+            {
+              "name": "GroupInput",
+              "type": "GroupInput",
+              "position": [
+                -800,
+                0
+              ]
+            },
+            {
+              "name": "Clouds1",
+              "type": "clouds",
+              "position": [
+                -500,
+                0
+              ],
+              "values": {
+                "scale": 5,
+                "octaves": 6,
+                "seed": 421
+              }
+            },
+            {
+              "name": "Colorize2",
+              "type": "colorize",
+              "position": [
+                -350,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.022,
+                      0.0116,
+                      0.0072,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.0835,
+                      0.047,
+                      0.0245,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Cells3",
+              "type": "cells",
+              "position": [
+                -200,
+                0
+              ],
+              "values": {
+                "scale": 22,
+                "mode": "f1",
+                "jitter": 1.0,
+                "seed": 422
+              }
+            },
+            {
+              "name": "Perlin4",
+              "type": "perlin",
+              "position": [
+                -50,
+                0
+              ],
+              "values": {
+                "scale": 12,
+                "octaves": 3,
+                "seed": 423
+              }
+            },
+            {
+              "name": "Warp5",
+              "type": "warp",
+              "position": [
+                100,
+                0
+              ],
+              "values": {
+                "mode": "gradient",
+                "intensity": 0.35
+              }
+            },
+            {
+              "name": "Invert6",
+              "type": "invert",
+              "position": [
+                -650,
+                120
+              ],
+              "values": {}
+            },
+            {
+              "name": "Threshold7",
+              "type": "threshold",
+              "position": [
+                -500,
+                120
+              ],
+              "values": {
+                "threshold": 0.82,
+                "softness": 0.04
+              }
+            },
+            {
+              "name": "Perlin8",
+              "type": "perlin",
+              "position": [
+                -350,
+                120
+              ],
+              "values": {
+                "scale": 5,
+                "octaves": 2,
+                "seed": 424
+              }
+            },
+            {
+              "name": "Threshold9",
+              "type": "threshold",
+              "position": [
+                -200,
+                120
+              ],
+              "values": {
+                "threshold": 0.6,
+                "softness": 0.05
+              }
+            },
+            {
+              "name": "Blend10",
+              "type": "blend",
+              "position": [
+                -50,
+                120
+              ],
+              "values": {
+                "mode": "multiply",
+                "opacity": 1.0
+              }
+            },
+            {
+              "name": "Color11",
+              "type": "color",
+              "position": [
+                100,
+                120
+              ],
+              "values": {
+                "color": [
+                  0.0732,
+                  0.0593,
+                  0.047,
+                  1
+                ]
+              }
+            },
+            {
+              "name": "Blend12",
+              "type": "blend",
+              "position": [
+                -650,
+                240
+              ],
+              "values": {
+                "mode": "normal",
+                "opacity": 1.0
+              }
+            },
+            {
+              "name": "Colorize13",
+              "type": "colorize",
+              "position": [
+                -500,
+                240
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.0,
+                      0.0,
+                      0.0,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.25,
+                      0.25,
+                      0.25,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Colorize14",
+              "type": "colorize",
+              "position": [
+                -350,
+                240
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.4,
+                      0.4,
+                      0.4,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.6,
+                      0.6,
+                      0.6,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Blend15",
+              "type": "blend",
+              "position": [
+                -200,
+                240
+              ],
+              "values": {
+                "mode": "add",
+                "opacity": 1.0
+              }
+            },
+            {
+              "name": "Colorize16",
+              "type": "colorize",
+              "position": [
+                -50,
+                240
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.6,
+                      0.6,
+                      0.6,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.9,
+                      0.9,
+                      0.9,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "GroupOutput",
+              "type": "GroupOutput",
+              "position": [
+                400,
+                0
+              ]
+            }
+          ],
+          "links": [
+            [
+              "Clouds1",
+              "out",
+              "Colorize2",
+              "input"
+            ],
+            [
+              "Cells3",
+              "out",
+              "Warp5",
+              "input"
+            ],
+            [
+              "Perlin4",
+              "out",
+              "Warp5",
+              "warp"
+            ],
+            [
+              "Warp5",
+              "out",
+              "Invert6",
+              "input"
+            ],
+            [
+              "Invert6",
+              "out",
+              "Threshold7",
+              "input"
+            ],
+            [
+              "Perlin8",
+              "out",
+              "Threshold9",
+              "input"
+            ],
+            [
+              "Threshold7",
+              "out",
+              "Blend10",
+              "foreground"
+            ],
+            [
+              "Threshold9",
+              "out",
+              "Blend10",
+              "background"
+            ],
+            [
+              "Color11",
+              "out",
+              "Blend12",
+              "foreground"
+            ],
+            [
+              "Colorize2",
+              "out",
+              "Blend12",
+              "background"
+            ],
+            [
+              "Blend10",
+              "out",
+              "Blend12",
+              "mask"
+            ],
+            [
+              "Blend12",
+              "out",
+              "GroupOutput",
+              "baseColor"
+            ],
+            [
+              "Blend10",
+              "out",
+              "Colorize13",
+              "input"
+            ],
+            [
+              "Clouds1",
+              "out",
+              "Colorize14",
+              "input"
+            ],
+            [
+              "Colorize13",
+              "out",
+              "Blend15",
+              "foreground"
+            ],
+            [
+              "Colorize14",
+              "out",
+              "Blend15",
+              "background"
+            ],
+            [
+              "Blend15",
+              "out",
+              "GroupOutput",
+              "height"
+            ],
+            [
+              "Clouds1",
+              "out",
+              "Colorize16",
+              "input"
+            ],
+            [
+              "Colorize16",
+              "out",
+              "GroupOutput",
+              "roughness"
+            ]
+          ]
+        },
+        "masks": []
+      },
+      {
+        "id": "L4",
+        "name": "Puddles",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.0049,
+            0.0039,
+            0.0031,
+            1
+          ],
+          "roughness": 0.05,
+          "height": 0.45
+        },
+        "masks": [
+          {
+            "id": "M2",
+            "kind": "generator",
+            "type": "genWetness",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "waterLine": 0.25,
+              "puddles": 1.0,
+              "puddleScale": 3,
+              "seed": 423
+            }
+          },
+          {
+            "id": "M3",
+            "kind": "generator",
+            "type": "clouds",
+            "mode": "multiply",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "scale": 3,
+              "contrast": 2.5,
+              "seed": 423
+            }
+          }
+        ],
+        "channels": {
+          "height": {
+            "mode": "normal",
+            "opacity": 1.0
+          }
+        }
+      }
+    ],
+    "masks": []
+  }
+}

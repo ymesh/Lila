@@ -7,6 +7,7 @@
 #include "bake/BakeNodes.h"
 #include "bake/Targets.h"
 #include "core/MainQueue.h"
+#include "core/PrefStore.h"
 #include "geo/Mesh.h"
 #include "geo/Primitives.h"
 #include "mcp/McpServer.h"
@@ -18,6 +19,7 @@
 #include "scene/Transform.h"
 #include "ui/Actions.h"
 #include "ui/BakerPanel.h"
+#include "ui/Theme.h"
 #include "ui/Deletion.h"
 #include "ui/Menus.h"
 #include "ui/Outliner.h"
@@ -590,6 +592,214 @@ TEST_CASE("baker panel: presets stick on group and High rows, typed params edit 
         pump();
         CHECK(bake::groupsOf(g, project).size() == 1);
     }
+}
+
+TEST_CASE("baker panel: Unlink Material lists the highs' materials, adds one under the group's lows and Remove takes it out")
+{
+    setupBaker();
+    ops::execute("newScene", json::object());
+    UndoStack::get().clear();
+    addPlane("crate_low", 0.0);
+    addPlane("crate_high", 1.0);
+    const std::string bolts = addPlane("bolts", 1.5);
+    ops::execute("createMaterial", {{"args", {"M_Bolts"}}});
+    ops::execute("assignMaterial", {{"args", {"M_Bolts", bolts}}});
+
+    ui::BakerPanel panel;
+    panel.resize(420, 900);
+    panel.show();
+    pump();
+    child<QToolButton>(&panel, "bakerAutoGroup")->click();
+    pump();
+    REQUIRE_FALSE(panel.project().empty());
+    const std::string group = onlyGroup(panel.project())->path();
+    ops::execute("bakeGroup", {{"args", {group}}, {"addHigh", {bolts}}});
+    pump();
+    auto* groups = child<QTreeWidget>(&panel, "bakerGroups");
+    groups->setCurrentItem(findRow(groups, QString::fromStdString(onlyGroup(panel.project())->name())));
+    pump();
+
+    QMenu* menu = child<QToolButton>(&panel, "bakerUnlinkMaterial")->menu();
+    REQUIRE(menu);
+    Q_EMIT menu->aboutToShow();
+    QAction* pickBolts = nullptr;
+    for (QAction* a : menu->actions())
+        if (a->text() == "M_Bolts")
+            pickBolts = a;
+    REQUIRE(pickBolts);
+    pickBolts->trigger();
+    pump();
+    auto unlinks = [&] { return bake::groupSettings(*onlyGroup(panel.project())).unlinks; };
+    REQUIRE(unlinks().size() == 1);
+    CHECK(unlinks()[0].lows.empty());
+    CHECK(unlinks()[0].meshes.empty());
+    CHECK(unlinks()[0].materials == std::vector<std::string>{"M_Bolts"});
+
+    auto* tree = child<QTreeWidget>(&panel, "bakerUnlinks");
+    QTreeWidgetItem* row = findRow(tree, "M_Bolts");
+    REQUIRE(row);
+    REQUIRE(row->parent());
+    CHECK(row->parent()->text(0) == "All lows");
+    row->setSelected(true);
+    child<QToolButton>(&panel, "bakerUnlinkRemove")->click();
+    pump();
+    CHECK(unlinks().empty());
+}
+
+TEST_CASE("baker panel: an occlusion result under sculpt lighting gets a Lighting row and a button back to environment lighting")
+{
+    setupBaker();
+    ops::execute("newScene", json::object());
+    PrefStore& prefs = PrefStore::get();
+    const std::string before = prefs.value<std::string>("general", "/viewport/lighting", "environment");
+
+    ui::BakerPanel panel;
+    panel.resize(420, 900);
+    panel.show();
+    pump();
+    auto* tree = child<QTreeWidget>(&panel, "bakerSummary");
+    // Hidden or not, whichever tab is in front.
+    auto* button = child<QToolButton>(&panel, "bakerEnvironmentLighting");
+    const json occlusion = {{"outputs", {{{"map", "ao"}}}}, {"stats", json::object()}};
+    const json normalOnly = {{"outputs", {{{"map", "normal"}}}}, {"stats", json::object()}};
+
+    prefs.set("general", "/viewport/lighting", std::string("environment"));
+    panel.showResult(occlusion);
+    pump();
+    CHECK_FALSE(findRow(tree, "Lighting"));
+    CHECK(button->isHidden());
+
+    // The row follows the lighting, not only the bake.
+    prefs.set("general", "/viewport/lighting", std::string("sculpt"));
+    pump();
+    REQUIRE(findRow(tree, "Lighting"));
+    CHECK(findRow(tree, "Lighting")->text(1) == "Sculpt");
+    CHECK_FALSE(button->isHidden());
+
+    panel.showResult(normalOnly);
+    pump();
+    CHECK_FALSE(findRow(tree, "Lighting"));
+    CHECK(button->isHidden());
+
+    panel.showResult(occlusion);
+    pump();
+    REQUIRE(findRow(tree, "Lighting"));
+    button->click();
+    pump();
+    CHECK(prefs.value<std::string>("general", "/viewport/lighting", "") == "environment");
+    CHECK_FALSE(findRow(tree, "Lighting"));
+    CHECK(button->isHidden());
+
+    prefs.set("general", "/viewport/lighting", before);
+}
+
+TEST_CASE("baker panel: a low shown without a modifier its export runs gets a Preview row and Show Export Mesh")
+{
+    setupBaker();
+    ops::execute("newScene", json::object());
+    UndoStack::get().clear();
+    const std::string low = addPlane("crate_low", 0.0);
+    addPlane("crate_high", 1.0);
+    ops::execute("addModifier", {{"args", {low}}, {"kind", "subdivision"}});
+    const std::string mod = ops::execute("modifierStack", {{"args", {low}}})["modifiers"].back()["name"];
+    scene::Graph& g = scene::Graph::current();
+    auto enabled = [&] { return std::get<bool>(g.value({g.find(mod)->id(), g.find(mod)->type().attrIndex("enabled"), -1})); };
+
+    ui::BakerPanel panel;
+    panel.resize(420, 900);
+    panel.show();
+    pump();
+    child<QToolButton>(&panel, "bakerAutoGroup")->click();
+    pump();
+    REQUIRE_FALSE(panel.project().empty());
+    auto* tree = child<QTreeWidget>(&panel, "bakerSummary");
+    // Hidden or not, whichever tab is in front.
+    auto* button = child<QToolButton>(&panel, "bakerShowExportMesh");
+    const json baked = {{"outputs", {{{"map", "normal"}}}}, {"stats", json::object()}};
+
+    panel.showResult(baked);
+    pump();
+    CHECK_FALSE(findRow(tree, "Preview"));
+    CHECK(button->isHidden());
+
+    // The row follows the stack, not only the bake.
+    ops::execute("setAttr", {{"args", {mod + ".enabled", false}}});
+    pump();
+    REQUIRE(findRow(tree, "Preview"));
+    CHECK(findRow(tree, "Preview")->text(1) == "Cage, 1 mesh");
+    CHECK_FALSE(button->isHidden());
+
+    // A planned bake has no maps to preview.
+    panel.showResult({{"outputs", json::array()}, {"stats", json::object()}, {"dryRun", true}});
+    pump();
+    CHECK_FALSE(findRow(tree, "Preview"));
+    CHECK(button->isHidden());
+
+    panel.showResult(baked);
+    pump();
+    REQUIRE(findRow(tree, "Preview"));
+    button->click();
+    pump();
+    CHECK(enabled());
+    CHECK_FALSE(findRow(tree, "Preview"));
+    CHECK(button->isHidden());
+    REQUIRE(UndoStack::get().undo());
+    pump();
+    CHECK_FALSE(enabled());
+    CHECK(findRow(tree, "Preview"));
+}
+
+TEST_CASE("baker panel: a result whose snapshots overflowed the cache leads with a Cache row in the error colour and Raise Cache")
+{
+    setupBaker();
+    ops::execute("newScene", json::object());
+    PrefStore& prefs = PrefStore::get();
+    const double before = prefs.value<double>("baker", "/snapshotCacheGb", 0.0);
+
+    ui::BakerPanel panel;
+    panel.resize(420, 900);
+    panel.show();
+    pump();
+    auto* tree = child<QTreeWidget>(&panel, "bakerSummary");
+    // Hidden or not, whichever tab is in front.
+    auto* button = child<QToolButton>(&panel, "bakerRaiseCache");
+    const double gb = double(size_t(1) << 30);
+    auto result = [&](double dropped) {
+        json timings = json::object();
+        if (dropped > 0.0)
+            timings = {{"snapshotCacheDropped", dropped}, {"snapshotCacheBudget", 3.0 * gb}};
+        return json{{"outputs", {{{"map", "normal"}}}}, {"stats", json::object()}, {"timings", timings}, {"seconds", dropped}};
+    };
+
+    panel.showResult(result(0.0));
+    pump();
+    CHECK_FALSE(findRow(tree, "Cache"));
+    CHECK(button->isHidden());
+
+    panel.showResult(result(1.0 * gb));
+    pump();
+    QTreeWidgetItem* row = tree->topLevelItem(0);
+    REQUIRE(row);
+    CHECK(row->text(0) == "Cache");
+    CHECK(row->text(1) == "Full: 1.0 GB of meshes redone every bake");
+    CHECK(row->foreground(1).color() == ui::themeColor("statusError"));
+    CHECK(row->font(1).bold());
+    CHECK_FALSE(button->isHidden());
+
+    // Room for what it held plus what it dropped, and a quarter more.
+    button->click();
+    pump();
+    CHECK(prefs.value<double>("baker", "/snapshotCacheGb", 0.0) == doctest::Approx(5.0));
+    CHECK(findRow(tree, "Cache")->text(1) == "Raised to 5 GB, from the next bake");
+    CHECK(button->isHidden());
+
+    // More than the machine could spare: the row stays, with nothing to press.
+    panel.showResult(result(4096.0 * gb));
+    pump();
+    REQUIRE(findRow(tree, "Cache"));
+    CHECK(button->isHidden());
+
+    prefs.set("baker", "/snapshotCacheGb", before);
 }
 
 TEST_CASE("baker actions and menu are registered with docs")

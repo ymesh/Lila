@@ -1,0 +1,40 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Soft Pencil",
+  "category": "Dry",
+  "doc": "A broad, dark graphite line.",
+  "brush": {
+    "falloff": "smooth",
+    "strength": 1.0,
+    "flow": 0.85,
+    "spacing": 0.05,
+    "pressureSize": true,
+    "pressureOpacity": true,
+    "pressureFlow": false,
+    "jitter": {
+      "position": 0.0,
+      "size": 0.0,
+      "opacity": 0.0,
+      "angle": 0.0
+    },
+    "angle": 0.0,
+    "followStroke": false,
+    "roundness": 1.0,
+    "alpha": "alpha://lila/brush tips/pencil grain.png",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.0,
+    "radius": 8.0,
+    "pressureCurve": {
+      "size": {
+        "floor": 0.5,
+        "exponent": 1.0
+      }
+    }
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "normal"
+  }
+}

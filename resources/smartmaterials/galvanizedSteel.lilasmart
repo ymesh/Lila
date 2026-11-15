@@ -1,0 +1,241 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Galvanized Steel",
+  "description": "Zinc-coated steel with a crystalline spangle pattern of varying sheen and a little white oxide.",
+  "tags": [
+    "metal",
+    "realistic"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L5",
+    "name": "Galvanized Steel",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Zinc",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.6209,
+            0.6383,
+            0.6739,
+            1
+          ],
+          "roughness": 0.35,
+          "metallic": 1.0,
+          "height": 0.5
+        },
+        "masks": []
+      },
+      {
+        "id": "L2",
+        "name": "Spangle",
+        "kind": "procedural",
+        "graph": {
+          "name": "spangle",
+          "typeVersion": 1,
+          "inputs": [
+            {
+              "name": "Cells Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 10,
+              "targets": [
+                "Cells1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 351,
+              "targets": [
+                "Cells1.seed"
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "name": "roughness",
+              "type": "gray"
+            },
+            {
+              "name": "baseColor",
+              "type": "color"
+            }
+          ],
+          "nodes": [
+            {
+              "name": "GroupInput",
+              "type": "GroupInput",
+              "position": [
+                -800,
+                0
+              ]
+            },
+            {
+              "name": "Cells1",
+              "type": "cells",
+              "position": [
+                -500,
+                0
+              ],
+              "values": {
+                "scale": 10,
+                "mode": "cells",
+                "jitter": 1.0,
+                "seed": 351
+              }
+            },
+            {
+              "name": "Colorize2",
+              "type": "colorize",
+              "position": [
+                -350,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.2,
+                      0.2,
+                      0.2,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.55,
+                      0.55,
+                      0.55,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Colorize3",
+              "type": "colorize",
+              "position": [
+                -200,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.5071,
+                      0.5382,
+                      0.5705,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.7484,
+                      0.7678,
+                      0.7874,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "GroupOutput",
+              "type": "GroupOutput",
+              "position": [
+                400,
+                0
+              ]
+            }
+          ],
+          "links": [
+            [
+              "Cells1",
+              "random",
+              "Colorize2",
+              "input"
+            ],
+            [
+              "Colorize2",
+              "out",
+              "GroupOutput",
+              "roughness"
+            ],
+            [
+              "Cells1",
+              "random",
+              "Colorize3",
+              "input"
+            ],
+            [
+              "Colorize3",
+              "out",
+              "GroupOutput",
+              "baseColor"
+            ]
+          ]
+        },
+        "masks": []
+      },
+      {
+        "id": "L4",
+        "name": "White Oxide",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.5225,
+            0.5382,
+            0.5225,
+            1
+          ],
+          "metallic": 0.0,
+          "roughness": 0.9
+        },
+        "masks": [
+          {
+            "id": "M3",
+            "kind": "generator",
+            "type": "genDirt",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.45,
+              "breakup": 0.9,
+              "noiseScale": 6,
+              "seed": 352
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.6
+          },
+          "metallic": {
+            "mode": "normal",
+            "opacity": 0.6
+          },
+          "roughness": {
+            "mode": "normal",
+            "opacity": 0.6
+          }
+        }
+      }
+    ],
+    "masks": []
+  }
+}

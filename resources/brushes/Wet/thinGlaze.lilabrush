@@ -1,0 +1,33 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Thin Glaze",
+  "category": "Wet",
+  "doc": "A multiplying glaze that deepens what is under it.",
+  "brush": {
+    "falloff": "bell",
+    "strength": 0.6,
+    "flow": 0.15,
+    "spacing": 0.06,
+    "pressureSize": false,
+    "pressureOpacity": false,
+    "pressureFlow": false,
+    "jitter": {
+      "position": 0.0,
+      "size": 0.0,
+      "opacity": 0.0,
+      "angle": 0.0
+    },
+    "angle": 0.0,
+    "followStroke": false,
+    "roundness": 1.0,
+    "alpha": "",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.0
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "multiply"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Thin Smoke Trail",
+  "category": "Artistic",
+  "doc": "A narrow ribbon of smoke along the stroke.",
+  "brush": {
+    "falloff": "smooth",
+    "strength": 1.0,
+    "flow": 0.15,
+    "spacing": 0.08,
+    "pressureSize": false,
+    "pressureOpacity": false,
+    "pressureFlow": false,
+    "jitter": {
+      "position": 0.0,
+      "size": 0.0,
+      "opacity": 0.0,
+      "angle": 0.0
+    },
+    "angle": 0.0,
+    "followStroke": true,
+    "roundness": 0.45,
+    "alpha": "alpha://lila/brush tips/smoke wisp.png",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.0
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "normal"
+  }
+}

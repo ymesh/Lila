@@ -1,0 +1,43 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Frayed Fabric Edges",
+  "description": "Fabric worn at seams and folds with the weave showing through.",
+  "tags": [
+    "fabric",
+    "edges",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Wear",
+      "type": "genEdgeWear",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "strength": 1.4,
+        "level": 0.22,
+        "softness": 0.45,
+        "breakup": 0.6,
+        "seed": 1401
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Threads",
+      "type": "weave",
+      "mode": "multiply",
+      "opacity": 0.7,
+      "invert": false,
+      "values": {
+        "count": 48,
+        "width": 0.75
+      }
+    }
+  ]
+}

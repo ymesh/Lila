@@ -1,0 +1,57 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Dusty Dirt",
+  "description": "Soft, pale dirt in the recesses blending into a dust film on top.",
+  "tags": [
+    "dirt",
+    "dust",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Dirt",
+      "type": "genDirt",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.45,
+        "softness": 0.8,
+        "breakup": 0.4,
+        "noiseScale": 4,
+        "seed": 121
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Dust",
+      "type": "genDust",
+      "mode": "lighten",
+      "opacity": 0.55,
+      "invert": false,
+      "values": {
+        "level": 0.55,
+        "softness": 0.7,
+        "breakup": 0.3,
+        "seed": 122
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "filter",
+      "name": "Soften",
+      "type": "blur",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "radius": 0.006
+      }
+    }
+  ]
+}

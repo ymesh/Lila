@@ -6899,6 +6899,7 @@ void Renderer::stop()
     }
     m->cv.notify_all();
     m->thread.join();
+    std::unique_lock deviceUse(compute::offThreadDeviceUse());
     for (const auto& hook : m->stopHooks)
         hook(m->vk);
     gpuProfile::stop();

@@ -1,11 +1,14 @@
 #include "bake/BakeCache.h"
 
 #include "bake/BakeInputs.h"
+#include "core/PrefStore.h"
 #include "core/Profile.h"
+#include "core/SystemMemory.h"
 
 #include <tbb/parallel_for.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <list>
 #include <mutex>
@@ -17,8 +20,21 @@ namespace
 constexpr uint64_t kMul = 0x9e3779b97f4a7c15ull;
 /** Large inputs hash as fixed chunks combined in order, so the result never depends on the thread count. */
 constexpr size_t kChunk = size_t(1) << 20;
-/** Snapshots kept between bakes, by their soups' bytes. */
-constexpr size_t kCacheBytes = size_t(3) << 30;
+/**
+ * Snapshots kept between bakes, by their soups' bytes: a quarter of the machine's memory, 3 GB at least. A dense asset's
+ * highs run to several GB, and a cache too small for them all evicts as it fills, so every bake redoes most of them.
+ */
+std::atomic<size_t> gBudget{0};
+/** The bake being tallied; entries it made or reused carry it. */
+std::atomic<uint64_t> gEpoch{1};
+std::atomic<size_t> gDropped{0};
+
+size_t cacheBytes()
+{
+    static const size_t fallback = std::max(size_t(3) << 30, physicalMemoryBytes() / 4);
+    const size_t set = gBudget.load(std::memory_order_relaxed);
+    return set ? set : fallback;
+}
 
 uint64_t mix(uint64_t h)
 {
@@ -68,6 +84,7 @@ template <class T> struct Cache
         SnapshotKey key;
         std::shared_ptr<const T> value;
         size_t bytes = 0;
+        uint64_t epoch = 0;
     };
     std::mutex mutex;
     std::list<Entry> entries;
@@ -94,6 +111,7 @@ template <class T> struct Cache
         for (auto it = entries.begin(); it != entries.end(); ++it)
             if (same(it->key, key))
             {
+                it->epoch = gEpoch.load(std::memory_order_relaxed);
                 entries.splice(entries.begin(), entries, it);
                 return entries.front().value;
             }
@@ -102,8 +120,13 @@ template <class T> struct Cache
 
     void put(const SnapshotKey& key, std::shared_ptr<const T> value, size_t size)
     {
-        if (!key.sourcePtr || size > kCacheBytes)
+        if (!key.sourcePtr)
             return;
+        if (size > cacheBytes())
+        {
+            gDropped += size;
+            return;
+        }
         std::scoped_lock lock(mutex);
         dropExpired();
         std::erase_if(entries, [&](const Entry& e) {
@@ -112,10 +135,14 @@ template <class T> struct Cache
             bytes -= e.bytes;
             return true;
         });
-        entries.push_front({key, std::move(value), size});
+        const uint64_t epoch = gEpoch.load(std::memory_order_relaxed);
+        entries.push_front({key, std::move(value), size, epoch});
         bytes += size;
-        while (bytes > kCacheBytes && entries.size() > 1)
+        while (bytes > cacheBytes() && entries.size() > 1)
         {
+            // One of this bake's own going is the cache too small for the bake, not an old snapshot making room.
+            if (entries.back().epoch == epoch)
+                gDropped += entries.back().bytes;
             bytes -= entries.back().bytes;
             entries.pop_back();
         }
@@ -191,6 +218,19 @@ SnapshotKey snapshotKey(const std::shared_ptr<const geo::Mesh>& source, const gl
     const std::string m = modifiers.dump();
     k.digest = hashBytes(m.data(), m.size(), h);
     return k;
+}
+
+void beginSnapshotTally()
+{
+    const double gb = PrefStore::get().value<double>("baker", "/snapshotCacheGb", 0.0);
+    gBudget = gb > 0.0 ? size_t(gb * double(size_t(1) << 30)) : 0;
+    ++gEpoch;
+    gDropped = 0;
+}
+
+SnapshotTally snapshotTally()
+{
+    return {gDropped.load(), cacheBytes()};
 }
 
 std::shared_ptr<const HighInput> cachedHigh(const SnapshotKey& key) { return highs().get(key); }

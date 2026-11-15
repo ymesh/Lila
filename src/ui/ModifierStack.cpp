@@ -1661,5 +1661,10 @@ void registerModifierStackActions()
     };
     actions::add({.id = "modifier.applyAll", .label = "Apply All Modifiers", .category = "Modifiers", .run = onMeshes("applyAllModifiers"),
                   .doc = "Bake every modifier of the selected meshes into their base mesh.", .python = "applyAllModifiers()"});
+    actions::add({.id = "modifier.showExportMesh", .label = "Show Export Mesh", .category = "Modifiers", .run = onMeshes("showExportMesh"),
+                  .doc = "Shows the selected meshes as they export: each modifier's viewport switch takes its export switch, so baked maps "
+                         "preview on the mesh they were baked for.",
+                  .python = "showExportMesh()",
+                  .keywords = {"export", "preview", "final", "render", "bake", "subdivision", "viewport", "cage"}});
 }
 } // namespace lila::ui

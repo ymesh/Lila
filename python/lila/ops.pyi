@@ -786,7 +786,7 @@ def bakeGroup(*objects: Any, project: str | None = None, lows: Sequence[Any] | N
         addHigh: Add highs. Short form ah.
         removeHigh: Remove highs. Short form rh.
         self: Add (True) or remove (False) the lows themselves as a high. Short form sf.
-        modifiers: Bake-only modifier stack, [{"kind": "subdivision", "params": {"levels": 2}}] or a preset name, for the highs given in this call (else every high). Kinds are modifierKinds(). Short form md.
+        modifiers: Bake-only modifier stack, [{"kind": "subdivision", "params": {"levels": 2}}] or a preset name, for the highs given in this call (else every high). Kinds are modifierKinds(). A subdivision here blends its uvs unless its params say uvs: 1 (Fit Surface), which takes many times longer on dense highs. Short form md.
         preset: A bake modifier preset instead of modifiers=: Smooth x2, Smooth x1-x4, Auto Bevel + Smooth, none. Short form ps.
         cage: A cage mesh with the low's topology (one low); empty uses the auto cage. Short form cg.
         cageOffset: Scales the auto cage's push (frontal distance). Short form co.
@@ -795,7 +795,7 @@ def bakeGroup(*objects: Any, project: str | None = None, lows: Sequence[Any] | N
         ignoreBackfaces: Rays only hit high faces facing them. Short form ib.
         aoScope: AO occluders: self, group or all. Short form as. One of 'self', 'group', 'all'.
         skew: 0 to 1: tilts rays from the smooth normals toward each low face's normal. Short form sk.
-        unlinks: Replace the unlinks: [{"lows": [...] (empty: every low), "meshes": [...], "occlusion": True, "projection": False}]. The lows' AO and other occlusion rays pass through those meshes (any high or occluder, a self high by its low's name); projection=True also bakes nothing from them onto the lows. Short form ul.
+        unlinks: Replace the unlinks: [{"lows": [...] (empty: every low), "meshes": [...], "materials": [...], "occlusion": True, "projection": False}]. The lows' AO and other occlusion rays pass through those meshes (any high or occluder, a self high by its low's name) and through every high with faces of those materials; projection=True also bakes nothing from them onto the lows. Short form ul.
         addHighFile: Add highs streamed from files at bake time (.fbx, .obj, .abc), never loaded into the scene. Short form ahf.
         removeHighFile: Remove file highs. Short form rhf.
         fileObject: With addHighFile: only the file's meshes whose name contains this. Short form fob.
@@ -812,7 +812,7 @@ def bakeGroupPerMesh(*objects: Any, project: str | None = None, preset: str | No
     """
 
 def bakeLint(project: str | None = None, groups: Sequence[Any] | None = None, checks: Sequence[Any] | None = None, highs: bool | None = None, backend: str | None = None, *, pj: str | None = None, g: Sequence[Any] | None = None, c: Sequence[Any] | None = None, hi: bool | None = None, be: str | None = None) -> Any:
-    """Check a bake project before baking: hard edges off UV seams, overlapping UVs (also across groups writing one texture), missing or collapsed UVs, islands off their mesh's texel density, mirrored islands against tangent signs, lows with no high in range, highs outside the cage and cage topology; non-planar faces whose triangulation depends on the exporter only when checks names triangulation. Problems too small to show in the map are left out. bake runs it first and lists its warnings. Returns {issues: [{check, severity, group, mesh, message, data}], warnings, checks, distances: [{group, frontal, rear, frontalAuto, rearAuto, measured}]} (Auto distances are measured against the highs when highs is on).
+    """Check a bake project before baking: hard edges off UV seams, overlapping UVs (also across groups writing one texture), missing or collapsed UVs, islands off their mesh's texel density, mirrored islands against tangent signs, lows with no high in range, highs outside the cage, cage topology and lows shown without a modifier their export runs, where the viewport reads texels baked elsewhere (previewMesh); non-planar faces whose triangulation depends on the exporter only when checks names triangulation. Problems too small to show in the map are left out. bake runs it first and lists its warnings. Returns {issues: [{check, severity, group, mesh, message, data}], warnings, checks, distances: [{group, frontal, rear, frontalAuto, rearAuto, measured}]} (Auto distances are measured against the highs when highs is on).
 
     Args:
         project: The bake project; defaults to the scene's only one. Short form pj.
@@ -7792,7 +7792,7 @@ def render(camera: str | None = None, width: int | None = None, height: int | No
     """
 
 def renderMaterialThumbnail(*objects: Any, size: int | None = None, mesh: str | None = None, path: str | None = None, force: bool | None = None, backend: str | None = None, all: bool | None = None) -> Any:
-    """Render a material's thumbnail offscreen on the standard shader ball (or mesh= of the scene, at the material's real-world scale) and cache it by graph hash. material is a library id, .lilamat path or texture set; all=True renders every library material. Returns {file, cached} (a list with all).
+    """Render a material's thumbnail offscreen on the preview ball (or mesh= of the scene, at the material's real-world scale) and cache it by graph hash. material is a library id, .lilamat path, texture set or smart:<name> (a smart material or mask); all=True renders every library material. Returns {file, cached} (a list with all).
 
     Args:
         objects: material.
@@ -9305,6 +9305,13 @@ def show(*objects: Any, all: bool | None = None) -> Any:
         all: Show everything. Default False.
     """
 
+def showExportMesh(*objects: Any) -> Any:
+    """Show meshes as they export: every modifier's viewport state takes its export state, so a Subdivision left off in the viewport but on for export runs in both, and baked maps preview on the mesh they were baked for. Returns the modifiers changed.
+
+    Args:
+        objects: meshes.
+    """
+
 def showLastHidden() -> Any:
     """Show the objects the last hide (or hiding toggle) hid. Returns them."""
 
@@ -10070,7 +10077,7 @@ def symmetrizeSelection() -> Any:
     """Add the mirror images of the component selection, on each mesh whose symmetry is on."""
 
 def symmetryCheck(*objects: Any) -> Any:
-    """Report how symmetric meshes are across their symmetry plane (or round their radial axis): the largest distance between a point and its partner's reflection (or its orbit's image), and the points without a partner. For radial symmetry also the unmatched point ids and the count the mesh fits best. Changes nothing.
+    """Report how symmetric meshes are across their symmetry plane (or round their radial axis): the largest distance between a point and its partner's reflection (or its orbit's image), and the points without a partner. For radial symmetry also the unmatched point ids and the count the mesh fits best. For a mirror, planeTilt is how far (degrees) the plane sits off the world axes under the object's transform; a tilted one is warned about. Changes nothing.
 
     Args:
         objects: objects.
@@ -10233,7 +10240,7 @@ def texBrushPresets(name: str | None = None, reload: bool | None = None, *, n: s
     """
 
 def texBuildGraph(*objects: Any, assign: Sequence[Any] | None = None) -> Any:
-    """Build a material's texture graph from a compact spec, creating its texture set when it doesn't exist: {material, set, settings, description, nodes: [{name, type, params: {...}, values: {...}, position}], links: ['A.out -> Output.baseColor', ...]}. The set defaults to <material>Tex. A Material Output named Output is added when missing; positions are laid out when omitted. Nothing changes unless the whole spec is valid; the error lists every problem with the valid names. Returns the set, the material, the channels the graph drives and any compile error.
+    """Build a material's texture graph from a compact spec, creating its texture set when it doesn't exist: {material, set, settings, description, nodes: [{name, type, params: {...}, values: {...}, position}], links: ['A.out -> Output.baseColor', ...]}. The set defaults to the one bound to the material, else <material>Tex without the material's M_ prefix. A Material Output named Output is added when missing; positions are laid out when omitted. Nothing changes unless the whole spec is valid; the error lists every problem with the valid names. Returns the set, the material, the channels the graph drives and any compile error.
 
     Args:
         objects: spec.
@@ -10395,6 +10402,16 @@ def texImportImage(*objects: Any, kind: str | None = None, channel: str | None =
         folder: Where the copies go; textures/<set>/imported by default.
     """
 
+def texImportPainterSmartMaterials(*objects: Any, folder: str | None = None, brushFolder: str | None = None, overwrite: bool | None = None) -> Any:
+    """Convert Substance 3D Painter smart materials (.spsm), smart masks (.spmsk) and brush presets (.sppr), or folders of them: smart materials and masks as .lilasmart beside their embedded images, brush presets into Imported in your brushes. Painter's generators, noises and filters become their nearest Lila nodes and brush tips the nearest library alpha; custom Substance graphs and painted strokes can't come across. Returns per file {file, materials, brushes, approximated, dropped, error}.
+
+    Args:
+        objects: file|folder [file|folder...].
+        folder: Where they go; your smart materials folder by default.
+        brushFolder: Where brush presets go; Imported in your brushes folder by default.
+        overwrite: Replace ones of the same name there. Default True.
+    """
+
 def texLayerStack(*objects: Any) -> Any:
     """A texture set's layer stack as JSON: layers bottom first (with each channel's resolved enable, mode and opacity), masks, anchors, the base values, the mesh maps it reads, and mode: stack, or graph when the graph was edited as nodes beyond what the stack can show (or was never layered).
 
@@ -10440,7 +10457,7 @@ def texPaintInfo(*objects: Any, layer: str | None = None) -> Any:
     """
 
 def texPaintStroke(*objects: Any, stroke: Any | None = None, layer: str | None = None, mesh: str | None = None, payload: Any | None = None, brush: Any | None = None, points: Sequence[Any] | None = None, view: Any | None = None, space: str | None = None, particles: Any | None = None, id: int | None = None) -> Any:
-    """Paint a stroke into a texture set's paint layer (layer=, else the active one, else the stack's top paint layer, else a new paint layer). The stroke is a record: {mesh, brush (radius, strength, flow, spacing, falloff, roundness, angle, alpha, strokeMode line, lazyRadius, mirror...), payload {kind, channels {baseColor: [r, g, b], roughness: 0.3, ...}, blend normal|erase|add|subtract|multiply, mask}, occlusion, particles}, plus either space=surface with dabs [{triangle, bary [u, v], radius, pressure, opacity, angle}] or [{position [x, y, z], radius}] (object space), or space=screen with points [[x, y, pressure]] and view {width, height, camera | view + proj | viewProj + eye | eye + lookAt + fov}. Payload kinds: paint; direction (tilt, channel: normal, or another channel for a flow map); smudge (amount), blur and sharpen (filterRadius texels, amount), clone and heal (sourceOffset [du, dv] or cloneFrom [x, y, z]); fill (fillBy mesh|island|material|selection with at [x, y, z], triangle, material or faces; no dabs); project (image: a file path, {path, rect [x, y, w, h], opacity}, or {width, height, data}, through view; facingFade, colorChannel; no dabs); normal (normalMode bump|stamp, stampImage, intensity, channel). paint and fill take source {library id | graph | node type, values, resolution, scale} to paint a material's channels, and any kind tip {node | graph, values, resolution} for a texture graph brush tip. particles {kind drips|rain|sparks, count, length, size, spread, rate, seed} adds particle dabs. Each stroke is one undo step and is kept, so texRasterize can replay it. Returns {layer, stroke, dabs, pages}.
+    """Paint a stroke into a texture set's paint layer (layer=, else the active one, else the stack's top paint layer, else a new paint layer). The stroke is a record: {mesh, brush (radius, strength, flow, spacing, falloff, roundness, angle, alpha, strokeMode line, lazyRadius, mirror...), payload {kind, channels {baseColor: [r, g, b], roughness: 0.3, ...}, blend normal|erase|add|subtract|multiply, mask}, occlusion, particles}, plus either space=surface with dabs [{triangle, bary [u, v], radius, pressure, opacity, angle}] or [{position [x, y, z], radius}] (object space), or space=screen with points [[x, y, pressure]] and view {width, height, camera | view + proj | viewProj + eye | eye + lookAt + fov}. Payload kinds: paint; direction (tilt, channel: normal, or another channel for a flow map); smudge (amount), blur and sharpen (filterRadius texels, amount), clone and heal (sourceOffset [du, dv] or cloneFrom [x, y, z]); fill (fillBy mesh|island|material|polygon|triangle|selection with at [x, y, z], triangle, material or faces; no dabs); project (image: a file path, {path, rect [x, y, w, h], opacity}, or {width, height, data}, through view; facingFade, colorChannel; no dabs); normal (normalMode bump|stamp, stampImage, intensity, channel). paint and fill take source {library id | graph | node type, values, resolution, scale} to paint a material's channels, and any kind tip {node | graph, values, resolution} for a texture graph brush tip. particles {kind drips|rain|sparks, count, length, size, spread, rate, seed} adds particle dabs. Each stroke is one undo step and is kept, so texRasterize can replay it. Returns {layer, stroke, dabs, pages}.
 
     Args:
         objects: set [layer].
@@ -10539,7 +10556,7 @@ def texSetFrames(*objects: Any) -> Any:
     """
 
 def texSetLayer(*objects: Any) -> Any:
-    """Change a layer: props is a merge patch over its JSON (texLayerStack shows it): name, enabled, channels {channel: {enabled, mode, opacity}}, material {channel: value, or null to drop it}, paint {channel or mask: image}, graph, source, filter, filterValues, anchor, heightBlend {enabled, sharpness, influence}, masks, kind. Returns the layer.
+    """Change a layer: props is a merge patch over its JSON (texLayerStack shows it): name, enabled, channels {channel: {enabled, mode, opacity}}, material {channel: value, or null to drop it}, paint {channel or mask: image}, graph, source, filter, filterValues, anchor, heightBlend {enabled, sharpness, influence}, tiling {scale, rotation, offsetX, offsetY}, masks, kind; params {name: value} sets a procedural layer's exposed settings (its graph's param inputs and the node values they target). Returns the layer.
 
     Args:
         objects: set layer props.
@@ -10569,6 +10586,16 @@ def texSetSettings(*objects: Any) -> Any:
         objects: set settings.
     """
 
+def texSetSmartMaterialTags(*objects: Any, tags: Sequence[Any] | None = None, add: Sequence[Any] | None = None, remove: Sequence[Any] | None = None) -> Any:
+    """Set, add or remove a smart material's or mask's tags, for you only (built-in ones too). Returns its tags.
+
+    Args:
+        objects: smartMaterial.
+        tags: Replace its tags with these.
+        add: Tags to add.
+        remove: Tags to remove.
+    """
+
 def texSetTies(*objects: Any) -> Any:
     """Replace a texture set's zip ties, shaped as gnSetTies takes them. Display only; links not in the graph are dropped, and so is a tie left with fewer than two. Returns how many ties the graph has.
 
@@ -10586,8 +10613,12 @@ def texSetValue(*objects: Any) -> Any:
 def texSets() -> Any:
     """Names of the texture sets in the scene."""
 
-def texSmartMaterials() -> Any:
-    """The smart materials and masks in the libraries: name, kind, description, tier and file."""
+def texSmartMaterials(tags: Sequence[Any] | None = None) -> Any:
+    """The smart materials and masks in the libraries: name, kind, description, tags, tier and file. tags= keeps those with every tag given.
+
+    Args:
+        tags: Only those carrying all of these tags.
+    """
 
 def textCurves(text: str | None = None, font: str | None = None, size: float | None = None, alignment: str | None = None, anchor: str | None = None, wrapWidth: float | None = None, letterSpacing: float | None = None, wordSpacing: float | None = None, lineSpacing: float | None = None, textCase: str | None = None, width: float | None = None, slant: float | None = None, weight: float | None = None, underline: bool | None = None, strikethrough: bool | None = None, kerning: bool | None = None, mergeOverlaps: bool | None = None, constructionHistory: bool | None = None, name: str | None = None, *, ch: bool | None = None, n: str | None = None) -> Any:
     """Make text as curves (Maya's textCurves): closed Bezier outlines of each glyph, exact, in the XY plane with the first baseline on the origin. The curveText node keeps the text, font and layout live, so editing it updates anything built on the curve (a bevelPlus, say). Returns [curve, curveText].

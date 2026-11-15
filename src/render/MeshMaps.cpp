@@ -24,6 +24,7 @@
 #include "tex/Generators.h"
 
 #include <tbb/parallel_for.h>
+#include <tbb/task_arena.h>
 
 #include <algorithm>
 #include <chrono>
@@ -717,24 +718,46 @@ GpuImageRef cachedBakedFile(const std::string& project, const std::string& map, 
     return it->second.image;
 }
 
-/** Main thread: reads the project's last baked file for the map and uploads it; false when it has none. */
-bool loadBakedFile(scene::Graph& g, const std::string& project, const std::string& map, int udim)
+/** Reads a project's baked map file into an upload, off the main thread; null when it can't be read. */
+GpuImageRef readBakedFile(const std::filesystem::path& file, const std::string& map)
 {
-    const std::filesystem::path file = tex::bakedMapFile(g, project, map, udim);
-    if (file.empty())
-        return false;
-    std::error_code ec;
-    const std::filesystem::file_time_type time = std::filesystem::last_write_time(file, ec);
-    image::Image img = ec ? image::Image{} : image::read(file);
+    LILA_ZONE();
+    image::Image img = image::read(file);
     if (img.width <= 0)
-        return false;
+        return nullptr;
     // Float files hold data (trim indices, rectangles), the rest are 8 bit.
     const bool exact = file.extension() == ".exr";
     GpuImageRef gpu = GpuImage::create({img.width, img.height, exact ? TextureFormat::RGBA16F : TextureFormat::RGBA8, false, false, "bake." + map});
     gpu->updateRgba(0, 0, img.width, img.height, img.rgba);
-    BakedFiles& b = bakedFiles();
-    std::scoped_lock lock(b.mutex);
-    b.files[{project, map, udim}] = {file, time, std::move(gpu)};
+    return gpu;
+}
+
+/** Main thread: whether a group-less project has a baked file for the map, which then loads in the background. */
+bool loadBakedFile(scene::Graph& g, const std::string& project, const std::string& map, int udim)
+{
+    const std::filesystem::path file = tex::bakedMapFile(g, project, map, udim);
+    std::error_code ec;
+    const std::filesystem::file_time_type time = file.empty() ? std::filesystem::file_time_type() : std::filesystem::last_write_time(file, ec);
+    if (file.empty() || ec)
+        return false;
+    static tbb::task_arena arena;
+    arena.enqueue([file, time, project, map, udim] {
+        GpuImageRef gpu = readBakedFile(file, map);
+        mainq::post([file, time, project, map, udim, gpu = std::move(gpu)]() mutable {
+            const bool loaded = gpu != nullptr;
+            {
+                BakedFiles& b = bakedFiles();
+                std::scoped_lock lock(b.mutex);
+                b.pending.erase({project, map, udim});
+                if (loaded)
+                    b.files[{project, map, udim}] = {file, time, std::move(gpu)};
+                else
+                    b.misses.insert({project, map, udim});
+            }
+            if (loaded)
+                texgpu::meshMapsChanged(project);
+        });
+    });
     return true;
 }
 
@@ -758,19 +781,17 @@ GpuImageRef meshMapSource(const std::string& projectName, const std::string& ext
         if (!b.misses.contains({projectName, map, udim}) && b.pending.insert({projectName, map, udim}).second)
             mainq::post([projectName, map, udim] {
                 scene::Graph& g = scene::Graph::current();
-                bool loaded = false;
+                bool loading = false;
                 for (NodeId id : bake::projects(g))
-                    if (g.node(id)->name() == projectName && bake::groupsOf(g, id).empty())
-                        loaded = loadBakedFile(g, projectName, map, udim);
+                    if (!loading && g.node(id)->name() == projectName && bake::groupsOf(g, id).empty())
+                        loading = loadBakedFile(g, projectName, map, udim);
+                if (!loading)
                 {
                     BakedFiles& files = bakedFiles();
                     std::scoped_lock done(files.mutex);
                     files.pending.erase({projectName, map, udim});
-                    if (!loaded)
-                        files.misses.insert({projectName, map, udim});
+                    files.misses.insert({projectName, map, udim});
                 }
-                if (loaded)
-                    texgpu::meshMapsChanged(projectName);
             });
     }
     static std::mutex triedMutex;

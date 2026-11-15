@@ -1,0 +1,346 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Pine Bark",
+  "description": "Thick plated pine bark with reddish-brown scales separated by deep dark fissures.",
+  "tags": [
+    "wood",
+    "realistic"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L4",
+    "name": "Pine Bark",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Bark",
+        "kind": "procedural",
+        "graph": {
+          "name": "bark",
+          "typeVersion": 1,
+          "inputs": [
+            {
+              "name": "Cells Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 7,
+              "targets": [
+                "Cells1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Grain Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 8,
+              "targets": [
+                "Dirt3.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 381,
+              "targets": [
+                "Cells1.seed",
+                "Dirt3.seed"
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "name": "height",
+              "type": "gray"
+            },
+            {
+              "name": "baseColor",
+              "type": "color"
+            },
+            {
+              "name": "roughness",
+              "type": "gray"
+            }
+          ],
+          "nodes": [
+            {
+              "name": "GroupInput",
+              "type": "GroupInput",
+              "position": [
+                -800,
+                0
+              ]
+            },
+            {
+              "name": "Cells1",
+              "type": "cells",
+              "position": [
+                -500,
+                0
+              ],
+              "values": {
+                "scale": 7,
+                "mode": "f2MinusF1",
+                "jitter": 1.0,
+                "metric": "manhattan",
+                "seed": 381
+              }
+            },
+            {
+              "name": "Colorize2",
+              "type": "colorize",
+              "position": [
+                -350,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.1,
+                      0.1,
+                      0.1,
+                      1
+                    ]
+                  ],
+                  [
+                    0.1,
+                    [
+                      0.45,
+                      0.45,
+                      0.45,
+                      1
+                    ]
+                  ],
+                  [
+                    0.5,
+                    [
+                      0.62,
+                      0.62,
+                      0.62,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.68,
+                      0.68,
+                      0.68,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Dirt3",
+              "type": "dirt",
+              "position": [
+                -200,
+                0
+              ],
+              "values": {
+                "scale": 8,
+                "amount": 0.5,
+                "contrast": 2.0,
+                "seed": 382
+              }
+            },
+            {
+              "name": "Colorize4",
+              "type": "colorize",
+              "position": [
+                -50,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.0331,
+                      0.0116,
+                      0.006,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.1473,
+                      0.047,
+                      0.0196,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Color5",
+              "type": "color",
+              "position": [
+                100,
+                0
+              ],
+              "values": {
+                "color": [
+                  0.0031,
+                  0.0023,
+                  0.0019,
+                  1
+                ]
+              }
+            },
+            {
+              "name": "Threshold6",
+              "type": "threshold",
+              "position": [
+                -650,
+                120
+              ],
+              "values": {
+                "threshold": 0.08,
+                "softness": 0.08
+              }
+            },
+            {
+              "name": "Blend7",
+              "type": "blend",
+              "position": [
+                -500,
+                120
+              ],
+              "values": {
+                "mode": "normal",
+                "opacity": 1.0
+              }
+            },
+            {
+              "name": "Constant8",
+              "type": "constant",
+              "position": [
+                -350,
+                120
+              ],
+              "values": {
+                "value": 0.92
+              }
+            },
+            {
+              "name": "GroupOutput",
+              "type": "GroupOutput",
+              "position": [
+                400,
+                0
+              ]
+            }
+          ],
+          "links": [
+            [
+              "Cells1",
+              "out",
+              "Colorize2",
+              "input"
+            ],
+            [
+              "Colorize2",
+              "out",
+              "GroupOutput",
+              "height"
+            ],
+            [
+              "Dirt3",
+              "out",
+              "Colorize4",
+              "input"
+            ],
+            [
+              "Cells1",
+              "out",
+              "Threshold6",
+              "input"
+            ],
+            [
+              "Colorize4",
+              "out",
+              "Blend7",
+              "foreground"
+            ],
+            [
+              "Color5",
+              "out",
+              "Blend7",
+              "background"
+            ],
+            [
+              "Threshold6",
+              "out",
+              "Blend7",
+              "mask"
+            ],
+            [
+              "Blend7",
+              "out",
+              "GroupOutput",
+              "baseColor"
+            ],
+            [
+              "Constant8",
+              "out",
+              "GroupOutput",
+              "roughness"
+            ]
+          ]
+        },
+        "masks": []
+      },
+      {
+        "id": "L3",
+        "name": "Lichen",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.1706,
+            0.214,
+            0.1193,
+            1
+          ],
+          "roughness": 0.95
+        },
+        "masks": [
+          {
+            "id": "M2",
+            "kind": "generator",
+            "type": "genMoss",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.78,
+              "softness": 0.2,
+              "breakup": 0.9,
+              "noiseScale": 8,
+              "seed": 383
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.4
+          }
+        }
+      }
+    ],
+    "masks": []
+  }
+}

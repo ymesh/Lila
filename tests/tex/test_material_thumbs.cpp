@@ -71,3 +71,28 @@ TEST_CASE("material thumbnails render headless on the shader ball and come from 
     fs::remove_all(file.parent_path());
     lib::reload();
 }
+
+TEST_CASE("smart materials render on the preview ball with its baked mesh maps")
+{
+    if (!thumbsGpu())
+        return;
+    run("newScene");
+    fs::remove_all(thumbs::cacheDir());
+    thumbs::Options o;
+    o.size = 128;
+    // Rusty Iron's rust follows cavity and curvature: flat mesh maps would leave the ball one colour.
+    thumbs::Result r = thumbs::render("smart:Rusty Iron", o);
+    REQUIRE(fs::exists(r.file));
+    QImage img(QString::fromStdWString(r.file.wstring()));
+    REQUIRE(img.width() == 128);
+    int lo = 255, hi = 0;
+    for (int y = 30; y < 90; ++y)
+        for (int x = 30; x < 90; ++x)
+        {
+            const int v = qGray(img.pixel(x, y));
+            lo = std::min(lo, v);
+            hi = std::max(hi, v);
+        }
+    CHECK(hi - lo > 40);
+    CHECK_THROWS(thumbs::render("smart:No Such Smart Material", o));
+}

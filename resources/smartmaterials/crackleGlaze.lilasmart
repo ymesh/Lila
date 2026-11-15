@@ -1,0 +1,328 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Crackle Glaze Ceramic",
+  "description": "Cream ceramic glaze with a fine crackle network darkened by age and a glassy finish.",
+  "tags": [
+    "ceramic",
+    "realistic",
+    "clean"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L2",
+    "name": "Crackle Glaze Ceramic",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Glaze",
+        "kind": "procedural",
+        "graph": {
+          "name": "glaze",
+          "typeVersion": 1,
+          "inputs": [
+            {
+              "name": "Cells Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 9,
+              "targets": [
+                "Cells1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Cells Scale 2",
+              "kind": "param",
+              "type": "int",
+              "default": 22,
+              "targets": [
+                "Cells2.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 3,
+              "targets": [
+                "Clouds3.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 541,
+              "targets": [
+                "Cells1.seed",
+                "Cells2.seed",
+                "Clouds3.seed"
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "name": "baseColor",
+              "type": "color"
+            },
+            {
+              "name": "height",
+              "type": "gray"
+            },
+            {
+              "name": "roughness",
+              "type": "gray"
+            }
+          ],
+          "nodes": [
+            {
+              "name": "GroupInput",
+              "type": "GroupInput",
+              "position": [
+                -800,
+                0
+              ]
+            },
+            {
+              "name": "Cells1",
+              "type": "cells",
+              "position": [
+                -500,
+                0
+              ],
+              "values": {
+                "scale": 9,
+                "mode": "crackle",
+                "width": 0.012,
+                "seed": 541
+              }
+            },
+            {
+              "name": "Cells2",
+              "type": "cells",
+              "position": [
+                -350,
+                0
+              ],
+              "values": {
+                "scale": 22,
+                "mode": "crackle",
+                "width": 0.008,
+                "seed": 542
+              }
+            },
+            {
+              "name": "Clouds3",
+              "type": "clouds",
+              "position": [
+                -200,
+                0
+              ],
+              "values": {
+                "scale": 3,
+                "octaves": 3,
+                "seed": 543
+              }
+            },
+            {
+              "name": "Colorize4",
+              "type": "colorize",
+              "position": [
+                -50,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.5071,
+                      0.448,
+                      0.3185,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.7106,
+                      0.6559,
+                      0.5071,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Color5",
+              "type": "color",
+              "position": [
+                100,
+                0
+              ],
+              "values": {
+                "color": [
+                  0.1005,
+                  0.0732,
+                  0.047,
+                  1
+                ]
+              }
+            },
+            {
+              "name": "Blend6",
+              "type": "blend",
+              "position": [
+                -650,
+                120
+              ],
+              "values": {
+                "mode": "normal",
+                "opacity": 0.8
+              }
+            },
+            {
+              "name": "Blend7",
+              "type": "blend",
+              "position": [
+                -500,
+                120
+              ],
+              "values": {
+                "mode": "normal",
+                "opacity": 0.4
+              }
+            },
+            {
+              "name": "Colorize8",
+              "type": "colorize",
+              "position": [
+                -350,
+                120
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.5,
+                      0.5,
+                      0.5,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.47,
+                      0.47,
+                      0.47,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Constant9",
+              "type": "constant",
+              "position": [
+                -200,
+                120
+              ],
+              "values": {
+                "value": 0.06
+              }
+            },
+            {
+              "name": "GroupOutput",
+              "type": "GroupOutput",
+              "position": [
+                400,
+                0
+              ]
+            }
+          ],
+          "links": [
+            [
+              "Clouds3",
+              "out",
+              "Colorize4",
+              "input"
+            ],
+            [
+              "Color5",
+              "out",
+              "Blend6",
+              "foreground"
+            ],
+            [
+              "Colorize4",
+              "out",
+              "Blend6",
+              "background"
+            ],
+            [
+              "Cells1",
+              "out",
+              "Blend6",
+              "mask"
+            ],
+            [
+              "Color5",
+              "out",
+              "Blend7",
+              "foreground"
+            ],
+            [
+              "Blend6",
+              "out",
+              "Blend7",
+              "background"
+            ],
+            [
+              "Cells2",
+              "out",
+              "Blend7",
+              "mask"
+            ],
+            [
+              "Blend7",
+              "out",
+              "GroupOutput",
+              "baseColor"
+            ],
+            [
+              "Cells1",
+              "out",
+              "Colorize8",
+              "input"
+            ],
+            [
+              "Colorize8",
+              "out",
+              "GroupOutput",
+              "height"
+            ],
+            [
+              "Constant9",
+              "out",
+              "GroupOutput",
+              "roughness"
+            ]
+          ]
+        },
+        "masks": []
+      }
+    ],
+    "masks": []
+  }
+}

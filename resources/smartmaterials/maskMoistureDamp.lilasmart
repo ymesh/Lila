@@ -1,0 +1,55 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Damp Patches",
+  "description": "Damp, darkened patches gathering in sheltered areas.",
+  "tags": [
+    "moisture",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Shelter",
+      "type": "genAoDarken",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.45,
+        "softness": 0.8
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Patches",
+      "type": "clouds",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 4,
+        "octaves": 5,
+        "mode": "soft",
+        "contrast": 1.6,
+        "seed": 1221
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "filter",
+      "name": "Coverage",
+      "type": "histogramScan",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "position": 0.7,
+        "contrast": 0.4
+      }
+    }
+  ]
+}

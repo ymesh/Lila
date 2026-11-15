@@ -1,0 +1,29 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Wet from the Base",
+  "description": "Wet where water wicks up from the ground, with a soft waterline.",
+  "tags": [
+    "moisture",
+    "ground",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Waterline",
+      "type": "genWetness",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "waterLine": 0.55,
+        "softness": 0.15,
+        "puddles": 0.0,
+        "seed": 1201
+      }
+    }
+  ]
+}

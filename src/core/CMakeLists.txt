@@ -40,7 +40,7 @@ lila_module(lila_core Foundation
 find_package(miniz CONFIG REQUIRED)
 find_package(WebP CONFIG REQUIRED)
 target_link_libraries(lila_core PRIVATE miniz::miniz WebP::webpdecoder)
-target_include_directories(lila_core SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party/bcdec)
+target_include_directories(lila_core SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party/bcdec ${CMAKE_SOURCE_DIR}/third_party/stb)
 if(WIN32)
     target_link_libraries(lila_core PRIVATE mfplat mfreadwrite mfuuid ole32 iphlpapi ws2_32)
 endif()
@@ -51,6 +51,8 @@ set_source_files_properties(Version.cpp PROPERTIES INCLUDE_DIRECTORIES ${LILA_BU
 add_dependencies(lila_core lila_version)
 # windows.h stays out of the unity batch.
 set_source_files_properties(SystemMemory.cpp Profiler.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+# stb_image's implementation and macros stay out of the unity batch.
+set_source_files_properties(ImageIO.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 if(LILA_TRACY)
     target_link_libraries(lila_core PUBLIC Tracy::TracyClient)
     target_compile_definitions(lila_core PUBLIC LILA_TRACY)

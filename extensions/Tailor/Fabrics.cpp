@@ -62,6 +62,13 @@ const std::vector<Fabric>& fabricPresets()
         makeFabricPreset("Neoprene", 1600.f, 1500.f, 300.f, 5e-4f, 5e-4f, 4e-4f, 0.40f, 0.55f, 0.0030f, 0.70f, 0.030f),
         makeFabricPreset("Nylon", 9000.f, 8000.f, 350.f, 1e-5f, 1e-5f, 8e-6f, 0.04f, 0.09f, 0.0004f, 0.20f, 0.008f),
         makeFabricPreset("Twill", 10000.f, 8000.f, 600.f, 1e-4f, 9e-5f, 7e-5f, 0.05f, 0.30f, 0.0011f, 0.40f, 0.015f),
+        // Hands and feet: thin leather that follows fingers, shaft leather that stands up, a sole that stays flat.
+        makeFabricPreset("Glove Leather", 6000.f, 6000.f, 900.f, 6e-5f, 6e-5f, 5e-5f, 0.08f, 0.35f, 0.0008f, 0.55f, 0.020f),
+        makeFabricPreset("Boot Leather", 25000.f, 25000.f, 5000.f, 2e-3f, 2e-3f, 2e-3f, 0.02f, 1.20f, 0.0025f, 0.50f, 0.030f),
+        makeFabricPreset("Sole", 40000.f, 40000.f, 10000.f, 8e-3f, 8e-3f, 8e-3f, 0.01f, 2.50f, 0.0050f, 0.80f, 0.050f),
+        makeFabricPreset("Knit", 900.f, 700.f, 90.f, 3e-5f, 3e-5f, 2.5e-5f, 0.35f, 0.30f, 0.0030f, 0.55f, 0.030f),
+        makeFabricPreset("Felt", 5000.f, 5000.f, 1500.f, 3e-4f, 3e-4f, 3e-4f, 0.05f, 0.45f, 0.0030f, 0.60f, 0.030f),
+        makeFabricPreset("Satin", 3000.f, 2500.f, 120.f, 6e-6f, 6e-6f, 4e-6f, 0.06f, 0.12f, 0.0004f, 0.15f, 0.005f),
     };
     return presets;
 }

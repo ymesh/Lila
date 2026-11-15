@@ -1,0 +1,82 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Pilled Fabric",
+  "description": "Little bobbles of pilled fibre on rubbed, raised areas.",
+  "tags": [
+    "fabric",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Pills",
+      "type": "cells",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": true,
+      "values": {
+        "scale": 40,
+        "mode": "f1",
+        "width": 0.08,
+        "jitter": 1.0,
+        "seed": 1441
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Pill Size",
+      "type": "threshold",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "threshold": 0.8,
+        "softness": 0.15
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Rubbed Areas",
+      "type": "genEdgeWear",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "strength": 1.2,
+        "level": 0.15,
+        "softness": 0.6,
+        "breakup": 0.5,
+        "seed": 1442
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "filter",
+      "name": "Spread",
+      "type": "blur",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "radius": 0.004
+      }
+    },
+    {
+      "id": "M5",
+      "kind": "levels",
+      "name": "Range",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "inLow": 0.0,
+        "inHigh": 0.5
+      }
+    }
+  ]
+}

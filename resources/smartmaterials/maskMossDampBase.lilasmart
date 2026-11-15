@@ -1,0 +1,73 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Damp Growth at the Base",
+  "description": "Green growth creeping up from the damp base of an object.",
+  "tags": [
+    "moss",
+    "ground",
+    "moisture",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Base",
+      "type": "genPositionGradient",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "start": 0.6,
+        "end": 0.0,
+        "breakup": 0.8,
+        "noiseScale": 6,
+        "seed": 541
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Upper Moss",
+      "type": "genMoss",
+      "mode": "lighten",
+      "opacity": 0.5,
+      "invert": false,
+      "values": {
+        "level": 0.7,
+        "softness": 0.3,
+        "seed": 542
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Breakup",
+      "type": "clouds",
+      "mode": "multiply",
+      "opacity": 0.5,
+      "invert": false,
+      "values": {
+        "scale": 8,
+        "octaves": 5,
+        "mode": "billow",
+        "contrast": 1.0,
+        "seed": 543
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "levels",
+      "name": "Range",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "inLow": 0.05,
+        "inHigh": 0.5
+      }
+    }
+  ]
+}

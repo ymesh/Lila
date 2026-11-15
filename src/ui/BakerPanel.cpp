@@ -1,5 +1,8 @@
 #include "ui/BakerPanelInternal.h"
 #include "ui/UiCommands.h"
+#include "core/SystemMemory.h"
+#include "ui/Theme.h"
+#include "ui/ViewportDisplay.h"
 
 namespace lila::ui
 {
@@ -299,7 +302,11 @@ BakerPanel::BakerPanel(QWidget* parent) : QWidget(parent)
     mLintTimer = new QTimer(this);
     mLintTimer->setSingleShot(true);
     mLintTimer->setInterval(500);
-    connect(mLintTimer, &QTimer::timeout, this, [this] { runLint(false); });
+    connect(mLintTimer, &QTimer::timeout, this, [this] {
+        // A layout restore shows and hides tabs; only a panel still on screen checks.
+        if (isVisible())
+            runLint(false);
+    });
 
     QPointer<BakerPanel> self(this);
     mGraphListener = graph().addListener([self](scene::Change c, scene::NodeId id) {
@@ -317,6 +324,17 @@ BakerPanel::BakerPanel(QWidget* parent) : QWidget(parent)
                 return;
             if (!(bake::isProject(*n) || bake::isGroup(*n)))
             {
+                // A modifier switched on or off changes which mesh the maps are previewed on.
+                if (self->mResultBaked && !self->mPreviewPending && scene::modifiers::asModifier(n))
+                {
+                    self->mPreviewPending = true;
+                    QTimer::singleShot(0, self.data(), [self] {
+                        if (!self)
+                            return;
+                        self->mPreviewPending = false;
+                        self->syncPreviewNote();
+                    });
+                }
                 if (self->watchedByLint(id))
                     self->scheduleLint();
                 return;
@@ -350,6 +368,7 @@ BakerPanel::~BakerPanel()
     graph().removeListener(mGraphListener);
     ops::removeExecuteListener(mExecListener);
     bake::removeBakeListener(mBakeListener);
+    PrefStore::get().removeOnChanged(mPrefListener);
     bake::arrange::removeListener(mArrangeListener);
 }
 
@@ -379,7 +398,15 @@ void BakerPanel::onBakeEvent(const bake::BakeEvent& e)
                 showStatus("Failed", qs(e.data.value("error", std::string())), true);
         }
         else
+        {
             showResult(e.data);
+            if (mCacheDropped > 0.0)
+            {
+                const QString text = QString("Bake cache full: %1 GB of meshes are redone every bake. See Results").arg(mCacheDropped / double(size_t(1) << 30), 0, 'f', 1);
+                viewportToast::showActive(text, 8000, viewportToast::Kind::Error);
+                log::error("{}", ss(text));
+            }
+        }
         updateButtons();
         break;
     }
@@ -653,6 +680,19 @@ void BakerPanel::showResult(const json& result)
     }
     if (lint)
         add(nullptr, "Issues", QString::number(lint), "alert-triangle", "Listed under each group in the groups tree");
+    mResultOcclusion = false;
+    if (!dryRun)
+        for (const json& o : result.value("outputs", json::array()))
+            if (const std::string map = o.value("map", std::string()); map == "ao" || map == "orm")
+                mResultOcclusion = true;
+    mResultBaked = !dryRun;
+    const json timings = result.value("timings", json::object());
+    mCacheDropped = dryRun ? 0.0 : timings.value("snapshotCacheDropped", 0.0);
+    mCacheBudget = timings.value("snapshotCacheBudget", 0.0);
+    mCacheRaisedTo = 0.0;
+    syncLightingNote();
+    syncPreviewNote();
+    syncCacheNote();
     mSummaryBox->show();
     if (result.contains("lint") && result["lint"].is_object() && result["lint"] != mLint)
     {
@@ -684,8 +724,133 @@ void BakerPanel::showResult(const json& result)
     }
 }
 
+void BakerPanel::syncLightingNote()
+{
+    for (int i = mSummary->topLevelItemCount() - 1; i >= 0; --i)
+        if (mSummary->topLevelItem(i)->data(0, kLightingNoteRole).toBool())
+            delete mSummary->takeTopLevelItem(i);
+    const bool show = mResultOcclusion && PrefStore::get().value<std::string>("general", viewportDisplay::kLighting, "environment") == "sculpt";
+    mEnvironmentLighting->setVisible(show);
+    if (!show)
+        return;
+    const QString tip = "Sculpt lighting has almost no ambient light, so the baked occlusion barely shows in the viewport";
+    auto* it = new QTreeWidgetItem(mSummary, {"Lighting", "Sculpt"});
+    it->setIcon(0, icon("alert-triangle"));
+    it->setForeground(1, palette().color(QPalette::Disabled, QPalette::Text));
+    it->setToolTip(0, tip);
+    it->setToolTip(1, tip);
+    it->setData(0, kLightingNoteRole, true);
+}
+
+/** The project's lows shown without a modifier their export runs, or with one it doesn't. */
+static std::vector<std::string> lowsShownUnlikeExport(scene::Graph& g, const scene::Node& project)
+{
+    std::vector<std::string> out;
+    for (scene::NodeId group : bake::groupsOf(g, project.id()))
+        for (const std::string& low : bake::groupSettings(*g.node(group)).lows)
+            if (scene::Node* n = findNode(low); n && n->type().isA("mesh") && !scene::modifiers::shownUnlikeExport(g, n->id()).empty())
+                out.push_back(n->path());
+    return out;
+}
+
+void BakerPanel::syncPreviewNote()
+{
+    for (int i = mSummary->topLevelItemCount() - 1; i >= 0; --i)
+        if (mSummary->topLevelItem(i)->data(0, kPreviewNoteRole).toBool())
+            delete mSummary->takeTopLevelItem(i);
+    size_t lows = 0;
+    if (scene::Node* p = findNode(mProject); mResultBaked && p && bake::isProject(*p))
+        lows = lowsShownUnlikeExport(graph(), *p).size();
+    mShowExportMesh->setVisible(lows > 0);
+    if (!lows)
+        return;
+    const QString tip = "Shown without a modifier the export runs, so the viewport previews the maps on a mesh they were not baked for";
+    auto* it = new QTreeWidgetItem(mSummary, {"Preview", lows == 1 ? QString("Cage, 1 mesh") : QString("Cage, %1 meshes").arg(lows)});
+    it->setIcon(0, icon("alert-triangle"));
+    it->setForeground(1, palette().color(QPalette::Disabled, QPalette::Text));
+    it->setToolTip(0, tip);
+    it->setToolTip(1, tip);
+    it->setData(0, kPreviewNoteRole, true);
+}
+
+/** GB the snapshot cache needs to hold a result that overflowed it, with a quarter to spare. */
+static double cacheGbFor(double budget, double dropped)
+{
+    return std::ceil((budget + dropped) * 1.25 / double(size_t(1) << 30));
+}
+
+void BakerPanel::syncCacheNote()
+{
+    for (int i = mSummary->topLevelItemCount() - 1; i >= 0; --i)
+        if (mSummary->topLevelItem(i)->data(0, kCacheNoteRole).toBool())
+            delete mSummary->takeTopLevelItem(i);
+    const bool full = mCacheDropped > 0.0;
+    const double gb = double(size_t(1) << 30);
+    // Raising it only helps while the machine has the memory to spare.
+    const bool canRaise = full && mCacheRaisedTo == 0.0 && cacheGbFor(mCacheBudget, mCacheDropped) * gb <= 0.75 * double(physicalMemoryBytes());
+    mRaiseCache->setVisible(canRaise);
+    if (!full)
+        return;
+    auto* it = new QTreeWidgetItem({"Cache", QString()});
+    mSummary->insertTopLevelItem(0, it);
+    it->setIcon(0, icon("alert-triangle"));
+    it->setData(0, kCacheNoteRole, true);
+    QString tip;
+    if (mCacheRaisedTo > 0.0)
+    {
+        it->setText(1, QString("Raised to %1 GB, from the next bake").arg(mCacheRaisedTo, 0, 'f', 0));
+        it->setForeground(1, palette().color(QPalette::Disabled, QPalette::Text));
+        tip = "The snapshot cache now holds this bake's meshes: the next bake fills it, the ones after reuse it";
+    }
+    else
+    {
+        QFont bold = it->font(0);
+        bold.setBold(true);
+        for (int c = 0; c < 2; ++c)
+        {
+            it->setForeground(c, themeColor("statusError"));
+            it->setFont(c, bold);
+        }
+        it->setText(1, QString("Full: %1 GB of meshes redone every bake").arg(mCacheDropped / gb, 0, 'f', 1));
+        tip = QString("The snapshot cache holds %1 GB and this bake's meshes need more, so the ones that did not fit are prepared again "
+                      "on every bake instead of being reused. %2")
+                  .arg(mCacheBudget / gb, 0, 'f', 1)
+                  .arg(canRaise ? "Raise Cache makes room for them" : "This machine has too little memory to hold them all: bake fewer groups at once, or lower the highs' subdivision");
+    }
+    it->setToolTip(0, tip);
+    it->setToolTip(1, tip);
+}
+
+void BakerPanel::raiseSnapshotCache()
+{
+    if (mCacheDropped <= 0.0)
+        return;
+    mCacheRaisedTo = cacheGbFor(mCacheBudget, mCacheDropped);
+    PrefStore::get().set(kPrefs, "/snapshotCacheGb", mCacheRaisedTo);
+    syncCacheNote();
+}
+
+void BakerPanel::showExportMesh()
+{
+    scene::Node* p = findNode(mProject);
+    if (!p || !bake::isProject(*p))
+        return;
+    json lows = json::array();
+    for (const std::string& low : lowsShownUnlikeExport(graph(), *p))
+        lows.push_back(low);
+    if (!lows.empty())
+        run("showExportMesh", {{"args", lows}}, false);
+    syncPreviewNote();
+}
+
 void BakerPanel::showStatus(const QString& text, const QString& detail, bool error)
 {
+    mResultOcclusion = false;
+    mResultBaked = false;
+    mCacheDropped = 0.0;
+    syncLightingNote();
+    syncPreviewNote();
+    syncCacheNote();
     mSummary->clear();
     auto* it = new QTreeWidgetItem(mSummary, {text, detail});
     it->setIcon(0, icon(error ? "alert-triangle" : "loader"));

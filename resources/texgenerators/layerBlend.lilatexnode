@@ -4,7 +4,7 @@
   "type": "layerBlend",
   "label": "Layer Blend",
   "category": "Layer",
-  "doc": "Composites a layer's channel over the stack below it: the blend mode result, mixed in by mask times opacity. addSigned adds around 0.5 (heights).",
+  "doc": "Composites a layer's channel over the stack below it: the blend mode result, mixed in by mask times opacity. addSigned adds around 0.5 (heights); saturation, color and value take that part from the layer, the rest from below.",
   "inputs": [
     {
       "id": "below",
@@ -54,7 +54,19 @@
         "lighten",
         "difference",
         "softLight",
-        "addSigned"
+        "addSigned",
+        "colorBurn",
+        "linearBurn",
+        "colorDodge",
+        "hardLight",
+        "vividLight",
+        "linearLight",
+        "pinLight",
+        "exclusion",
+        "divide",
+        "saturation",
+        "color",
+        "value"
       ]
     },
     {

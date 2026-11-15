@@ -1,0 +1,70 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Moss in Crevices",
+  "description": "Moss tucked into crevices and sheltered joints.",
+  "tags": [
+    "moss",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Crevices",
+      "type": "levels",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": true,
+      "values": {
+        "inLow": 0.5,
+        "inHigh": 0.95
+      },
+      "bindings": {
+        "input": "cavity"
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Shelter",
+      "type": "genAoDarken",
+      "mode": "lighten",
+      "opacity": 0.7,
+      "invert": false,
+      "values": {
+        "level": 0.35,
+        "softness": 0.5
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Clumps",
+      "type": "dirt",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 7,
+        "amount": 0.75,
+        "contrast": 2.0,
+        "grain": 0.5,
+        "seed": 511
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "filter",
+      "name": "Grow",
+      "type": "dilate",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "radius": 0.003
+      }
+    }
+  ]
+}

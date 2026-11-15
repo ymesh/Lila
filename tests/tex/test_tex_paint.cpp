@@ -15,7 +15,9 @@
 #include "ui/TexLive.h"
 
 #include <cmath>
+#include <chrono>
 #include <filesystem>
+#include <thread>
 
 using namespace textest;
 using namespace lila::render;
@@ -347,4 +349,130 @@ TEST_CASE("texture paint: the live viewport composites a painted buffer")
     REQUIRE(out["files"].size() == 1);
     image::Image file = image::read(fs::path(out["files"][0].get<std::string>()));
     CHECK(at(file, uv)[0] > 0.8f);
+}
+
+TEST_CASE("texture paint: a committed or undone stroke redraws the viewport at full size only, never through a preview")
+{
+    if (!gpu())
+        return;
+    newScene();
+    addMesh("PanelMesh", seamPanel());
+    scene::Node& set = makeSet("Sharp", 512);
+    tex::Graph g = tex::Graph::makeMaterial("Sharp");
+    add(g, "Paint", "image", {{"file", tex::paint::imageRef("P", "baseColor")}});
+    link(g, "Paint.out", "Output.baseColor");
+    tex::writeGraph(sg(), set, g);
+    paintStroke("Sharp", "P", redStroke({{25, 0, 0}}, 20.0));
+    ui::texLive::install();
+    REQUIRE(ui::texLive::mapsFor("Sharp"));
+    REQUIRE(ui::texLive::waitIdle());
+    auto counts = [](const char* key) {
+        std::vector<uint64_t> out;
+        for (const json& set : ui::texLive::status())
+            if (set["set"] == "Sharp")
+                for (const json& level : set["tiles"][0]["levels"])
+                    out.push_back(level[key].get<uint64_t>());
+        return out;
+    };
+    auto plans = [&] { return counts("plans"); };
+    auto swaps = [&] { return counts("swaps"); };
+    const std::vector<uint64_t> start = plans();
+    // The 256 preview, then the 512 tile.
+    REQUIRE(start.size() == 2);
+
+    // Painted live and committed: the preview would write its upsampled images over the sharp ones.
+    makeSet("Scratch", 512);
+    paintStroke("Scratch", "P", redStroke({{-25, 0, 0}, {-15, 0, 5}}, 15.0, {{"baseColor", {0.0, 0.0, 1.0}}}));
+    tex::paint::Stroke rec = *tex::paint::readPaint(*tex::findSet(sg(), "Scratch"))->buffer("P")->strokes.front();
+    rec.id = 100;
+    REQUIRE(ui::texLive::waitIdle());
+    const std::vector<uint64_t> before = plans();
+    const std::vector<uint64_t> swapsBefore = swaps();
+    gp::beginLive(sg(), set, "P", std::make_shared<const tex::paint::Stroke>(rec));
+    gp::liveDabs(set.id(), "P", rec.dabs);
+    REQUIRE(ui::texLive::waitIdle());
+    paintStroke("Sharp", "P", rec.toJson(false));
+    REQUIRE(ui::texLive::waitIdle());
+    // Same graph: the full size takes the new paint in place, with no new plan (which would reload and redo the whole
+    // stack in one slice), and the preview stays put.
+    std::vector<uint64_t> now = plans();
+    CHECK(now[0] == before[0]);
+    CHECK(now[1] == before[1]);
+    CHECK(swaps()[1] > swapsBefore[1]);
+
+    REQUIRE(UndoStack::get().undo());
+    mainq::drain();
+    REQUIRE(ui::texLive::waitIdle());
+    CHECK(plans()[0] == before[0]);
+
+    // An edit to the graph itself still shows a preview first.
+    tex::Graph edited = tex::readGraph(set);
+    add(edited, "Extra", "color", {});
+    tex::writeGraph(sg(), set, edited);
+    mainq::drain();
+    REQUIRE(ui::texLive::waitIdle());
+    CHECK(plans()[0] > before[0]);
+    ui::texLive::shutdown();
+}
+
+TEST_CASE("texture paint: prewarming builds the stroke pipelines without waiting, and strokes paint after it")
+{
+    if (!gpu())
+        return;
+    newScene();
+    addMesh("PanelMesh", seamPanel());
+    makeSet("Warm", 128);
+    gp::prewarm();
+    const json r = paintStroke("Warm", "P", redStroke({{25, 0, 0}}, 20.0));
+    CHECK(r["pages"].get<int>() > 0);
+}
+
+TEST_CASE("texture paint: the graph a first stroke makes is compiled ahead, so adding and wiring its paint layer compiles nothing")
+{
+    if (!gpu())
+        return;
+    newScene();
+    addMesh("PanelMesh", seamPanel());
+    scene::Node& set = makeSet("Ahead", 256);
+    ui::texLive::install();
+    REQUIRE(ui::texLive::mapsFor("Ahead"));
+    REQUIRE(ui::texLive::waitIdle());
+    std::vector<std::string> channels;
+    for (const tex::Channel& c : tex::readSettings(set).channels)
+        channels.push_back(c.name);
+    channels.push_back(tex::paint::kMaskChannel);
+
+    // What Texture Paint's first stroke does: a new paint layer on top, every channel wired.
+    std::optional<tex::Graph> next = gp::wiredGraph(set, "", channels);
+    REQUIRE(next);
+    ui::texLive::warm("Ahead", *next);
+    auto warmed = [] {
+        for (const json& s : ui::texLive::status())
+            if (s["set"] == "Ahead")
+                return s.value("warmed", uint64_t(0));
+        return uint64_t(0);
+    };
+    for (int i = 0; i < 6000 && warmed() == 0; ++i)
+    {
+        mainq::drain();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    REQUIRE(warmed() == 1);
+
+    const std::string layer = run("texAddLayer", {{"args", {"Ahead", "paint"}}})["id"].get<std::string>();
+    gp::wireLayer(set, layer, channels);
+    mainq::drain();
+    REQUIRE(ui::texLive::waitIdle());
+    // The prediction is exactly the graph the edits make, so the plans find every pass compiled.
+    CHECK(tex::readGraph(set).toJson() == next->toJson());
+    for (const json& s : ui::texLive::status())
+        if (s["set"] == "Ahead")
+            for (const json& level : s["tiles"][0]["levels"])
+            {
+                CHECK(level["compiled"].get<size_t>() == 0);
+                CHECK(level["pipelinesCreated"].get<size_t>() == 0);
+            }
+    // Wired already: nothing left to compile ahead.
+    CHECK_FALSE(gp::wiredGraph(set, layer, channels));
+    ui::texLive::shutdown();
 }

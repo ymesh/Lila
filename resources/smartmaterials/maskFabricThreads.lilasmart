@@ -1,0 +1,58 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Loose Threads",
+  "description": "Stray threads and pulled fibres scattered over the cloth.",
+  "tags": [
+    "fabric",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Threads",
+      "type": "scratches",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 5,
+        "count": 3,
+        "length": 0.35,
+        "width": 0.0025,
+        "angleRandom": 1.0,
+        "seed": 1411
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Pulls",
+      "type": "anisotropic",
+      "mode": "lighten",
+      "opacity": 0.6,
+      "invert": false,
+      "values": {
+        "scaleX": 48,
+        "scaleY": 3,
+        "octaves": 2,
+        "seed": 1412
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "filter",
+      "name": "Sparse",
+      "type": "threshold",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "threshold": 0.45,
+        "softness": 0.1
+      }
+    }
+  ]
+}

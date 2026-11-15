@@ -3,6 +3,13 @@
   "version": 1,
   "name": "Worn Painted Metal",
   "description": "Painted steel worn back to bare metal on the edges, with chips, dirt in the crevices and dust on top.",
+  "tags": [
+    "metal",
+    "paint",
+    "realistic",
+    "worn",
+    "dirty"
+  ],
   "kind": "material",
   "layer": {
     "id": "L10",

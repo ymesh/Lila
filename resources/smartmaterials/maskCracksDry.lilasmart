@@ -1,0 +1,46 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Dried Mud Cracks",
+  "description": "A full network of shrinkage cracks, like dried mud or old plaster.",
+  "tags": [
+    "cracks",
+    "ground",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Network",
+      "type": "cells",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 14,
+        "mode": "crackle",
+        "width": 0.1,
+        "jitter": 1.0,
+        "seed": 1111
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Fine Network",
+      "type": "cells",
+      "mode": "lighten",
+      "opacity": 0.5,
+      "invert": false,
+      "values": {
+        "scale": 32,
+        "mode": "crackle",
+        "width": 0.06,
+        "jitter": 1.0,
+        "seed": 1112
+      }
+    }
+  ]
+}

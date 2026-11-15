@@ -53,7 +53,7 @@ LILA_UI_API Result get(const Request& request, std::function<void()> ready = {})
 LILA_UI_API Result render(const Request& request);
 
 /**
- * What evaluates a plan: the CPU evaluator by default. A GPU evaluator installs its own; it runs on a worker thread and
+ * What evaluates a plan: the GPU evaluator when the renderer can run, else the CPU one. A replacement runs on a worker thread and
  * returns the named output as RGBA floats, rows top first, or throws.
  */
 using Renderer = std::function<image::Image(const tex::Plan& plan, const std::string& output, const tex::EvalOptions& options)>;

@@ -3,7 +3,10 @@
 #include "TestUtil.h"
 #include "bake/Arrange.h"
 #include "bake/Bake.h"
+#include "bake/BakeCache.h"
 #include "bake/BakeInputs.h"
+#include "core/PrefStore.h"
+#include "core/Progress.h"
 #include "bake/BakeNodes.h"
 #include "bake/BakePipeline.h"
 #include "bake/Cage.h"
@@ -15,6 +18,7 @@
 #include "geo/Mesh.h"
 #include "geo/Normals.h"
 #include "geo/ObjIO.h"
+#include "geo/Ops.h"
 #include "geo/Primitives.h"
 #include "io/SceneFile.h"
 #include "ops/Command.h"
@@ -461,6 +465,41 @@ TEST_CASE("bakeLint finds each problem and bake lists its warnings first")
         CHECK(issues(r, "cageTopology").size() == 1);
     }
 
+    SUBCASE("a low shown without a modifier its export runs")
+    {
+        newScene();
+        const std::string low = ops::execute("polyCube", {{"width", 7.0}, {"height", 0.6}, {"depth", 3.0}})[0];
+        ops::execute("addModifier", {{"args", {low}}, {"kind", "subdivision"}});
+        const std::string mod = ops::execute("modifierStack", {{"args", {low}}})["modifiers"].back()["name"];
+        ops::execute("setAttr", {{"args", {mod + ".levels", 2}}});
+        const std::string p = smallProject(dir);
+        ops::execute("setBakeOutput", {{"project", p}, {"width", 4096}, {"height", 4096}});
+        ops::execute("bakeGroup", {{"args", {"g"}}, {"lows", {low}}, {"self", true}});
+        auto preview = [&] { return issues(ops::execute("bakeLint", {{"project", p}, {"checks", {"previewMesh"}}, {"highs", false}}), "previewMesh"); };
+        // Shown as it exports, the maps preview on the mesh they are baked for.
+        CHECK(preview().empty());
+
+        // Off in the viewport, on for export: Fit Surface lays the export's uvs out apart from the cage's.
+        ops::execute("setAttr", {{"args", {mod + ".enabled", false}}});
+        const auto off = preview();
+        REQUIRE(off.size() == 1);
+        CHECK(off[0]["mesh"].get<std::string>() == low);
+        CHECK(off[0]["data"]["maxTexels"].get<double>() > 16.0);
+        CHECK(off[0]["data"]["exportOnly"].get<std::string>() == mod);
+
+        const json changed = ops::execute("showExportMesh", {{"args", {low}}});
+        REQUIRE(changed.size() == 1);
+        CHECK(std::get<bool>(scene::Graph::current().value({scene::Graph::current().find(mod)->id(), scene::Graph::current().find(mod)->type().attrIndex("enabled"), -1})));
+        CHECK(preview().empty());
+        ops::execute("undo", json::object());
+        CHECK(preview().size() == 1);
+
+        // Blended uvs stay far nearer the cage's.
+        ops::execute("setAttr", {{"args", {mod + ".uvs", 0}}});
+        const auto blended = preview();
+        CHECK((blended.empty() || blended[0]["data"]["maxTexels"].get<double>() < 0.5 * off[0]["data"]["maxTexels"].get<double>()));
+    }
+
     CHECK_THROWS_AS(ops::execute("bakeLint", {{"project", "P"}, {"checks", {"nope"}}}), CommandError);
 }
 
@@ -747,4 +786,101 @@ TEST_CASE("bake presets: save a project's settings as a target, apply them in an
     ops::execute("deleteBakeTarget", {{"args", {"Studio"}}});
     CHECK_FALSE(fs::exists(file));
     CHECK_FALSE(bake::findTarget("Studio"));
+}
+
+TEST_CASE("preparing bake inputs steps and can be aborted per mesh, not per group")
+{
+    newScene();
+    scene::Graph& g = graph();
+    const fs::path dir = tempDir("lila_bakegrp_abort");
+    const std::string p = smallProject(dir);
+    json lows = json::array();
+    for (int i = 0; i < 12; ++i)
+        lows.push_back(addMesh("part" + std::to_string(i), lifted(plane(4), double(i))));
+    // One group holding every mesh, each its own high: as a whole asset baked onto itself.
+    ops::execute("bakeGroup", {{"args", {"g"}}, {"lows", lows}, {"self", true}});
+    const scene::NodeId project = g.find(p)->id();
+
+    // Aborted from the progress pump once some meshes are through and others are still to come.
+    double abortedAt = -1.0;
+    progress::setPump(
+        [&] {
+            for (const progress::Snapshot& s : progress::snapshot())
+                if (s.title == "Preparing bake inputs" && !s.cancelled && s.fraction > 0.0 && s.fraction < 0.9)
+                {
+                    abortedAt = s.fraction;
+                    progress::cancel(s.id);
+                }
+        },
+        0);
+    CHECK_THROWS_AS(bake::buildInputs(g, project, {}, true), progress::Cancelled);
+    progress::setPump({});
+    CHECK(abortedAt > 0.0);
+    CHECK(abortedAt < 0.9);
+
+    // Left alone it runs to the end.
+    CHECK(bake::buildInputs(g, project, {}, true).groups.size() == 1);
+}
+
+TEST_CASE("a bake stack's subdivision blends its uvs unless its params say otherwise")
+{
+    geo::CubeOptions co;
+    co.width = 7.0;
+    co.height = 0.6;
+    co.depth = 3.0;
+    const geo::Mesh box = geo::makeCube(co);
+    auto uvsOf = [](const geo::Mesh& m) {
+        const std::span<const glm::vec2> uv = m.cornerAttrs().get<glm::vec2>("uv0");
+        return std::vector<glm::vec2>(uv.begin(), uv.end());
+    };
+    const std::vector<glm::vec2> blend = uvsOf(geo::subdivide(box, {.levels = 2, .uvs = geo::SubdivideUvs::Blend}));
+    const std::vector<glm::vec2> fit = uvsOf(geo::subdivide(box, {.levels = 2, .uvs = geo::SubdivideUvs::FitSurface}));
+    REQUIRE(blend.size() == fit.size());
+    REQUIRE(blend != fit);
+
+    bake::BakeModifierStack plain(json::array({{{"kind", "subdivision"}, {"params", {{"levels", 2}}}}}));
+    REQUIRE(plain.pure());
+    const geo::Mesh high = plain.apply(box);
+    CHECK(uvsOf(high) == blend);
+    // From any thread it is the same mesh.
+    std::vector<std::string> warnings;
+    const geo::Mesh again = plain.applyPure(box, warnings);
+    CHECK(warnings.empty());
+    CHECK(uvsOf(again) == blend);
+    CHECK(again.numFaces() == high.numFaces());
+
+    bake::BakeModifierStack fitted(json::array({{{"kind", "subdivision"}, {"params", {{"levels", 2}, {"uvs", 1}}}}}));
+    CHECK(uvsOf(fitted.apply(box)) == fit);
+}
+
+TEST_CASE("a bake whose snapshots overflow the cache says so: bytes dropped in the timings and a warning")
+{
+    newScene();
+    const fs::path dir = tempDir("lila_bakegrp_cache");
+    const std::string p = smallProject(dir);
+    const std::string low = addMesh("c_low", plane(8));
+    ops::execute("bakeGroup", {{"args", {"g"}}, {"lows", {low}}, {"highs", {addMesh("c_high", lifted(plane(32), 1.0))}}});
+    PrefStore& prefs = PrefStore::get();
+    const double before = prefs.value<double>("baker", "/snapshotCacheGb", 0.0);
+    bake::clearBakeCaches();
+
+    // Room for everything: nothing dropped, nothing said.
+    prefs.set("baker", "/snapshotCacheGb", 1.0);
+    json r = ops::execute("bake", {{"project", p}, {"maps", {"normal"}}});
+    CHECK_FALSE(r["timings"].contains("snapshotCacheDropped"));
+
+    // A cache of a few kilobytes can't keep the high.
+    bake::clearBakeCaches();
+    prefs.set("baker", "/snapshotCacheGb", 4096.0 / double(size_t(1) << 30));
+    r = ops::execute("bake", {{"project", p}, {"maps", {"normal"}}});
+    REQUIRE(r["timings"].contains("snapshotCacheDropped"));
+    CHECK(r["timings"]["snapshotCacheDropped"].get<double>() > 4096.0);
+    CHECK(r["timings"]["snapshotCacheBudget"].get<double>() == doctest::Approx(4096.0));
+    bool warned = false;
+    for (const json& w : r["warnings"])
+        warned = warned || w.get<std::string>().starts_with("snapshot cache full");
+    CHECK(warned);
+
+    prefs.set("baker", "/snapshotCacheGb", before);
+    bake::clearBakeCaches();
 }

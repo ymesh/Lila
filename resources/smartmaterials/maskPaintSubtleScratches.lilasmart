@@ -1,0 +1,31 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Subtle Paint Scratches",
+  "description": "Faint, thin scratches scattered over a painted finish.",
+  "tags": [
+    "paint",
+    "scratches",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Scratches",
+      "type": "scratches",
+      "mode": "normal",
+      "opacity": 0.7,
+      "invert": false,
+      "values": {
+        "scale": 6,
+        "count": 4,
+        "length": 0.5,
+        "width": 0.002,
+        "angleRandom": 1.0,
+        "seed": 731
+      }
+    }
+  ]
+}

@@ -25,6 +25,8 @@ struct State
     std::string editor;
     std::string selection;
     std::string shown;
+    /** The layout's set when listeners last heard: they also follow the layout (the texturing 2D View) when the menus a tool or selection picks stay put. */
+    std::string shownLayout;
     std::vector<std::function<void()>> listeners;
 };
 
@@ -38,9 +40,10 @@ void notify()
 {
     State& s = state();
     const std::string now = current();
-    if (now == s.shown)
+    if (now == s.shown && s.layoutSet == s.shownLayout)
         return;
     s.shown = now;
+    s.shownLayout = s.layoutSet;
     for (const auto& fn : s.listeners)
         fn();
 }

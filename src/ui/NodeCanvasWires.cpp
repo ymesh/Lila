@@ -108,6 +108,20 @@ void NodeCanvas::finishWire(QPointF sp)
     runVerb(*backend, "Connect", args({mGroup, out, in}));
 }
 
+bool NodeCanvas::disconnectSocket(NodeItem* n, int socket, bool input)
+{
+    std::vector<std::pair<std::string, std::string>> hits;
+    for (LinkItem* l : mLinks)
+        if (input ? (l->to == n && l->in == socket) : (l->from == n && l->out == socket))
+            hits.push_back({l->from->name + "." + l->from->outputs[l->out].id, l->to->name + "." + l->to->inputs[l->in].id});
+    if (hits.empty())
+        return false;
+    UndoChunk chunk("Disconnect");
+    for (auto& [src, dst] : hits)
+        runVerb(*backend, "Disconnect", {{"args", {mGroup, dst}}, {"source", src}});
+    return true;
+}
+
 void NodeCanvas::finishCut()
 {
     if (mTemp)

@@ -22,6 +22,39 @@ namespace
 {
 constexpr const char* kExt = ".lilasmart";
 
+fs::path tagsFile()
+{
+    return PrefStore::get().userDir() / "smartmaterials" / "tags.json";
+}
+
+json readTagOverrides()
+{
+    std::ifstream in(tagsFile(), std::ios::binary);
+    if (!in)
+        return json::object();
+    try
+    {
+        json j = json::parse(in);
+        return j.is_object() ? j : json::object();
+    }
+    catch (const json::exception&)
+    {
+        return json::object();
+    }
+}
+
+void applyTagOverride(SmartMaterial& m, const json& overrides)
+{
+    auto it = overrides.find(m.name);
+    if (it == overrides.end() || !it->is_array())
+        return;
+    std::vector<std::string> tags;
+    for (const json& s : *it)
+        if (s.is_string())
+            tags.push_back(s.get<std::string>());
+    m.tags = normalizeTags(tags);
+}
+
 SmartMaterial readSmartFile(const fs::path& path, const std::string& tier)
 {
     std::ifstream in(path, std::ios::binary);
@@ -43,6 +76,7 @@ SmartMaterial readSmartFile(const fs::path& path, const std::string& tier)
     m.tier = tier;
     if (m.name.empty())
         m.name = path.stem().string();
+    applyTagOverride(m, readTagOverrides());
     return m;
 }
 
@@ -97,6 +131,8 @@ json SmartMaterial::toJson() const
     json j = {{"format", "lilasmart"}, {"version", 1}, {"name", name}, {"kind", kind}};
     if (!description.empty())
         j["description"] = description;
+    if (!tags.empty())
+        j["tags"] = tags;
     if (kind == "mask")
         j["masks"] = masks;
     else
@@ -112,6 +148,13 @@ SmartMaterial SmartMaterial::fromJson(const json& j)
     m.name = j.value("name", std::string());
     m.description = j.value("description", std::string());
     m.kind = j.value("kind", std::string("material"));
+    if (auto t = j.find("tags"); t != j.end() && t->is_array())
+    {
+        for (const json& s : *t)
+            if (s.is_string())
+                m.tags.push_back(s.get<std::string>());
+        m.tags = normalizeTags(m.tags);
+    }
     if (m.kind == "material")
     {
         m.layer = j.value("layer", json());
@@ -164,9 +207,13 @@ std::vector<SmartMaterial> listSmartMaterials()
             }
         }
     }
+    const json overrides = readTagOverrides();
     std::vector<SmartMaterial> out;
     for (auto& [k, m] : byName)
+    {
+        applyTagOverride(m, overrides);
         out.push_back(std::move(m));
+    }
     return out;
 }
 
@@ -199,6 +246,51 @@ void saveSmartMaterial(const SmartMaterial& m, const fs::path& path)
     if (!out)
         throw std::runtime_error("can't write " + paths::toUtf8(path));
     out << m.toJson().dump(2) << "\n";
+}
+
+std::vector<std::string> normalizeTags(const std::vector<std::string>& tags)
+{
+    std::vector<std::string> out;
+    for (std::string t : tags)
+    {
+        t = lower(t);
+        const auto a = t.find_first_not_of(" \t");
+        if (a == std::string::npos)
+            continue;
+        t = t.substr(a, t.find_last_not_of(" \t") - a + 1);
+        out.push_back(t);
+    }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
+void setSmartMaterialTags(const std::string& name, const std::vector<std::string>& tags)
+{
+    const SmartMaterial current = loadSmartMaterial(name);
+    std::vector<std::string> fileTags;
+    {
+        std::ifstream in(current.file, std::ios::binary);
+        try
+        {
+            fileTags = SmartMaterial::fromJson(json::parse(in)).tags;
+        }
+        catch (const std::exception&)
+        {
+        }
+    }
+    json overrides = readTagOverrides();
+    const std::vector<std::string> want = normalizeTags(tags);
+    if (want == fileTags)
+        overrides.erase(current.name);
+    else
+        overrides[current.name] = want;
+    std::error_code ec;
+    fs::create_directories(tagsFile().parent_path(), ec);
+    std::ofstream out(tagsFile(), std::ios::binary);
+    if (!out)
+        throw std::runtime_error("can't write " + paths::toUtf8(tagsFile()));
+    out << overrides.dump(2) << '\n';
 }
 
 Layer instantiateLayer(const json& layerJson, LayerStack& stack)

@@ -144,7 +144,13 @@ void UvTexturePaint::setChannel(const std::string& set, const std::string& chann
 
 bool UvTexturePaint::shown() const { return !m->set.empty() && !m->channel.empty(); }
 
-void UvTexturePaint::setPainting(bool on) { m->painting = on; }
+void UvTexturePaint::setPainting(bool on)
+{
+    // Builds the stroke pipelines now, so the first stroke doesn't wait on them.
+    if (on && !m->painting)
+        rp::prewarm();
+    m->painting = on;
+}
 
 bool UvTexturePaint::painting() const { return m->painting; }
 

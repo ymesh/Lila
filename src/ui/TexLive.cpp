@@ -46,7 +46,43 @@ struct TileState
     /** Preview levels first, the tile's full size last. */
     std::vector<std::shared_ptr<Evaluator>> levels;
     std::vector<std::pair<int, int>> levelSizes;
+    /** The full size has finished since the last job that ran the previews: its images are sharp and current. */
+    std::shared_ptr<std::atomic<bool>> fullShown = std::make_shared<std::atomic<bool>>(false);
+    /** Worker: the graph and settings the last job planned. */
+    std::string plannedKey;
+    /** Plans each level has been given, for texLiveStatus. */
+    std::vector<std::atomic<uint64_t>> plans;
+    /** Worker: the GPU externals each level's plan runs with, so an unchanged graph swaps them instead of replanning. */
+    std::vector<std::map<std::string, GpuImageRef>> externals;
+    /** External updates given without a new plan, per level, for texLiveStatus. */
+    std::vector<std::atomic<uint64_t>> swaps;
 };
+
+/**
+ * Whether a level can take new GPU externals in place: the same names, and each image (or its absence) giving the
+ * buffer the size and format the plan was set with, so only the loads and their readers change.
+ */
+bool externalsSwap(const std::map<std::string, GpuImageRef>& was, const std::map<std::string, GpuImageRef>& now, int width, int height)
+{
+    // The buffer size setPlan gives an external: the level's, or the image's own when it is smaller.
+    auto planned = [&](const GpuImageRef& img) {
+        return !img || (img->width() >= width && img->height() >= height) ? std::pair{width, height} : std::pair{img->width(), img->height()};
+    };
+    for (const auto& [name, img] : now)
+    {
+        auto it = was.find(name);
+        const GpuImageRef old = it == was.end() ? nullptr : it->second;
+        if (planned(img) != planned(old))
+            return false;
+        // A missing external planned as a float uv fill; a present one keeps its format so its half or float buffer holds.
+        if ((old && img && old->format() != img->format()) || (old && !img))
+            return false;
+    }
+    for (const auto& [name, img] : was)
+        if (img && !now.contains(name))
+            return false;
+    return true;
+}
 
 using Tiles = std::vector<std::shared_ptr<TileState>>;
 
@@ -89,6 +125,8 @@ struct Entry
     bool failed = false;
     /** A preview's tile at full size, null for the full size itself. */
     std::shared_ptr<Evaluator> full;
+    /** The full size's TileState::fullShown, null for a preview. */
+    std::shared_ptr<std::atomic<bool>> shown;
     std::chrono::steady_clock::time_point ran = std::chrono::steady_clock::now();
 };
 
@@ -106,6 +144,10 @@ events::SubscriptionId gShutdownSub = 0;
 std::mutex gJobMutex;
 std::condition_variable gJobCv;
 std::map<scene::NodeId, Job> gJobs; // newest per set
+/** Graphs a set is about to have, compiled ahead when no real job waits; newest per set. */
+std::map<scene::NodeId, Job> gWarm;
+/** Warm jobs finished, per set, for status(). */
+std::map<scene::NodeId, uint64_t> gWarmed;
 bool gJobBusy = false;
 bool gJobQuit = false;
 std::thread gWorker;
@@ -548,6 +590,8 @@ bool runSlice(render::VulkanContext& vk)
             // them, even when it has nothing of its own to redo there.
             if (std::array<float, 4> uv; e.full && e.ev->takeStored(uv))
                 e.full->storeAgain(uv);
+            if (finished && e.shown)
+                e.shown->store(true);
             // A finished level has written its images: show them.
             if (finished)
                 mainq::post([node = e.node] {
@@ -641,11 +685,16 @@ std::string runJob(const Job& job)
     std::vector<tex::OutputRequest> requests = tex::channelRequests(job.graph, job.settings);
     if (requests.empty())
         return job.graph.firstOfType(tex::kMaterialOutputType) ? "the set has no channels" : "the graph has no Material Output";
+    const std::string key = job.graph.toJson().dump() + job.settings.toJson().dump();
     for (const auto& tile : job.tiles)
     {
         const std::vector<StoreTarget> stores = storesFor(*tile, job.settings);
         const auto [u, v] = tex::udimOrigin(tile->udim);
-        for (size_t l = 0; l < tile->levels.size(); ++l)
+        // Previews write the shown images upsampled, so over sharp ones they flash blurry. When only the inputs moved (a
+        // stroke committed or undone, maps rebaked) the full size alone redoes what changed over images already sharp.
+        const bool fullOnly = key == tile->plannedKey && tile->fullShown->load();
+        tile->plannedKey = key;
+        for (size_t l = fullOnly ? tile->levels.size() - 1 : 0; l < tile->levels.size(); ++l)
         {
             tex::PlanRequest req;
             req.width = tile->levelSizes[l].first;
@@ -666,8 +715,22 @@ std::string runJob(const Job& job)
                     else if (GpuImageRef map = render::texgpu::meshMap(job.settings.bakeProject, b.name, tile->udim))
                         in.gpuExternals[b.name] = map;
                 }
+            if (tile->externals.size() < tile->levels.size())
+                tile->externals.resize(tile->levels.size());
+            // Same graph: a new plan would reload every image and recompute the whole stack in one slice (a stall on
+            // a stroke's first press or its commit). Only what reads the changed externals runs.
+            if (fullOnly && tile->plans[l] > 0 && externalsSwap(tile->externals[l], in.gpuExternals, req.width, req.height))
+            {
+                tile->externals[l] = in.gpuExternals;
+                tile->levels[l]->setExternals(std::move(in.gpuExternals));
+                ++tile->swaps[l];
+                ensureTask();
+                continue;
+            }
+            tile->externals[l] = in.gpuExternals;
             if (std::string err = tile->levels[l]->setPlan(std::move(plan), std::move(in), stores); !err.empty())
                 return err;
+            ++tile->plans[l];
             {
                 std::scoped_lock lock(gTaskMutex);
                 for (Entry& e : gEntries)
@@ -676,8 +739,37 @@ std::string runJob(const Job& job)
             }
             ensureTask();
         }
+        // After the new plans, so the old plan's full size finishing late can't claim the new previews are done.
+        if (!fullOnly)
+            tile->fullShown->store(false);
     }
     return {};
+}
+
+/**
+ * Compiles the passes a graph will need at every level of every tile, into the shared shader and pipeline caches, so the
+ * edit that makes it the set's graph plans without compiling.
+ */
+void runWarm(const Job& job)
+{
+    LILA_ZONE();
+    if (job.pages)
+        return;
+    std::vector<tex::OutputRequest> requests = tex::channelRequests(job.graph, job.settings);
+    if (requests.empty())
+        return;
+    for (const auto& tile : job.tiles)
+        for (const auto& [w, h] : tile->levelSizes)
+        {
+            tex::PlanRequest req;
+            req.width = w;
+            req.height = h;
+            req.outputs = requests;
+            const tex::Plan plan = tex::buildPlan(job.graph, req);
+            if (!plan.error.empty())
+                return;
+            render::texgpu::precompile(plan);
+        }
 }
 
 void workerLoop()
@@ -685,14 +777,32 @@ void workerLoop()
     for (;;)
     {
         Job job;
+        bool warm = false;
         {
             std::unique_lock lock(gJobMutex);
-            gJobCv.wait(lock, [] { return gJobQuit || !gJobs.empty(); });
+            gJobCv.wait(lock, [] { return gJobQuit || !gJobs.empty() || !gWarm.empty(); });
             if (gJobQuit)
                 return;
-            job = std::move(gJobs.begin()->second);
-            gJobs.erase(gJobs.begin());
-            gJobBusy = true;
+            // Real edits first: a warm job only fills the time the worker would sit idle.
+            warm = gJobs.empty();
+            std::map<scene::NodeId, Job>& from = warm ? gWarm : gJobs;
+            job = std::move(from.begin()->second);
+            from.erase(from.begin());
+            gJobBusy = !warm;
+        }
+        if (warm)
+        {
+            try
+            {
+                runWarm(job);
+            }
+            catch (const std::exception& e)
+            {
+                log::debug("texture set warm-up: {}", e.what());
+            }
+            std::scoped_lock lock(gJobMutex);
+            ++gWarmed[job.node];
+            continue;
         }
         std::string err;
         try
@@ -843,11 +953,21 @@ void rebuild(LiveSet& s)
             return;
         }
         tile->levelSizes = levelSizes(tile->width, tile->height, previews);
+        tile->plans = std::vector<std::atomic<uint64_t>>(tile->levelSizes.size());
+        tile->swaps = std::vector<std::atomic<uint64_t>>(tile->levelSizes.size());
         std::scoped_lock lock(gTaskMutex);
         for (size_t l = 0; l < tile->levelSizes.size(); ++l)
             tile->levels.push_back(std::make_shared<Evaluator>());
         for (size_t l = 0; l < tile->levels.size(); ++l)
-            gEntries.push_back({int(l), gSeq++, s.node, tile->levels[l], false, l + 1 < tile->levels.size() ? tile->levels.back() : nullptr});
+        {
+            const bool preview = l + 1 < tile->levels.size();
+            gEntries.push_back({.level = int(l),
+                                .seq = gSeq++,
+                                .node = s.node,
+                                .ev = tile->levels[l],
+                                .full = preview ? tile->levels.back() : nullptr,
+                                .shown = preview ? nullptr : tile->fullShown});
+        }
         std::stable_sort(gEntries.begin(), gEntries.end(), [](const Entry& a, const Entry& b) { return a.level < b.level; });
         s.tiles.push_back(std::move(tile));
     }
@@ -1057,7 +1177,7 @@ void install()
     if (!ops::find("texLiveStatus"))
         ops::registerCommand({
             .name = "texLiveStatus",
-            .doc = "The viewport's live texture sets: per set its material, tiles and evaluation levels (size, idle, passes, compiles, GPU "
+            .doc = "The viewport's live texture sets: per set its material, warm-ups compiled ahead, tiles and evaluation levels (size, idle, plans, passes, compiles, GPU "
                    "milliseconds) and the last error; idle is whether every set has finished its latest edit.",
             .undoable = false,
             .run = [](const Args&) -> nlohmann::json { return {{"idle", idle()}, {"sets", status()}}; },
@@ -1122,6 +1242,33 @@ void shutdown()
     gIndexDirty = true;
 }
 
+void warm(const std::string& set, const tex::Graph& graph)
+{
+    if (!gInstalled)
+        return;
+    for (const auto& [id, s] : gSets)
+    {
+        if (s->name != set || s->tiles.empty() || s->pages || s->virtualTexture)
+            continue;
+        Job job;
+        job.node = id;
+        job.graph = graph;
+        job.settings = s->settings;
+        job.tiles = s->tiles;
+        {
+            std::scoped_lock lock(gJobMutex);
+            if (!gWorker.joinable())
+            {
+                gJobQuit = false;
+                gWorker = std::thread(workerLoop);
+            }
+            gWarm[id] = std::move(job);
+        }
+        gJobCv.notify_one();
+        return;
+    }
+}
+
 bool idle()
 {
     {
@@ -1176,6 +1323,8 @@ json status()
                 levels.push_back({{"width", t->levelSizes[l].first},
                                   {"height", t->levelSizes[l].second},
                                   {"idle", t->levels[l]->idle()},
+                                  {"plans", l < t->plans.size() ? t->plans[l].load() : 0},
+                                  {"swaps", l < t->swaps.size() ? t->swaps[l].load() : 0},
                                   {"failed", failed},
                                   {"passesDirty", st.passesDirty},
                                   {"passesRun", st.passesRun},
@@ -1189,6 +1338,11 @@ json status()
             tiles.push_back({{"udim", t->udim}, {"levels", levels}});
         }
         json entry = {{"set", s->name}, {"material", s->material}, {"tiles", tiles}, {"error", s->error}};
+        {
+            std::scoped_lock lock(gJobMutex);
+            auto w = gWarmed.find(id);
+            entry["warmed"] = w == gWarmed.end() ? 0 : w->second;
+        }
         if (s->virtualTexture)
         {
             const render::vt::TextureStats vs = s->virtualTexture->stats();

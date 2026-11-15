@@ -254,6 +254,19 @@ TEST_CASE("updater compares versions and reads the manifest")
     CHECK(up::parseManifest(json::array()).version.empty());
 }
 
+TEST_CASE("welcome changelog card reads the newest release section")
+{
+    const auto r = ui::news::latestRelease("# Changelog\r\n\r\nIntro.\r\n\r\n## 0.2.0 - 2026-12-01\r\n\r\n"
+                                           "- **Texture painting** in the [Texture Set](texturing.md#sets) dock\r\n"
+                                           "- `polyBridge` keeps snake_case names\r\n\r\n## 0.1.0 - 2026-11-20\r\n- First\r\n");
+    CHECK(r.version == "0.2.0");
+    CHECK(r.date == "2026-12-01");
+    REQUIRE(r.changes.size() == 2);
+    CHECK(r.changes[0] == "Texture painting in the Texture Set dock");
+    CHECK(r.changes[1] == "polyBridge keeps snake_case names");
+    CHECK(ui::news::latestRelease("# Changelog\n").version.empty());
+}
+
 TEST_CASE("welcome news opens on the newest unseen item and rotates the showcase")
 {
     const json feed = json::parse(R"({"items": [

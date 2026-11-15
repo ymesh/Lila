@@ -1,0 +1,232 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Aged Bronze",
+  "description": "Dark statuary bronze with green-grey patina streaks, grime in the recesses and rubbed highlights.",
+  "tags": [
+    "metal",
+    "realistic",
+    "worn",
+    "dirty"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L11",
+    "name": "Aged Bronze",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Bronze",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.2633,
+            0.1193,
+            0.0397,
+            1
+          ],
+          "roughness": 0.45,
+          "metallic": 1.0,
+          "height": 0.5
+        },
+        "masks": []
+      },
+      {
+        "id": "L3",
+        "name": "Dark Patina",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.0272,
+            0.0196,
+            0.01,
+            1
+          ],
+          "roughness": 0.6,
+          "metallic": 0.6
+        },
+        "masks": [
+          {
+            "id": "M2",
+            "kind": "generator",
+            "type": "clouds",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "scale": 4,
+              "octaves": 6,
+              "contrast": 1.2,
+              "seed": 331
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.8
+          },
+          "roughness": {
+            "mode": "normal",
+            "opacity": 0.8
+          },
+          "metallic": {
+            "mode": "normal",
+            "opacity": 0.8
+          }
+        }
+      },
+      {
+        "id": "L6",
+        "name": "Green Streaks",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.0732,
+            0.1473,
+            0.1005,
+            1
+          ],
+          "metallic": 0.0,
+          "roughness": 0.85
+        },
+        "masks": [
+          {
+            "id": "M4",
+            "kind": "generator",
+            "type": "genDrips",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "density": 30,
+              "length": 3,
+              "wallsOnly": 0.6,
+              "level": 0.55,
+              "seed": 332
+            }
+          },
+          {
+            "id": "M5",
+            "kind": "generator",
+            "type": "genCavityGrime",
+            "mode": "lighten",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.25,
+              "breakup": 0.6,
+              "seed": 332
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.75
+          },
+          "metallic": {
+            "mode": "normal",
+            "opacity": 0.75
+          },
+          "roughness": {
+            "mode": "normal",
+            "opacity": 0.75
+          }
+        }
+      },
+      {
+        "id": "L8",
+        "name": "Grime",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.0049,
+            0.0039,
+            0.0031,
+            1
+          ],
+          "metallic": 0.0,
+          "roughness": 0.9
+        },
+        "masks": [
+          {
+            "id": "M7",
+            "kind": "generator",
+            "type": "genDirt",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.4,
+              "seed": 333
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.7
+          },
+          "metallic": {
+            "mode": "normal",
+            "opacity": 0.7
+          },
+          "roughness": {
+            "mode": "normal",
+            "opacity": 0.7
+          }
+        }
+      },
+      {
+        "id": "L10",
+        "name": "Edge Highlight",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.5225,
+            0.2633,
+            0.1005,
+            1
+          ],
+          "roughness": 0.3,
+          "metallic": 1.0
+        },
+        "masks": [
+          {
+            "id": "M9",
+            "kind": "generator",
+            "type": "genEdgeWear",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.3,
+              "softness": 0.2,
+              "breakup": 0.7,
+              "strength": 2.2,
+              "noiseScale": 5,
+              "seed": 334
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 1.0
+          },
+          "roughness": {
+            "mode": "normal",
+            "opacity": 1.0
+          },
+          "metallic": {
+            "mode": "normal",
+            "opacity": 1.0
+          }
+        }
+      }
+    ],
+    "masks": []
+  }
+}

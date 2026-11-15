@@ -11,6 +11,7 @@
 #include "geo/ColorSets.h"
 #include "geo/Mesh.h"
 #include "geo/Normals.h"
+#include "geo/Ops.h"
 #include "geo/Triangulate.h"
 #include "ops/Undo.h"
 #include "scene/Graph.h"
@@ -20,6 +21,7 @@
 
 #include <tbb/parallel_for.h>
 
+#include <format>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -319,6 +321,12 @@ BakeModifierStack::BakeModifierStack(const json& stack) : mGraph(std::make_uniqu
             mGraph->deleteNode(n->id());
             continue;
         }
+        // A high's uvs only place the textures it brings, and blending keeps them where the mesh under the stack has them.
+        // Fit Surface would re-lay every island of a mesh 64 times denser: most of a bake's preparation, for uvs nothing
+        // reads differently. A stack that names uvs gets what it names.
+        if (kind == "subdivision")
+            if (const int uvs = type->attrIndex("uvs"); uvs >= 0)
+                mGraph->setValue({n->id(), uvs, -1}, int64_t(geo::SubdivideUvs::Blend));
         if (entry.is_object() && entry.contains("params") && entry["params"].is_object())
             for (auto it = entry["params"].begin(); it != entry["params"].end(); ++it)
             {
@@ -370,6 +378,34 @@ geo::Mesh BakeModifierStack::apply(const geo::Mesh& mesh)
         catch (const std::exception& e)
         {
             mWarnings.push_back(mod->type().name + ": " + e.what() + " (passed through)");
+        }
+    }
+    return *cur;
+}
+
+bool BakeModifierStack::pure() const
+{
+    for (scene::NodeId id : mNodes)
+        if (!scene::modifiers::asModifier(mGraph->node(id))->apply)
+            return false;
+    return true;
+}
+
+geo::Mesh BakeModifierStack::applyPure(const geo::Mesh& mesh, std::vector<std::string>& warnings) const
+{
+    LILA_ZONE();
+
+    scene::MeshPtr cur = std::make_shared<geo::Mesh>(mesh);
+    for (scene::NodeId id : mNodes)
+    {
+        const scene::ModifierNode* mod = scene::modifiers::asModifier(mGraph->node(id));
+        try
+        {
+            cur = std::make_shared<geo::Mesh>(mod->apply(*cur, *mod));
+        }
+        catch (const std::exception& e)
+        {
+            warnings.push_back(mod->type().name + ": " + e.what() + " (passed through)");
         }
     }
     return *cur;
@@ -427,9 +463,30 @@ BakeInputs buildInputs(scene::Graph& g, scene::NodeId project, const std::vector
         std::shared_ptr<const LowInput> cachedLow;
     };
     std::vector<Job> jobs;
+    /** A high whose bake stack is all plain mesh functions: run with the others, across the cores, once the jobs are listed. */
+    struct StackRun
+    {
+        size_t job;
+        std::shared_ptr<BakeModifierStack> stack;
+        std::string group;
+        std::vector<std::string> warnings;
+    };
+    std::vector<StackRun> stackRuns;
     double modifierSeconds = 0.0;
     int cacheHits = 0;
-    progress::Scope scope("Preparing bake inputs", double(ids.size()), progress::Cancellable);
+    beginSnapshotTally();
+    // A step per mesh, not per group: one group can hold a whole asset, and each mesh runs its export stack here.
+    double meshes = 0.0;
+    for (scene::NodeId gid : ids)
+        if (const scene::Node* gn = g.node(gid); gn && isGroup(*gn))
+        {
+            const GroupSettings s = groupSettings(*gn);
+            meshes += double(s.lows.size());
+            if (withHighs)
+                for (const HighEntry& h : s.highs)
+                    meshes += h.self ? double(s.lows.size()) : 1.0;
+        }
+    progress::Scope scope("Preparing bake inputs", std::max(meshes, 1.0), progress::Cancellable);
     for (scene::NodeId gid : ids)
     {
         scene::Node* gn = g.node(gid);
@@ -473,6 +530,8 @@ BakeInputs buildInputs(scene::Graph& g, scene::NodeId project, const std::vector
             cacheHits += j.cachedLow ? 1 : 0;
             gi.lows.emplace_back();
             jobs.push_back(std::move(j));
+            scope.step();
+            scope.checkCancel();
         }
         if (withHighs)
             for (const HighEntry& h : gi.settings.highs)
@@ -506,14 +565,19 @@ BakeInputs buildInputs(scene::Graph& g, scene::NodeId project, const std::vector
                     sources.emplace_back(exportedMesh(g, n.id()), worldOf(g, n.id()));
                     names.push_back(n.path());
                 }
-                BakeModifierStack stack(h.modifiers);
+                const auto stackPtr = std::make_shared<BakeModifierStack>(h.modifiers);
+                BakeModifierStack& stack = *stackPtr;
+                const bool pure = stack.pure();
                 for (size_t k = 0; k < sources.size(); ++k)
                 {
                     scene::MeshPtr m = sources[k].first;
                     const SnapshotKey key = snapshotKey(m, sources[k].second, names[k], h.modifiers);
                     std::shared_ptr<const HighInput> cached = m ? cachedHigh(key) : nullptr;
                     const uint32_t before = cached ? cached->sourceTriangles : m ? uint32_t(geo::triangulate(*m).faces.size()) : 0u;
-                    if (m && !stack.empty() && !cached)
+                    const bool later = m && !stack.empty() && !cached && pure;
+                    if (later)
+                        stackRuns.push_back({jobs.size(), stackPtr, gi.name, {}});
+                    else if (m && !stack.empty() && !cached)
                     {
                         // The stack runs here without a step, often for seconds on a dense high.
                         scope.setStatus("Applying bake modifiers: " + names[k]);
@@ -532,6 +596,17 @@ BakeInputs buildInputs(scene::Graph& g, scene::NodeId project, const std::vector
                     gi.highNodes.push_back(h.self ? gi.settings.lows[k] : !h.file.empty() ? h.file : names[k]);
                     gi.highSelfLow.push_back(h.self ? int32_t(k) : -1);
                     jobs.push_back(std::move(j));
+                    // A stack left for later steps when it has run.
+                    if (h.self && !later)
+                    {
+                        scope.step();
+                        scope.checkCancel();
+                    }
+                }
+                if (!h.self && (stackRuns.empty() || stackRuns.back().stack != stackPtr))
+                {
+                    scope.step();
+                    scope.checkCancel();
                 }
                 for (const std::string& w : stack.warnings())
                     in.warnings.push_back("group " + gi.name + ": " + w);
@@ -541,15 +616,37 @@ BakeInputs buildInputs(scene::Graph& g, scene::NodeId project, const std::vector
         else if (withHighs && gi.highs.empty())
             in.warnings.push_back("group " + gi.name + " has no highs");
         in.groups.push_back(std::move(gi));
-        scope.step();
         scope.checkCancel();
+    }
+
+    if (!stackRuns.empty())
+    {
+        // Each stack is single-threaded for much of its run; a mesh a core finishes an asset's highs several times sooner.
+        scope.setStatus("Applying bake modifiers");
+        scope.showNow();
+        const auto t0 = std::chrono::steady_clock::now();
+        tbb::parallel_for(size_t(0), stackRuns.size(), [&](size_t i) {
+            if (scope.cancelled())
+                return;
+            StackRun& r = stackRuns[i];
+            Job& j = jobs[r.job];
+            j.mesh = std::make_shared<geo::Mesh>(r.stack->applyPure(*j.mesh, r.warnings));
+            scope.step();
+        });
+        modifierSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        scope.setStatus({});
+        scope.checkCancel();
+        for (const StackRun& r : stackRuns)
+            for (const std::string& w : r.warnings)
+                in.warnings.push_back("group " + r.group + ": " + w);
     }
 
     const auto snapshotStarted = std::chrono::steady_clock::now();
     tbb::parallel_for(size_t(0), jobs.size(), [&](size_t i) {
         const Job& j = jobs[i];
         GroupInputs& gi = in.groups[j.group];
-        if (!j.mesh)
+        // An abort leaves the rest unread; the check after the loop throws before anything uses them.
+        if (!j.mesh || scope.cancelled())
             return;
         if (j.low)
         {
@@ -577,9 +674,19 @@ BakeInputs buildInputs(scene::Graph& g, scene::NodeId project, const std::vector
             cacheHigh(j.key, std::move(h));
         }
     });
+    scope.checkCancel();
     in.timings["modifiers"] = modifierSeconds;
     in.timings["snapshot"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - snapshotStarted).count();
     in.timings["snapshotCacheHits"] = cacheHits;
+    if (const SnapshotTally tally = snapshotTally(); tally.dropped)
+    {
+        const double gb = double(size_t(1) << 30);
+        in.timings["snapshotCacheDropped"] = double(tally.dropped);
+        in.timings["snapshotCacheBudget"] = double(tally.budget);
+        in.warnings.push_back(std::format("snapshot cache full: {:.1f} GB of these meshes did not fit in its {:.1f} GB and are prepared again on "
+                                          "every bake; raise the baker/snapshotCacheGb pref",
+                                          double(tally.dropped) / gb, double(tally.budget) / gb));
+    }
 
     for (const GroupInputs& gi : in.groups)
         for (const HighInput& h : gi.highs)
@@ -620,6 +727,35 @@ BakeInputs buildInputs(scene::Graph& g, scene::NodeId project, const std::vector
     return in;
 }
 
+namespace
+{
+/**
+ * Whether any triangle of the group's high h has one of the materials. Links are per high, so a high that also has other
+ * materials is skipped whole, with a warning.
+ */
+bool usesMaterial(BakeInputs& in, const GroupInputs& gi, size_t h, const std::vector<std::string>& materials)
+{
+    if (materials.empty() || h >= gi.highs.size())
+        return false;
+    const MeshSoup& soup = gi.highs[h].soup;
+    std::vector<uint8_t> used(soup.materialNames.size(), 0);
+    for (uint32_t id : soup.materials)
+        if (id < used.size())
+            used[id] = 1;
+    bool match = false, other = false;
+    for (size_t id = 0; id < used.size(); ++id)
+        if (used[id])
+            (std::ranges::find(materials, soup.materialNames[id]) != materials.end() ? match : other) = true;
+    if (match && other)
+    {
+        std::string w = "group " + gi.name + ": " + gi.highNodes[h] + " is unlinked whole by material, though only some of its faces have it";
+        if (std::ranges::find(in.warnings, w) == in.warnings.end())
+            in.warnings.push_back(std::move(w));
+    }
+    return match;
+}
+} // namespace
+
 void buildLinks(BakeInputs& in)
 {
     uint32_t total = 0;
@@ -656,7 +792,7 @@ void buildLinks(BakeInputs& in)
                 for (const GroupInputs& other : in.groups)
                     for (size_t h = 0; h < other.highNodes.size(); ++h)
                     {
-                        if (std::ranges::find(u.meshes, other.highNodes[h]) == u.meshes.end())
+                        if (std::ranges::find(u.meshes, other.highNodes[h]) == u.meshes.end() && !usesMaterial(in, other, h, u.materials))
                             continue;
                         if (u.occlusion)
                             set(l, RayKind::Occlusion, other.highBase + uint32_t(h));

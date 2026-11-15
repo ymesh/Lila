@@ -143,29 +143,50 @@ VkPipeline PipelineCache::get(VulkanContext& vk, VkPipelineLayout layout, uint64
                               const char* entry)
 {
     auto key = std::make_tuple(hash, std::string(entry), layoutKey);
-    if (auto it = mPipelines.find(key); it != mPipelines.end())
+    VkShaderModule mod = VK_NULL_HANDLE;
     {
-        ++mHits;
-        return it->second;
+        std::scoped_lock lock(mMutex);
+        if (auto it = mPipelines.find(key); it != mPipelines.end())
+        {
+            ++mHits;
+            return it->second;
+        }
+        if (auto it = mModules.find(hash); it != mModules.end())
+            mod = it->second;
     }
     ++mMisses;
-    VkShaderModule& mod = mModules[hash];
-    if (!mod)
-        mod = shaderModule(vk, code);
+    LILA_ZONE_N("compute pipeline create");
     if (!mod)
     {
-        mModules.erase(hash);
-        throw std::runtime_error(std::string("GPU: bad shader module for ") + entry);
+        VkShaderModule made = shaderModule(vk, code);
+        if (!made)
+            throw std::runtime_error(std::string("GPU: bad shader module for ") + entry);
+        std::scoped_lock lock(mMutex);
+        auto [it, added] = mModules.try_emplace(hash, made);
+        if (!added)
+            vkDestroyShaderModule(vk.device, made, nullptr);
+        mod = it->second;
     }
     VkPipeline p = computePipeline(vk, layout, mod, entry);
     if (!p)
         throw std::runtime_error(std::string("GPU: compute pipeline creation failed (") + entry + ")");
-    mPipelines.emplace(std::move(key), p);
-    return p;
+    std::scoped_lock lock(mMutex);
+    // Another thread may have made the same pipeline meanwhile; keep the first.
+    auto [it, added] = mPipelines.try_emplace(std::move(key), p);
+    if (!added)
+        vkDestroyPipeline(vk.device, p, nullptr);
+    return it->second;
+}
+
+bool PipelineCache::contains(uint64_t layoutKey, uint64_t codeHash, const char* entry) const
+{
+    std::scoped_lock lock(mMutex);
+    return mPipelines.contains(std::make_tuple(codeHash, std::string(entry), layoutKey));
 }
 
 void PipelineCache::clear(VulkanContext& vk)
 {
+    std::scoped_lock lock(mMutex);
     for (auto& [k, p] : mPipelines)
         vkDestroyPipeline(vk.device, p, nullptr);
     for (auto& [k, m] : mModules)
@@ -178,6 +199,12 @@ PipelineCache& sharedPipelines()
 {
     static PipelineCache cache;
     return cache;
+}
+
+std::shared_mutex& offThreadDeviceUse()
+{
+    static std::shared_mutex m;
+    return m;
 }
 
 uint64_t layoutKey(uint32_t pushBytes, VkShaderStageFlags stages, std::string_view setsTag)

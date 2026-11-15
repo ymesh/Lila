@@ -932,3 +932,266 @@ TEST_CASE("a big cartoon head moves the neck, and the blocks follow it")
         }
     }
 }
+
+TEST_CASE("blocks: every block sits in a category")
+{
+    for (const Block& b : blocks())
+    {
+        CAPTURE(b.id);
+        CHECK(!b.category.empty());
+        CHECK(!b.label.empty());
+    }
+    REQUIRE(findBlock("mittens"));
+    CHECK(findBlock("mittens")->category == "Hands");
+    REQUIRE(findBlock("kneeBoots"));
+    CHECK(findBlock("kneeBoots")->category == "Feet");
+}
+
+TEST_CASE("gloves and mittens: a back and a palm per hand, thumbs forward, seams walk their sides the same way")
+{
+    struct Case
+    {
+        const char* id;
+        size_t seamsPerHand;
+        const char* fabric;
+    };
+    const Body body;
+    for (const Case& c : {Case{"gloves", 1, "Glove Leather"}, Case{"gauntlets", 1, "Leather"}, Case{"operaGloves", 1, "Satin"},
+                          Case{"fingerlessGloves", 6, "Knit"}, Case{"mittens", 1, "Knit"}})
+    {
+        CAPTURE(c.id);
+        Garment g;
+        REQUIRE(buildBlock(c.id, g));
+        checkGarment(g, c.id);
+        REQUIRE(g.panels.size() == 4);
+        CHECK(g.seams.size() == 2 * c.seamsPerHand);
+        REQUIRE(g.fabrics.size() == 1);
+        CHECK(g.fabrics[0].name == c.fabric);
+        for (const Seam& s : g.seams)
+            CHECK(seamGap(g, s, false) < seamGap(g, s, true));
+        CHECK(buildClothMesh(g).tris.size() > 800);
+        for (const Panel& p : g.panels)
+        {
+            CAPTURE(p.name);
+            const bool left = p.name.ends_with(" L");
+            // Out on its own arm, below the shoulder, the thumb reaching further forward than the little finger does back.
+            float front = -1e9f, back = 1e9f;
+            for (const Vec2& q : p.outline)
+            {
+                const Vec3 w = placePatternPoint(p, q);
+                CHECK((left ? w[0] : -w[0]) > body.shoulderWidth * 0.5f);
+                CHECK(w[1] < body.shoulderY());
+                front = std::max(front, w[2]);
+                back = std::min(back, w[2]);
+            }
+            CHECK(front > -back + 0.02f);
+        }
+    }
+    // Open tips: more outline left unsewn than a closed glove's cuff alone.
+    Garment closed, open;
+    REQUIRE(buildBlock("gloves", closed));
+    REQUIRE(buildBlock("gloves", open, nullptr, body, {{"fingerLength", 0.5f}}));
+    CHECK(open.seams.size() == 12);
+    checkGarment(open, "gloves, open tips");
+    Garment mitt;
+    REQUIRE(buildBlock("mittens", mitt, nullptr, body, {{"fingerLength", 0.5f}}));
+    CHECK(mitt.seams.size() == 6);
+    checkGarment(mitt, "mittens, open tips");
+}
+
+TEST_CASE("shoes and boots: two sides and a sole per foot, toes forward, seams walk their sides the same way")
+{
+    struct Case
+    {
+        const char* id;
+        bool sole;
+        const char* fabric;
+        float top;
+    };
+    const Body body;
+    for (const Case& c : {Case{"shoes", true, "Leather", 0.07f}, Case{"slippers", false, "Felt", 0.06f}, Case{"socks", false, "Knit", 0.26f},
+                          Case{"ankleBoots", true, "Leather", 0.16f}, Case{"boots", true, "Boot Leather", 0.32f},
+                          Case{"kneeBoots", true, "Boot Leather", 0.46f}})
+    {
+        CAPTURE(c.id);
+        Garment g;
+        REQUIRE(buildBlock(c.id, g));
+        checkGarment(g, c.id);
+        REQUIRE(g.panels.size() == (c.sole ? 6 : 4));
+        CHECK(g.seams.size() == (c.sole ? 8 : 2));
+        REQUIRE(g.fabrics.size() == (c.sole ? 2 : 1));
+        CHECK(g.fabrics[0].name == c.fabric);
+        for (const Seam& s : g.seams)
+            CHECK(seamGap(g, s, false) < seamGap(g, s, true));
+        float top = 0.f, toe = 0.f;
+        for (const Panel& p : g.panels)
+        {
+            CAPTURE(p.name);
+            const bool sole = p.name.rfind("Sole", 0) == 0;
+            CHECK(g.fabrics[size_t(p.fabric)].name == (sole ? "Sole" : c.fabric));
+            for (const Vec2& q : p.outline)
+            {
+                const Vec3 w = placePatternPoint(p, q);
+                CHECK((p.name.ends_with(" L") ? w[0] : -w[0]) > 0.f);
+                top = std::max(top, w[1]);
+                toe = std::max(toe, w[2]);
+                if (sole)
+                    CHECK(w[1] < 0.01f);
+            }
+        }
+        CHECK(top == doctest::Approx(c.top).epsilon(0.1));
+        CHECK(toe > 0.15f);
+    }
+    // A pointed toe is longer and still sews to its sole; the height stops short of the crotch.
+    Garment g;
+    REQUIRE(buildBlock("shoes", g, nullptr, body, {{"toe", 1.f}}));
+    checkGarment(g, "pointed shoes");
+    REQUIRE(buildBlock("kneeBoots", g, nullptr, body, {{"height", 0.6f}, {"opening", 0.5f}}));
+    checkGarment(g, "tall boots");
+    for (const Panel& p : g.panels)
+        for (const Vec2& q : p.outline)
+            CHECK(placePatternPoint(p, q)[1] < body.crotchY() * 0.7f);
+}
+
+namespace
+{
+struct BlockDrape
+{
+    Garment g;
+    ClothMesh cm;
+    std::vector<Vec3> at;
+    float maxGap = 0.f;
+    int inside = 0, finite = 0;
+};
+
+BlockDrape drapeBlock(const char* id, const Body& body, int frames)
+{
+    std::vector<Vec3> pts;
+    std::vector<std::array<int, 3>> tris;
+    mannequin(body, pts, tris);
+    const Sdf sdf = sdfFromMesh(pts, tris, 0.01f, 0.05f);
+    BlockDrape d;
+    REQUIRE(buildBlock(id, d.g, nullptr, body));
+    d.cm = buildClothMesh(d.g);
+    ClothSolver solver;
+    SolverSettings s;
+    s.floorY = 0.f;
+    solver.reset(d.cm, d.g, s);
+    solver.setColliders({&sdf});
+    solver.setPins(resolvePins(d.cm, d.g));
+    for (int frame = 0; frame < frames; ++frame)
+        solver.step();
+    d.at = solver.positions();
+    for (const Vec3& p : d.at)
+    {
+        d.finite += std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]);
+        d.inside += sdf.sample(p) < -0.005f;
+    }
+    for (const auto& pr : d.cm.seamPairs)
+    {
+        const Vec3 &a = d.at[pr[0]], &b = d.at[pr[1]];
+        d.maxGap = std::max(d.maxGap, std::hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]));
+    }
+    return d;
+}
+} // namespace
+
+TEST_CASE("gloves and mittens drape onto the mannequin's hands and stay on them")
+{
+    const Body body;
+    // The left wrist, as the mannequin has it.
+    const float chestA = body.chest / (std::numbers::pi_v<float> * 1.72f);
+    const float sx = std::max(body.shoulderWidth * 0.5f, chestA + 0.06f) - 0.045f;
+    const Vec3 dir{std::cos(body.armAngle), -std::sin(body.armAngle), 0.f};
+    const Vec3 wrist{sx + dir[0] * body.armLength, body.shoulderY() - 0.065f + dir[1] * body.armLength, 0.f};
+    for (const char* id : {"gloves", "mittens", "gauntlets"})
+    {
+        CAPTURE(id);
+        const BlockDrape d = drapeBlock(id, body, 240);
+        CHECK(d.finite == int(d.at.size()));
+        CHECK(d.inside < int(d.at.size()) / 50);
+        CHECK(d.maxGap < 0.01f);
+        // How far down the arm from the wrist the left glove's cloth sits, on average and at its near edge.
+        float sum = 0.f, least = 1e9f;
+        int count = 0;
+        for (size_t v = 0; v < d.at.size(); ++v)
+            if (d.g.panels[size_t(d.cm.vertPanel[v])].name.ends_with(" L"))
+            {
+                const Vec3& q = d.at[v];
+                const float along = (q[0] - wrist[0]) * dir[0] + (q[1] - wrist[1]) * dir[1];
+                sum += along;
+                least = std::min(least, along);
+                ++count;
+            }
+        REQUIRE(count > 0);
+        MESSAGE(id << ": mean " << sum / float(count) << " m past the wrist, cuff edge at " << least << ", max seam gap " << d.maxGap);
+        // Still over the hand rather than slid off the fingers: the cuff's edge has not passed the wrist.
+        CHECK(least < 0.02f);
+        CHECK(sum / float(count) < 0.12f);
+    }
+}
+
+TEST_CASE("shoes and boots drape onto the mannequin's feet, seams closed, soles on the floor")
+{
+    const Body body;
+    for (const char* id : {"shoes", "boots", "socks"})
+    {
+        CAPTURE(id);
+        const BlockDrape d = drapeBlock(id, body, 240);
+        CHECK(d.finite == int(d.at.size()));
+        CHECK(d.inside < int(d.at.size()) / 50);
+        // Without a sole the sides join under the foot, where the floor pinches the seam and it closes last.
+        CHECK(d.maxGap < (std::string(id) == "socks" ? 0.03f : 0.02f));
+        float top = 0.f, soleTop = 0.f, bottom = 1e9f;
+        for (size_t v = 0; v < d.at.size(); ++v)
+        {
+            const std::string& name = d.g.panels[size_t(d.cm.vertPanel[v])].name;
+            top = std::max(top, d.at[v][1]);
+            bottom = std::min(bottom, d.at[v][1]);
+            if (name.rfind("Sole", 0) == 0)
+                soleTop = std::max(soleTop, d.at[v][1]);
+        }
+        MESSAGE(id << ": top " << top << ", sole top " << soleTop << ", max seam gap " << d.maxGap);
+        CHECK(bottom > -0.01f);
+        CHECK(soleTop < 0.05f);
+        // A boot's shaft stands; a sock may slump but stays over the ankle.
+        CHECK(top > (std::string(id) == "boots" ? 0.24f : std::string(id) == "socks" ? 0.1f : 0.04f));
+    }
+}
+
+TEST_CASE("measuring a mannequin finds its left hand and foot")
+{
+    const Body want;
+    std::vector<Vec3> pts;
+    std::vector<std::array<int, 3>> tris;
+    mannequin(want, pts, tris);
+    for (Vec3& p : pts)
+        p = {p[0] + 2.f, p[1] + 0.5f, p[2] - 1.f};
+    const Body got = measureBody(pts, tris);
+    // The mannequin's foot runs from z = -0.08 to 0.185 at x = 0.094; its hand ends 0.13 past the wrist.
+    CHECK(got.footLength == doctest::Approx(0.265f).epsilon(0.08));
+    CHECK(got.heelZ == doctest::Approx(-0.08f).epsilon(0.2));
+    CHECK(got.footX == doctest::Approx(0.094f).epsilon(0.12));
+    CHECK(got.footWidth == doctest::Approx(0.08f).epsilon(0.25));
+    const Vec3 dir{std::cos(want.armAngle), -std::sin(want.armAngle), 0.f};
+    CHECK(got.handDir[0] * dir[0] + got.handDir[1] * dir[1] + got.handDir[2] * dir[2] > 0.97f);
+    const float chestA = want.chest / (std::numbers::pi_v<float> * 1.72f);
+    const float sx = std::max(want.shoulderWidth * 0.5f, chestA + 0.06f) - 0.045f;
+    const Vec3 tip{sx + dir[0] * (want.armLength + 0.13f), want.shoulderY() - 0.065f + dir[1] * (want.armLength + 0.13f), 0.f};
+    CHECK(std::hypot(got.handTip[0] - tip[0], got.handTip[1] - tip[1], got.handTip[2] - tip[2]) < 0.04f);
+    // Its hand is round, so the back is left to the arm's pose.
+    CHECK(std::hypot(got.handBack[0], got.handBack[1], got.handBack[2]) < 0.5f);
+
+    // Gloves and shoes built for the measured body land on that hand and foot.
+    Garment g;
+    REQUIRE(buildBlock("gloves", g, nullptr, got));
+    checkGarment(g, "gloves, measured");
+    REQUIRE(buildBlock("shoes", g, nullptr, got));
+    checkGarment(g, "shoes, measured");
+    for (const Panel& p : g.panels)
+        if (p.name == "Sole L")
+        {
+            CHECK(p.origin[0] == doctest::Approx(got.footX));
+            CHECK(std::abs(p.origin[2] - got.heelZ) < 0.02f);
+        }
+}

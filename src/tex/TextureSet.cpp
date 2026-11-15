@@ -173,6 +173,31 @@ std::vector<std::string> setNames(scene::Graph& g)
     return out;
 }
 
+std::string setForMaterial(scene::Graph& g, std::string_view material)
+{
+    for (const std::string& name : setNames(g))
+        try
+        {
+            if (Node* n = findSet(g, name); n && readSettings(*n).material == material)
+                return name;
+        }
+        catch (const std::exception&)
+        {
+        }
+    return {};
+}
+
+std::string defaultSetName(std::string_view material)
+{
+    for (std::string_view prefix : {"MI_", "M_"})
+        if (material.size() > prefix.size() && material.starts_with(prefix))
+        {
+            material.remove_prefix(prefix.size());
+            break;
+        }
+    return std::string(material) + "Tex";
+}
+
 Graph readGraph(const Node& set)
 {
     const std::string& def = set.as<std::string>(attr(set, "graph"));

@@ -1,0 +1,40 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Flick Streaks",
+  "category": "Splatter",
+  "doc": "Streaks flung out from the stroke.",
+  "brush": {
+    "falloff": "smooth",
+    "strength": 1.0,
+    "flow": 1.0,
+    "spacing": 0.4,
+    "pressureSize": false,
+    "pressureOpacity": false,
+    "pressureFlow": false,
+    "jitter": {
+      "position": 0.0,
+      "size": 0.0,
+      "opacity": 0.0,
+      "angle": 0.0
+    },
+    "angle": 0.0,
+    "followStroke": false,
+    "roundness": 1.0,
+    "alpha": "alpha://lila/shapes/round soft.png",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.0
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "normal"
+  },
+  "particles": {
+    "kind": "sparks",
+    "count": 6,
+    "length": 4,
+    "size": 0.1,
+    "rate": 0.6
+  }
+}

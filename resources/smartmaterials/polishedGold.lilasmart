@@ -1,0 +1,179 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Polished Gold",
+  "description": "Mirror-polished yellow gold with subtle polishing swirls and slightly duller recesses.",
+  "tags": [
+    "metal",
+    "realistic",
+    "clean"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L5",
+    "name": "Polished Gold",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Gold",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            1.0,
+            0.7106,
+            0.214,
+            1
+          ],
+          "roughness": 0.1,
+          "metallic": 1.0,
+          "height": 0.5
+        },
+        "masks": []
+      },
+      {
+        "id": "L2",
+        "name": "Polish Swirls",
+        "kind": "procedural",
+        "graph": {
+          "name": "swirls",
+          "typeVersion": 1,
+          "inputs": [
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 311,
+              "targets": [
+                "Gabor1.seed"
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "name": "roughness",
+              "type": "gray"
+            }
+          ],
+          "nodes": [
+            {
+              "name": "GroupInput",
+              "type": "GroupInput",
+              "position": [
+                -800,
+                0
+              ]
+            },
+            {
+              "name": "Gabor1",
+              "type": "gabor",
+              "position": [
+                -500,
+                0
+              ],
+              "values": {
+                "scale": 10,
+                "impulses": 8,
+                "frequency": 3.0,
+                "angleRandom": 1.0,
+                "seed": 311
+              }
+            },
+            {
+              "name": "Colorize2",
+              "type": "colorize",
+              "position": [
+                -350,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.08,
+                      0.08,
+                      0.08,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.16,
+                      0.16,
+                      0.16,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "GroupOutput",
+              "type": "GroupOutput",
+              "position": [
+                400,
+                0
+              ]
+            }
+          ],
+          "links": [
+            [
+              "Gabor1",
+              "out",
+              "Colorize2",
+              "input"
+            ],
+            [
+              "Colorize2",
+              "out",
+              "GroupOutput",
+              "roughness"
+            ]
+          ]
+        },
+        "masks": []
+      },
+      {
+        "id": "L4",
+        "name": "Recess Dulling",
+        "kind": "fill",
+        "material": {
+          "roughness": 0.35,
+          "baseColor": [
+            0.7874,
+            0.477,
+            0.1329,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M3",
+            "kind": "generator",
+            "type": "genAoDarken",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.4,
+              "softness": 0.8
+            }
+          }
+        ],
+        "channels": {
+          "roughness": {
+            "mode": "normal",
+            "opacity": 0.6
+          },
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.5
+          }
+        }
+      }
+    ],
+    "masks": []
+  }
+}

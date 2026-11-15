@@ -1,0 +1,63 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Scratched Edges",
+  "description": "Edges worn bright with fine scratches trailing off them.",
+  "tags": [
+    "edges",
+    "scratches",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Edge Band",
+      "type": "genEdgeWear",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "strength": 1.2,
+        "level": 0.15,
+        "softness": 0.5,
+        "breakup": 0.2,
+        "seed": 311
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Scratches",
+      "type": "scratches",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 8,
+        "count": 8,
+        "length": 0.6,
+        "width": 0.004,
+        "angleRandom": 1.0,
+        "seed": 312
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Worn Edge",
+      "type": "genEdgeWear",
+      "mode": "lighten",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "strength": 2.5,
+        "level": 0.4,
+        "softness": 0.1,
+        "breakup": 0.4,
+        "seed": 313
+      }
+    }
+  ]
+}

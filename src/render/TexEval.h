@@ -215,6 +215,14 @@ public:
     void refreshExternals();
 
     /**
+     * Gives the current plan new GPU externals (images that appeared, like a paint layer's first stroke, or were
+     * replaced) without a new plan: the next step loads the ones that differ and reruns only what reads them. The
+     * caller keeps names, sizes and formats as the plan was set with; a later setPlan drops it. Any thread but the
+     * render thread.
+     */
+    void setExternals(std::map<std::string, GpuImageRef> externals);
+
+    /**
      * Render thread: the uv region {x0, y0, x1, y1} (fractions, rows down) the stores wrote since the last call, false
      * when none.
      */
@@ -281,6 +289,12 @@ LILA_UI_API tex::EvalResult evaluate(const tex::Plan& plan, const tex::EvalOptio
 
 /** Fused passes compiled to SPIR-V and cache hits, process-wide. */
 LILA_UI_API std::pair<size_t, size_t> spirvCacheStats();
+
+/**
+ * Compiles a plan's passes and makes their pipelines into the shared caches, without evaluating: an Evaluator given an
+ * equal plan later finds them ready. Blocking, any thread but the render thread. Empty, or why the plan can't run.
+ */
+LILA_UI_API std::string precompile(const tex::Plan& plan);
 
 /** Makes this the texture graph GPU backend (tex::setGpuEvaluator): texEvaluate and exports use it. Starts the renderer on demand. */
 LILA_UI_API void registerTexGpu();

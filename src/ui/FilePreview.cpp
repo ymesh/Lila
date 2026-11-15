@@ -4,6 +4,7 @@
 #include "fbx/Fbx.h"
 #include "geo/ObjIO.h"
 #include "io/ScenePreview.h"
+#include "tex/PainterFile.h"
 #include "ui/TextureCache.h"
 #include "ui/Theme.h"
 
@@ -81,7 +82,7 @@ FilePreview::~FilePreview()
 bool FilePreview::canPreview(const QString& path)
 {
     const QString ext = QFileInfo(path).suffix().toLower();
-    return ext == "fbx" || ext == "obj" || ext == "lila" || ext == "lilaa" || fpIsImage(ext);
+    return ext == "fbx" || ext == "obj" || ext == "lila" || ext == "lilaa" || ext == "spsm" || fpIsImage(ext);
 }
 
 bool FilePreview::setFile(const QString& path)
@@ -111,8 +112,43 @@ bool FilePreview::setFile(const QString& path)
         update();
         return true;
     }
-    mLoading = true;
     mMessage = "Loading...";
+    if (fi.suffix().toLower() == "spsm")
+    {
+        // Painter's own preview of the smart material; read off the UI thread, as the file holds its textures too.
+        mIsImage = true;
+        setCursor(Qt::ArrowCursor);
+        update();
+        std::thread([path, generation = mGeneration, alive = mAlive, self = this] {
+            QImage thumb;
+            try
+            {
+                const image::Image img = tex::painter::readSpsmPreview(path.toStdWString());
+                if (img.width > 0)
+                {
+                    thumb = QImage(img.width, img.height, QImage::Format_RGBA8888);
+                    for (int y = 0; y < img.height; ++y)
+                    {
+                        uchar* row = thumb.scanLine(y);
+                        for (int x = 0; x < img.width * 4; ++x)
+                            row[x] = uchar(std::clamp(img.rgba[size_t(y) * size_t(img.width) * 4 + size_t(x)], 0.0f, 1.0f) * 255.0f + 0.5f);
+                    }
+                }
+            }
+            catch (const std::exception&)
+            {
+            }
+            QMetaObject::invokeMethod(qApp, [alive, self, generation, thumb = std::move(thumb)]() mutable {
+                if (!*alive || self->mGeneration != generation)
+                    return;
+                self->mThumb = std::move(thumb);
+                self->mMessage = self->mThumb.isNull() ? QString("No preview") : QString("Painter smart material");
+                self->update();
+            });
+        }).detach();
+        return true;
+    }
+    mLoading = true;
     if (fpIsImage(fi.suffix().toLower()))
     {
         mIsImage = true;

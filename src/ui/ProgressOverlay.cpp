@@ -82,14 +82,11 @@ public:
     void set(const progress::Snapshot& s)
     {
         if (s.id != mState.id)
-        {
             mConfirming = false;
-            mCancel->setEnabled(true);
-            mCancel->setText("Abort");
-        }
         mState = s;
-        mCancel->setVisible(s.cancellable && !s.cancelled);
+        mCancel->setVisible(cancellable());
         mKeepGoing->setVisible(mConfirming && cancellable());
+        setAccessibleDescription(statusText());
         placeButtons();
         update();
     }
@@ -111,11 +108,17 @@ public:
     {
         progress::cancel(mState.id);
         mConfirming = false;
+        mState.cancelled = true;
+        mCancel->hide();
         mKeepGoing->hide();
-        mCancel->setEnabled(false);
-        mCancel->setText("Aborting...");
-        placeButtons();
+        setAccessibleDescription(statusText());
         update();
+    }
+
+    /** The line under the bar. An abort only lands when the operation next checks for it, so say that it is on its way. */
+    QString statusText() const
+    {
+        return mState.cancelled ? QStringLiteral("Aborting once the current step ends") : QString::fromStdString(mState.status);
     }
 
 protected:
@@ -151,9 +154,9 @@ protected:
         const QString percent = mState.determinate ? QString("%1%").arg(int(std::floor(mState.fraction * 100.0))) : QString();
         const int percentWidth = percent.isEmpty() ? 0 : fm.horizontalAdvance("100%") + 8;
         const QRect statusRect(int(bar.left()), int(bar.bottom()) + 10, int(bar.width()) - percentWidth, fm.height());
+        p.setPen(mState.cancelled ? kTitle : kStatus);
+        p.drawText(statusRect, Qt::AlignLeft | Qt::AlignVCenter, fm.elidedText(statusText(), Qt::ElideMiddle, statusRect.width()));
         p.setPen(kStatus);
-        p.drawText(statusRect, Qt::AlignLeft | Qt::AlignVCenter,
-                   fm.elidedText(QString::fromStdString(mState.status), Qt::ElideMiddle, statusRect.width()));
         if (!percent.isEmpty())
             p.drawText(QRect(statusRect.right(), statusRect.top(), percentWidth, statusRect.height()), Qt::AlignRight | Qt::AlignVCenter, percent);
 

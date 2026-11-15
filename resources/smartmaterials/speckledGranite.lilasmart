@@ -1,0 +1,402 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Speckled Granite",
+  "description": "Polished grey granite flecked with black, white and pink mineral grains.",
+  "tags": [
+    "stone",
+    "realistic"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L2",
+    "name": "Speckled Granite",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Granite",
+        "kind": "procedural",
+        "graph": {
+          "name": "granite",
+          "typeVersion": 1,
+          "inputs": [
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 5,
+              "targets": [
+                "Clouds1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Cells Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 110,
+              "targets": [
+                "Cells3.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Cells Scale 2",
+              "kind": "param",
+              "type": "int",
+              "default": 80,
+              "targets": [
+                "Cells4.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 391,
+              "targets": [
+                "Clouds1.seed",
+                "Cells3.seed",
+                "Cells4.seed"
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "name": "baseColor",
+              "type": "color"
+            },
+            {
+              "name": "roughness",
+              "type": "gray"
+            },
+            {
+              "name": "height",
+              "type": "gray"
+            }
+          ],
+          "nodes": [
+            {
+              "name": "GroupInput",
+              "type": "GroupInput",
+              "position": [
+                -800,
+                0
+              ]
+            },
+            {
+              "name": "Clouds1",
+              "type": "clouds",
+              "position": [
+                -500,
+                0
+              ],
+              "values": {
+                "scale": 5,
+                "octaves": 4,
+                "seed": 391
+              }
+            },
+            {
+              "name": "Colorize2",
+              "type": "colorize",
+              "position": [
+                -350,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.1473,
+                      0.1329,
+                      0.1329,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.2957,
+                      0.2738,
+                      0.2633,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Cells3",
+              "type": "cells",
+              "position": [
+                -200,
+                0
+              ],
+              "values": {
+                "scale": 110,
+                "mode": "cells",
+                "seed": 392
+              }
+            },
+            {
+              "name": "Cells4",
+              "type": "cells",
+              "position": [
+                -50,
+                0
+              ],
+              "values": {
+                "scale": 80,
+                "mode": "cells",
+                "seed": 393
+              }
+            },
+            {
+              "name": "Threshold5",
+              "type": "threshold",
+              "position": [
+                100,
+                0
+              ],
+              "values": {
+                "threshold": 0.75,
+                "softness": 0.02
+              }
+            },
+            {
+              "name": "Threshold6",
+              "type": "threshold",
+              "position": [
+                -650,
+                120
+              ],
+              "values": {
+                "threshold": 0.8,
+                "softness": 0.02
+              }
+            },
+            {
+              "name": "Color7",
+              "type": "color",
+              "position": [
+                -500,
+                120
+              ],
+              "values": {
+                "color": [
+                  0.0049,
+                  0.0049,
+                  0.006,
+                  1
+                ]
+              }
+            },
+            {
+              "name": "Blend8",
+              "type": "blend",
+              "position": [
+                -350,
+                120
+              ],
+              "values": {
+                "mode": "normal",
+                "opacity": 1.0
+              }
+            },
+            {
+              "name": "Color9",
+              "type": "color",
+              "position": [
+                -200,
+                120
+              ],
+              "values": {
+                "color": [
+                  0.3931,
+                  0.196,
+                  0.1626,
+                  1
+                ]
+              }
+            },
+            {
+              "name": "Blend10",
+              "type": "blend",
+              "position": [
+                -50,
+                120
+              ],
+              "values": {
+                "mode": "normal",
+                "opacity": 1.0
+              }
+            },
+            {
+              "name": "Colorize11",
+              "type": "colorize",
+              "position": [
+                100,
+                120
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.2,
+                      0.2,
+                      0.2,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.3,
+                      0.3,
+                      0.3,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Colorize12",
+              "type": "colorize",
+              "position": [
+                -650,
+                240
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.495,
+                      0.495,
+                      0.495,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.505,
+                      0.505,
+                      0.505,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "GroupOutput",
+              "type": "GroupOutput",
+              "position": [
+                400,
+                0
+              ]
+            }
+          ],
+          "links": [
+            [
+              "Clouds1",
+              "out",
+              "Colorize2",
+              "input"
+            ],
+            [
+              "Cells3",
+              "random",
+              "Threshold5",
+              "input"
+            ],
+            [
+              "Cells4",
+              "random",
+              "Threshold6",
+              "input"
+            ],
+            [
+              "Color7",
+              "out",
+              "Blend8",
+              "foreground"
+            ],
+            [
+              "Colorize2",
+              "out",
+              "Blend8",
+              "background"
+            ],
+            [
+              "Threshold5",
+              "out",
+              "Blend8",
+              "mask"
+            ],
+            [
+              "Color9",
+              "out",
+              "Blend10",
+              "foreground"
+            ],
+            [
+              "Blend8",
+              "out",
+              "Blend10",
+              "background"
+            ],
+            [
+              "Threshold6",
+              "out",
+              "Blend10",
+              "mask"
+            ],
+            [
+              "Blend10",
+              "out",
+              "GroupOutput",
+              "baseColor"
+            ],
+            [
+              "Threshold5",
+              "out",
+              "Colorize11",
+              "input"
+            ],
+            [
+              "Colorize11",
+              "out",
+              "GroupOutput",
+              "roughness"
+            ],
+            [
+              "Clouds1",
+              "out",
+              "Colorize12",
+              "input"
+            ],
+            [
+              "Colorize12",
+              "out",
+              "GroupOutput",
+              "height"
+            ]
+          ]
+        },
+        "masks": []
+      }
+    ],
+    "masks": []
+  }
+}

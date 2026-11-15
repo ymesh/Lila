@@ -125,13 +125,19 @@ struct LILA_SCENE_API HighEntry
     static HighEntry fromJson(const json& j);
 };
 
-/** Meshes kept out of some of a group's lows' rays. A high or occluder matches by its node, a self high by its low. */
+/**
+ * Meshes kept out of some of a group's lows' rays. A high or occluder matches by its node (a self high by its low), or by
+ * a material any of its faces use: a high is skipped whole.
+ */
 struct LILA_SCENE_API Unlink
 {
     /** The lows it applies to; empty is every low of the group. */
     std::vector<std::string> lows;
     /** The meshes those lows' rays ignore. */
     std::vector<std::string> meshes;
+    /** Material slot names: every high and occluder with faces of one is ignored too. */
+    std::vector<std::string> materials;
+    bool empty() const { return meshes.empty() && materials.empty(); }
     /** Secondary rays (AO, thickness, bent normals, rounded edges) pass through them. */
     bool occlusion = true;
     /** Projection rays pass through them: they bake nothing onto these lows. */

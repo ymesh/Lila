@@ -15,6 +15,8 @@ lila_module(lila_tex Scene
     Lint.cpp
     NodeDef.cpp
     PageStore.cpp
+    PainterFile.cpp
+    PainterImport.cpp
     PaintBuffer.cpp
     PaintParticles.cpp
     PaintStrokes.cpp

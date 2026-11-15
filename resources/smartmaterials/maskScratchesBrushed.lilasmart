@@ -1,0 +1,46 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Brushed Scratches",
+  "description": "Long parallel scratches running one way, like brushed or sanded metal.",
+  "tags": [
+    "scratches",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Parallel",
+      "type": "scratches",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 8,
+        "count": 12,
+        "length": 1.2,
+        "width": 0.0015,
+        "angle": 0.0,
+        "angleRandom": 0.03,
+        "seed": 1011
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Grain",
+      "type": "anisotropic",
+      "mode": "lighten",
+      "opacity": 0.2,
+      "invert": false,
+      "values": {
+        "scaleX": 2,
+        "scaleY": 96,
+        "octaves": 3,
+        "seed": 1012
+      }
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Rust from the Ground Up",
+  "description": "Rust climbing from the base where water sits, fading with height.",
+  "tags": [
+    "rust",
+    "ground",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Base",
+      "type": "genPositionGradient",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "start": 0.8,
+        "end": 0.0,
+        "breakup": 0.7,
+        "noiseScale": 5,
+        "seed": 431
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Patches",
+      "type": "clouds",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 6,
+        "octaves": 5,
+        "mode": "billow",
+        "contrast": 1.4,
+        "seed": 432
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "levels",
+      "name": "Range",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "inLow": 0.05,
+        "inHigh": 0.45
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "generator",
+      "name": "Crevice Rust",
+      "type": "genRustSpread",
+      "mode": "lighten",
+      "opacity": 0.5,
+      "invert": false,
+      "values": {
+        "edgeWeight": 0.2,
+        "level": 0.6,
+        "seed": 433
+      }
+    }
+  ]
+}

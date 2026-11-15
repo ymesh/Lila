@@ -1,0 +1,209 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Stylized Bronze Relic",
+  "description": "Old bronze with turquoise patina pooled in the recesses and polished, light edges.",
+  "tags": [
+    "metal",
+    "stylized",
+    "worn"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L12",
+    "name": "Stylized Bronze Relic",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Bronze",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.3424,
+            0.1329,
+            0.0331,
+            1
+          ],
+          "roughness": 0.45,
+          "metallic": 1.0,
+          "height": 0.5
+        },
+        "masks": []
+      },
+      {
+        "id": "L3",
+        "name": "Colour Variation",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.1706,
+            0.0732,
+            0.022,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M2",
+            "kind": "generator",
+            "type": "clouds",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "scale": 4,
+              "octaves": 4,
+              "persistence": 0.5,
+              "contrast": 1.4,
+              "seed": 71
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.4
+          }
+        }
+      },
+      {
+        "id": "L7",
+        "name": "Patina",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.0509,
+            0.42,
+            0.2957,
+            1
+          ],
+          "metallic": 0.0,
+          "roughness": 0.85,
+          "height": 0.52
+        },
+        "masks": [
+          {
+            "id": "M4",
+            "kind": "generator",
+            "type": "genCavityGrime",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.2,
+              "softness": 0.35,
+              "breakup": 0.5,
+              "noiseScale": 5,
+              "seed": 72
+            }
+          },
+          {
+            "id": "M5",
+            "kind": "generator",
+            "type": "genAoDarken",
+            "mode": "lighten",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.45,
+              "softness": 0.6
+            }
+          },
+          {
+            "id": "M6",
+            "kind": "generator",
+            "type": "clouds",
+            "mode": "multiply",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "scale": 5,
+              "contrast": 1.6,
+              "seed": 72
+            }
+          }
+        ]
+      },
+      {
+        "id": "L9",
+        "name": "Edge Highlight",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.89,
+            0.5225,
+            0.1706,
+            1
+          ],
+          "roughness": 0.25
+        },
+        "masks": [
+          {
+            "id": "M8",
+            "kind": "generator",
+            "type": "genEdgeWear",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.3,
+              "softness": 0.2,
+              "breakup": 0.2,
+              "strength": 2.2,
+              "noiseScale": 5,
+              "seed": 13
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 1.0
+          },
+          "roughness": {
+            "mode": "normal",
+            "opacity": 1.0
+          }
+        }
+      },
+      {
+        "id": "L11",
+        "name": "Top Light",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.6921,
+            0.3801,
+            0.1329,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M10",
+            "kind": "generator",
+            "type": "genPositionGradient",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "start": 0.25,
+              "end": 1.0,
+              "breakup": 0.4,
+              "noiseScale": 3,
+              "seed": 0
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.2
+          }
+        }
+      }
+    ],
+    "masks": []
+  }
+}

@@ -327,6 +327,89 @@ static float findNeck(const std::vector<Vec3>& points, const std::vector<std::ar
     return 0.f;
 }
 
+namespace
+{
+/** Fills body's left hand and foot from the mesh's points; `feet` is the centre of its feet. Leaves what it cannot read. */
+void measureHandAndFoot(const std::vector<Vec3>& points, const vec3& feet, Body& body)
+{
+    const float k = body.torso() / 1.8f;
+    std::vector<vec3> left;
+    float reach = 0.f;
+    for (const Vec3& q : points)
+        if (const vec3 p = vec3(q[0], q[1], q[2]) - feet; p.x > 0.f)
+        {
+            left.push_back(p);
+            reach = std::max(reach, p.x);
+        }
+    if (left.empty())
+        return;
+
+    // Foot: what stands on the floor.
+    vec3 lo(1e30f), hi(-1e30f);
+    for (const vec3& p : left)
+        if (p.y < 0.035f * k)
+        {
+            lo = glm::min(lo, p);
+            hi = glm::max(hi, p);
+        }
+    if (const vec3 size = hi - lo; size.z > 0.14f * k && size.z < 0.45f * k && size.x > 0.04f * k && size.x < 0.22f * k)
+    {
+        body.footX = 0.5f * (lo.x + hi.x);
+        body.heelZ = lo.z;
+        body.footLength = size.z;
+        body.footWidth = size.x;
+    }
+
+    // Hand: the arm's far end, when the arms are held out from the body far enough for that to be the fingertips.
+    vec3 tip(0.f), arm(0.f);
+    int tips = 0, arms = 0;
+    for (const vec3& p : left)
+        if (p.x > reach - 0.015f * k)
+            tip += p, ++tips;
+    tip /= float(std::max(tips, 1));
+    if (tip.x < 0.5f * body.shoulderWidth + 0.15f * k || tip.y > body.shoulderY() + 0.1f * k)
+        return;
+    for (const vec3& p : left)
+        if (glm::distance(p, tip) < 0.3f * k)
+            arm += p, ++arms;
+    arm /= float(std::max(arms, 1));
+    if (glm::distance(arm, tip) < 0.05f * k)
+        return;
+    const vec3 dir = glm::normalize(tip - arm);
+    body.handTip = {tip.x, tip.y, tip.z};
+    body.handDir = {dir.x, dir.y, dir.z};
+
+    // A flat hand's thin axis is the way out of its back: the minor axis of the hand's points across the arm.
+    const vec3 u = glm::normalize(glm::cross(dir, std::abs(dir.z) < 0.9f ? vec3(0.f, 0.f, 1.f) : vec3(0.f, 1.f, 0.f)));
+    const vec3 v = glm::cross(dir, u);
+    vec3 centre(0.f);
+    int count = 0;
+    for (const vec3& p : left)
+        if (glm::distance(p, tip) < 0.15f * k)
+            centre += p, ++count;
+    if (count < 8)
+        return;
+    centre /= float(count);
+    float cuu = 0.f, cvv = 0.f, cuv = 0.f;
+    for (const vec3& p : left)
+        if (glm::distance(p, tip) < 0.15f * k)
+        {
+            const float a = glm::dot(p - centre, u), b = glm::dot(p - centre, v);
+            cuu += a * a, cvv += b * b, cuv += a * b;
+        }
+    const float mean = 0.5f * (cuu + cvv), spread = std::hypot(0.5f * (cuu - cvv), cuv);
+    if (mean - spread <= 0.f || (mean + spread) / (mean - spread) < 2.2f)
+        return;
+    const float theta = 0.5f * std::atan2(2.f * cuv, cuu - cvv) + 1.5707963f;
+    vec3 back = u * std::cos(theta) + v * std::sin(theta);
+    // Thumbs forward: of the two ways out of a flat hand, the back is the one that puts the thumb side in front.
+    const float thumbZ = glm::cross(dir, back).z;
+    if (thumbZ < -0.2f || (std::abs(thumbZ) <= 0.2f && back.y < 0.f))
+        back = -back;
+    body.handBack = {back.x, back.y, back.z};
+}
+} // namespace
+
 Body measureBody(const std::vector<Vec3>& points, const std::vector<std::array<int, 3>>& tris, Vec3* offset, float neckGiven)
 {
     Body body;
@@ -375,6 +458,7 @@ Body measureBody(const std::vector<Vec3>& points, const std::vector<std::array<i
         body.head = std::max(body.head, read(y, 0.f));
     if (body.head <= 0.f)
         body.head = read(body.height - 0.11f * s, ref.head);
+    measureHandAndFoot(points, vec3(axis.x, lo.y, axis.y), body);
     if (offset)
         *offset = {axis.x, lo.y, axis.y};
     return body;

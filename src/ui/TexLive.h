@@ -10,6 +10,11 @@
 #include <optional>
 #include <string>
 
+namespace lila::tex
+{
+struct Graph;
+}
+
 /**
  * Texture sets in the viewport: a set's channels evaluate on the GPU into images its material samples (by the set's
  * material name, else the set's own), so editing the graph updates the viewport live. Evaluation starts when a draw
@@ -44,6 +49,13 @@ LILA_UI_API render::GpuImageRef channelImage(const std::string& set, const std::
 LILA_UI_API void install();
 /** Stops the plan worker and drops every live set. Before the renderer stops. */
 LILA_UI_API void shutdown();
+
+/**
+ * Compiles, in the background and only while no real edit waits, the shaders the live set named set would need if its
+ * graph became graph: a tool calls this before an edit it is about to make (a paint layer added, a channel wired), so
+ * the edit plans without compiling. Nothing for a set that isn't live. Main thread.
+ */
+LILA_UI_API void warm(const std::string& set, const tex::Graph& graph);
 
 /** Whether every live set has finished evaluating its latest edit. Main thread. */
 LILA_UI_API bool idle();

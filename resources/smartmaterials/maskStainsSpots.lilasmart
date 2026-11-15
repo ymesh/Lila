@@ -1,0 +1,54 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Spot Stains",
+  "description": "Scattered small stains of varied size.",
+  "tags": [
+    "stains",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Spots",
+      "type": "worley",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": true,
+      "values": {
+        "scale": 10,
+        "octaves": 2,
+        "jitter": 1.0,
+        "seed": 921
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Spot Size",
+      "type": "threshold",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "threshold": 0.82,
+        "softness": 0.1
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Fade",
+      "type": "perlin",
+      "mode": "multiply",
+      "opacity": 0.5,
+      "invert": false,
+      "values": {
+        "scale": 8,
+        "seed": 922
+      }
+    }
+  ]
+}

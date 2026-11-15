@@ -55,6 +55,17 @@ LILA_UI_API size_t firstUnseen(const std::vector<Item>& items, const std::vector
 /** The showcase entry shown fewest times (views maps id to count), newest on a tie; -1 when there are none. */
 LILA_UI_API int pickShowcase(const std::vector<Item>& showcase, const nlohmann::json& views);
 
+/** One release from the changelog page: its "## <version> - <date>" heading and its bullets as plain text. */
+struct Release
+{
+    std::string version;
+    std::string date;
+    std::vector<std::string> changes;
+};
+
+/** The first release section of changelog markdown, with links, emphasis and code marks stripped; empty when there is none. */
+LILA_UI_API Release latestRelease(std::string_view markdown);
+
 /** The ids in the seen pref. */
 LILA_UI_API std::vector<std::string> seenIds();
 LILA_UI_API void markSeen(const std::string& id);

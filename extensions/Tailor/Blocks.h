@@ -32,6 +32,17 @@ struct Body
     /** Floor to the base of the neck when the head is out of human proportion (a big cartoon head); 0 = 0.84 of height.
      *  Everything below the neck is proportioned to it, the head takes the rest. */
     float neckHeight = 0.f;
+    /**
+     * Where the left hand and foot are, read off a measured body; the right ones mirror them. A zero handDir or
+     * footLength means not measured, and the proportions above place them instead.
+     */
+    Vec3 handTip{0.f, 0.f, 0.f};   // fingertips
+    Vec3 handDir{0.f, 0.f, 0.f};   // unit, wrist to fingertips
+    Vec3 handBack{0.f, 0.f, 0.f};  // unit, out of the back of the hand; zero when the hand reads as round
+    float footX = 0.f;             // the foot's centre line
+    float heelZ = 0.f;
+    float footLength = 0.f;
+    float footWidth = 0.f;
 
     /** The height of a human body with this one's neck: what the landmarks below the neck scale with. */
     float torso() const { return neckHeight > 0.f ? neckHeight / 0.84f : height; }
@@ -480,6 +491,130 @@ struct BootieParams
 };
 
 /**
+ * Gloves and mittens: a back and a palm for each hand, sewn round the fingers and thumb and open at the cuff. They are
+ * placed on the body's hands, thumbs forward, and pinned at the wrist so they stay on.
+ */
+struct HandwearParams
+{
+    float cuffLength = 0.06f;      // from the wrist back up the arm
+    float cuffFlare = 0.05f;       // extra width at the cuff's edge as a fraction
+    float ease = 0.08f;
+    bool fingers = true;           // off cuts the four fingers as one: a mitten
+    float fingerLength = 1.f;      // share of the fingers and thumb covered; below 1 leaves the tips open
+    const char* fabric = "Glove Leather";
+};
+
+struct GlovesParams : HandwearParams {};
+
+struct GauntletsParams : HandwearParams
+{
+    GauntletsParams()
+    {
+        cuffLength = 0.16f;
+        cuffFlare = 0.45f;
+        ease = 0.14f;
+        fabric = "Leather";
+    }
+};
+
+struct OperaGlovesParams : HandwearParams
+{
+    OperaGlovesParams()
+    {
+        cuffLength = 0.4f;
+        cuffFlare = 0.3f;
+        ease = 0.04f;
+        fabric = "Satin";
+    }
+};
+
+struct FingerlessGlovesParams : HandwearParams
+{
+    FingerlessGlovesParams()
+    {
+        cuffLength = 0.05f;
+        fingerLength = 0.4f;
+        fabric = "Knit";
+    }
+};
+
+struct MittensParams : HandwearParams
+{
+    MittensParams()
+    {
+        cuffLength = 0.08f;
+        ease = 0.18f;
+        fingers = false;
+        fabric = "Knit";
+    }
+};
+
+/**
+ * Shoes and boots: two side profiles for each foot seamed down the front and the heel, sewn to a sole and open at the
+ * top. `length` is heel to toe, `height` floor to opening (capped below the knee's top). The sole is pinned flat under
+ * the foot and a tall shaft is pinned at its top.
+ */
+struct FootwearParams
+{
+    float length = 0.f;            // 0 fits the body's foot
+    float height = 0.07f;
+    float opening = 0.f;           // circumference of the top edge; 0 fits the foot or the leg at that height
+    float ease = 0.1f;
+    float toe = 0.f;               // 0 round, 1 pointed
+    bool sole = true;              // off joins the sides under the foot instead, as a sock does
+    const char* fabric = "Leather";
+};
+
+struct ShoesParams : FootwearParams {};
+
+struct SlippersParams : FootwearParams
+{
+    SlippersParams()
+    {
+        height = 0.06f;
+        ease = 0.15f;
+        sole = false;
+        fabric = "Felt";
+    }
+};
+
+struct SocksParams : FootwearParams
+{
+    SocksParams()
+    {
+        height = 0.26f;
+        ease = 0.02f;
+        sole = false;
+        fabric = "Knit";
+    }
+};
+
+struct AnkleBootsParams : FootwearParams
+{
+    AnkleBootsParams() { height = 0.16f; }
+};
+
+struct BootsParams : FootwearParams
+{
+    BootsParams()
+    {
+        height = 0.32f;
+        ease = 0.14f;
+        fabric = "Boot Leather";
+    }
+};
+
+struct KneeBootsParams : FootwearParams
+{
+    KneeBootsParams()
+    {
+        height = 0.46f;
+        ease = 0.12f;
+        fabric = "Boot Leather";
+    }
+};
+
+/**
  * One-piece suit: an open-front top joined at the waist to trousers, the fronts sewn down the centre (seam 0, ready for
  * tailorAddZip), with an optional hood and booties sewn to the leg hems. Cut from Plush.
  */
@@ -603,6 +738,10 @@ Garment sack(const Body& body, const SackParams& p = {});
 Garment banner(const Body& body, const BannerParams& p = {});
 Garment tent(const Body& body, const TentParams& p = {});
 Garment booties(const Body& body, const BootieParams& p = {});
+/** Gloves, gauntlets, opera gloves, fingerless gloves and mittens all draft through it. */
+Garment handwear(const Body& body, const HandwearParams& p);
+/** Shoes, slippers, socks and boots all draft through it. */
+Garment footwear(const Body& body, const FootwearParams& p);
 Garment onesie(const Body& body, const OnesieParams& p = {});
 /** Jumpsuit, flight suit and coverall all draft through it. */
 Garment suit(const Body& body, const SuitParams& p);
@@ -631,6 +770,7 @@ struct Block
 {
     std::string id;
     std::string label;
+    std::string category;          // "Tops", "Feet": how pickers group the blocks
     std::vector<BlockParam> params;
     std::function<Garment(const Body&, const BlockParamValues&, std::vector<BlockAnchor>*)> build;
 };
@@ -645,8 +785,8 @@ void mannequin(const Body& body, std::vector<Vec3>& points, std::vector<std::arr
 
 /** Measures a standing body mesh (metres, +Y up, facing +Z): height from its bounds; chest, waist, hip, neck and head
  *  girths as a tape would read them around horizontal sections; other lengths scaled by height, or by the neck when the
- *  head is out of human proportion. `neck` (above the feet), when set, is used instead of the one found. `offset` gets the
- *  centre of its feet, where garments built for the result go. */
+ *  head is out of human proportion; where its left hand and foot are, for gloves and shoes. `neck` (above the feet), when
+ *  set, is used instead of the one found. `offset` gets the centre of its feet, where garments built for the result go. */
 Body measureBody(const std::vector<Vec3>& points, const std::vector<std::array<int, 3>>& tris, Vec3* offset = nullptr, float neck = 0.f);
 
 /** Something a pattern maker would flag, with what to do about it. */

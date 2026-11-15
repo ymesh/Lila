@@ -1,0 +1,45 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Chipped Paint Edges",
+  "description": "Paint flaking off edges in sharp chips with clean wear between them.",
+  "tags": [
+    "edges",
+    "paint",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Chips",
+      "type": "genPaintChips",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.66,
+        "softness": 0.02,
+        "chipScale": 16,
+        "seed": 351
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Worn Line",
+      "type": "genEdgeWear",
+      "mode": "lighten",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "strength": 3.0,
+        "level": 0.45,
+        "softness": 0.06,
+        "breakup": 0.3,
+        "seed": 352
+      }
+    }
+  ]
+}

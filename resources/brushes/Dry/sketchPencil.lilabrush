@@ -1,0 +1,40 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Sketch Pencil",
+  "category": "Dry",
+  "doc": "A smoothed pencil for loose sketching.",
+  "brush": {
+    "falloff": "smooth",
+    "strength": 1.0,
+    "flow": 1.0,
+    "spacing": 0.05,
+    "pressureSize": true,
+    "pressureOpacity": false,
+    "pressureFlow": false,
+    "jitter": {
+      "position": 0.0,
+      "size": 0.0,
+      "opacity": 0.0,
+      "angle": 0.0
+    },
+    "angle": 0.0,
+    "followStroke": false,
+    "roundness": 1.0,
+    "alpha": "alpha://lila/brush tips/pencil grain.png",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.3,
+    "radius": 5.0,
+    "pressureCurve": {
+      "size": {
+        "floor": 0.2,
+        "exponent": 1.0
+      }
+    }
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "normal"
+  }
+}

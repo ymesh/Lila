@@ -9,11 +9,13 @@ add_executable(lila_tex_tests
     test_material_library.cpp
     test_tex_paint_buffer.cpp
     test_tex_paint_data.cpp
+    test_tex_painter.cpp
     test_tex_pipeline.cpp
     test_tex_plan.cpp
     test_tex_routing.cpp
     test_tex_ties.cpp)
 target_link_libraries(lila_tex_tests PRIVATE LilaScene doctest::doctest)
+target_compile_definitions(lila_tex_tests PRIVATE LILA_TEST_TEX_DATA="${CMAKE_SOURCE_DIR}/tests/data/tex")
 add_dependencies(lila_tex_tests lila_slang_runtime)
 add_test(NAME lila_tex_tests COMMAND lila_tex_tests)
 

@@ -2,6 +2,7 @@
 
 #include "core/Export.h"
 
+#include <QStringList>
 #include <QWidget>
 
 #include <functional>
@@ -9,6 +10,7 @@
 #include <string>
 
 class QComboBox;
+
 class QListWidget;
 class QTreeWidget;
 
@@ -35,6 +37,12 @@ LILA_UI_API void setActiveLayer(const std::string& set, const std::string& layer
 /** Hears active layer changes (main thread). Returns an id. */
 LILA_UI_API int addActiveLayerListener(std::function<void(const std::string& set, const std::string& layer)> fn);
 LILA_UI_API void removeActiveLayerListener(int id);
+/** Shows the Brush page (opening the panel when none is up), or the Layer page. Texture Paint calls this as it starts and ends. */
+LILA_UI_API void showBrushPage(bool on);
+/** Switches the library shelf to a kind ("materials", "masks", "brushes", "alphas", "textures"), opening the panel when none is up. */
+LILA_UI_API void showLibrary(const std::string& kind);
+/** Rereads the library shelf's folders (after a preset or texture is saved). */
+LILA_UI_API void refreshLibrary();
 } // namespace textureSets
 
 /**
@@ -80,6 +88,13 @@ public:
     void openSelectedAsNodes();
     /** Applies a smart material on top of the selection, or a smart mask to the selected layer. */
     void applySmartMaterial(const std::string& name);
+    /** The lower pane's Brush page (the Texture Paint settings), or its Layer page. */
+    void showBrushPage(bool on);
+    /** Switches the library shelf to a kind: "materials", "masks", "brushes", "alphas" or "textures". */
+    void showLibrary(const std::string& kind);
+    void refreshLibrary();
+    /** Copies images into the user's textures folder and shows them; one image becomes the brush's texture. */
+    void addTextures(const QStringList& files);
 
     QTreeWidget* tree() const;
     QComboBox* setPicker() const;
@@ -91,6 +106,11 @@ public:
 
     /** The panel the textureSets.* actions act on: the focused one, else the last focused, else any. */
     static TextureSetPanel* active();
+
+    QSize minimumSizeHint() const override;
+
+protected:
+    void resizeEvent(QResizeEvent* e) override;
 
 private:
     struct Impl;

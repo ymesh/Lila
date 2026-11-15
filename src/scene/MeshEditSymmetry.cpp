@@ -304,11 +304,15 @@ void registerMeshEditSymmetryCommands()
         return names;
     };
 
+    /** A mirror plane this far (degrees) off every world axis is reported: the mesh mirrors across a plane no other part shares. */
+    constexpr double kPlaneTiltWarn = 0.05;
+
     ops::registerCommand({
         .name = "symmetryCheck",
         .doc = "Report how symmetric meshes are across their symmetry plane (or round their radial axis): the largest distance "
                "between a point and its partner's reflection (or its orbit's image), and the points without a partner. For "
-               "radial symmetry also the unmatched point ids and the count the mesh fits best. Changes nothing.",
+               "radial symmetry also the unmatched point ids and the count the mesh fits best. For a mirror, planeTilt is how far "
+               "(degrees) the plane sits off the world axes under the object's transform; a tilted one is warned about. Changes nothing.",
         .positionalDoc = "objects",
         .run = [symmetricMesh, symmetryTargets](const Args& a) -> json {
             Graph& g = graph();
@@ -341,6 +345,20 @@ void registerMeshEditSymmetryCommands()
                     std::vector<Index> unmatched = map.unmatchedPoints(m);
                     r["unmatchedPoints"] = unmatched;
                     r["bestCount"] = unmatched.empty() ? spec.radial->count() : bestRadialCount(m, *spec.radial, symmetryTolerance(m));
+                }
+                // The plane is the object's: under a turned transform the halves mirror across a tilted plane, not the world's.
+                if (!spec.radial)
+                {
+                    const glm::dmat3 linear(n.as<glm::dmat4>(Transform::kWorldMatrix));
+                    glm::dvec3 axis(0.0);
+                    axis[spec.axis] = 1.0;
+                    const glm::dvec3 normal = glm::normalize(glm::transpose(glm::inverse(linear)) * axis);
+                    const double along = std::max({std::abs(normal.x), std::abs(normal.y), std::abs(normal.z)});
+                    const double tilt = glm::degrees(std::acos(std::min(along, 1.0)));
+                    r["planeTilt"] = tilt;
+                    if (tilt > kPlaneTiltWarn)
+                        log::warn("{}: its symmetry plane is tilted {:.3g} degrees off the world axes (its transform is rotated), so its halves "
+                                  "do not mirror across the world plane. Freeze Transforms, then Rebuild Symmetry, squares it", n.path(), tilt);
                 }
                 out[n.path()] = r;
                 log::write(LogLevel::Info, std::format("{}: symmetry {} max asymmetry {:g} cm, {} {}, {} {}, {} unmatched", n.path(), symmetryName(spec),
@@ -430,6 +448,16 @@ void registerMeshEditSymmetryCommands()
         return below > 4 * above ? -1 : 1;
     };
 
+    /** Whether every point has a partner and every face a mirror face, so the two halves differ in position only. */
+    auto pairsEveryFace = [](const geo::Mesh& m, const geo::SymmetryMap& map) {
+        if (map.empty() || map.unmatchedCount() > 0)
+            return false;
+        for (Index f = 0; f < m.faceCapacity(); ++f)
+            if (m.faceValid(f) && map.mirrorFace(m, f) == geo::kInvalid)
+                return false;
+        return true;
+    };
+
     ops::registerCommand({
         .name = "symmetryRebuild",
         .doc = "Rebuild meshes symmetric: the kept side is mirrored across the plane through the object's pivot, replacing the other side, "
@@ -446,7 +474,7 @@ void registerMeshEditSymmetryCommands()
                   {"pairsOnly", "", T::Bool, false, "Only match the stored pairs again, leaving the geometry as it is."},
                   {"topological", "", T::Bool, false, "With pairsOnly: match by topology from the selected edge."},
                   {"tolerance", "", T::Float, 0.0, "Weld or match distance, cm (0: scaled to the mesh).", {}, {}, 0.0}},
-        .run = [symmetricMesh, symmetryTargets, keepSide, keepWedge](const Args& a) -> json {
+        .run = [symmetricMesh, symmetryTargets, keepSide, keepWedge, pairsEveryFace](const Args& a) -> json {
             Graph& g = graph();
             g.evaluate();
             const std::string side = a.get<std::string>("side", "auto");
@@ -489,11 +517,27 @@ void registerMeshEditSymmetryCommands()
                 {
                     const double plane = symmetryOffset(n, axis);
                     const int keep = side == "positive" ? 1 : side == "negative" ? -1 : keepSide(n, m, axis, plane, tol);
-                    map = geo::symmetrizeTopology(m, axis, keep, tol, plane);
-                    if (m.numFaces() == 0)
-                        throw CommandError(std::format("symmetryRebuild: {} has nothing on the {} side of the {} plane", n.path(),
-                                                       keep > 0 ? "+" : "-", char('X' + axis)));
-                    rebuilt = true;
+                    // Halves that already pair face for face only need their points moved, which keeps each half's own UVs.
+                    geo::Mesh paired = m;
+                    geo::SymmetryMap pairs = geo::SymmetryMap::persistent(paired, axis, tol, nullptr, plane);
+                    if (pairsEveryFace(paired, pairs))
+                    {
+                        pairs.symmetrize(paired, keep);
+                        m = std::move(paired);
+                        map = std::move(pairs);
+                    }
+                    else
+                    {
+                        map = geo::symmetrizeTopology(m, axis, keep, tol, plane);
+                        if (m.numFaces() == 0)
+                            throw CommandError(std::format("symmetryRebuild: {} has nothing on the {} side of the {} plane", n.path(),
+                                                           keep > 0 ? "+" : "-", char('X' + axis)));
+                        rebuilt = true;
+                    }
+                    const std::string kept = std::format("{}{}", keep > 0 ? "+" : "-", char('X' + axis));
+                    log::write(LogLevel::Info, std::format("{}: rebuilt from its {} side", n.path(), kept));
+                    if (ops::find("viewportToast"))
+                        ops::execute("viewportToast", {{"args", {"Rebuilt from " + kept + " side"}}, {"duration", 3.0}});
                 }
                 else if (a.get<bool>("topological"))
                 {

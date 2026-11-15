@@ -75,10 +75,11 @@ struct LintOptions
  */
 LILA_SCENE_API LintReport lintInputs(const BakeInputs& inputs, const ProjectSettings& project, const Backend* backend, const LintOptions& options = {});
 
-/** The checks that need the scene meshes (triangulation, cageTopology), appended to r. Main thread. */
-LILA_SCENE_API void lintScene(scene::Graph& g, const BakeInputs& inputs, LintReport& r, const LintOptions& options = {});
+/** The checks that need the scene meshes (triangulation, cageTopology, previewMesh), appended to r. Main thread. */
+LILA_SCENE_API void lintScene(scene::Graph& g, const BakeInputs& inputs, const ProjectSettings& project, LintReport& r,
+                              const LintOptions& options = {});
 
-/** lintInputs plus the checks that need the scene meshes (triangulation, cageTopology). */
+/** lintInputs plus the checks that need the scene meshes (triangulation, cageTopology, previewMesh). */
 LILA_SCENE_API LintReport lint(scene::Graph& g, const BakeInputs& inputs, const ProjectSettings& project, const Backend* backend,
                                const LintOptions& options = {});
 } // namespace lila::bake

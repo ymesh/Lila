@@ -1,0 +1,57 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Chipped Concrete Edges",
+  "description": "Concrete corners broken into chunky, angular chips.",
+  "tags": [
+    "concrete",
+    "edges",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Edges",
+      "type": "genEdgeWear",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "strength": 1.8,
+        "level": 0.25,
+        "softness": 0.2,
+        "breakup": 0.3,
+        "seed": 1501
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Chunks",
+      "type": "crystal",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 14,
+        "octaves": 1,
+        "seed": 1502
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "filter",
+      "name": "Chunk Edge",
+      "type": "threshold",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "threshold": 0.3,
+        "softness": 0.04
+      }
+    }
+  ]
+}

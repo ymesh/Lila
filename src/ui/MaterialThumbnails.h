@@ -9,8 +9,9 @@
 #include <string>
 
 /**
- * Material thumbnails: a library material (or a texture set) evaluated small and rendered offscreen on a standard shader
- * ball, or on a mesh of the scene at the material's real-world scale. Files are cached by graph hash under
+ * Material thumbnails: a library material, smart material or texture set rendered offscreen on the preview ball (a stepped
+ * sphere on a pedestal whose baked mesh maps put wear and dirt on its edges and crevices), or on a mesh of the scene at
+ * the material's real-world scale. Files are cached by graph hash under
  * <config>/cache/materialThumbs, so an unchanged material renders once. Works in batch mode (the renderer starts headless).
  */
 namespace lila::ui::materialThumbs
@@ -18,7 +19,7 @@ namespace lila::ui::materialThumbs
 struct Options
 {
     int size = 256;
-    /** A mesh object to render on instead of the shader ball. */
+    /** A mesh object to render on instead of the preview ball. */
     std::string mesh;
     /** gpu or cpu for the graph; empty picks the GPU. */
     std::string backend;
@@ -43,8 +44,9 @@ LILA_UI_API std::filesystem::path cachedFile(const std::string& material, int si
 using Done = std::function<void(const Result& result, const std::string& error)>;
 
 /**
- * material: a library id, a .lilamat path or a texture set name. Resolves on the calling (main) thread, then evaluates
- * and renders on a worker; done runs on the main thread through mainq. Never waits for the GPU or the render thread.
+ * material: a library id, a .lilamat path, a texture set name or "smart:<name>" for a smart material or mask. Resolves on
+ * the calling (main) thread, then evaluates and renders on a worker; done runs on the main thread through mainq. Never
+ * waits for the GPU or the render thread.
  */
 LILA_UI_API void renderAsync(const std::string& material, const Options& o, Done done);
 

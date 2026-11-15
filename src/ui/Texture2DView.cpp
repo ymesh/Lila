@@ -5,6 +5,7 @@
 #include "render/RenderMesh.h"
 #include "scene/Graph.h"
 #include "scene/Materials.h"
+#include "scene/MeshNodes.h"
 // Plan.h has a member named like Qt's slots macro.
 #pragma push_macro("slots")
 #undef slots
@@ -248,6 +249,11 @@ public:
     /** Bins per channel (R, G, B, A); empty before an image. */
     std::array<std::vector<int>, 4> bins;
     int histChannels = 3;
+    /** UV edges in the image's unit square, v down. */
+    QList<QLineF> uvLines;
+    bool showUvs = true;
+    /** Shown in place of the image while there is none. */
+    QString emptyText;
     std::function<void(int x, int y, bool inside)> onHover;
 
     void fit()
@@ -284,8 +290,16 @@ protected:
         p.fillRect(rect(), gray(30));
         if (image.isNull())
         {
+            // The UV square stands in for the texture, so the layout shows before the first render.
+            const double side = 0.92 * std::min(width(), height());
+            const QRectF square(width() * 0.5 - side * 0.5, height() * 0.5 - side * 0.5, side, side);
+            if (showUvs && !uvLines.isEmpty())
+            {
+                p.fillRect(square, gray(42));
+                drawUvs(p, square.topLeft(), square.size());
+            }
             p.setPen(gray(140));
-            p.drawText(rect(), Qt::AlignCenter, "Ctrl+Shift+click a node in the Texture Graph\nor pick an output above.");
+            p.drawText(rect(), Qt::AlignCenter, emptyText);
             return;
         }
         p.setRenderHint(QPainter::SmoothPixmapTransform, mScale < 1.0);
@@ -301,8 +315,28 @@ protected:
             p.setBrush(Qt::NoBrush);
             p.drawRect(QRectF(topLeft, sz));
         }
+        if (showUvs && !uvLines.isEmpty())
+            drawUvs(p, topLeft, sz);
         if (histogram && !bins[0].empty())
             drawHistogram(p);
+    }
+
+    void drawUvs(QPainter& p, const QPointF& topLeft, const QSizeF& size)
+    {
+        p.save();
+        p.translate(topLeft);
+        p.scale(size.width(), size.height());
+        p.setRenderHint(QPainter::Antialiasing, uvLines.size() < 20000);
+        // Dark under light, so the edges read on any texture.
+        QPen under(gray(0, 110), 3.0);
+        under.setCosmetic(true);
+        p.setPen(under);
+        p.drawLines(uvLines);
+        QPen pen(gray(240, 200));
+        pen.setCosmetic(true);
+        p.setPen(pen);
+        p.drawLines(uvLines);
+        p.restore();
     }
 
     void drawHistogram(QPainter& p)
@@ -443,6 +477,17 @@ void view(const Source& source)
 
 Source current() { return ctl().source; }
 
+void showSet(const std::string& set)
+{
+    Controller& c = ctl();
+    if (set.empty() || c.source.set == set)
+        return;
+    c.source = {set, {}, {}, c.source.channel.empty() ? std::string("baseColor") : c.source.channel};
+    // With no view open the next one renders it.
+    if (!c.listeners.empty())
+        request();
+}
+
 void clearMeshPreview()
 {
     ctl().onMesh = false;
@@ -461,6 +506,7 @@ struct Texture2DView::Impl
     QToolButton* tile = nullptr;
     QToolButton* hist = nullptr;
     QToolButton* onMesh = nullptr;
+    QToolButton* uvs = nullptr;
     controls::Segmented* solo = nullptr;
     QLabel* status = nullptr;
     QLabel* pixel = nullptr;
@@ -470,6 +516,61 @@ struct Texture2DView::Impl
     std::string type;
     std::string shownSet;
     texture2d::Source shownSource;
+    std::vector<const geo::Mesh*> uvMeshes;
+    int sceneListener = 0;
+    bool uvsQueued = false;
+
+    /** The UV edges of the faces the shown set textures, on every mesh whose material it drives. */
+    void rebuildUvs()
+    {
+        const std::string& set = ctl().source.set;
+        scene::Graph& g = scene::Graph::current();
+        std::vector<std::pair<scene::MeshPtr, std::vector<int32_t>>> bound;
+        std::vector<const geo::Mesh*> meshes;
+        if (canvas->showUvs && !set.empty())
+            for (scene::NodeId id : g.nodes())
+            {
+                scene::Node* n = g.node(id);
+                if (!n || !n->type().isA("mesh"))
+                    continue;
+                scene::MeshPtr mesh = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+                if (!mesh)
+                    continue;
+                std::vector<int32_t> slots;
+                const size_t slotCount = std::max<size_t>(mesh->materialNames().size(), 1);
+                for (size_t i = 0; i < slotCount; ++i)
+                    if (boundSet(scene::materials::slotName(*mesh, int32_t(i))) == set)
+                        slots.push_back(int32_t(i));
+                if (slots.empty())
+                    continue;
+                meshes.push_back(mesh.get());
+                bound.emplace_back(std::move(mesh), std::move(slots));
+            }
+        if (meshes == uvMeshes)
+            return;
+        uvMeshes = std::move(meshes);
+        QList<QLineF> lines;
+        for (const auto& [mesh, slots] : bound)
+        {
+            const std::span<const glm::vec2> uv = mesh->cornerAttrs().get<glm::vec2>(geo::attr::uvName(0));
+            if (uv.empty())
+                continue;
+            const std::span<const int32_t> material = mesh->faceAttrs().get<int32_t>(geo::attr::kMaterial);
+            for (geo::Index f = 0; f < mesh->faceCapacity(); ++f)
+            {
+                if (!mesh->faceValid(f) || std::find(slots.begin(), slots.end(), material.empty() ? 0 : material[f]) == slots.end())
+                    continue;
+                const std::vector<geo::Index> corners = mesh->faceCorners(f);
+                for (size_t i = 0; i < corners.size(); ++i)
+                {
+                    const glm::vec2 a = uv[corners[i]], b = uv[corners[(i + 1) % corners.size()]];
+                    lines.push_back(QLineF(a.x, 1.0 - a.y, b.x, 1.0 - b.y));
+                }
+            }
+        }
+        canvas->uvLines = std::move(lines);
+        canvas->update();
+    }
 
     void rebuildSources()
     {
@@ -532,6 +633,7 @@ struct Texture2DView::Impl
             shownSource = c.source;
             rebuildSources();
         }
+        rebuildUvs();
         if (c.result.image != data || c.result.type != type)
         {
             data = c.result.image;
@@ -546,6 +648,14 @@ struct Texture2DView::Impl
         else if (c.result.stale || (!data && !c.source.set.empty()))
             text += "   rendering...";
         status->setText(text);
+        const QString empty = c.source.set.empty()       ? QString("No texture set. Click New Texture Set in the Texture Set panel.")
+                              : !c.result.error.empty() ? qs(c.result.error)
+                                                        : QString("Rendering...");
+        if (empty != canvas->emptyText)
+        {
+            canvas->emptyText = empty;
+            canvas->update();
+        }
         QSignalBlocker block(onMesh);
         onMesh->setChecked(c.onMesh);
     }
@@ -607,6 +717,8 @@ Texture2DView::Texture2DView(QWidget* parent) : QWidget(parent), d(std::make_uni
     d->hist = toggle("Histogram", "Histogram: of the shown channels");
     d->hist->setChecked(true);
     d->onMesh = toggle("On Mesh", "On Mesh: show this output as base colour on the meshes whose material the texture set drives");
+    d->uvs = toggle("UVs", "UVs: draw the UV edges of the meshes the texture set textures");
+    d->uvs->setChecked(true);
     auto* fit = new QToolButton(toggles);
     fit->setText("Fit");
     fit->setToolTip("Fit: the whole image in the view (F, or double-click)");
@@ -651,6 +763,13 @@ Texture2DView::Texture2DView(QWidget* parent) : QWidget(parent), d(std::make_uni
         else
             texture2d::clearMeshPreview();
     });
+    connect(d->uvs, &QToolButton::toggled, this, [impl](bool on) {
+        impl->canvas->showUvs = on;
+        impl->uvMeshes.clear();
+        impl->canvas->uvLines.clear();
+        impl->rebuildUvs();
+        impl->canvas->update();
+    });
     connect(fit, &QToolButton::clicked, this, [impl] { impl->canvas->fit(); });
     d->canvas->onHover = [this](int x, int y, bool inside) { d->pixel->setText(inside ? inspect(x, y) : QString()); };
 
@@ -661,13 +780,27 @@ Texture2DView::Texture2DView(QWidget* parent) : QWidget(parent), d(std::make_uni
         if (self)
             self->d->sync();
     };
+    // Mesh edits and material assignments change the UVs drawn without touching the set.
+    d->sceneListener = scene::Graph::current().addListener([self](scene::Change change, scene::NodeId) {
+        if (!self || change == scene::Change::Selection || self->d->uvsQueued || !self->isVisible())
+            return;
+        self->d->uvsQueued = true;
+        QTimer::singleShot(0, self, [self] {
+            self->d->uvsQueued = false;
+            self->d->rebuildUvs();
+        });
+    });
     if (c.source.set.empty())
         if (std::string set = currentTextureSet(); !set.empty())
             c.source = {set, {}, {}, "baseColor"};
     request();
 }
 
-Texture2DView::~Texture2DView() { ctl().listeners.erase(d->listener); }
+Texture2DView::~Texture2DView()
+{
+    ctl().listeners.erase(d->listener);
+    scene::Graph::current().removeListener(d->sceneListener);
+}
 
 QImage Texture2DView::displayed() const { return d->canvas->image; }
 

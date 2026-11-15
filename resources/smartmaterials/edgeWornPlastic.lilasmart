@@ -3,6 +3,11 @@
   "version": 1,
   "name": "Edge Worn Plastic",
   "description": "Glossy coloured plastic, paler and rougher on worn edges, with fine scratches and a little dirt.",
+  "tags": [
+    "plastic",
+    "realistic",
+    "worn"
+  ],
   "kind": "material",
   "layer": {
     "id": "L8",

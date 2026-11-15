@@ -30,12 +30,14 @@
 #include <QCoreApplication>
 #include <QInputDialog>
 #include <QLabel>
+#include <QMainWindow>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPointer>
 #include <QPushButton>
+#include <QScreen>
 #include <QScrollArea>
 #include <QSet>
 #include <QTimer>
@@ -762,6 +764,26 @@ bool removeCustom(const std::string& actionId)
     return customs().remove(actionId);
 }
 
+/** Places a new option box at the viewport's left edge, vertically centred, so the model stays in view. */
+void placeBesideViewport(QWidget* dialog)
+{
+    auto* main = qobject_cast<QMainWindow*>(mainWindow());
+    QWidget* view = main ? main->centralWidget() : nullptr;
+    if (!view || !view->isVisible())
+        return;
+    constexpr int kMargin = 16;
+    const QRect area(view->mapToGlobal(QPoint(0, 0)), view->size());
+    const QSize size = dialog->frameGeometry().size().expandedTo(dialog->size());
+    QRect box(QPoint(area.left() + kMargin, area.top() + (area.height() - size.height()) / 2), size);
+    if (const QScreen* screen = view->screen())
+    {
+        const QRect avail = screen->availableGeometry();
+        box.moveTop(std::clamp(box.top(), avail.top(), std::max(avail.top(), avail.bottom() - box.height())));
+        box.moveLeft(std::clamp(box.left(), avail.left(), std::max(avail.left(), avail.right() - box.width())));
+    }
+    dialog->move(box.topLeft());
+}
+
 void open(const std::string& actionId)
 {
     if (const std::function<void()>* custom = customs().find(actionId))
@@ -775,7 +797,10 @@ void open(const std::string& actionId)
         return;
     QPointer<OptionsDialog>& d = dialogs()[actionId];
     if (!d)
+    {
         d = new OptionsDialog(*a, mainWindow());
+        placeBesideViewport(d);
+    }
     d->show();
     d->raise();
     d->activateWindow();
@@ -825,6 +850,7 @@ bool openCommand(const std::string& title, const std::string& command, const nlo
         const CommandDef* def = ops::find(command);
         d = new OptionsDialog(Action{.id = key, .label = title, .doc = def ? def->doc : std::string(), .command = command, .call = fixed},
                               mainWindow());
+        placeBesideViewport(d);
     }
     d->show();
     d->raise();

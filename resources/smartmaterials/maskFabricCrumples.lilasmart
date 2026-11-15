@@ -1,0 +1,56 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Crumpled Creases",
+  "description": "Sharp crease lines of crumpled cloth.",
+  "tags": [
+    "fabric",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Creases",
+      "type": "clouds",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 5,
+        "octaves": 4,
+        "mode": "ridged",
+        "contrast": 1.3,
+        "seed": 1431
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "levels",
+      "name": "Range",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "inLow": 0.55,
+        "inHigh": 0.95
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Fold Ridges",
+      "type": "genEdgeWear",
+      "mode": "lighten",
+      "opacity": 0.5,
+      "invert": false,
+      "values": {
+        "strength": 1.5,
+        "level": 0.3,
+        "softness": 0.3,
+        "seed": 1432
+      }
+    }
+  ]
+}

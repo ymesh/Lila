@@ -1,0 +1,58 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Sand in Crevices",
+  "description": "Fine grainy sand settled in crevices and low corners.",
+  "tags": [
+    "sand",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Crevices",
+      "type": "genCavityGrime",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.3,
+        "softness": 0.5,
+        "breakup": 0.5,
+        "noiseScale": 20,
+        "seed": 601
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "generator",
+      "name": "Corners",
+      "type": "genAoDarken",
+      "mode": "lighten",
+      "opacity": 0.6,
+      "invert": false,
+      "values": {
+        "level": 0.35,
+        "softness": 0.4
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Grains",
+      "type": "dirt",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 24,
+        "amount": 0.75,
+        "contrast": 1.5,
+        "grain": 1.0,
+        "seed": 602
+      }
+    }
+  ]
+}

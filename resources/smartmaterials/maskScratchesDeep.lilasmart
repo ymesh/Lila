@@ -1,0 +1,42 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Deep Gouges",
+  "description": "A few long, deep gouges cut across the surface.",
+  "tags": [
+    "scratches",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Gouges",
+      "type": "scratches",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 3,
+        "count": 2,
+        "length": 1.2,
+        "width": 0.006,
+        "angleRandom": 0.6,
+        "seed": 1021
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Width",
+      "type": "dilate",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "radius": 0.002
+      }
+    }
+  ]
+}

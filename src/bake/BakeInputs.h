@@ -175,7 +175,8 @@ LILA_SCENE_API std::vector<glm::ivec2> triangleTiles(const LowInput& low);
 
 /**
  * A bake-only modifier stack ([{"kind", "params"}]) instantiated on a private graph, never the scene's: nothing it does
- * reaches the scene graph, the file or undo. Build and apply on the main thread.
+ * reaches the scene graph, the file or undo. Build and apply on the main thread; applyPure runs anywhere. A subdivision
+ * here blends its uvs unless its params name another way.
  */
 class LILA_SCENE_API BakeModifierStack
 {
@@ -189,6 +190,10 @@ public:
     bool empty() const { return mNodes.empty(); }
     /** The mesh through every modifier in order. A modifier that throws passes its input through, with a warning. */
     geo::Mesh apply(const geo::Mesh& mesh);
+    /** Every modifier is a plain function of its input mesh and settings, so applyPure may run on any thread, several at once. */
+    bool pure() const;
+    /** apply() for a pure() stack, touching nothing shared: warnings go to the caller's list. */
+    geo::Mesh applyPure(const geo::Mesh& mesh, std::vector<std::string>& warnings) const;
     const std::vector<std::string>& warnings() const { return mWarnings; }
 
 private:

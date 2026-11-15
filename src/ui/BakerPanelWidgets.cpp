@@ -684,7 +684,7 @@ QWidget* BakerPanel::buildGroupDetails()
     mUnlinks->setUniformRowHeights(true);
     mUnlinks->setSelectionMode(QAbstractItemView::ExtendedSelection);
     mUnlinks->setHeaderLabels({"Low", "Skip Projection"});
-    mUnlinks->headerItem()->setToolTip(0, "Meshes under a low don't occlude it");
+    mUnlinks->headerItem()->setToolTip(0, "Meshes and materials under a low don't occlude it");
     mUnlinks->headerItem()->setToolTip(1, "They don't project onto it either");
     mUnlinks->header()->setStretchLastSection(false);
     mUnlinks->header()->setSectionResizeMode(0, QHeaderView::Stretch);
@@ -720,7 +720,29 @@ QWidget* BakerPanel::buildGroupDetails()
         unlinkSelected(currentGroup(), low, QApplication::keyboardModifiers() & Qt::ShiftModifier);
     });
     ub->addWidget(unlinkAdd);
-    QToolButton* unlinkRemove = toolButton(unlinkBox, "trash", "Remove: the selected meshes, or every mesh of a selected low row");
+    QToolButton* unlinkMaterialButton = bakerPush(unlinkBox, "Unlink Material",
+                                                  "Unlink Material: every high with faces of the picked material stops occluding the current "
+                                                  "Low row, or every low when a group row is current. Shift+click a material: they also stop "
+                                                  "projecting onto it.");
+    unlinkMaterialButton->setObjectName("bakerUnlinkMaterial");
+    unlinkMaterialButton->setPopupMode(QToolButton::InstantPopup);
+    auto* materialMenu = new QMenu(unlinkMaterialButton);
+    unlinkMaterialButton->setMenu(materialMenu);
+    connect(materialMenu, &QMenu::aboutToShow, this, [this, materialMenu] {
+        materialMenu->clear();
+        QTreeWidgetItem* it = mGroups->currentItem();
+        const std::string low = it && it->data(0, kKindRole).toInt() == kLowItem ? ss(it->data(0, kNodeRole).toString()) : std::string();
+        const std::string group = currentGroup();
+        for (const std::string& m : unlinkableMaterials())
+            materialMenu->addAction(icon("palette"), qs(m), this, [this, group, low, m] {
+                unlinkMaterial(group, low, m, QApplication::keyboardModifiers() & Qt::ShiftModifier);
+            });
+        if (materialMenu->isEmpty())
+            materialMenu->addAction("No materials on the highs")->setEnabled(false);
+    });
+    ub->addWidget(unlinkMaterialButton);
+    QToolButton* unlinkRemove = toolButton(unlinkBox, "trash", "Remove: the selected meshes and materials, or everything under a selected low row");
+    unlinkRemove->setObjectName("bakerUnlinkRemove");
     connect(unlinkRemove, &QToolButton::clicked, this, [this] { removeSelectedUnlinks(); });
     ub->addWidget(unlinkRemove);
     uv->addLayout(ub);
@@ -1146,13 +1168,40 @@ QWidget* BakerPanel::buildResults()
     auto* clear = bakerPush(mSummaryBox, "Clear", "Clear: the bake messages");
     clear->setObjectName("bakerClearSummary");
     connect(clear, &QToolButton::clicked, this, [this] {
+        mResultOcclusion = false;
+        mResultBaked = false;
+        mCacheDropped = 0.0;
+        syncLightingNote();
+        syncPreviewNote();
+        syncCacheNote();
         mSummary->clear();
         mSummaryBox->hide();
     });
     buttons->addWidget(clear);
+    mEnvironmentLighting = bakerPush(mSummaryBox, "Environment Lighting",
+                                     "Environment Lighting: light the viewport with the HDRI, where baked occlusion shows. Sculpt lighting all but hides it");
+    mEnvironmentLighting->setObjectName("bakerEnvironmentLighting");
+    mEnvironmentLighting->hide();
+    connect(mEnvironmentLighting, &QToolButton::clicked, this, [] { actions::run(json("viewport.lighting.environment")); });
+    buttons->addWidget(mEnvironmentLighting);
+    mShowExportMesh = bakerPush(mSummaryBox, "Show Export Mesh",
+                                "Show Export Mesh: turn on, in the viewport, the modifiers these meshes export with, so the maps preview on the mesh they were baked for");
+    mShowExportMesh->setObjectName("bakerShowExportMesh");
+    mShowExportMesh->hide();
+    connect(mShowExportMesh, &QToolButton::clicked, this, [this] { showExportMesh(); });
+    buttons->addWidget(mShowExportMesh);
+    mRaiseCache = bakerPush(mSummaryBox, "Raise Cache", "Raise Cache: let the snapshot cache hold every mesh of this bake, so re-bakes reuse them instead of preparing them again");
+    mRaiseCache->setObjectName("bakerRaiseCache");
+    mRaiseCache->hide();
+    connect(mRaiseCache, &QToolButton::clicked, this, [this] { raiseSnapshotCache(); });
+    buttons->addWidget(mRaiseCache);
+    mPrefListener = PrefStore::get().onChanged([this](const std::string& file) {
+        if (file == "general")
+            syncLightingNote();
+    });
     buttons->addStretch(1);
     // One column width, so the buttons line up.
-    for (QToolButton* b : {mAssign, openOutput, clear})
+    for (QToolButton* b : {mAssign, openOutput, clear, mEnvironmentLighting, mShowExportMesh, mRaiseCache})
         b->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     mThumbs = new ThumbList(split);
     mThumbs->setObjectName("bakerThumbs");

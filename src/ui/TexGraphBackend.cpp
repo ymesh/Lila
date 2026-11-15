@@ -25,6 +25,7 @@
 #include "ui/FileDialog.h"
 #include "ui/UiCommands.h"
 #include "ui/UiCommon.h"
+#include "ui/PainterImportUi.h"
 
 #include <QApplication>
 #include <QFormLayout>
@@ -361,13 +362,44 @@ void openSet(const std::string& set)
         e->setGroup(qs(set));
 }
 
+/** The texture size the smallest of a material's maps fills, per side; invalid when it has no map that can be read. */
+QSize sizeFromMaps(const std::string& slot)
+{
+    scene::Node* material = scene::materials::find(scene::Graph::current(), slot);
+    if (!material)
+        return {};
+    QSize least;
+    for (const auto& [channel, attr] : scene::materials::textureChannels())
+    {
+        const std::string path = material->as<std::string>(attr);
+        // The stroke sheet is a brush pattern, not a map of the surface.
+        if (path.empty() || channel == "stroke")
+            continue;
+        const QSize size = QImageReader(qs(scene::materials::resolvePath(path))).size();
+        if (size.isValid())
+            least = least.isValid() ? least.boundedTo(size) : size;
+    }
+    if (!least.isValid())
+        return {};
+    auto snap = [](int side) { return std::clamp(int(std::bit_floor(unsigned(std::max(side, 1)))), 512, 16384); };
+    return {snap(least.width()), snap(least.height())};
+}
+
 void newSet()
 {
     UndoChunk chunk("New Texture Set");
     std::string slot = slotForNewSet();
-    json call = argsCall({uniqueName(slot.empty() ? "TextureSet" : slot + "Tex")});
+    json call = argsCall({uniqueName(slot.empty() ? "TextureSet" : tex::defaultSetName(slot))});
     if (!slot.empty())
+    {
         call["settings"] = {{"material", slot}};
+        if (const QSize size = sizeFromMaps(slot); size.isValid())
+        {
+            call["settings"]["width"] = size.width();
+            call["settings"]["height"] = size.height();
+            log::info("{}: {} x {}, the size of the material's smallest map", slot, size.width(), size.height());
+        }
+    }
     json r = runUi("texCreateSet", call);
     if (r.is_string())
         openSet(r.get<std::string>());
@@ -406,6 +438,11 @@ void exportFile(const char* suffix)
         log::info("exported {}", r.get<std::string>());
 }
 } // namespace
+
+void openTextureSet(const std::string& set)
+{
+    openSet(set);
+}
 
 void registerTexGraphBackend()
 {
@@ -468,6 +505,14 @@ void registerTextureGraphUi()
                   .run = [] { importFiles(); },
                   .doc = "Read .lilamat materials as new texture sets, or add a .lilatexnodes node library to your node library.",
                   .python = "lila.ops.texImportGraph(\"rock.lilamat\")"});
+    actions::add({.id = "texture.importPainterSmart",
+                  .label = "Import from Painter...",
+                  .category = "Texture",
+                  .run = [] { importPainterSmartMaterialsDialog(); },
+                  .doc = "Convert Substance 3D Painter smart materials, smart masks and brush presets (.spsm, .spmsk, .sppr) for the shelf. "
+                         "What can't come across exactly is listed in the log.",
+                  .python = "lila.ops.texImportPainterSmartMaterials(\"C:/path/to/smart-materials\")",
+                  .keywords = {"substance", "spsm", "adobe", "smart material", "convert"}});
     actions::add({.id = "texture.exportMaterial",
                   .label = "Export Material...",
                   .category = "Texture",
@@ -499,7 +544,8 @@ void registerTextureGraphUi()
                   .python = "lila.ui.run_action(\"texture.clearPreview\")"});
 
     menus::addMenu({.id = "Texture", .title = "Texture", .before = "Rig", .sets = {"Texture"}});
-    menus::addActions("Texture", {"texture.newSet", "", "window.textureGraph", "window.texture2d", "", "texture.import", "texture.exportMaterial",
-                                  "texture.exportNodes", "texture.exportMaps", "", "texture.clearPreview"});
+    menus::addActions("Texture", {"texture.newSet", "tex.paint", "", "window.textureGraph", "window.texture2d", "", "texture.import", "texture.importPainterSmart", "texture.exportMaterial",
+                                  "texture.exportNodes", "texture.exportMaps", "", "texture.clearPreview", "#View", "viewport.textureView3d",
+                                  "viewport.textureViewSplit", "viewport.textureView2d"});
 }
 } // namespace lila::ui

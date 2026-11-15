@@ -1184,7 +1184,7 @@ std::unique_ptr<PreparedBake> prepareBake(scene::Graph& g, const BakeRequest& re
     for (const auto& [k, v] : b->inputs.timings.items())
         addTiming(b->timings, k, v.get<double>());
     t0 = Clock::now();
-    lintScene(g, b->inputs, b->sceneLint);
+    lintScene(g, b->inputs, b->ps, b->sceneLint);
     addTiming(b->timings, "lint", since(t0));
     b->opt.maps = request.maps;
     b->opt.dryRun = request.dryRun;

@@ -1,0 +1,41 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Bleeding Ink",
+  "category": "Wet",
+  "doc": "Ink blooms that run a little.",
+  "brush": {
+    "falloff": "smooth",
+    "strength": 1.0,
+    "flow": 0.5,
+    "spacing": 0.4,
+    "pressureSize": false,
+    "pressureOpacity": false,
+    "pressureFlow": false,
+    "jitter": {
+      "position": 0.0,
+      "size": 0.2,
+      "opacity": 0.0,
+      "angle": 180
+    },
+    "angle": 0.0,
+    "followStroke": false,
+    "roundness": 1.0,
+    "alpha": "alpha://lila/brush tips/watercolour bloom.png",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.0,
+    "seed": 26779
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "normal"
+  },
+  "particles": {
+    "kind": "drips",
+    "count": 1,
+    "length": 3,
+    "size": 0.2,
+    "rate": 0.15
+  }
+}

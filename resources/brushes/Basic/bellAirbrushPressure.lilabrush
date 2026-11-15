@@ -1,0 +1,39 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Airbrush, Pressure Size",
+  "category": "Basic",
+  "doc": "Low-flow bell airbrush; pressure sets size and flow.",
+  "brush": {
+    "falloff": "bell",
+    "strength": 1.0,
+    "flow": 0.2,
+    "spacing": 0.05,
+    "pressureSize": true,
+    "pressureOpacity": false,
+    "pressureFlow": true,
+    "jitter": {
+      "position": 0.0,
+      "size": 0.0,
+      "opacity": 0.0,
+      "angle": 0.0
+    },
+    "angle": 0.0,
+    "followStroke": false,
+    "roundness": 1.0,
+    "alpha": "",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.0,
+    "pressureCurve": {
+      "size": {
+        "floor": 0.2,
+        "exponent": 1.0
+      }
+    }
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "normal"
+  }
+}

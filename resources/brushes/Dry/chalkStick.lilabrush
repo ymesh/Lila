@@ -1,0 +1,40 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Chalk Stick",
+  "category": "Dry",
+  "doc": "The tip of a chalk stick on rough paper.",
+  "brush": {
+    "falloff": "smooth",
+    "strength": 1.0,
+    "flow": 1.0,
+    "spacing": 0.06,
+    "pressureSize": true,
+    "pressureOpacity": false,
+    "pressureFlow": false,
+    "jitter": {
+      "position": 0.0,
+      "size": 0.0,
+      "opacity": 0.0,
+      "angle": 180
+    },
+    "angle": 0.0,
+    "followStroke": false,
+    "roundness": 1.0,
+    "alpha": "alpha://lila/brush tips/chalk grain.png",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.0,
+    "pressureCurve": {
+      "size": {
+        "floor": 0.4,
+        "exponent": 1.0
+      }
+    },
+    "seed": 32607
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "normal"
+  }
+}

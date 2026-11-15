@@ -1,0 +1,29 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Fine Edge Highlight",
+  "description": "A thin, crisp line on only the sharpest edges.",
+  "tags": [
+    "edges",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Edge Line",
+      "type": "genEdgeWear",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "strength": 4.0,
+        "level": 0.5,
+        "softness": 0.05,
+        "breakup": 0.05,
+        "seed": 381
+      }
+    }
+  ]
+}

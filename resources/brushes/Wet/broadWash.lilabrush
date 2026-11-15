@@ -1,0 +1,33 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Broad Wash",
+  "category": "Wet",
+  "doc": "Thin even wash; pressure sets the flow.",
+  "brush": {
+    "falloff": "bell",
+    "strength": 1.0,
+    "flow": 0.08,
+    "spacing": 0.06,
+    "pressureSize": false,
+    "pressureOpacity": false,
+    "pressureFlow": true,
+    "jitter": {
+      "position": 0.0,
+      "size": 0.0,
+      "opacity": 0.0,
+      "angle": 0.0
+    },
+    "angle": 0.0,
+    "followStroke": false,
+    "roundness": 1.0,
+    "alpha": "",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.0
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "normal"
+  }
+}

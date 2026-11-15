@@ -1,0 +1,42 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Sharp Crevice Dirt",
+  "description": "Dirt confined to the deepest crevices with crisp edges.",
+  "tags": [
+    "dirt",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Deep Crevices",
+      "type": "levels",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": true,
+      "values": {
+        "inLow": 0.72,
+        "inHigh": 0.85
+      },
+      "bindings": {
+        "input": "cavity"
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Crisp",
+      "type": "threshold",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "threshold": 0.35,
+        "softness": 0.1
+      }
+    }
+  ]
+}

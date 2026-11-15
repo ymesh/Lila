@@ -133,6 +133,12 @@ TEST_CASE("progress overlay: shown after 300 ms, pumps with input blocked, gone 
         abort->click();
         abort->click();
         CHECK(root.cancelled());
+
+        // Until the operation notices, the card says the abort is on its way and offers nothing to press.
+        REQUIRE(card(win));
+        CHECK(card(win)->accessibleDescription() == "Aborting once the current step ends");
+        CHECK_FALSE(cardButton(win, "Abort"));
+        CHECK_FALSE(cardButton(win, "Continue"));
     }
     CHECK_FALSE(card(win));
 

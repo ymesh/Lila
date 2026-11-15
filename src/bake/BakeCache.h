@@ -56,6 +56,22 @@ LILA_SCENE_API void cacheHigh(const SnapshotKey& key, std::shared_ptr<const High
 LILA_SCENE_API std::shared_ptr<const LowInput> cachedLow(const SnapshotKey& key);
 LILA_SCENE_API void cacheLow(const SnapshotKey& key, std::shared_ptr<const LowInput> low);
 
+/** What a bake's snapshots lost to the cache's size since beginSnapshotTally. */
+struct SnapshotTally
+{
+    /** Bytes of this bake's own snapshots evicted, or too big to keep: those meshes are prepared again on the next bake. */
+    size_t dropped = 0;
+    /** What each cache (lows, highs) may hold. */
+    size_t budget = 0;
+};
+
+/**
+ * Starts a bake's tally and reads the budget: the baker/snapshotCacheGb pref, else a quarter of the machine's memory
+ * (3 GB at least). Main thread.
+ */
+LILA_SCENE_API void beginSnapshotTally();
+LILA_SCENE_API SnapshotTally snapshotTally();
+
 /** Registers a function every clearBakeCaches call runs (backends drop their device caches). */
 LILA_SCENE_API void onClearBakeCaches(std::function<void()> fn);
 /** Drops every cached snapshot and asks backends to drop theirs. */

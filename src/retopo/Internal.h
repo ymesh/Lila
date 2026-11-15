@@ -179,6 +179,11 @@ LILA_SCENE_API Surface surfaceFromMesh(const geo::Mesh& mesh, bool useHardEdges)
 LILA_SCENE_API void refineSurface(Surface& s, double maxLength);
 /** QEM simplification to about targetTris, keeping borders and user feature edges. */
 LILA_SCENE_API void decimateSurface(Surface& s, Index targetTris);
+/**
+ * Removes fins: two triangles back to back on the same three points, which simplifying leaves where it closes a thin
+ * part up, hung on the surface by an edge with four triangles. Returns how many triangles went.
+ */
+LILA_SCENE_API int dropFins(Surface& s);
 /** Evens out triangle shapes by tangential relaxation projected onto the source; feature and border vertices stay. */
 LILA_SCENE_API void smoothSurface(Surface& s, const geo::MeshBvh& source, int iterations);
 /** Keeps the part with plane.distance >= 0, cutting triangles; cut points land exactly on the plane. */

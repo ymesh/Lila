@@ -4,6 +4,7 @@
 
 #include "core/Log.h"
 #include "scene/Graph.h"
+#include "scene/Materials.h"
 
 #include <stdexcept>
 
@@ -65,6 +66,8 @@ struct GroupData final : scene::Data
     std::vector<Ref> lows, highs;
     /** Per unlink: its lows' refs, then its meshes'. */
     std::vector<std::pair<std::vector<Ref>, std::vector<Ref>>> unlinks;
+    /** Per unlink: its materials' nodes, so a renamed material keeps its unlink. A slot without a node stays a name. */
+    std::vector<std::vector<Ref>> unlinkMaterials;
     Ref cage, project;
 
     const char* kind() const override { return kGroupKind; }
@@ -170,7 +173,18 @@ GroupSettings resolved(const scene::Graph& g, const std::string& ns, const Group
         const bool has = i < d.unlinks.size();
         u.lows = names(u.lows, has ? &d.unlinks[i].first : nullptr);
         u.meshes = names(u.meshes, has ? &d.unlinks[i].second : nullptr);
-        if (!u.meshes.empty())
+        if (i < d.unlinkMaterials.size())
+            for (size_t m = 0; m < u.materials.size() && m < d.unlinkMaterials[i].size(); ++m)
+            {
+                const Ref& r = d.unlinkMaterials[i][m];
+                const scene::Node* n = r.id != scene::kNoNode ? g.node(r.id) : findByName(g, {}, r.name);
+                if (!n || !n->type().isA("material"))
+                    continue;
+                if (refresh)
+                    r.id = n->id();
+                u.materials[m] = n->name();
+            }
+        if (!u.empty())
             s.unlinks.push_back(std::move(u));
     }
     return s;
@@ -217,6 +231,9 @@ std::shared_ptr<GroupData> unbound(const GroupSettings& s, const std::string& pr
             refs.first.push_back(Ref{.name = l});
         for (const std::string& m : u.meshes)
             refs.second.push_back(Ref{.name = m});
+        auto& mats = d->unlinkMaterials.emplace_back();
+        for (const std::string& m : u.materials)
+            mats.push_back(Ref{.name = m});
     }
     d->project.name = project;
     return d;
@@ -366,6 +383,12 @@ void setGroupSettings(scene::Graph& g, scene::NodeId group, const GroupSettings&
             refs.first.push_back(refFor(g, ns, l));
         for (const std::string& m : u.meshes)
             refs.second.push_back(refFor(g, ns, m));
+        auto& mats = d->unlinkMaterials.emplace_back();
+        for (const std::string& m : u.materials)
+        {
+            const scene::Node* material = scene::materials::find(g, m);
+            mats.push_back(Ref{.id = material ? material->id() : scene::kNoNode, .name = m});
+        }
     }
     if (const GroupData* old = groupData(*n))
         d->project = old->project;

@@ -191,6 +191,8 @@ private:
     QPointer<QTabBar> mPressedTabBar;
     void rememberSize(QDockWidget* dock);
     void restoreSize(QDockWidget* dock);
+    /** Gives a bottom panel that opened a row of its own its remembered height, or a default share of the window. */
+    void sizeOpenedRow(QDockWidget* dock);
     /** Gives a docked panel squeezed to almost nothing its remembered size, or a default share of the window. */
     void ensureUsableSize(QDockWidget* dock);
     /** Snapshots the side areas' panel widths when a drag starts on a dock separator. */

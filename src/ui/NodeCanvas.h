@@ -792,6 +792,9 @@ private:
 
     void finishWire(QPointF sp);
 
+    /** Removes every link on a socket. Returns false when it had none. */
+    bool disconnectSocket(NodeItem* n, int socket, bool input);
+
     void finishCut();
 
     /** Where a wire first crosses a straight stroke, if it does. */

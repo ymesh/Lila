@@ -82,8 +82,7 @@ TEST_CASE("quad remesh lands near the asked face count")
     }
 }
 
-// Parked: the layout needs a ring of poles round a handle to change density (prescribed singularities, not built yet).
-TEST_CASE("quad remesh density handles change face size where they sit" * doctest::may_fail())
+TEST_CASE("quad remesh density handles change face size where they sit")
 {
     for (double scale : {0.5, 2.0})
     {

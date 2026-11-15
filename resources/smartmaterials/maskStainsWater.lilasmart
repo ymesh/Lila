@@ -1,0 +1,79 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Water Rings",
+  "description": "Dried water marks with darker tide lines at their rims.",
+  "tags": [
+    "stains",
+    "moisture",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Puddles",
+      "type": "clouds",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 4,
+        "octaves": 5,
+        "mode": "soft",
+        "contrast": 1.5,
+        "seed": 901
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Shape",
+      "type": "threshold",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "threshold": 0.62,
+        "softness": 0.02
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "levels",
+      "name": "Faint Fill",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "outHigh": 0.3
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "filter",
+      "name": "Rims",
+      "type": "edgeDetect",
+      "mode": "lighten",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "width": 2.0,
+        "intensity": 3.0
+      }
+    },
+    {
+      "id": "M5",
+      "kind": "filter",
+      "name": "Soften",
+      "type": "blur",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "radius": 0.003
+      }
+    }
+  ]
+}

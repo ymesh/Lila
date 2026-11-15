@@ -1,0 +1,67 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Grease Smudges",
+  "description": "Smeared grease marks around handled and occluded areas.",
+  "tags": [
+    "stains",
+    "dirt",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Smears",
+      "type": "perlin",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 5,
+        "octaves": 6,
+        "persistence": 0.6,
+        "seed": 931
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Smear",
+      "type": "directionalBlur",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "angle": 20.0,
+        "length": 0.04
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "levels",
+      "name": "Range",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "inLow": 0.45,
+        "inHigh": 0.7
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "generator",
+      "name": "Handled Areas",
+      "type": "genAoDarken",
+      "mode": "multiply",
+      "opacity": 0.6,
+      "invert": false,
+      "values": {
+        "level": 0.5,
+        "softness": 0.9
+      }
+    }
+  ]
+}

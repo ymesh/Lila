@@ -1,0 +1,449 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Natural Skin",
+  "description": "Light human skin with fine pores, faint freckles and redness variation.",
+  "tags": [
+    "skin",
+    "realistic"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L4",
+    "name": "Natural Skin",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Skin",
+        "kind": "procedural",
+        "graph": {
+          "name": "skin",
+          "typeVersion": 1,
+          "inputs": [
+            {
+              "name": "Cells Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 90,
+              "targets": [
+                "Cells1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 4,
+              "targets": [
+                "Clouds3.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Cells Scale 2",
+              "kind": "param",
+              "type": "int",
+              "default": 140,
+              "targets": [
+                "Cells5.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 511,
+              "targets": [
+                "Cells1.seed",
+                "Anisotropic2.seed",
+                "Clouds3.seed",
+                "Cells5.seed"
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "name": "baseColor",
+              "type": "color"
+            },
+            {
+              "name": "height",
+              "type": "gray"
+            },
+            {
+              "name": "roughness",
+              "type": "gray"
+            }
+          ],
+          "nodes": [
+            {
+              "name": "GroupInput",
+              "type": "GroupInput",
+              "position": [
+                -800,
+                0
+              ]
+            },
+            {
+              "name": "Cells1",
+              "type": "cells",
+              "position": [
+                -500,
+                0
+              ],
+              "values": {
+                "scale": 90,
+                "mode": "f1",
+                "seed": 511
+              }
+            },
+            {
+              "name": "Anisotropic2",
+              "type": "anisotropic",
+              "position": [
+                -350,
+                0
+              ],
+              "values": {
+                "scaleX": 60,
+                "scaleY": 8,
+                "octaves": 3,
+                "seed": 512
+              }
+            },
+            {
+              "name": "Clouds3",
+              "type": "clouds",
+              "position": [
+                -200,
+                0
+              ],
+              "values": {
+                "scale": 4,
+                "octaves": 4,
+                "seed": 513
+              }
+            },
+            {
+              "name": "Colorize4",
+              "type": "colorize",
+              "position": [
+                -50,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.42,
+                      0.1706,
+                      0.1065,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.5705,
+                      0.2738,
+                      0.1789,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Cells5",
+              "type": "cells",
+              "position": [
+                100,
+                0
+              ],
+              "values": {
+                "scale": 140,
+                "mode": "cells",
+                "seed": 514
+              }
+            },
+            {
+              "name": "Threshold6",
+              "type": "threshold",
+              "position": [
+                -650,
+                120
+              ],
+              "values": {
+                "threshold": 0.93,
+                "softness": 0.03
+              }
+            },
+            {
+              "name": "Color7",
+              "type": "color",
+              "position": [
+                -500,
+                120
+              ],
+              "values": {
+                "color": [
+                  0.214,
+                  0.0732,
+                  0.0331,
+                  1
+                ]
+              }
+            },
+            {
+              "name": "Blend8",
+              "type": "blend",
+              "position": [
+                -350,
+                120
+              ],
+              "values": {
+                "mode": "normal",
+                "opacity": 0.3
+              }
+            },
+            {
+              "name": "Colorize9",
+              "type": "colorize",
+              "position": [
+                -200,
+                120
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.52,
+                      0.52,
+                      0.52,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.48,
+                      0.48,
+                      0.48,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Colorize10",
+              "type": "colorize",
+              "position": [
+                -50,
+                120
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.49,
+                      0.49,
+                      0.49,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.51,
+                      0.51,
+                      0.51,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Blend11",
+              "type": "blend",
+              "position": [
+                100,
+                120
+              ],
+              "values": {
+                "mode": "overlay",
+                "opacity": 1.0
+              }
+            },
+            {
+              "name": "Colorize12",
+              "type": "colorize",
+              "position": [
+                -650,
+                240
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.38,
+                      0.38,
+                      0.38,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.5,
+                      0.5,
+                      0.5,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "GroupOutput",
+              "type": "GroupOutput",
+              "position": [
+                400,
+                0
+              ]
+            }
+          ],
+          "links": [
+            [
+              "Clouds3",
+              "out",
+              "Colorize4",
+              "input"
+            ],
+            [
+              "Cells5",
+              "random",
+              "Threshold6",
+              "input"
+            ],
+            [
+              "Color7",
+              "out",
+              "Blend8",
+              "foreground"
+            ],
+            [
+              "Colorize4",
+              "out",
+              "Blend8",
+              "background"
+            ],
+            [
+              "Threshold6",
+              "out",
+              "Blend8",
+              "mask"
+            ],
+            [
+              "Blend8",
+              "out",
+              "GroupOutput",
+              "baseColor"
+            ],
+            [
+              "Cells1",
+              "out",
+              "Colorize9",
+              "input"
+            ],
+            [
+              "Anisotropic2",
+              "out",
+              "Colorize10",
+              "input"
+            ],
+            [
+              "Colorize9",
+              "out",
+              "Blend11",
+              "foreground"
+            ],
+            [
+              "Colorize10",
+              "out",
+              "Blend11",
+              "background"
+            ],
+            [
+              "Blend11",
+              "out",
+              "GroupOutput",
+              "height"
+            ],
+            [
+              "Cells1",
+              "out",
+              "Colorize12",
+              "input"
+            ],
+            [
+              "Colorize12",
+              "out",
+              "GroupOutput",
+              "roughness"
+            ]
+          ]
+        },
+        "masks": []
+      },
+      {
+        "id": "L3",
+        "name": "Colour Variation",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.5225,
+            0.1193,
+            0.089,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M2",
+            "kind": "generator",
+            "type": "clouds",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "scale": 4,
+              "octaves": 4,
+              "persistence": 0.5,
+              "contrast": 1.4,
+              "seed": 515
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.3
+          }
+        }
+      }
+    ],
+    "masks": []
+  }
+}

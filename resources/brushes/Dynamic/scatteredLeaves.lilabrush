@@ -1,0 +1,34 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Scattered Leaves",
+  "category": "Dynamic",
+  "doc": "Leaves strewn every way.",
+  "brush": {
+    "falloff": "constant",
+    "strength": 1.0,
+    "flow": 1.0,
+    "spacing": 1.0,
+    "pressureSize": false,
+    "pressureOpacity": false,
+    "pressureFlow": false,
+    "jitter": {
+      "position": 0.8,
+      "size": 0.5,
+      "opacity": 0.0,
+      "angle": 180
+    },
+    "angle": 0.0,
+    "followStroke": false,
+    "roundness": 1.0,
+    "alpha": "alpha://lila/organic/oval leaf.png",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.0,
+    "seed": 27237
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "normal"
+  }
+}

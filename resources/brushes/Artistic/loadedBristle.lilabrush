@@ -1,0 +1,40 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Loaded Bristle",
+  "category": "Artistic",
+  "doc": "A round bristle brush full of paint; streaks along the stroke.",
+  "brush": {
+    "falloff": "smooth",
+    "strength": 1.0,
+    "flow": 1.0,
+    "spacing": 0.04,
+    "pressureSize": true,
+    "pressureOpacity": false,
+    "pressureFlow": false,
+    "jitter": {
+      "position": 0.0,
+      "size": 0.0,
+      "opacity": 0.1,
+      "angle": 0.0
+    },
+    "angle": 0.0,
+    "followStroke": true,
+    "roundness": 1.0,
+    "alpha": "alpha://lila/brush tips/bristle round.png",
+    "strokeMode": "freehand",
+    "lazyRadius": 0.0,
+    "smoothing": 0.0,
+    "pressureCurve": {
+      "size": {
+        "floor": 0.3,
+        "exponent": 1.0
+      }
+    },
+    "seed": 61986
+  },
+  "payload": {
+    "kind": "paint",
+    "blend": "normal"
+  }
+}

@@ -446,6 +446,8 @@ namespace
 {
 constexpr const char* kPresetsProperty = "lilaPresets";
 constexpr int kPresetArrowWidth = 16;
+constexpr int kPresetStepWidth = 12;
+constexpr int kPresetButtonsWidth = kPresetArrowWidth + kPresetStepWidth;
 
 std::vector<double> presetsOf(const QAbstractSpinBox* box)
 {
@@ -481,11 +483,11 @@ QString presetText(const QAbstractSpinBox* box, double v)
     return QString::number(v);
 }
 
-/** Wheel and arrow keys step presets; the chevron follows the field's right edge. */
+/** Wheel and arrow keys step presets; the step buttons and chevron follow the field's right edge. */
 class PresetStepper : public QObject
 {
 public:
-    PresetStepper(QAbstractSpinBox* box, QToolButton* arrow) : QObject(box), mBox(box), mArrow(arrow) {}
+    PresetStepper(QAbstractSpinBox* box, QWidget* buttons) : QObject(box), mBox(box), mButtons(buttons) {}
 
 protected:
     bool eventFilter(QObject*, QEvent* e) override
@@ -494,7 +496,7 @@ protected:
         {
         case QEvent::Resize:
         case QEvent::Show:
-            mArrow->setGeometry(mBox->width() - kPresetArrowWidth - 2, 2, kPresetArrowWidth, std::max(0, mBox->height() - 4));
+            mButtons->setGeometry(mBox->width() - kPresetButtonsWidth - 2, 2, kPresetButtonsWidth, std::max(0, mBox->height() - 4));
             return false;
         case QEvent::Wheel:
         {
@@ -519,8 +521,21 @@ protected:
 
 private:
     QAbstractSpinBox* mBox;
-    QToolButton* mArrow;
+    QWidget* mButtons;
 };
+
+QToolButton* presetButton(QWidget* parent, const char* iconName, int iconSize, const QString& tip)
+{
+    auto* b = new QToolButton(parent);
+    b->setIcon(icon(iconName));
+    b->setIconSize(QSize(iconSize, iconSize));
+    b->setAutoRaise(true);
+    b->setFocusPolicy(Qt::NoFocus);
+    b->setCursor(Qt::ArrowCursor);
+    b->setToolTip(tip);
+    b->setStyleSheet("QToolButton { border: none; background: transparent; padding: 0; }");
+    return b;
+}
 } // namespace
 
 void setPresets(QAbstractSpinBox* box, std::vector<double> values)
@@ -535,17 +550,34 @@ void setPresets(QAbstractSpinBox* box, std::vector<double> values)
     if (had)
         return;
     box->setButtonSymbols(QAbstractSpinBox::NoButtons);
-    auto* arrow = new QToolButton(box);
+    auto* buttons = new QWidget(box);
+    buttons->setObjectName("presetButtons");
+    auto* steps = new QVBoxLayout;
+    steps->setContentsMargins(0, 0, 0, 0);
+    steps->setSpacing(0);
+    auto* up = presetButton(buttons, "caret-up", 10, "Next preset (wheel, Up)");
+    up->setObjectName("presetUp");
+    auto* down = presetButton(buttons, "caret-down", 10, "Previous preset (wheel, Down)");
+    down->setObjectName("presetDown");
+    for (QToolButton* b : {up, down})
+    {
+        b->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+        b->setFixedWidth(kPresetStepWidth);
+        steps->addWidget(b);
+    }
+    QObject::connect(up, &QToolButton::clicked, box, [box] { stepPresets(box, 1); });
+    QObject::connect(down, &QToolButton::clicked, box, [box] { stepPresets(box, -1); });
+    auto* arrow = presetButton(buttons, "chevron-down", 12, "Presets");
     arrow->setObjectName("presetArrow");
-    arrow->setIcon(icon("chevron-down"));
-    arrow->setIconSize(QSize(12, 12));
-    arrow->setAutoRaise(true);
-    arrow->setFocusPolicy(Qt::NoFocus);
-    arrow->setCursor(Qt::ArrowCursor);
-    arrow->setToolTip("Presets");
-    arrow->setStyleSheet("QToolButton { border: none; background: transparent; padding: 0; }");
+    arrow->setFixedWidth(kPresetArrowWidth);
+    arrow->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+    auto* row = new QHBoxLayout(buttons);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(0);
+    row->addLayout(steps);
+    row->addWidget(arrow);
     if (auto* edit = box->findChild<QLineEdit*>())
-        edit->setTextMargins(0, 0, kPresetArrowWidth, 0);
+        edit->setTextMargins(0, 0, kPresetButtonsWidth, 0);
     QObject::connect(arrow, &QToolButton::clicked, box, [box, arrow] {
         QMenu menu;
         const double current = spinValue(box);
@@ -557,7 +589,7 @@ void setPresets(QAbstractSpinBox* box, std::vector<double> values)
         }
         menu.exec(arrow->mapToGlobal(QPoint(arrow->width() - menu.sizeHint().width(), arrow->height())));
     });
-    box->installEventFilter(new PresetStepper(box, arrow));
+    box->installEventFilter(new PresetStepper(box, buttons));
 }
 
 bool stepPresets(QAbstractSpinBox* box, int steps)

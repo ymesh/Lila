@@ -1,0 +1,273 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Chunky Wool",
+  "description": "Thick heather-grey wool in a chunky basket weave with a soft, fuzzy matte finish.",
+  "tags": [
+    "fabric",
+    "realistic"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L2",
+    "name": "Chunky Wool",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Knit",
+        "kind": "procedural",
+        "graph": {
+          "name": "knit",
+          "typeVersion": 1,
+          "inputs": [
+            {
+              "name": "Grain Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 30,
+              "targets": [
+                "Dirt2.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 483,
+              "targets": [
+                "Dirt2.seed"
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "name": "baseColor",
+              "type": "color"
+            },
+            {
+              "name": "height",
+              "type": "gray"
+            },
+            {
+              "name": "roughness",
+              "type": "gray"
+            }
+          ],
+          "nodes": [
+            {
+              "name": "GroupInput",
+              "type": "GroupInput",
+              "position": [
+                -800,
+                0
+              ]
+            },
+            {
+              "name": "Weave1",
+              "type": "weave",
+              "position": [
+                -500,
+                0
+              ],
+              "values": {
+                "count": 14,
+                "width": 0.95
+              }
+            },
+            {
+              "name": "Dirt2",
+              "type": "dirt",
+              "position": [
+                -350,
+                0
+              ],
+              "values": {
+                "scale": 30,
+                "amount": 0.5,
+                "contrast": 1.0,
+                "grain": 1.0,
+                "seed": 483
+              }
+            },
+            {
+              "name": "Colorize3",
+              "type": "colorize",
+              "position": [
+                -200,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.214,
+                      0.196,
+                      0.214,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.3424,
+                      0.3185,
+                      0.3185,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Colorize4",
+              "type": "colorize",
+              "position": [
+                -50,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.3,
+                      0.3,
+                      0.3,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      1.0,
+                      1.0,
+                      1.0,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Blend5",
+              "type": "blend",
+              "position": [
+                100,
+                0
+              ],
+              "values": {
+                "mode": "multiply",
+                "opacity": 1.0
+              }
+            },
+            {
+              "name": "Colorize6",
+              "type": "colorize",
+              "position": [
+                -650,
+                120
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.0,
+                    [
+                      0.3,
+                      0.3,
+                      0.3,
+                      1
+                    ]
+                  ],
+                  [
+                    1.0,
+                    [
+                      0.7,
+                      0.7,
+                      0.7,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Constant7",
+              "type": "constant",
+              "position": [
+                -500,
+                120
+              ],
+              "values": {
+                "value": 1.0
+              }
+            },
+            {
+              "name": "GroupOutput",
+              "type": "GroupOutput",
+              "position": [
+                400,
+                0
+              ]
+            }
+          ],
+          "links": [
+            [
+              "Dirt2",
+              "out",
+              "Colorize3",
+              "input"
+            ],
+            [
+              "Weave1",
+              "height",
+              "Colorize4",
+              "input"
+            ],
+            [
+              "Colorize4",
+              "out",
+              "Blend5",
+              "foreground"
+            ],
+            [
+              "Colorize3",
+              "out",
+              "Blend5",
+              "background"
+            ],
+            [
+              "Blend5",
+              "out",
+              "GroupOutput",
+              "baseColor"
+            ],
+            [
+              "Weave1",
+              "height",
+              "Colorize6",
+              "input"
+            ],
+            [
+              "Colorize6",
+              "out",
+              "GroupOutput",
+              "height"
+            ],
+            [
+              "Constant7",
+              "out",
+              "GroupOutput",
+              "roughness"
+            ]
+          ]
+        },
+        "masks": []
+      }
+    ],
+    "masks": []
+  }
+}

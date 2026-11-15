@@ -1,0 +1,30 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Settled Dust on Tops",
+  "description": "Dense dust settled on upward-facing surfaces with a firm boundary.",
+  "tags": [
+    "dust",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Dust",
+      "type": "genDust",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.5,
+        "softness": 0.2,
+        "breakup": 0.45,
+        "aoInfluence": 0.8,
+        "noiseScale": 6,
+        "seed": 231
+      }
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Gentle Edge Wear",
+  "description": "Soft, faded wear along edges with gradual falloff.",
+  "tags": [
+    "edges",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Edges",
+      "type": "genEdgeWear",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "strength": 1.2,
+        "level": 0.25,
+        "softness": 0.7,
+        "breakup": 0.15,
+        "noiseScale": 6,
+        "seed": 331
+      }
+    }
+  ]
+}

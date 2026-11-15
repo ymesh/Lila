@@ -1,0 +1,70 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Puddles on Top",
+  "description": "Puddles pooled on flat, upward-facing areas.",
+  "tags": [
+    "moisture",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Flat Tops",
+      "type": "maskFacing",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "elevation": 90.0,
+        "twoSided": false
+      },
+      "bindings": {
+        "normal": "worldNormal"
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "levels",
+      "name": "Flatness",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "inLow": 0.6,
+        "inHigh": 0.9
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Pools",
+      "type": "clouds",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 4,
+        "octaves": 5,
+        "mode": "soft",
+        "contrast": 1.5,
+        "seed": 1211
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "filter",
+      "name": "Shoreline",
+      "type": "threshold",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "threshold": 0.25,
+        "softness": 0.08
+      }
+    }
+  ]
+}

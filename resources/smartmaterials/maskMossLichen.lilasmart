@@ -1,0 +1,71 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Lichen Rosettes",
+  "description": "Round lichen rosettes dotted over exposed surfaces.",
+  "tags": [
+    "moss",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Rosettes",
+      "type": "cells",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": true,
+      "values": {
+        "scale": 9,
+        "mode": "f1",
+        "width": 0.08,
+        "jitter": 0.9,
+        "seed": 531
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Rosette Size",
+      "type": "threshold",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "threshold": 0.72,
+        "softness": 0.08
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Clusters",
+      "type": "clouds",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 3,
+        "octaves": 5,
+        "mode": "soft",
+        "contrast": 1.8,
+        "seed": 532
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "filter",
+      "name": "Coverage",
+      "type": "histogramScan",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "position": 0.4,
+        "contrast": 0.6
+      }
+    }
+  ]
+}

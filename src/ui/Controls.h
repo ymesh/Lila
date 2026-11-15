@@ -108,7 +108,7 @@ LILA_UI_API QDoubleSpinBox* axisField(char axis, double lo, double hi, int decim
 LILA_UI_API QWidget* vectorField(std::vector<QDoubleSpinBox*>& out, double lo, double hi, int decimals, const QString& unit, QWidget* parent);
 
 /**
- * Gives a number field preset values: a chevron inside its right edge lists them, and the wheel, arrow keys and
+ * Gives a number field preset values: up/down buttons and a chevron inside its right edge step through and list them; the wheel, arrow keys and
  * middle-drag step from one to the next instead of by the single step. Any other value can still be typed.
  */
 LILA_UI_API void setPresets(QAbstractSpinBox* box, std::vector<double> values);

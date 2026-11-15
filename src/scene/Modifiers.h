@@ -110,12 +110,15 @@ LILA_SCENE_API void baseRemapped(Graph& g, NodeId mesh, const geo::MeshRemap& re
 /** Whether a modifier is applied on export (its exportEnabled attr; true when the type has none). */
 LILA_SCENE_API bool exportEnabled(const Node& modifier);
 
+/** The mesh's modifiers that run in the viewport but not on export, or the other way round: with any, it is shown as another mesh than it exports. */
+LILA_SCENE_API std::vector<NodeId> shownUnlikeExport(Graph& g, NodeId mesh);
+
 /** The mesh as exporters should write it: outMesh, or the stack re-run without the modifiers turned off for export. */
 LILA_SCENE_API MeshPtr exportMesh(Graph& g, NodeId mesh);
 
 LILA_SCENE_API void registerTypes();
 LILA_SCENE_API void registerCommands();
-/** duplicateModifier, applyAllModifiers, bakeModifierStack, modifierStack (ModifierCommands.cpp). */
+/** duplicateModifier, applyAllModifiers, bakeModifierStack, modifierStack, showExportMesh (ModifierCommands.cpp). */
 LILA_SCENE_API void registerStackCommands();
 } // namespace modifiers
 } // namespace lila::scene

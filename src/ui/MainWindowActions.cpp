@@ -7,6 +7,7 @@
 #include "ui/LicensesDialog.h"
 #include "ui/AudioUi.h"
 #include "ui/MediaLane.h"
+#include "ui/MenuContext.h"
 #include "ui/RenderOutputDialog.h"
 #include "ui/PerfTrace.h"
 #include "ui/ReferenceOverlay.h"
@@ -318,6 +319,30 @@ void MainWindow::registerActions()
     cursorBadges::registerDefaults();
     actions::add({"viewport.toggleQuad", "Toggle Four Views", "View", [this] { mViewports->toggleQuad(); }, nullptr,
                   "Switches between one view and the top, front, side and perspective views together."});
+    struct TextureViewAction
+    {
+        const char* id;
+        const char* label;
+        ViewportLayout::TextureView mode;
+        const char* icon;
+        const char* doc;
+    };
+    for (const TextureViewAction& a :
+         {TextureViewAction{"viewport.textureView3d", "3D View", ViewportLayout::TextureView::View3D, "cube", "Shows the viewport alone in the texturing layouts."},
+          TextureViewAction{"viewport.textureViewSplit", "3D and 2D Views", ViewportLayout::TextureView::Split, "layout-columns",
+                            "Shows the viewport beside the 2D View: the texture set laid out in UV space, with the UV edges over it."},
+          TextureViewAction{"viewport.textureView2d", "2D View", ViewportLayout::TextureView::View2D, "photo",
+                            "Shows the 2D View in place of the viewport: the texture set laid out in UV space, with the UV edges over it."}})
+        actions::add({.id = a.id,
+                      .label = a.label,
+                      .category = "Texture",
+                      .run = [this, mode = a.mode] { mViewports->setTextureView(mode); },
+                      .enabled = [] { return menuContext::layoutSet() == "Texture"; },
+                      .doc = a.doc,
+                      .python = std::string("lila.ui.run_action(\"") + a.id + "\")",
+                      .checked = [this, mode = a.mode] { return mViewports->textureView() == mode; },
+                      .icon = a.icon,
+                      .keywords = {"split", "uv view", "viewport"}});
     auto toggleGate = [this](const char* flag, const char* key) {
         std::string cam = mViewports->active()->viewName();
         bool on = scene::renderSettings().camera(cam).toJson()[key].get<bool>();

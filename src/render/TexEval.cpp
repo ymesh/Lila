@@ -1,6 +1,9 @@
 #include "render/TexEval.h"
 #include "render/TexEvalInternal.h"
 
+#include "core/Progress.h"
+
+#include <optional>
 #include <tbb/parallel_for.h>
 
 namespace lila::render::texgpu
@@ -239,6 +242,8 @@ VkPipeline kernel(VulkanContext& vk, const char* file, const char* entry, uint32
 void ensurePassLayout(VulkanContext& vk)
 {
     Shared& s = shared();
+    static std::mutex m;
+    std::scoped_lock lock(m);
     if (s.passLayout)
         return;
     VkDescriptorSetLayoutBinding b[4]{};
@@ -346,6 +351,67 @@ std::string prepareNative(Prepared& prep, const Plan& plan, size_t i)
 }
 } // namespace
 
+namespace
+{
+/** The status bar's progress title while a plan's shaders compile. */
+constexpr const char* kCompilingTitle = "Compiling texture shaders";
+
+/** Fused passes whose SPIR-V this process has not compiled yet. */
+size_t uncompiledPasses(const Plan& plan, const Prepared& prep)
+{
+    Shared& s = shared();
+    std::scoped_lock lock(s.mutex);
+    size_t n = 0;
+    for (size_t i = 0; i < plan.passes.size(); ++i)
+        if (plan.passes[i].kind != PassKind::Native && !s.spirv.contains(prep.codeHash[i]))
+            ++n;
+    return n;
+}
+
+/**
+ * Has the driver build the plan's compute pipelines here, on the calling (worker) thread: built in a render-thread slice,
+ * each new one stalls every viewport for as long as the driver takes, which can be most of a second.
+ */
+void createPipelines(const Plan& plan, const Prepared& prep, std::optional<progress::Scope>& compiling)
+{
+    LILA_ZONE();
+    std::shared_lock deviceUse(compute::offThreadDeviceUse());
+    VulkanContext* vk = Renderer::get().context();
+    if (!vk)
+        return;
+    const uint64_t passKey = compute::layoutKey(0, kCompute, "texgraph");
+    std::vector<std::tuple<const std::vector<uint32_t>*, uint64_t, const char*>> todo;
+    for (size_t i = 0; i < plan.passes.size(); ++i)
+    {
+        const Pass& p = plan.passes[i];
+        if (p.kind != PassKind::Native && prep.code[i] && !compute::sharedPipelines().contains(passKey, p.hash, p.entry.c_str()))
+            todo.emplace_back(prep.code[i].get(), p.hash, p.entry.c_str());
+        for (const auto& [code, hash] : prep.stepCode[i])
+            if (code && !compute::sharedPipelines().contains(passKey, hash, "texMain"))
+                todo.emplace_back(code.get(), hash, "texMain");
+    }
+    if (todo.empty())
+        return;
+    if (compiling)
+        compiling->setTotal(compiling->total() + double(todo.size()));
+    else
+        compiling.emplace(kCompilingTitle, double(todo.size()), progress::Silent);
+    ensurePassLayout(*vk);
+    tbb::parallel_for(size_t(0), todo.size(), size_t(1), [&](size_t i) {
+        const auto& [code, hash, entry] = todo[i];
+        try
+        {
+            compute::sharedPipelines().get(*vk, shared().passLayout, passKey, *code, hash, entry);
+            compiling->step();
+        }
+        catch (const std::exception&)
+        {
+            // The render thread retries when it records the pass and reports the failure there.
+        }
+    });
+}
+} // namespace
+
 // -------------------------------------------------------------------------------------------------------- Evaluator
 
 Evaluator::Evaluator() : m(std::make_shared<State>())
@@ -376,14 +442,12 @@ std::shared_ptr<const image::Image> blackImage()
 }
 } // namespace
 
-std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget> stores)
+namespace
 {
-    LILA_ZONE();
-    if (!plan.error.empty())
-        return plan.error;
-    if (plan.passes.empty())
-        return "the plan has no passes";
-    auto prep = std::make_unique<Prepared>();
+/** Compiles the plan's passes (blocking) and makes their pipelines, into prep. Empty, or why the plan can't run. */
+std::string compilePlan(const Plan& plan, std::unique_ptr<Prepared>& prep)
+{
+    prep = std::make_unique<Prepared>();
     prep->code.resize(plan.passes.size());
     prep->codeHash.resize(plan.passes.size());
     std::vector<std::string> gpuForms(plan.passes.size());
@@ -402,6 +466,12 @@ std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget
             if (std::string err = prepareNative(*prep, plan, i); !err.empty())
                 return err;
     // The other passes compile side by side: each is seconds of Slang the first time it is seen.
+    for (size_t i = 0; i < plan.passes.size(); ++i)
+        if (plan.passes[i].kind != PassKind::Native)
+            prep->codeHash[i] = prep->gpuForm ? tex::hash64(gpuForms[i]) : plan.passes[i].hash;
+    std::optional<progress::Scope> compiling;
+    if (const size_t n = uncompiledPasses(plan, *prep))
+        compiling.emplace(kCompilingTitle, double(n), progress::Silent);
     std::vector<std::string> errors(plan.passes.size());
     std::vector<uint8_t> fresh(plan.passes.size(), 0);
     tbb::parallel_for(size_t(0), plan.passes.size(), size_t(1), [&](size_t i) {
@@ -409,9 +479,10 @@ std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget
         if (p.kind == PassKind::Native)
             return;
         bool compiled = false;
-        prep->codeHash[i] = prep->gpuForm ? tex::hash64(gpuForms[i]) : p.hash;
         prep->code[i] = spirvFor(prep->gpuForm ? gpuForms[i] : p.source, prep->codeHash[i], compiled, errors[i]);
         fresh[i] = compiled ? 1 : 0;
+        if (compiled && compiling)
+            compiling->step();
     });
     for (size_t i = 0; i < plan.passes.size(); ++i)
     {
@@ -422,6 +493,33 @@ std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget
             return "pass for " + p.node + " failed to compile:\n" + errors[i];
         ++(fresh[i] ? prep->compiled : prep->cached);
     }
+    createPipelines(plan, *prep, compiling);
+    compiling.reset();
+    return {};
+}
+} // namespace
+
+std::string precompile(const tex::Plan& plan)
+{
+    LILA_ZONE();
+    if (!plan.error.empty())
+        return plan.error;
+    if (plan.passes.empty())
+        return "the plan has no passes";
+    std::unique_ptr<Prepared> prep;
+    return compilePlan(plan, prep);
+}
+
+std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget> stores)
+{
+    LILA_ZONE();
+    if (!plan.error.empty())
+        return plan.error;
+    if (plan.passes.empty())
+        return "the plan has no passes";
+    std::unique_ptr<Prepared> prep;
+    if (std::string err = compilePlan(plan, prep); !err.empty())
+        return err;
 
     // Buffers no pass touches and no output names (those of outputs another evaluation makes) take no room and load nothing.
     prep->unused.assign(plan.buffers.size(), 1);
@@ -591,6 +689,7 @@ std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget
     prep->warnings = std::move(warnings);
     std::scoped_lock lock(m->mutex);
     m->pending = std::move(prep);
+    m->pendingExternals.reset();
     m->done = false;
     return {};
 }
@@ -600,6 +699,18 @@ bool Evaluator::step(VulkanContext& vk, double budgetMs)
     LILA_ZONE();
     State& st = *m;
     st.adopt(vk.properties.limits.maxStorageBufferRange);
+    {
+        std::unique_ptr<std::map<std::string, GpuImageRef>> externals;
+        {
+            std::scoped_lock lock(st.mutex);
+            externals = std::move(st.pendingExternals);
+        }
+        if (externals && st.cur)
+        {
+            st.cur->inputs.gpuExternals = std::move(*externals);
+            st.refresh = true;
+        }
+    }
     if (st.cur && st.refresh.exchange(false))
         st.markExternals();
     auto pendingNow = [&] {
@@ -627,7 +738,8 @@ bool Evaluator::step(VulkanContext& vk, double budgetMs)
     try
     {
         ms = st.sub.run(vk, [&](VkCommandBuffer cmd) {
-            st.recordLoads(vk, cmd, temps);
+            if (!st.recordLoads(vk, cmd, temps, budgetMs))
+                return;
             st.arenaFresh = false;
             if (st.uniformsDirty)
             {
@@ -650,6 +762,8 @@ bool Evaluator::step(VulkanContext& vk, double budgetMs)
     }
     for (compute::Buffer& b : temps)
         compute::destroy(vk, b);
+    if (predicted <= 0.0 && st.sliceLoaded > 0 && ms > 0.5)
+        st.loadRate = std::clamp(compute::adaptRate(st.loadRate, double(st.sliceLoaded) / st.loadRate, ms), 1.0e4, 1.0e8);
     if (predicted > 1.0)
         st.rate = compute::adaptRate(st.rate, predicted, ms);
     if (st.cpuNext)
@@ -682,6 +796,13 @@ bool Evaluator::trim(VulkanContext& vk)
     st.trimmed = true;
     st.arenaFresh = true;
     return true;
+}
+
+void Evaluator::setExternals(std::map<std::string, GpuImageRef> externals)
+{
+    std::scoped_lock lock(m->mutex);
+    m->pendingExternals = std::make_unique<std::map<std::string, GpuImageRef>>(std::move(externals));
+    m->done = false;
 }
 
 void Evaluator::refreshExternals()

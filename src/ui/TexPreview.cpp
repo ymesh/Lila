@@ -217,7 +217,8 @@ image::Image evaluate(const Renderer& renderer, const Job& job)
 {
     if (renderer)
         return renderer(job.plan, job.output, job.options);
-    tex::EvalResult r = tex::evaluateCpu(job.plan, job.options);
+    // The GPU path caches compiled passes on disk; the CPU one compiles each pass through a C++ compiler, one at a time.
+    tex::EvalResult r = tex::evaluate(job.plan, job.options, "");
     auto it = r.outputs.find(job.output);
     if (it == r.outputs.end())
         throw std::runtime_error("the evaluator returned no '" + job.output + "'");

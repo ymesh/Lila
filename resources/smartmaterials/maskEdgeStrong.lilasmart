@@ -1,0 +1,30 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Heavy Edge Wear",
+  "description": "Wide, strong wear eating into every edge.",
+  "tags": [
+    "edges",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Edges",
+      "type": "genEdgeWear",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "strength": 3.5,
+        "level": 0.25,
+        "softness": 0.12,
+        "breakup": 0.3,
+        "noiseScale": 8,
+        "seed": 321
+      }
+    }
+  ]
+}

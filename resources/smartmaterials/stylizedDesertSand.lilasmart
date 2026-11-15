@@ -1,0 +1,369 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Stylized Desert Sand",
+  "description": "Golden sand with wind-swept ripples, peach highlights on the crests and rosy shade.",
+  "tags": [
+    "sand",
+    "stylized"
+  ],
+  "kind": "material",
+  "layer": {
+    "id": "L9",
+    "name": "Stylized Desert Sand",
+    "kind": "folder",
+    "children": [
+      {
+        "id": "L1",
+        "name": "Dunes",
+        "kind": "procedural",
+        "graph": {
+          "name": "sand",
+          "typeVersion": 1,
+          "inputs": [
+            {
+              "name": "Noise Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 3,
+              "targets": [
+                "Perlin2.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 121,
+              "targets": [
+                "Directional1.seed",
+                "Perlin2.seed"
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "name": "height",
+              "type": "gray"
+            },
+            {
+              "name": "baseColor",
+              "type": "color"
+            },
+            {
+              "name": "roughness",
+              "type": "gray"
+            }
+          ],
+          "nodes": [
+            {
+              "name": "GroupInput",
+              "type": "GroupInput",
+              "position": [
+                -800,
+                0
+              ]
+            },
+            {
+              "name": "Directional1",
+              "type": "directional",
+              "position": [
+                -500,
+                0
+              ],
+              "values": {
+                "angle": 15.0,
+                "scaleAlong": 2,
+                "scaleAcross": 22,
+                "octaves": 1,
+                "persistence": 0.4,
+                "seed": 121
+              }
+            },
+            {
+              "name": "Perlin2",
+              "type": "perlin",
+              "position": [
+                -350,
+                0
+              ],
+              "values": {
+                "scale": 3,
+                "octaves": 2,
+                "seed": 122
+              }
+            },
+            {
+              "name": "Warp3",
+              "type": "warp",
+              "position": [
+                -200,
+                0
+              ],
+              "values": {
+                "mode": "gradient",
+                "intensity": 0.4
+              }
+            },
+            {
+              "name": "Colorize4",
+              "type": "colorize",
+              "position": [
+                -50,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.35,
+                    [
+                      0.3,
+                      0.3,
+                      0.3,
+                      1
+                    ]
+                  ],
+                  [
+                    0.65,
+                    [
+                      0.7,
+                      0.7,
+                      0.7,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Colorize5",
+              "type": "colorize",
+              "position": [
+                100,
+                0
+              ],
+              "values": {
+                "gradient": [
+                  [
+                    0.35,
+                    [
+                      0.477,
+                      0.1789,
+                      0.055,
+                      1
+                    ]
+                  ],
+                  [
+                    0.55,
+                    [
+                      0.7874,
+                      0.42,
+                      0.1473,
+                      1
+                    ]
+                  ],
+                  [
+                    0.65,
+                    [
+                      0.9774,
+                      0.6739,
+                      0.2957,
+                      1
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "name": "Constant6",
+              "type": "constant",
+              "position": [
+                -650,
+                120
+              ],
+              "values": {
+                "value": 0.9
+              }
+            },
+            {
+              "name": "GroupOutput",
+              "type": "GroupOutput",
+              "position": [
+                400,
+                0
+              ]
+            }
+          ],
+          "links": [
+            [
+              "Directional1",
+              "out",
+              "Warp3",
+              "input"
+            ],
+            [
+              "Perlin2",
+              "out",
+              "Warp3",
+              "warp"
+            ],
+            [
+              "Warp3",
+              "out",
+              "Colorize4",
+              "input"
+            ],
+            [
+              "Colorize4",
+              "out",
+              "GroupOutput",
+              "height"
+            ],
+            [
+              "Warp3",
+              "out",
+              "Colorize5",
+              "input"
+            ],
+            [
+              "Colorize5",
+              "out",
+              "GroupOutput",
+              "baseColor"
+            ],
+            [
+              "Constant6",
+              "out",
+              "GroupOutput",
+              "roughness"
+            ]
+          ]
+        },
+        "masks": []
+      },
+      {
+        "id": "L3",
+        "name": "Colour Variation",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.6921,
+            0.214,
+            0.1005,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M2",
+            "kind": "generator",
+            "type": "clouds",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "scale": 2,
+              "octaves": 4,
+              "persistence": 0.5,
+              "contrast": 1.4,
+              "seed": 123
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.25
+          }
+        }
+      },
+      {
+        "id": "L6",
+        "name": "Cavity Shade",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            0.5225,
+            0.2633,
+            0.2633,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M4",
+            "kind": "generator",
+            "type": "genAoDarken",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.35,
+              "softness": 0.7
+            }
+          },
+          {
+            "id": "M5",
+            "kind": "generator",
+            "type": "genCavityGrime",
+            "mode": "lighten",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "level": 0.3,
+              "softness": 0.4,
+              "breakup": 0.15,
+              "noiseScale": 6,
+              "seed": 18
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "multiply",
+            "opacity": 0.85
+          }
+        }
+      },
+      {
+        "id": "L8",
+        "name": "Top Light",
+        "kind": "fill",
+        "material": {
+          "baseColor": [
+            1.0,
+            0.7484,
+            0.3424,
+            1
+          ]
+        },
+        "masks": [
+          {
+            "id": "M7",
+            "kind": "generator",
+            "type": "genPositionGradient",
+            "mode": "normal",
+            "opacity": 1.0,
+            "invert": false,
+            "values": {
+              "start": 0.25,
+              "end": 1.0,
+              "breakup": 0.4,
+              "noiseScale": 3,
+              "seed": 0
+            }
+          }
+        ],
+        "channels": {
+          "baseColor": {
+            "mode": "normal",
+            "opacity": 0.3
+          }
+        }
+      }
+    ],
+    "masks": []
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "format": "lilasmart",
+  "version": 1,
+  "name": "Cracked Stone Edges",
+  "description": "Stone and concrete edges crumbling with cracks running in from them.",
+  "tags": [
+    "edges",
+    "cracks",
+    "concrete",
+    "mask"
+  ],
+  "kind": "mask",
+  "masks": [
+    {
+      "id": "M1",
+      "kind": "generator",
+      "name": "Edge Zone",
+      "type": "genEdgeWear",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "strength": 1.2,
+        "level": 0.15,
+        "softness": 0.4,
+        "breakup": 0.3,
+        "seed": 371
+      }
+    },
+    {
+      "id": "M2",
+      "kind": "filter",
+      "name": "Widen",
+      "type": "blur",
+      "mode": "normal",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "radius": 0.02
+      }
+    },
+    {
+      "id": "M3",
+      "kind": "generator",
+      "name": "Cracks",
+      "type": "cells",
+      "mode": "multiply",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "scale": 9,
+        "mode": "crackle",
+        "width": 0.06,
+        "jitter": 1.0,
+        "seed": 372
+      }
+    },
+    {
+      "id": "M4",
+      "kind": "generator",
+      "name": "Crumbles",
+      "type": "genPaintChips",
+      "mode": "lighten",
+      "opacity": 1.0,
+      "invert": false,
+      "values": {
+        "level": 0.7,
+        "softness": 0.03,
+        "chipScale": 14,
+        "seed": 373
+      }
+    }
+  ]
+}

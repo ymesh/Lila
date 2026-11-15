@@ -370,7 +370,10 @@ void smoothMiddle(geo::Mesh& m, int axis, double strength)
     }
 }
 
-/** Faces facing against the source surface under them. */
+/**
+ * Faces facing against the source surface: under their centre and under at least half their corners. A face across the
+ * bottom of a groove narrower than itself has its centre in the air, nearest whichever wall, and is no fold.
+ */
 std::vector<Index> foldedFaces(const geo::Mesh& m, const geo::Mesh& src, const geo::MeshBvh& bvh)
 {
     std::vector<Index> out;
@@ -378,8 +381,17 @@ std::vector<Index> foldedFaces(const geo::Mesh& m, const geo::Mesh& src, const g
     {
         if (!m.faceValid(f))
             continue;
+        const glm::dvec3 facing = m.faceAreaVector(f);
         geo::BvhClosest c;
-        if (bvh.closestPoint(m.faceCentroid(f), c) && glm::dot(m.faceAreaVector(f), src.faceNormal(c.face)) < 0.0)
+        if (!bvh.closestPoint(m.faceCentroid(f), c) || glm::dot(facing, src.faceNormal(c.face)) >= 0.0)
+            continue;
+        int against = 0, corners = 0;
+        for (Index p : m.facePoints(f))
+        {
+            ++corners;
+            against += bvh.closestPoint(m.position(p), c) && glm::dot(facing, src.faceNormal(c.face)) < 0.0;
+        }
+        if (2 * against >= corners)
             out.push_back(f);
     }
     return out;
@@ -688,10 +700,11 @@ int imprintGuides(Surface& s, const std::vector<std::vector<glm::dvec3>>& guides
 /**
  * Caps the lattice spacing on thin parts, like fingers, so at least `around` edges go round them: the thickness straight
  * through the shape (to the inside of the far wall) stands in for a tube's diameter. The cap grows out gradually, like
- * fitGaps'. cf is the lattice's coarsening, the spacing per result edge.
+ * fitGaps'. cf is the lattice's coarsening, the spacing per result edge. The cap goes no lower than `deepest` of the
+ * spacing it is given.
  */
 void fitThickness(const Surface& s, const geo::Mesh& src, const geo::MeshBvh& bvh, const std::vector<double>& curvature, int around, double cf,
-                  std::vector<double>& scale)
+                  double deepest, std::vector<double>& scale)
 {
     LILA_ZONE();
 
@@ -700,7 +713,7 @@ void fitThickness(const Surface& s, const geo::Mesh& src, const geo::MeshBvh& bv
     std::vector<double> cap(n, std::numeric_limits<double>::max());
     tbb::parallel_for(Index(0), n, [&](Index v) {
         if (const double t = roundThickness(s, src, bvh, curvature, v, scale[v] / perDiameter); t > 0.0)
-            cap[v] = std::max(perDiameter * t, 0.25 * scale[v]);
+            cap[v] = std::max(perDiameter * t, deepest * scale[v]);
     });
     for (int it = 0; it < 30; ++it)
     {
@@ -765,6 +778,11 @@ struct Work
      * shapes keep Lila's own size field: read across a crease, that measure calls every edge of a cube curved.
      */
     bool stockSizes = false;
+    /**
+     * A sculpted shape on Lila's own path: most of it curves both ways at once, as against the flat and rolled faces of
+     * a modelled one. Its working triangles follow the quads' sizes, and its sizes dip less: see sizeTrianglesByQuads.
+     */
+    bool organic = false;
     /** The quads asked of the stock layout, over all of iso off its caps. */
     double stockQuads = 0.0;
     /**
@@ -864,9 +882,9 @@ enum class CurvatureSizing
  * Per vertex, the edge length multiplier curvature asks for (autoremesher's measures). Triangles: the normal's turn per
  * unit length round the vertex against its 75th percentile, squared into an importance, down to 0.35 where curved and
  * up to 3 where flat. Quads: the steepest normal turn per length to a neighbour against the median, raised to -strength,
- * 0.3 to 3.
+ * `smallest` to 3.
  */
-std::vector<double> curvatureMultiplier(const Surface& s, double strength, CurvatureSizing sizing)
+std::vector<double> curvatureMultiplier(const Surface& s, double strength, CurvatureSizing sizing, double smallest)
 {
     const Index n = s.vertexCount();
     std::vector<double> mult(n, 1.0);
@@ -924,7 +942,7 @@ std::vector<double> curvatureMultiplier(const Surface& s, double strength, Curva
     if (mean <= 0.0)
         return mult;
     for (Index v = 0; v < n; ++v)
-        mult[v] = std::clamp(std::pow(std::max(curv[v] / mean, 1e-3), -strength), 0.3, 3.0);
+        mult[v] = std::clamp(std::pow(std::max(curv[v] / mean, 1e-3), -strength), smallest, 3.0);
     return mult;
 }
 
@@ -957,7 +975,8 @@ std::vector<double> sizeField(const Surface& s, const Work& w, const QuadRemeshO
         }
         rho = std::move(next);
     }
-    const std::vector<double> bend = curvatureMultiplier(s, 4.0 * opts.adaptivity, sizing);
+    // A sculpt's sizes dip half as deep: its curvature is busy at every scale, and the cover folds at each deep dip.
+    const std::vector<double> bend = curvatureMultiplier(s, 4.0 * opts.adaptivity, sizing, w.organic ? 0.5 : 0.3);
     for (Index v = 0; v < n; ++v)
         rho[v] /= bend[v] * bend[v];
     // Joints get theirs after the spread, which would flatten a fold's narrow peak. A fold reads as a saddle only along
@@ -996,7 +1015,7 @@ std::vector<double> sizeField(const Surface& s, const Work& w, const QuadRemeshO
     if (opts.resolveGaps && w.closed)
         fitGaps(s, w.src, *w.bvh, size);
     if (opts.edgesAround > 0 && w.closed)
-        fitThickness(s, w.src, *w.bvh, curv.magnitude, opts.edgesAround, 1.0, size);
+        fitThickness(s, w.src, *w.bvh, curv.magnitude, opts.edgesAround, 1.0, w.organic ? 0.5 : 0.25, size);
     limitGrowth(s, size, kSizeGrowth);
     return size;
 }
@@ -1205,6 +1224,7 @@ void clipSharpTips(Surface& s, double h, double sharpAngleDeg, std::vector<Clipp
         double angle;
         Index v;
         glm::dvec3 axis;
+        Index sides[2];
     };
     std::vector<Candidate> candidates;
     for (Index v = 0; v < n; ++v)
@@ -1232,7 +1252,7 @@ void clipSharpTips(Surface& s, double h, double sharpAngleDeg, std::vector<Clipp
             sides(t, a, b);
             byFirst[a] = t;
         }
-        Candidate best{kSharpest, kInvalid, glm::dvec3(0.0)};
+        Candidate best{kSharpest, kInvalid, glm::dvec3(0.0), {kInvalid, kInvalid}};
         for (Index start : around[v])
         {
             Index a, b;
@@ -1258,7 +1278,7 @@ void clipSharpTips(Surface& s, double h, double sharpAngleDeg, std::vector<Clipp
                 t = next->second;
             }
             if (closed && angle > 1e-3 && angle < best.angle)
-                best = {angle, v, glm::normalize(glm::normalize(s.pos[first] - s.pos[v]) + glm::normalize(s.pos[b] - s.pos[v]))};
+                best = {angle, v, glm::normalize(glm::normalize(s.pos[first] - s.pos[v]) + glm::normalize(s.pos[b] - s.pos[v])), {first, b}};
         }
         if (best.v != kInvalid)
             candidates.push_back(best);
@@ -1267,6 +1287,30 @@ void clipSharpTips(Surface& s, double h, double sharpAngleDeg, std::vector<Clipp
         return;
     std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) { return a.angle < b.angle; });
     const double total = s.totalArea();
+    // A sculpt's stray sharp edges meet in sharp sectors too: a tip's two sides run on as creases as far as the cut,
+    // and are the sector's width apart there. Returns where the side meets the cut.
+    auto reachesCut = [&](const ClippedTip& tip, Index from, Index to) {
+        for (Index prev = from, at = to, guard = 0; guard < n; ++guard)
+        {
+            if (glm::dot(s.pos[at] - tip.tip, tip.axis) >= tip.depth)
+                return at;
+            const glm::dvec3 dir = glm::normalize(s.pos[at] - s.pos[prev]);
+            Index next = kInvalid;
+            double straightest = 0.8;
+            for (Index k = s.adjStart[at]; k < s.adjStart[at + 1]; ++k)
+                if (const Index u = s.adj[k]; u != prev && sharp(s.adjEdge[k]))
+                    if (const double d = glm::dot(glm::normalize(s.pos[u] - s.pos[at]), dir); d > straightest)
+                    {
+                        straightest = d;
+                        next = u;
+                    }
+            if (next == kInvalid)
+                return kInvalid;
+            prev = at;
+            at = next;
+        }
+        return kInvalid;
+    };
     // Per vertex, the tip whose cut takes it off.
     std::vector<int> region(n, -1);
     std::vector<ClippedTip> cut;
@@ -1278,6 +1322,12 @@ void clipSharpTips(Surface& s, double h, double sharpAngleDeg, std::vector<Clipp
         tip.tip = s.pos[c.v];
         tip.axis = c.axis;
         tip.depth = std::min(kDeepest * h, 0.5 * kWidth * h / std::tan(0.5 * c.angle));
+        const Index ends[2] = {reachesCut(tip, c.v, c.sides[0]), reachesCut(tip, c.v, c.sides[1])};
+        if (ends[0] == kInvalid || ends[1] == kInvalid || glm::distance(s.pos[ends[0]], s.pos[ends[1]]) < 0.5 * kWidth * h)
+            continue;
+        if (std::getenv("LILA_TIP_LOG"))
+            std::fprintf(stderr, "tip at %.3f %.3f %.3f, sector %.1f degrees, cut %.2f quads deep\n", tip.tip.x, tip.tip.y, tip.tip.z,
+                         glm::degrees(c.angle), tip.depth / h);
         auto along = [&](Index v) { return glm::dot(s.pos[v] - tip.tip, tip.axis); };
         // What the plane takes off: the points this side of it joined to the tip.
         std::vector<Index> taken{c.v}, stack{c.v};
@@ -1870,6 +1920,51 @@ bool prepareStock(Work& w, const QuadRemeshOptions& opts, double faces, double h
     return true;
 }
 
+/**
+ * The share of the surface that curves both ways at once (a dome or a saddle, a sculpt nearly everywhere), as against
+ * flat or rolled the one way (a modelled shape's faces between its creases).
+ */
+double doublyCurvedShare(const Surface& s)
+{
+    const Curvature curv = estimateCurvature(s);
+    // Against the shape's own size, so the answer is the same at any face count.
+    const double size = std::sqrt(s.totalArea());
+    double both = 0.0, all = 0.0;
+    for (Index v = 0; v < s.vertexCount(); ++v)
+    {
+        all += s.area[v];
+        // Not flat (a radius under twice the shape's size), nor one principal curvature next to nothing beside the other.
+        const double magnitude = curv.magnitude[v], apart = curv.anisotropy[v];
+        if (magnitude * size > 0.5 && std::abs(apart / magnitude - 1.0) > 0.2)
+            both += s.area[v];
+    }
+    return all > 0.0 ? both / all : 0.0;
+}
+
+/**
+ * Remeshes the working triangles to the quads' own sizes. The first pass sizes them by another curvature measure and
+ * comes out up to four times finer than the quads where the shape is busy; the flow then follows detail smaller than a
+ * quad (a groove in an ear), turns where no quad can, and the cover folds there. s is the surface they were made from.
+ * For sculpted shapes only: a modelled one needs the finer triangles to hold its thin parts between creases.
+ */
+void sizeTrianglesByQuads(Work& w, const Surface& s)
+{
+    LILA_ZONE();
+
+
+    const SizeField quads(w.iso, w.isoSize);
+    std::vector<double> target(s.pos.size());
+    tbb::parallel_for(size_t(0), s.pos.size(), [&](size_t v) { target[v] = quads.at(s.pos[v]) / triangleRatio(); });
+    Surface again = remeshIsotropic(s, target, *w.simpleBvh, w.creases, w.border);
+    again.buildTopology();
+    again.buildGeometry();
+    again.detectFeatures(-1.0, 75.0, 0.0);
+    std::vector<double> size(again.pos.size());
+    tbb::parallel_for(size_t(0), again.pos.size(), [&](size_t v) { size[v] = quads.at(again.pos[v]); });
+    w.iso = std::move(again);
+    w.isoSize = std::move(size);
+}
+
 void prepareWork(Work& w, const geo::Mesh& source, const QuadRemeshOptions& opts, Stopwatch& clock, bool keepCaps = true)
 {
     LILA_ZONE();
@@ -1973,6 +2068,10 @@ void prepareWork(Work& w, const geo::Mesh& source, const QuadRemeshOptions& opts
             std::fprintf(stderr, "sharp tips cut off: %zu\n", w.tips.size());
     }
     w.border.build(s, 0.5 * w.h0, true);
+    const double curved = doublyCurvedShare(s);
+    w.organic = curved > 0.4 && !std::getenv("LILA_QR_MODELLED");
+    if (std::getenv("LILA_STAGE_LOG"))
+        std::fprintf(stderr, "curved both ways: %.2f of the surface\n", curved);
     std::vector<double> target = sizeField(s, w, opts, faces, CurvatureSizing::Triangles);
     if (std::getenv("LILA_STAGE_LOG"))
     {
@@ -1998,13 +2097,16 @@ void prepareWork(Work& w, const geo::Mesh& source, const QuadRemeshOptions& opts
     // The quads' own sizes, measured on the working triangles where curvature reads at about the quads' scale.
     w.isoSize = sizeField(w.iso, w, opts, faces, CurvatureSizing::Quads);
     // Creased is a crease for every fifty quads' worth of surface or so: a sculpt's few stray sharp edges don't count.
+    // On a sculpt a tenth of that: its one real crease (the rim of a flat base) is short beside its area at any size.
     double creased = 0.0;
     for (size_t e = 0; e < w.iso.edges.size(); ++e)
         if (w.iso.edgeFeature[e] && !w.iso.edgeBoundary[e])
             creased += glm::distance(w.iso.pos[w.iso.edges[e][0]], w.iso.pos[w.iso.edges[e][1]]);
-    w.stockSizes = creased * w.h0 < 0.02 * w.iso.totalArea() && !std::getenv("LILA_QR_OWN_SIZES");
+    w.stockSizes = creased * w.h0 < (w.organic ? 0.002 : 0.02) * w.iso.totalArea() && !std::getenv("LILA_QR_OWN_SIZES");
     if (std::getenv("LILA_STAGE_LOG"))
         std::fprintf(stderr, "creased %g of %g, stock sizes %d\n", creased * w.h0, 0.02 * w.iso.totalArea(), int(w.stockSizes));
+    if (w.organic && !w.stockSizes)
+        sizeTrianglesByQuads(w, s);
     if (w.symmetric && !std::getenv("LILA_QR_HALF"))
     {
         // Laid out whole like the stock path: the half joined to its mirror image, its cut an edge chain to hold.
@@ -2101,7 +2203,7 @@ void stockSizes(const Work& w, const QuadRemeshOptions& opts, std::vector<double
                 fitGaps(iso, w.src, *w.bvh, fitted);
             // A little under the ask: the layout rounds the count round a part to a whole number, down as often as up.
             if (opts.edgesAround > 0)
-                fitThickness(iso, w.src, *w.bvh, curvature, opts.edgesAround, 0.92, fitted);
+                fitThickness(iso, w.src, *w.bvh, curvature, opts.edgesAround, 0.92, 0.25, fitted);
             for (size_t v = 0; v < size.size(); ++v)
                 if (fitted[v] < 0.98 * from)
                     size[v] = std::min(size[v], fitted[v]);
@@ -2549,6 +2651,8 @@ void setUp(AutoRemesher::Parameterizer& pz, const CoverInput& in, const Work& w)
             pz.setFaceHints(&in.hints);
         if (!in.stiffness.empty())
             pz.setFieldStiffness(&in.stiffness);
+        if (!in.guidance.empty())
+            pz.setSingularitySimplification(false);
         pz.setProgressHandler([](float, const char*) { Budget::checkpoint(); });
         return;
     }
@@ -4037,6 +4141,91 @@ void unfold(geo::Mesh& m, const std::vector<FeatureKind>& feature, const geo::Me
 }
 
 /**
+ * Turns the flow round each density handle so it has the poles a change of face size needs. A layout changes its face
+ * size only round poles: with none near, the cover evens a handle's size out again. Four poles on a ring inside the
+ * handle and four of the opposite kind on a ring near its rim scale the faces between the rings by the rings' radii, so
+ * the inner ring sits at the outer one's radius times the handle's scale (or one over it): valence 3 inside and 5
+ * outside for smaller faces, the other way round for larger.
+ *
+ * Each inner pole pairs with the outer one on its spoke, and the flow is turned by a quarter of the angle the pair is
+ * seen under: a quarter turn across the stretch between them, which a cross field doesn't see, and next to nothing far
+ * off. Measured in the handle's tangent plane, faded out past the handle and on faces turned away from it. With a whole
+ * symmetric layout a handle off the plane acts on its mirror image too, and one on it has its spokes either side.
+ */
+void turnFlowRoundHandles(const Work& w, const QuadRemeshOptions& opts, std::vector<AutoRemesher::Vector3>& field)
+{
+    constexpr double kOuter = 0.9;
+    const Surface& iso = w.iso;
+    const double tiny = 1e-6 * glm::length(w.src.bounds().size());
+    struct Ring
+    {
+        glm::dvec3 centre, normal, u, v;
+        double inner, outer, radius, sign;
+    };
+    std::vector<Ring> rings;
+    for (const DensityHandle& handle : opts.densityHandles)
+    {
+        const double scale = std::clamp(handle.scale, 0.35, 2.8);
+        geo::BvhClosest c;
+        if (!(handle.radius > 0.0) || std::abs(scale - 1.0) < 0.05 || !w.bvh->closestPoint(handle.position, c))
+            continue;
+        Ring ring;
+        ring.centre = c.point;
+        ring.normal = w.src.faceNormal(c.face);
+        glm::dvec3 across = w.symmetric ? w.plane.normal : glm::dvec3(0.0);
+        across -= ring.normal * glm::dot(ring.normal, across);
+        ring.u = glm::length(across) > 1e-6 ? glm::normalize(across) : anyTangent(ring.normal);
+        ring.v = glm::cross(ring.normal, ring.u);
+        ring.radius = handle.radius;
+        ring.outer = kOuter * handle.radius;
+        ring.inner = ring.outer * std::min(scale, 1.0 / scale);
+        ring.sign = scale < 1.0 ? 1.0 : -1.0;
+        rings.push_back(ring);
+        if (w.wholeLayout && std::abs(w.plane.distance(ring.centre)) > tiny)
+        {
+            // The mirror image turns the other way round.
+            const auto flip = [&](const glm::dvec3& d) { return d - 2.0 * glm::dot(d, w.plane.normal) * w.plane.normal; };
+            ring.centre = w.plane.reflect(ring.centre);
+            ring.normal = flip(ring.normal);
+            ring.u = flip(ring.u);
+            ring.v = flip(ring.v);
+            ring.sign = -ring.sign;
+            rings.push_back(ring);
+        }
+    }
+    if (rings.empty())
+        return;
+    tbb::parallel_for(size_t(0), iso.tris.size(), [&](size_t t) {
+        const auto& tri = iso.tris[t];
+        const glm::dvec3 at = (iso.pos[tri[0]] + iso.pos[tri[1]] + iso.pos[tri[2]]) / 3.0, normal = iso.triNormal[t];
+        double turn = 0.0;
+        for (const Ring& ring : rings)
+        {
+            const glm::dvec3 d = at - ring.centre;
+            const double far = glm::length(d) / ring.radius, facing = glm::dot(normal, ring.normal);
+            if (far >= 2.0 || facing <= 0.0)
+                continue;
+            const double fade = (1.0 - glm::smoothstep(1.3, 2.0, far)) * glm::smoothstep(0.0, 0.3, facing);
+            const glm::dvec2 x(glm::dot(d, ring.u), glm::dot(d, ring.v));
+            double seen = 0.0;
+            for (int k = 0; k < 4; ++k)
+            {
+                // Diagonal to the plane's normal, so a handle on the plane has two spokes either side of it.
+                const double angle = 0.7853981633974483 + 1.5707963267948966 * k;
+                const glm::dvec2 spoke(std::cos(angle), std::sin(angle));
+                const glm::dvec2 a = x - ring.outer * spoke, b = x - ring.inner * spoke;
+                seen += std::atan2(a.x * b.y - a.y * b.x, a.x * b.x + a.y * b.y);
+            }
+            turn += ring.sign * fade * 0.25 * seen;
+        }
+        if (turn == 0.0)
+            return;
+        const glm::dvec3 dir = fromAr(field[t]);
+        field[t] = toAr(std::cos(turn) * dir + std::sin(turn) * glm::cross(normal, dir));
+    });
+}
+
+/**
  * One connected part's quads as a polygon soup: the cover solved over the working triangles, traced from its integer
  * grid (or the library's extraction where the grid leaves a hole).
  */
@@ -4047,6 +4236,17 @@ bool coverSoup(Work& w, const QuadRemeshOptions& opts, std::vector<glm::dvec3>& 
         CoverInput in = coverInput(w, opts, error);
         if (!error.empty())
             return false;
+        if (in.guidance.empty() && !opts.densityHandles.empty() && !std::getenv("LILA_QR_NO_HANDLE_POLES"))
+        {
+            // The layout's own flow first, poles cancelled as usual; the handles' poles go into that.
+            AutoRemesher::Parameterizer flow(&in.vertices, &in.triangles, nullptr);
+            setUp(flow, in, w);
+            if (flow.solveField() && flow.field().size() == in.triangles.size())
+            {
+                in.guidance = flow.field();
+                turnFlowRoundHandles(w, opts, in.guidance);
+            }
+        }
         AutoRemesher::Parameterizer pz(&in.vertices, &in.triangles, in.guidance.empty() ? nullptr : &in.guidance);
         setUp(pz, in, w);
         if (!pz.parameterize())
@@ -4075,9 +4275,9 @@ bool coverSoup(Work& w, const QuadRemeshOptions& opts, std::vector<glm::dvec3>& 
                     const auto& uv = originalUvs[t];
                     const auto& tri = w.iso.tris[t];
                     const glm::dvec3 c = (w.iso.pos[tri[0]] + w.iso.pos[tri[1]] + w.iso.pos[tri[2]]) / 3.0;
-                    std::fprintf(f, "%g %g %g %g %g %g %g %g %g %g %g\n", c.x, c.y, c.z, w.iso.triArea[t],
+                    std::fprintf(f, "%g %g %g %g %g %g %g %g %g %g %g %g\n", c.x, c.y, c.z, w.iso.triArea[t],
                                  0.5 * ((uv[1].x() - uv[0].x()) * (uv[2].y() - uv[0].y()) - (uv[1].y() - uv[0].y()) * (uv[2].x() - uv[0].x())),
-                                 uv[0].x(), uv[0].y(), uv[1].x(), uv[1].y(), uv[2].x(), uv[2].y());
+                                 uv[0].x(), uv[0].y(), uv[1].x(), uv[1].y(), uv[2].x(), uv[2].y(), in.faceSize[t]);
                 }
                 std::fclose(f);
             }
@@ -4537,18 +4737,24 @@ QuadRemeshResult quadRemeshOnce(const geo::Mesh& source, const QuadRemeshOptions
         result.error = r.error;
         return result;
     }
-    // The stock extraction now and then folds along a kept cap's rim or in a tight spot the grid traces cleanly.
+    // A body with flat faces is laid out both ways and the better result kept: neither way wins at every face count
+    // (the stock extraction now and then folds along a kept cap's rim), and pole counts swing by a third from one
+    // count to the next. Clearly fewer flaws decide, else fewer poles.
     constexpr int kFewFlaws = 3;
-    if (w.keptCapsBvh && r.defects > kFewFlaws)
+    if (w.keptCapsBvh && !std::getenv("LILA_QR_NO_FALLBACK"))
     {
         QuadRemeshResult own = quadRemeshOnce(source, opts, false);
-        if (own.ok() && own.defects < r.defects)
+        const bool cleaner = own.defects + kFewFlaws < r.defects, dirtier = r.defects + kFewFlaws < own.defects;
+        if (own.ok() && (cleaner || (!dirtier && own.metrics.irregular < r.metrics.irregular)))
         {
             own.attempts.insert(own.attempts.begin(), {r.layout, r.mesh.numFaces(), r.defects, r.metrics.irregular});
-            own.notes.push_back("laid out as a creased shape: with its flat faces as caps the layout left " + std::to_string(r.defects) +
-                                " folds, this way " + std::to_string(own.defects));
+            own.notes.push_back("laid out as a creased shape: with its flat faces as caps the layout had " + std::to_string(r.defects) +
+                                " folds and " + std::to_string(r.metrics.irregular) + " poles, this way " + std::to_string(own.defects) +
+                                " and " + std::to_string(own.metrics.irregular));
             return own;
         }
+        if (own.ok())
+            result.attempts.insert(result.attempts.end(), own.attempts.begin(), own.attempts.end());
     }
     result.attempts.push_back({r.layout, r.mesh.numFaces(), r.defects, r.metrics.irregular});
     result.mesh = std::move(r.mesh);
