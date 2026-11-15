@@ -2055,8 +2055,14 @@ void AttributeEditor::rebuild()
         heading->setToolTip(QString::fromStdString(def.doc));
         form->addRow(heading);
         int added = 1;
-        for (int i : indices)
+        // Every element is a row of widgets, and Qt's cost to lay out and show a form grows faster than its row count:
+        // a mesh-sized array (tens of thousands of elements) would stall the UI for minutes.
+        constexpr size_t kArrayRowCap = 100;
+        const std::string arrayKey = n->path() + "." + addPlug;
+        const size_t shownCount = mShowAllArrays.contains(arrayKey) ? indices.size() : std::min(indices.size(), kArrayRowCap);
+        for (size_t k = 0; k < shownCount; ++k)
         {
+            const int i = indices[k];
             if (dot == std::string::npos)
                 added += addRow(form, def, i, QString("[%1]").arg(i)) ? 1 : 0;
             else
@@ -2066,6 +2072,19 @@ void AttributeEditor::rebuild()
                     QString child = niceName(cd.name.substr(dot + 1));
                     added += addRow(form, cd, i, QString("[%1] %2").arg(i).arg(child)) ? 1 : 0;
                 }
+        }
+        if (shownCount < indices.size())
+        {
+            log::info("Attribute Editor: {} has {} elements, showing the first {}", arrayKey, indices.size(), shownCount);
+            auto* more = new QToolButton;
+            more->setText(QString("Show all %1").arg(indices.size()));
+            more->setToolTip("Every element becomes a row; a large array makes the Attribute Editor slow");
+            connect(more, &QToolButton::clicked, this, [this, arrayKey] {
+                mShowAllArrays.insert(arrayKey);
+                mRebuild = true;
+                scheduleRefresh();
+            });
+            form->addRow(QString("%1 more").arg(indices.size() - shownCount), more);
         }
         // Only arrays that hold values can grow here; connection-only ones grow by connecting.
         bool addable = true;
@@ -2831,10 +2850,14 @@ void AttributeEditor::applySearch()
 {
     const QString q = mSearch->text().trimmed();
     std::set<QWidget*> hit;
-    for (const SearchRow& r : mSearchRows)
+    for (SearchRow& r : mSearchRows)
     {
         const bool show = attrAuthoring::matches(r.def, q);
-        r.form->setRowVisible(r.label, show);
+        if (show != r.shown)
+        {
+            r.form->setRowVisible(r.label, show);
+            r.shown = show;
+        }
         if (show)
             for (QWidget* w = r.form->parentWidget(); w && w != mBody; w = w->parentWidget())
                 hit.insert(w);

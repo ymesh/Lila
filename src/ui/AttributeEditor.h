@@ -157,11 +157,15 @@ private:
     std::map<std::string, QLabel*> mBadges;
     int mViewListener = 0;
     std::string mViewSig;
+    /** Arrays (node path + "." + plug) the user asked to show past the element cap. */
+    std::set<std::string> mShowAllArrays;
     struct SearchRow
     {
         QFormLayout* form;
         QWidget* label;
         scene::AttrDef def;
+        /** What applySearch last set; rows start shown. setRowVisible finds its row by a linear scan, so only changes call it. */
+        bool shown = true;
     };
     std::vector<SearchRow> mSearchRows;
     struct SectionEntry
