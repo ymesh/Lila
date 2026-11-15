@@ -2447,7 +2447,7 @@ std::vector<std::string> overridden(const Stage& s, const std::set<SdfPath>& wri
             const UsdPrim prim = s.stage->GetPrimAtPath(p.GetPrimPath());
             const UsdProperty prop = prim ? prim.GetProperty(p.GetNameToken()) : UsdProperty();
             const SdfPropertySpecHandleVector stack = prop ? prop.GetPropertyStack() : SdfPropertySpecHandleVector();
-            if (!stack.empty() && stack.front()->GetLayer() != s.edit)
+            if (!stack.empty() && get_pointer(stack.front()->GetLayer()) != get_pointer(s.edit))
                 lost.insert(p.GetPrimPath());
         }
     std::vector<std::string> out;
@@ -4306,7 +4306,7 @@ json reloadOne(Stage& s, Graph& g, bool all)
         // usdMtlx can't read a .mtlx again into the layer it made, so one is read again only when it changed.
         if (l->GetFileFormat()->GetFormatId() == TfToken("mtlx") && std::find(changed.begin(), changed.end(), l) == changed.end())
             continue;
-        if (l == s.edit && l->IsDirty())
+        if (get_pointer(l) == get_pointer(s.edit) && l->IsDirty())
         {
             if (!all)
                 warnings.push_back("the edit layer changed on disk while it has unsaved edits; it was not read again");
@@ -4738,7 +4738,8 @@ void forEachSite(const UsdPrim& prim, Fn&& fn)
 json opinionSite(const Stage& s, const SdfLayerHandle& l, const SdfPath& path, const PcpNodeRef& node)
 {
     json e{{"layer", l->IsAnonymous() ? l->GetDisplayName() : fileOf(l)}, {"path", path.GetString()}, {"arc", arcName(node.GetArcType())}};
-    if (l == s.edit)
+    // Raw pointers: under C++20, TfWeakPtr == TfRefPtr picks Tf's reversed friend operator, which calls itself forever.
+    if (get_pointer(l) == get_pointer(s.edit))
         e["role"] = "edits";
     else if (l == s.stage->GetSessionLayer())
         e["role"] = "session";
@@ -4832,7 +4833,7 @@ json propertyOpinions(const Stage& s, const UsdProperty& p, bool full)
                     e["wins"] = true;
                     winner = e["layer"].get<std::string>();
                 }
-                else if (l == s.edit)
+                else if (get_pointer(l) == get_pointer(s.edit))
                     editLoses = true;
             }
         }
