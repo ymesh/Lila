@@ -70,6 +70,12 @@ if(NOT WIN32)
     # everything is position-independent; ELF can't put non-PIC code in a .so. Windows has no such distinction.
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # DT_RPATH rather than DT_RUNPATH, so Lila's binaries find the libraries they were built against even when
+    # LD_LIBRARY_PATH lists another copy: a /usr/local libpython3.14 there loaded under the bundled Python's home, whose
+    # lib-dynload lacks the modules that build compiles as shared modules (_ctypes), so "import ctypes" failed.
+    add_link_options(LINKER:--disable-new-dtags)
+endif()
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 
