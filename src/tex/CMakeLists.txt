@@ -41,7 +41,12 @@ lila_module(lila_tex Scene
 find_package(slang CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_package(ptex CONFIG REQUIRED)
-target_link_libraries(lila_tex PUBLIC lila_scene lila_geo PRIVATE slang::slang zstd::libzstd Ptex::Ptex_dynamic lila_uv lila_curve)
+if(WIN32)
+    target_link_libraries(lila_tex PUBLIC lila_scene lila_geo PRIVATE slang::slang zstd::libzstd Ptex::Ptex_dynamic lila_uv lila_curve)
+else()
+    # The Linux triplets build ptex static, so vcpkg exports only Ptex::Ptex_static.
+    target_link_libraries(lila_tex PUBLIC lila_scene lila_geo PRIVATE slang::slang zstd::libzstd Ptex::Ptex_static lila_uv lila_curve)
+endif()
 
 # The CPU evaluator JIT-compiles through slang-llvm, which Slang loads at runtime (so app-local deployment misses it),
 # along with its standard modules. Copy them beside the binaries.
