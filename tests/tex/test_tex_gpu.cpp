@@ -508,6 +508,23 @@ TEST_CASE("tex gpu: externals read GPU images, with uv as the fallback")
     CHECK(texel(ev.readOutputs().at("out"), 4, 4)[2] == doctest::Approx(7.0));
 }
 
+TEST_CASE("tex gpu: Image's sRGB colour and alpha match the CPU")
+{
+    if (!graphGpu())
+        return;
+    const auto file = tempDir("gpu_image_srgb") / "ramp.png";
+    std::vector<float> rgba;
+    for (int i = 0; i < 16; ++i)
+        rgba.insert(rgba.end(), {float(i) / 15.0f, 0.5f, 1.0f - float(i) / 15.0f, float(15 - i) / 15.0f});
+    image::writePng(file, 4, 4, rgba, 8);
+    Graph g;
+    add(g, "I", "image", {{"file", file.string()}, {"colorSpace", "srgb"}});
+    PlanRequest r;
+    r.width = r.height = 16;
+    r.outputs = {{"color", "I", "out", PortType::Color, {}}, {"alpha", "I", "alpha", PortType::Gray, {}}};
+    compare(buildPlan(g, r), 5e-3, 1e-3);
+}
+
 TEST_CASE("tex gpu: texEvaluate runs on the GPU by default and matches the CPU")
 {
     if (!graphGpu())

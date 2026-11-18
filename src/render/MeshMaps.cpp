@@ -610,6 +610,11 @@ json runUpdate(Session& s, std::unique_ptr<bake::BakeInputs> next, std::vector<M
         changes.push_back(std::move(c));
     }
 
+    // Every low's position map records the frame of all of them (bounds, world matrices), so each takes this update's.
+    for (auto& [k, t] : s.textures)
+        if (t->buf.def->id == "position" && t->buf.def->finalize)
+            t->buf.def->finalize(t->buf.settings, in, t->buf, t->buf.meta);
+
     s.jobs = std::move(jobs);
     s.inputs = std::move(next);
     s.highHashes = std::move(hashes);
@@ -1333,10 +1338,24 @@ static image::Image readLiveMap(const std::string& projectName, const std::strin
     return img;
 }
 
+/** The meta of the first live image of a project's map in its user set; null when it has none. */
+static json liveMapMeta(const std::string& projectName, const std::string& map)
+{
+    Engine& e = engine();
+    std::scoped_lock lock(e.pubMutex);
+    for (const auto& [key, list] : e.published)
+        if (key.second.empty())
+            for (const MeshMapInfo& m : list)
+                if (m.projectName == projectName && m.map == map)
+                    return m.meta;
+    return json();
+}
+
 void registerLiveMapCommands()
 {
     texgpu::setMeshMapSource(meshMapSource);
     tex::setLiveMeshMapReader(readLiveMap);
+    tex::setLiveMeshMapMetaReader(liveMapMeta);
     tex::setBakedMapsListener([](const std::string& project) {
         {
             BakedFiles& b = bakedFiles();

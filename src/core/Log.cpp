@@ -1,6 +1,8 @@
 #include "core/Log.h"
 
+#include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <mutex>
 
@@ -24,7 +26,39 @@ State& state()
     static State s;
     return s;
 }
+
+std::atomic<LogLevel>& consoleLevelRef()
+{
+    static std::atomic<LogLevel> level = [] {
+        LogLevel l = LogLevel::Debug;
+        if (const char* env = std::getenv("LILA_LOG_LEVEL"))
+            levelFromName(env, l);
+        return l;
+    }();
+    return level;
+}
 } // namespace
+
+LogLevel consoleLevel()
+{
+    return consoleLevelRef().load(std::memory_order_relaxed);
+}
+
+void setConsoleLevel(LogLevel level)
+{
+    consoleLevelRef().store(level, std::memory_order_relaxed);
+}
+
+bool levelFromName(std::string_view name, LogLevel& out)
+{
+    for (LogLevel l : {LogLevel::Debug, LogLevel::Info, LogLevel::Warning, LogLevel::Error})
+        if (name == levelName(l) || (l == LogLevel::Warning && name == "warn"))
+        {
+            out = l;
+            return true;
+        }
+    return false;
+}
 
 void write(LogLevel level, std::string_view text)
 {
@@ -41,7 +75,10 @@ void write(LogLevel level, std::string_view text)
     }
 
     if (level != LogLevel::Output && level != LogLevel::Echo)
-        std::fprintf(level >= LogLevel::Warning ? stderr : stdout, "[%s] %s\n", levelName(level), entry.text.c_str());
+    {
+        if (level >= consoleLevel())
+            std::fprintf(level >= LogLevel::Warning ? stderr : stdout, "[%s] %s\n", levelName(level), entry.text.c_str());
+    }
     else
         std::fprintf(stdout, "%s", entry.text.c_str());
     std::fflush(level >= LogLevel::Warning && level <= LogLevel::Error ? stderr : stdout);

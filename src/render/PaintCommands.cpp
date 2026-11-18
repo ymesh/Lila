@@ -14,6 +14,7 @@
 #include "tex/BrushPresets.h"
 #include "tex/Generators.h"
 #include "tex/Layers.h"
+#include "tex/MaterialFromMaps.h"
 #include "tex/PaintBuffer.h"
 #include "tex/PaintParticles.h"
 #include "tex/PaintSymmetry.h"
@@ -677,8 +678,28 @@ json projectionView(const Args& a)
     return s.projectionViews;
 }
 
-/** A stencil's picture: texels, a key the set or the paint tool holds, or a file (decoded to linear for colour stencils). */
-std::shared_ptr<const PaintImage> stencilPicture(const json& img, const Node& set, bool color)
+/** Decodes an sRGB picture's colour to linear in place; alpha stays as read. */
+void decodePictureSrgb(image::Image& pic)
+{
+    for (size_t i = 0; i < pic.rgba.size(); ++i)
+        if (i % 4 != 3)
+        {
+            const float c = std::clamp(pic.rgba[i], 0.0f, 1.0f);
+            pic.rgba[i] = c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+        }
+}
+
+/** Whether a picture file painted into channel decodes from sRGB: colour channels from integer files, the rule image fills use. */
+bool decodesSrgb(const std::string& file, const std::string& channel)
+{
+    return std::string_view(tex::maps::imageColorSpace(paths::fromUtf8(file), channel)) == "srgb";
+}
+
+/**
+ * A stencil's picture: texels, a key the set or the paint tool holds, or a file. colorChannel: the channel a colour stencil
+ * paints, whose rule decides whether the file decodes from sRGB; empty for a mask stencil.
+ */
+std::shared_ptr<const PaintImage> stencilPicture(const json& img, const Node& set, const std::string& colorChannel)
 {
     if (img.is_object() && img.contains("data"))
     {
@@ -699,19 +720,13 @@ std::shared_ptr<const PaintImage> stencilPicture(const json& img, const Node& se
     image::Image pic = image::read(paths::fromUtf8(s), &err);
     if (pic.width <= 0)
         throw CommandError("texPaintStroke: can't read stencil " + s + ": " + err);
-    std::string ext = paths::fromUtf8(s).extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), [](char c) { return char(std::tolower(static_cast<unsigned char>(c))); });
-    if (color && ext != ".exr" && ext != ".hdr")
-        for (size_t i = 0; i < pic.rgba.size(); ++i)
-            if (i % 4 != 3)
-            {
-                const float c = std::clamp(pic.rgba[i], 0.0f, 1.0f);
-                pic.rgba[i] = c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
-            }
+    if (!colorChannel.empty() && decodesSrgb(s, colorChannel))
+        decodePictureSrgb(pic);
     return PaintImage::fromRgba(pic.width, pic.height, pic.rgba);
 }
 
-std::shared_ptr<const PaintImage> projectionImage(const json& img, const Node& set, const StrokeView& view)
+/** colorChannel: the channel the picture's rgb paints into, whose rule decides whether the file decodes from sRGB. */
+std::shared_ptr<const PaintImage> projectionImage(const json& img, const Node& set, const StrokeView& view, const std::string& colorChannel)
 {
     if (img.is_object() && img.contains("data"))
     {
@@ -734,16 +749,8 @@ std::shared_ptr<const PaintImage> projectionImage(const json& img, const Node& s
     image::Image pic = image::read(paths::fromUtf8(path), &err);
     if (pic.width <= 0)
         throw CommandError("texPaintStroke: can't read " + path + ": " + err);
-    // 8-bit pictures hold sRGB colour; the channels are linear.
-    std::string ext = paths::fromUtf8(path).extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), [](char c) { return char(std::tolower(static_cast<unsigned char>(c))); });
-    if (!spec.value("linear", ext == ".exr" || ext == ".hdr"))
-        for (size_t i = 0; i < pic.rgba.size(); ++i)
-            if (i % 4 != 3)
-            {
-                const float c = std::clamp(pic.rgba[i], 0.0f, 1.0f);
-                pic.rgba[i] = c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
-            }
+    if (!spec.value("linear", !decodesSrgb(path, colorChannel)))
+        decodePictureSrgb(pic);
     const double scale = std::min(1.0, 4096.0 / double(std::max(view.width, view.height)));
     ProjectionBuffer buf;
     buf.resize(std::max(1, int(view.width * scale)), std::max(1, int(view.height * scale)));
@@ -947,7 +954,7 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
             if (!j.contains("view"))
                 throw CommandError("texPaintStroke: a projection needs view {width, height, camera | view + proj | eye + lookAt}");
             s.view = strokeViewOf(screenView(namedView(set, j["view"], "texPaintStroke")), *meshNode);
-            std::shared_ptr<const PaintImage> img = projectionImage(projection, set, *s.view);
+            std::shared_ptr<const PaintImage> img = projectionImage(projection, set, *s.view, s.payload.colorChannel);
             s.payload.image = img->key();
             if (image)
                 *image = img;
@@ -1076,7 +1083,7 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
     {
         if (!s.view)
             throw CommandError("texPaintStroke: a stencil is pinned to the view; the stroke needs view (screen points or a recorded view)");
-        std::shared_ptr<const PaintImage> img = stencilPicture(stencilImage, set, s.stencil->mode == "color");
+        std::shared_ptr<const PaintImage> img = stencilPicture(stencilImage, set, s.stencil->mode == "color" ? s.stencil->colorChannel : std::string());
         s.stencil->image = img->key();
         holdImage(img);
         if (s.stencil->mode == "color" && !s.payload.channels.contains(s.stencil->colorChannel))

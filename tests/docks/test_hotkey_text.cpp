@@ -5,8 +5,12 @@
 #include "core/PrefStore.h"
 #include "ui/Hotkeys.h"
 #include "ui/HotkeyCheatSheet.h"
+#include "ui/Shelf.h"
 
 #include <QApplication>
+#include <QFrame>
+#include <QLabel>
+#include <QPointer>
 #include <QLineEdit>
 #include <QMainWindow>
 #include <QElapsedTimer>
@@ -81,6 +85,29 @@ TEST_CASE("Shift+backtick and Shift+1 pick selection modes without the floating 
     CHECK(ranActions() == std::vector<std::string>{"select.vertexMode"});
     w.releaseKeyboard();
     qApp->removeEventFilter(&Hotkeys::get());
+}
+
+TEST_CASE("the floating shelf introduces its hotkey once")
+{
+    lila::PrefStore::get().set("general", "/floatingShelf/introduced", false);
+    Hotkeys::get().install();
+    qApp->removeEventFilter(&Hotkeys::get());
+    FloatingShelf::introduce();
+    QPointer<FloatingShelf> shelf = FloatingShelf::active();
+    REQUIRE(shelf);
+    CHECK(FloatingShelf::isOpen());
+    auto* intro = shelf->findChild<QFrame*>("floatingShelfIntro");
+    REQUIRE(intro);
+    QLabel* text = intro->findChild<QLabel*>();
+    REQUIRE(text);
+    CHECK(text->text().contains("<b>`</b> (left of 1)"));
+    shelf->close();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    CHECK(!shelf);
+    CHECK(!FloatingShelf::isOpen());
+
+    FloatingShelf::introduce();
+    CHECK(!FloatingShelf::active());
 }
 
 TEST_CASE("Ctrl+backtick opens the command palette")

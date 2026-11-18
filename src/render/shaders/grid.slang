@@ -104,12 +104,17 @@ PSOut gridPS(VSOut i)
     float dist = length(p - pc.eye.xyz);
     float fadeEnd = max(3000.0, height * 60.0);
     alpha *= 1.0 - smoothstep(fadeEnd * 0.25, fadeEnd, dist);
+
+    float4 clip = mul(pc.viewProj, float4(p, 1.0));
+    float depth = clip.z / clip.w;
+    // origin.w: how many pixels of depth slope to sink the grid by, so a ground-plane surface stays over it in a depth
+    // buffer drawn with a sub-pixel jitter the grid doesn't share.
+    depth -= (abs(ddx_fine(depth)) + abs(ddy_fine(depth))) * pc.origin.w;
     if (!hitsGround || alpha < 0.002)
         discard;
 
-    float4 clip = mul(pc.viewProj, float4(p, 1.0));
     PSOut o;
     o.color = float4(pc.params.w < 0.0 ? color : fromDisplay(color, pc.params.w), alpha);
-    o.depth = clip.z / clip.w;
+    o.depth = max(depth, 0.0);
     return o;
 }

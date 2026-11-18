@@ -492,13 +492,62 @@ TEST_CASE("tex library: golden images at 64 px")
             float* pp = &pos.rgba[(size_t(y) * 64 + x) * 4];
             float* np = &nrm.rgba[(size_t(y) * 64 + x) * 4];
             pp[0] = u, pp[1] = v, pp[2] = n.z * 0.5f, pp[3] = 1.0f;
-            np[0] = n.x, np[1] = n.y, np[2] = n.z, np[3] = 1.0f;
+            // As the bake stores them: n * 0.5 + 0.5.
+            np[0] = n.x * 0.5f + 0.5f, np[1] = n.y * 0.5f + 0.5f, np[2] = n.z * 0.5f + 0.5f, np[3] = 1.0f;
         }
     dome.externals["position"] = pos;
-    dome.externals["normal"] = nrm;
+    dome.externals["worldNormal"] = nrm;
     for (const auto& [name, make] : cases)
     {
         CAPTURE(name);
         golden(name, evalAt(make(), 64, name == "triplanar" ? dome : EvalOptions{}));
+    }
+}
+
+TEST_CASE("tex library: triplanar picks its axis from the bake's encoded normal and keeps the bounds' proportions")
+{
+    // Left half faces -X, right half +Z, each at one position in the bake's 0-1 bounds.
+    EvalOptions maps;
+    image::Image pos{8, 8, std::vector<float>(8 * 8 * 4)}, nrm = pos;
+    for (int y = 0; y < 8; ++y)
+        for (int x = 0; x < 8; ++x)
+        {
+            const bool left = x < 4;
+            const glm::vec3 p = left ? glm::vec3(0.2f, 0.6f, 0.9f) : glm::vec3(0.3f, 0.7f, 0.1f);
+            const glm::vec3 n = left ? glm::vec3(-1.0f, 0.0f, 0.0f) : glm::vec3(0.0f, 0.0f, 1.0f);
+            float* pp = &pos.rgba[(size_t(y) * 8 + x) * 4];
+            float* np = &nrm.rgba[(size_t(y) * 8 + x) * 4];
+            pp[0] = p.x, pp[1] = p.y, pp[2] = p.z, pp[3] = 1.0f;
+            np[0] = n.x * 0.5f + 0.5f, np[1] = n.y * 0.5f + 0.5f, np[2] = n.z * 0.5f + 0.5f, np[3] = 1.0f;
+        }
+    maps.externals["position"] = pos;
+    maps.externals["worldNormal"] = nrm;
+
+    // A linear gradient reads back the u it is sampled at: y for the X projection (yz), x for the Z projection (xy).
+    for (const char* type : {"triplanar", "triplanarTiled"})
+    {
+        CAPTURE(type);
+        Graph g;
+        add(g, "G", "gradient");
+        add(g, "T", type, {{"sharpness", 32.0}, {"rotation", 0.0}});
+        link(g, "G.out", "T.input");
+        if (std::string_view(type) == "triplanar")
+        {
+            image::Image cube = evalAt(into(g, "T.out"), 8, maps);
+            CHECK(texel(cube, 1, 4)[0] == doctest::Approx(0.6).epsilon(0.01));
+            CHECK(texel(cube, 6, 4)[0] == doctest::Approx(0.3).epsilon(0.01));
+            // A 100 x 400 x 100 box: x and z shrink to a quarter of y's span, so a square pattern stays square.
+            g.node("T")->values["boundsMax"] = json::array({100.0, 400.0, 100.0});
+            image::Image tall = evalAt(into(g, "T.out"), 8, maps);
+            CHECK(texel(tall, 1, 4)[0] == doctest::Approx(0.6).epsilon(0.01));
+            CHECK(texel(tall, 6, 4)[0] == doctest::Approx(0.075).epsilon(0.01));
+        }
+        else
+        {
+            // The tiled form turns and offsets each axis, so only the choice of axis shows: the halves differ.
+            g.node("G")->values["repeat"] = 3.0;
+            image::Image tiled = evalAt(into(g, "T.out"), 8, maps);
+            CHECK(std::abs(texel(tiled, 1, 4)[0] - texel(tiled, 6, 4)[0]) > 0.01f);
+        }
     }
 }

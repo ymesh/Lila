@@ -200,3 +200,26 @@ TEST_CASE("along curve nodes")
     CHECK(inst->mesh->numFaces() == 18);
     CHECK(inst->mesh->bounds().max.x == doctest::Approx(205.0));
 }
+
+TEST_CASE("math step and smooth step, operations listed as search variants")
+{
+    // smoothStep(0.25 from 0 to 1) = 0.15625 moves the cube in x; step(0.7 against 0.5) = 1 in y.
+    auto moved = evalNodes({N{"C", "MeshCube", {}, {}}, N{"Ss", "Math", {}, {{"operation", "smoothStep"}, {"a", 0.25}, {"b", 0.0}, {"c", 1.0}}},
+                            N{"St", "Math", {}, {{"operation", "step"}, {"a", 0.7}, {"b", 0.5}}}, N{"Xyz", "CombineXYZ", {}, {}},
+                            N{"T", "TransformGeometry", {}, {}}},
+                           {L{"Ss", "value", "Xyz", "x"}, L{"St", "value", "Xyz", "y"}, L{"Xyz", "vector", "T", "translation"},
+                            L{"C", "mesh", "T", "geometry"}, L{"T", "geometry", "GroupOutput", "geometry"}});
+    CHECK(moved->mesh->bounds().center().x == doctest::Approx(0.15625));
+    CHECK(moved->mesh->bounds().center().y == doctest::Approx(1.0));
+
+    json types = ops::execute("gnNodeTypes", json::object());
+    bool greater = false, smooth = false;
+    for (const json& t : types)
+        for (const json& v : t.value("variants", json::array()))
+        {
+            greater |= t.value("type", "") == "Compare" && v.value("label", "") == "Greater Than";
+            smooth |= t.value("type", "") == "Math" && v["values"].value("operation", "") == "smoothStep";
+        }
+    CHECK(greater);
+    CHECK(smooth);
+}

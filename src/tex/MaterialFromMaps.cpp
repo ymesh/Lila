@@ -82,6 +82,23 @@ bool imageFile(const fs::path& p)
            ext == ".bmp" || ext == ".hdr";
 }
 
+bool floatImageFile(const fs::path& p)
+{
+    std::string ext = p.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](char c) { return char(std::tolower(static_cast<unsigned char>(c))); });
+    return ext == ".exr" || ext == ".hdr";
+}
+} // namespace
+
+const char* imageColorSpace(const fs::path& file, const std::string& channel)
+{
+    const bool colour = channel == "baseColor" || channel == "emissive";
+    return colour && !floatImageFile(file) ? "srgb" : "linear";
+}
+
+namespace
+{
+
 /** The index of the role token in the stem's tokens and how many it spans; -1 when none. */
 std::optional<std::pair<MapRole, std::pair<size_t, size_t>>> findRole(const std::vector<std::string>& t)
 {
@@ -206,7 +223,7 @@ Graph buildGraph(const MapMaterial& m)
     };
     for (const auto& [file, role] : m.maps)
     {
-        const std::string img = add("image", {{"file", paths::toUtf8(file)}});
+        const std::string img = add("image", {{"file", paths::toUtf8(file)}, {"colorSpace", imageColorSpace(file, role.channel)}});
         if (role.channel == "packed")
         {
             static const char* kComponents[] = {"r", "g", "b"};

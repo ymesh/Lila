@@ -336,3 +336,30 @@ TEST_CASE("scene takes go out as one animation each and come back as takes")
     CHECK(after[2].x == doctest::Approx(100.0));
     CHECK(after[5].y == doctest::Approx(50.0));
 }
+
+TEST_CASE("the exported clip spans the playback range in frames at the scene fps")
+{
+    // Frames 1 to 120 at 30 fps: Lila's times are seconds, so the clip is 120 samples over 119/30 s.
+    run("newScene");
+    run("playbackOptions", {{"fps", 30.0}, {"minTime", 1.0 / 30.0}, {"maxTime", 120.0 / 30.0}, {"animationStartTime", 1.0 / 30.0},
+                            {"animationEndTime", 120.0 / 30.0}});
+    Graph& g = graph();
+    const NodeId id = addNode(g, "locator", "Mover")->id();
+    anim::setKey(g, {id, Transform::kTranslate, 0}, 1.0 / 30.0, 0.0);
+    anim::setKey(g, {id, Transform::kTranslate, 0}, 120.0 / 30.0, 100.0);
+    const fs::path file = tempDir("range") / "range.glb";
+    run("exportGltf", {{"args", {file.string(), "Mover"}}, {"bakeAnimation", true}});
+    Parsed p(file);
+    REQUIRE(p.data);
+    REQUIRE(p.data->animations_count == 1);
+    const cgltf_animation& a = p.data->animations[0];
+    REQUIRE(a.samplers_count > 0);
+    for (size_t i = 0; i < a.samplers_count; ++i)
+    {
+        const cgltf_accessor* in = a.samplers[i].input;
+        REQUIRE(in->has_min);
+        REQUIRE(in->has_max);
+        CHECK(in->count == 120);
+        CHECK(in->max[0] - in->min[0] == doctest::Approx(119.0 / 30.0).epsilon(1e-5));
+    }
+}

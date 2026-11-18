@@ -7,6 +7,8 @@
 #include "batch/BatchJob.h"
 #include "batch/BatchRunner.h"
 #include "core/Paths.h"
+#include "io/ExportOnSave.h"
+#include "io/FileTranslators.h"
 #include "io/SceneFile.h"
 #include "ops/Command.h"
 #include "scene/Graph.h"
@@ -14,6 +16,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -474,4 +477,110 @@ TEST_CASE("lilabatch passes the arguments after its script to the script")
     host::Options s = host::parse(4, const_cast<char**>(scene));
     CHECK(s.path == "scene.lila");
     CHECK(s.scriptArgs.empty());
+}
+
+TEST_CASE("lilabatch --export, --export-args, --quiet and --help")
+{
+    const char* convert[] = {"lilabatch", "-q", "--export", "Ship.lila", "out/Ship.fbx", "--export-args", "profile='unity', units='m'"};
+    host::Options o = host::parse(7, const_cast<char**>(convert));
+    CHECK(o.error.empty());
+    CHECK(o.quiet);
+    CHECK(o.batch);
+    CHECK(o.exportScene == "Ship.lila");
+    CHECK(o.exportOut == "out/Ship.fbx");
+    CHECK(o.exportArgs == "profile='unity', units='m'");
+    CHECK(o.path.empty());
+
+    const char* alias[] = {"lilabatch", "--convert", "a.lila", "a.glb", "--quiet"};
+    host::Options c = host::parse(5, const_cast<char**>(alias));
+    CHECK(c.exportOut == "a.glb");
+    CHECK(c.quiet);
+
+    const char* missing[] = {"lilabatch", "--export", "a.lila"};
+    CHECK_FALSE(host::parse(3, const_cast<char**>(missing)).error.empty());
+
+    const char* help[] = {"lilabatch", "-h"};
+    CHECK(host::parse(2, const_cast<char**>(help)).printHelp);
+    const std::string usage = host::usage();
+    for (const char* flag : {"--help", "--version", "--batch", "--command", "--export", "--convert", "--export-args", "--quiet",
+                             "--batch-run", "--change-stream", "Examples"})
+    {
+        CAPTURE(flag);
+        CHECK(usage.find(flag) != std::string::npos);
+    }
+}
+
+TEST_CASE("export on save writes the scene's export file on every save and is saved with the scene")
+{
+    io::translators::registerBuiltins();
+    io::exportOnSave::registerCommands();
+    static bool hooked = false;
+    if (!hooked)
+    {
+        io::onSaved([](const fs::path& p) { io::exportOnSave::onSceneSaved(p); });
+        hooked = true;
+    }
+    const fs::path d = tempDir("export_on_save");
+    ops::execute("newScene", json::object());
+    ops::execute("polyCube", {{"name", "Box"}});
+    ops::execute("select", {{"args", json::array()}});
+
+    CHECK_THROWS_AS(ops::execute("exportOnSave", {{"path", "Exports/Box.xyz"}}), CommandError);
+    CHECK_THROWS_AS(ops::execute("exportOnSave", {{"enable", true}}), CommandError);
+    json r = ops::execute("exportOnSave", {{"path", "Exports/Box.obj"}});
+    CHECK(r["enabled"] == true);
+    CHECK(r["path"] == "Exports/Box.obj");
+
+    const fs::path scene = d / "Box.lila";
+    const fs::path out = d / "Exports" / "Box.obj";
+    io::save(scene);
+    REQUIRE(fs::exists(out));
+    // The whole scene goes out though nothing is selected, and the selection stays as it was.
+    CHECK(slurp(out).find("\nf ") != std::string::npos);
+    CHECK(scene::Graph::current().selection().empty());
+    CHECK_FALSE(io::modified());
+    CHECK(paths::fromUtf8(ops::execute("exportOnSave", {{"query", true}})["file"].get<std::string>()) == out);
+
+    fs::remove(out);
+    ops::execute("newScene", json::object());
+    CHECK(ops::execute("exportOnSave", {{"query", true}})["enabled"] == false);
+    io::load(scene);
+    CHECK(ops::execute("exportOnSave", {{"query", true}})["path"] == "Exports/Box.obj");
+    io::save(scene);
+    CHECK(fs::exists(out));
+
+    ops::execute("exportOnSave", {{"enable", false}});
+    fs::remove(out);
+    io::save(scene);
+    CHECK_FALSE(fs::exists(out));
+    ops::execute("newScene", json::object());
+}
+
+TEST_CASE("lilabatch --export converts a scene by the output's extension and fails with a message")
+{
+    const fs::path d = tempDir("export_cli");
+    ops::execute("newScene", json::object());
+    ops::execute("polyCube", {{"name", "Box"}});
+    io::save(d / "Box.lila");
+    ops::execute("newScene", json::object());
+
+    const fs::path exe = paths::executableDir() / "lilabatch.exe";
+    REQUIRE(fs::exists(exe));
+    auto lilabatch = [&](const std::string& args, const fs::path& log) {
+        // cmd.exe strips the outer quotes, leaving the quoted exe and arguments intact.
+        const std::string line = "\"\"" + paths::toUtf8(exe) + "\" " + args + " > \"" + paths::toUtf8(log) + "\" 2>&1\"";
+        return std::system(line.c_str());
+    };
+    const fs::path glb = d / "out" / "Box.glb";
+    CHECK(lilabatch("--quiet --export \"" + paths::toUtf8(d / "Box.lila") + "\" \"" + paths::toUtf8(glb) + "\"", d / "ok.log") == 0);
+    REQUIRE(fs::exists(glb));
+    CHECK(slurp(glb).starts_with("glTF"));
+    const std::string quiet = slurp(d / "ok.log");
+    INFO(quiet);
+    CHECK(quiet.find("[info]") == std::string::npos);
+
+    CHECK(lilabatch("--quiet --export \"" + paths::toUtf8(d / "Box.lila") + "\" \"" + paths::toUtf8(d / "Box.xyz") + "\"", d / "bad.log") == 1);
+    const std::string bad = slurp(d / "bad.log");
+    INFO(bad);
+    CHECK(bad.find("lilabatch --export: no exporter writes '.xyz' files") != std::string::npos);
 }

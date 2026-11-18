@@ -72,7 +72,8 @@ inline constexpr const char* kShowRecentPref = "/startup/showDialog";
 /**
  * The frameless startup picker. welcome: the title and Essentials button over two zones, New Scene, Open and the recent
  * scenes down the left, the latest news over the samples and examples on the right; otherwise the recent scenes alone.
- * Enter or double-click opens, Esc dismisses; a click outside also dismisses the recent scenes alone, not the welcome.
+ * Enter or double-click opens, Esc dismisses from any of the app's windows; a click outside also dismisses the recent
+ * scenes alone, not the welcome.
  */
 class LILA_UI_API StartupDialog : public QDialog
 {

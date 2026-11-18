@@ -154,7 +154,11 @@ public:
     static void toggle();
     static void popup();
     static void releaseKey();
+    /** Once per install: opens the shelf with a line naming its hotkey, for people who never read the docs. */
+    static void introduce();
     static FloatingShelf* active();
+    /** Whether the shelf is on screen. */
+    static bool isOpen();
     /** The shelf it shows. */
     std::string shelf() const;
 
@@ -170,6 +174,7 @@ private:
     ~FloatingShelf() override;
     static void open(bool pinned);
     void build();
+    void showIntro();
     void reloadPicker();
     void showShelf(const std::string& name);
     void place();

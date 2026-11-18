@@ -27,8 +27,10 @@
 #include <QGraphicsView>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMainWindow>
 #include <QMouseEvent>
+#include <QPlainTextEdit>
 #include <QToolButton>
 
 #include <cmath>
@@ -1035,4 +1037,359 @@ TEST_CASE("I opens a Group node's group, U and the path bar lead back out")
     pump();
     CHECK(editor->group() == "Outer");
     CHECK(editor->parentGroup().isEmpty());
+}
+
+TEST_CASE("a number on a node scrubs in one undo step, Ctrl scrubs finer, and a double-click types it")
+{
+    run("newScene");
+    run("gnCreateGroup", {{"args", {"G"}}});
+    run("gnMoveNodes", {{"args", {"G"}}, {"positions", {{"GroupOutput", {700, 0}}, {"GroupInput", {-300, 0}}}}});
+    run("gnAddNode", {{"args", {"G", "Math"}}, {"position", {0, 0}}, {"name", "M"}});
+    run("gnSetValue", {{"args", {"G", "M.a", 1.0}}});
+    QMainWindow win;
+    ui::NodeEditor* editor = openOn(win, "G");
+    auto* view = editor->findChild<QGraphicsView*>();
+    // The a row: under the header, the outputs, the props, then the inputs in order.
+    QPointF a;
+    json info = run("gnGroupInfo", {{"args", {"G"}}});
+    for (const json& n : info["nodes"])
+        if (n["name"] == "M")
+            for (size_t i = 0; i < n["inputs"].size(); ++i)
+                if (n["inputs"][i]["id"] == "a")
+                    a = QPointF(85, 24 + 20.0 * double(n["outputs"].size() + n["props"].size() + i) + 10);
+    REQUIRE(a != QPointF());
+    auto value = [] { return gn::readGroup(*gn::findGroupNode(scene::Graph::current(), "G")).node("M")->values.value("a", 0.0); };
+    const double px = 1.0 / view->transform().m11();
+
+    dragInView(view, a, a + QPointF(100, 0) * px);
+    const double scrubbed = value();
+    CHECK(scrubbed > 1.5);
+    CHECK(gn::readGroup(*gn::findGroupNode(scene::Graph::current(), "G")).node("M")->position.x == doctest::Approx(0.0));
+    run("undo");
+    pump();
+    CHECK(value() == doctest::Approx(1.0));
+
+    mouse(view, QEvent::MouseButtonPress, a, Qt::LeftButton);
+    for (int i = 1; i <= 4; ++i)
+        mouse(view, QEvent::MouseMove, a + QPointF(25.0 * i, 0) * px, Qt::LeftButton, Qt::ControlModifier);
+    mouse(view, QEvent::MouseButtonRelease, a + QPointF(100, 0) * px, Qt::NoButton, Qt::ControlModifier);
+    CHECK(value() - 1.0 == doctest::Approx((scrubbed - 1.0) * 0.1).epsilon(0.05));
+    run("undo");
+    pump();
+
+    mouse(view, QEvent::MouseButtonPress, a, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, a, Qt::NoButton);
+    mouse(view, QEvent::MouseButtonDblClick, a, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, a, Qt::NoButton);
+    auto* edit = view->viewport()->findChild<QLineEdit*>();
+    REQUIRE(edit);
+    edit->setText("3.5");
+    press(edit, Qt::Key_Return);
+    CHECK(value() == doctest::Approx(3.5));
+    run("undo");
+    pump();
+    CHECK(value() == doctest::Approx(1.0));
+}
+
+TEST_CASE("a node with nothing linked shows its sockets even with unused ones hidden")
+{
+    run("newScene");
+    run("gnCreateGroup", {{"args", {"G"}}});
+    run("gnAddNode", {{"args", {"G", "Math"}}, {"position", {0, 400}}, {"name", "M"}});
+    QMainWindow win;
+    ui::NodeEditor* editor = openOn(win, "G");
+    auto* view = editor->findChild<QGraphicsView*>();
+    const double open = itemAt(view, {0, 400})->boundingRect().height();
+    run("gnSetNodeFlags", {{"args", {"G", "M"}}, {"hideUnused", true}});
+    pump();
+    CHECK(itemAt(view, {0, 400})->boundingRect().height() == doctest::Approx(open));
+
+    // The menu's flag items show their state for the selection.
+    view->scene()->clearSelection();
+    itemAt(view, {0, 400})->setSelected(true);
+    pump();
+    const ui::Action* hide = ui::actions::find("nodeEditor.toggleUnusedSockets");
+    REQUIRE(hide);
+    REQUIRE(hide->checked);
+    CHECK(hide->checked());
+    ui::actions::run(json("nodeEditor.toggleUnusedSockets"));
+    pump();
+    CHECK_FALSE(hide->checked());
+}
+
+TEST_CASE("F2 and a double-click on the title rename a node; Enter keeps, Esc cancels, an empty title shows the type's")
+{
+    run("newScene");
+    run("gnCreateGroup", {{"args", {"G"}}});
+    run("gnMoveNodes", {{"args", {"G"}}, {"positions", {{"GroupOutput", {700, 0}}, {"GroupInput", {-300, 0}}}}});
+    run("gnAddNode", {{"args", {"G", "Math"}}, {"position", {0, 0}}, {"name", "M"}});
+    QMainWindow win;
+    ui::NodeEditor* editor = openOn(win, "G");
+    auto* view = editor->findChild<QGraphicsView*>();
+    auto label = [] { return gn::readGroup(*gn::findGroupNode(scene::Graph::current(), "G")).node("M")->label; };
+
+    selectNode(view, "M");
+    press(view, Qt::Key_F2);
+    auto* edit = qobject_cast<QLineEdit*>(editor->inPlaceEditor());
+    REQUIRE(edit);
+    CHECK(edit->text() == "Math");
+    edit->setText("Height Scale");
+    press(edit, Qt::Key_Return);
+    CHECK(label() == "Height Scale");
+    CHECK(editor->inPlaceEditor() == nullptr);
+    // The name stays for links and scripts.
+    REQUIRE(gn::readGroup(*gn::findGroupNode(scene::Graph::current(), "G")).node("M"));
+
+    QPointF title(60, 12);
+    mouse(view, QEvent::MouseButtonPress, title, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, title, Qt::NoButton);
+    mouse(view, QEvent::MouseButtonDblClick, title, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, title, Qt::NoButton);
+    edit = qobject_cast<QLineEdit*>(editor->inPlaceEditor());
+    REQUIRE(edit);
+    CHECK(edit->text() == "Height Scale");
+    edit->setText("Discarded");
+    press(edit, Qt::Key_Escape);
+    CHECK(label() == "Height Scale");
+    CHECK(editor->inPlaceEditor() == nullptr);
+
+    // Typing the type's own label, or nothing, drops the label.
+    selectNode(view, "M");
+    press(view, Qt::Key_F2);
+    edit = qobject_cast<QLineEdit*>(editor->inPlaceEditor());
+    REQUIRE(edit);
+    edit->setText("");
+    press(edit, Qt::Key_Return);
+    CHECK(label().empty());
+    run("undo");
+    pump();
+    CHECK(label() == "Height Scale");
+    run("undo");
+    pump();
+    CHECK(label().empty());
+}
+
+TEST_CASE("notes: Add Note types one in place, the Add menu finds it as a sticky, and its text edits on double-click")
+{
+    run("newScene");
+    run("gnCreateGroup", {{"args", {"G"}}});
+    run("gnMoveNodes", {{"args", {"G"}}, {"positions", {{"GroupOutput", {700, 0}}, {"GroupInput", {-300, 0}}}}});
+    QMainWindow win;
+    ui::NodeEditor* editor = openOn(win, "G");
+    auto* view = editor->findChild<QGraphicsView*>();
+    auto frames = [] { return gn::readGroup(*gn::findGroupNode(scene::Graph::current(), "G")).frames; };
+
+    ui::actions::run(json("nodeEditor.addNote"));
+    pump();
+    auto* text = qobject_cast<QPlainTextEdit*>(editor->inPlaceEditor());
+    REQUIRE(text);
+    // Esc adds nothing.
+    text->setPlainText("Gone");
+    press(text, Qt::Key_Escape);
+    CHECK(frames().empty());
+
+    ui::actions::run(json("nodeEditor.addNote"));
+    pump();
+    text = qobject_cast<QPlainTextEdit*>(editor->inPlaceEditor());
+    REQUIRE(text);
+    text->setPlainText("Seed drives the scatter.\nKeep it under 100.");
+    press(text, Qt::Key_Return, Qt::ControlModifier);
+    REQUIRE(frames().size() == 1);
+    gn::GFrame note = frames()[0];
+    CHECK(note.text == "Seed drives the scatter.\nKeep it under 100.");
+    CHECK(note.label == "Note");
+    CHECK(note.nodes.empty());
+    CHECK(note.size.y > 22.0 + 2 * 14.0);
+
+    // A double-click on its text opens it again; Ctrl+Enter keeps the edit, one undo step each.
+    QPointF body(note.position.x + 40, note.position.y + 32);
+    mouse(view, QEvent::MouseButtonPress, body, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, body, Qt::NoButton);
+    mouse(view, QEvent::MouseButtonDblClick, body, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, body, Qt::NoButton);
+    text = qobject_cast<QPlainTextEdit*>(editor->inPlaceEditor());
+    REQUIRE(text);
+    CHECK(text->toPlainText() == "Seed drives the scatter.\nKeep it under 100.");
+    text->setPlainText("Edited");
+    press(text, Qt::Key_Return, Qt::ControlModifier);
+    CHECK(frames()[0].text == "Edited");
+    run("undo");
+    pump();
+    CHECK(frames()[0].text == "Seed drives the scatter.\nKeep it under 100.");
+    run("undo");
+    pump();
+    CHECK(frames().empty());
+
+    // The Add menu lists the note under Layout, found by its other names.
+    for (const char* word : {"note", "comment", "sticky", "annotation"})
+    {
+        CAPTURE(word);
+        press(view, Qt::Key_Tab);
+        QWidget* popup = QApplication::activePopupWidget();
+        REQUIRE(popup);
+        auto* search = popup->findChild<QLineEdit*>();
+        REQUIRE(search);
+        search->setText(word);
+        auto* list = popup->findChild<QListWidget*>();
+        REQUIRE(list);
+        REQUIRE(list->count() > 0);
+        CHECK(list->item(0)->text() == "Layout / Note");
+        QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QApplication::sendEvent(search, &enter);
+        pump();
+        text = qobject_cast<QPlainTextEdit*>(editor->inPlaceEditor());
+        REQUIRE(text);
+        press(text, Qt::Key_Escape);
+    }
+    CHECK(frames().empty());
+}
+
+TEST_CASE("the scene backend renames scene nodes and keeps frames")
+{
+    run("newScene");
+    run("polyCube", {{"name", "Box"}});
+    run("select", {{"args", {"Box"}}});
+    QMainWindow win;
+    auto* editor = new ui::NodeEditor(&win, ui::kSceneGraphBackend);
+    win.setCentralWidget(editor);
+    win.resize(1000, 700);
+    win.show();
+    editor->setGroup("Selection");
+    pump();
+    auto* view = editor->findChild<QGraphicsView*>();
+    REQUIRE(view);
+    view->setFocus();
+    pump();
+    view->scene()->clearSelection();
+    for (QGraphicsItem* i : view->scene()->items())
+        if (i->flags() & QGraphicsItem::ItemIsSelectable)
+        {
+            i->setSelected(true);
+            break;
+        }
+    ui::actions::run(json("nodeEditor.renameNode"));
+    pump();
+    auto* edit = qobject_cast<QLineEdit*>(editor->inPlaceEditor());
+    REQUIRE(edit);
+    const std::string before = edit->text().toStdString();
+    edit->setText("Crate");
+    press(edit, Qt::Key_Return);
+    CHECK(scene::Graph::current().find("Crate"));
+    CHECK_FALSE(scene::Graph::current().find(before));
+    run("undo");
+    pump();
+    CHECK(scene::Graph::current().find(before));
+
+    json frames = json::array({{{"label", "Note"}, {"position", {0, 0}}, {"size", {200, 100}}, {"text", "Scene note"}, {"nodes", {before}}}});
+    run("sceneGraphSetFrames", {{"args", {"Selection", frames}}});
+    json info = run("sceneGraphInfo", {{"args", {"Selection"}}});
+    REQUIRE(info["definition"]["frames"].size() == 1);
+    CHECK(info["definition"]["frames"][0]["text"] == "Scene note");
+    CHECK(info["definition"]["frames"][0]["nodes"].size() == 1);
+    run("sceneGraphRenameNode", {{"args", {"Selection", before, "Crate"}}});
+    info = run("sceneGraphInfo", {{"args", {"Selection"}}});
+    CHECK(info["definition"]["frames"][0]["nodes"][0].get<std::string>().find("Crate") != std::string::npos);
+}
+
+TEST_CASE("notes and empty frames select by their title, and copy, paste, duplicate and delete in every backend")
+{
+    registerTexGraphUi();
+    struct Case
+    {
+        const char* backend;
+        const char* group;
+    };
+    for (const Case& c : {Case{ui::kGeometryNodesBackend, "G"}, Case{ui::kTextureGraphBackend, "Rock"}, Case{ui::kSceneGraphBackend, "Selection"}})
+    {
+        CAPTURE(c.backend);
+        run("newScene");
+        run("gnCreateGroup", {{"args", {"G"}}});
+        run("gnAddNode", {{"args", {"G", "Value"}}, {"position", {0, 300}}, {"name", "V"}});
+        run("texCreateSet", {{"args", {"Rock"}}, {"resolution", 16}});
+        run("polyCube", {{"name", "Box"}});
+        run("select", {{"args", {"Box"}}});
+
+        QMainWindow win;
+        auto* editor = new ui::NodeEditor(&win, c.backend);
+        win.setCentralWidget(editor);
+        win.resize(1000, 700);
+        win.show();
+        win.activateWindow();
+        const ui::GraphBackend& b = editor->backend();
+        REQUIRE(b.id() == c.backend);
+        // The hint names the zip tie key as bound, not a fixed letter.
+        const QString zip = ui::Hotkeys::get().keyFor("nodeEditor.zipTieOn");
+        if (std::string(c.backend) != ui::kSceneGraphBackend)
+        {
+            CHECK(b.canvasHint().contains("Hold " + (zip.isEmpty() ? QString("(unbound)") : zip) + " and drag"));
+            CHECK_FALSE(b.canvasHint().contains("Hold Z"));
+        }
+        auto frames = [&] {
+            json info = run(b.command("GroupInfo").c_str(), {{"args", {c.group}}});
+            return info["definition"].value("frames", json::array());
+        };
+        const json note = {{"label", "Note"}, {"position", {-200, -600}}, {"size", {240, 90}}, {"text", "Keep it under 100."}, {"color", "light"}};
+        run(b.command("SetFrames").c_str(), {{"args", {c.group, json::array({note})}}});
+        editor->setGroup(c.group);
+        pump();
+        auto* view = editor->findChild<QGraphicsView*>();
+        REQUIRE(view);
+        view->setFocus();
+        pump();
+        REQUIRE(frames().size() == 1);
+
+        // A click on the title selects the note (and only it); copy and paste give a second one.
+        const QPointF title(-100, -590);
+        mouse(view, QEvent::MouseButtonPress, title, Qt::LeftButton);
+        mouse(view, QEvent::MouseButtonRelease, title, Qt::NoButton);
+        ui::actions::run(json("nodeEditor.copy"));
+        CHECK(QApplication::clipboard()->text().contains("Keep it under 100."));
+        ui::actions::run(json("nodeEditor.paste"));
+        pump();
+        json now = frames();
+        REQUIRE(now.size() == 2);
+        CHECK(now[1]["text"] == "Keep it under 100.");
+        CHECK(now[1].value("nodes", json::array()).empty());
+
+        // The pasted note is selected: duplicate puts a copy beside it, delete takes the copy away, undo brings it back.
+        ui::actions::run(json("nodeEditor.duplicate"));
+        pump();
+        now = frames();
+        REQUIRE(now.size() == 3);
+        CHECK(now[2]["position"][0].get<double>() == doctest::Approx(now[1]["position"][0].get<double>() + 40.0));
+        ui::actions::run(json("nodeEditor.delete"));
+        pump();
+        CHECK(frames().size() == 2);
+        run("undo");
+        pump();
+        CHECK(frames().size() == 3);
+    }
+
+    // With nodes: a node and a note copied together paste together.
+    run("newScene");
+    run("gnCreateGroup", {{"args", {"G"}}});
+    run("gnAddNode", {{"args", {"G", "Value"}}, {"position", {0, 300}}, {"name", "V"}});
+    run("gnSetFrames", {{"args", {"G", json::array({{{"label", "Note"}, {"position", {-200, -600}}, {"size", {240, 90}}, {"text", "Both"}}})}}});
+    QMainWindow win;
+    ui::NodeEditor* editor = openOn(win, "G");
+    auto* view = editor->findChild<QGraphicsView*>();
+    selectNode(view, "V");
+    mouse(view, QEvent::MouseButtonPress, {-100, -590}, Qt::LeftButton, Qt::ShiftModifier);
+    mouse(view, QEvent::MouseButtonRelease, {-100, -590}, Qt::NoButton, Qt::ShiftModifier);
+    ui::actions::run(json("nodeEditor.copy"));
+    const QString text = QApplication::clipboard()->text();
+    CHECK(text.contains(gn::kClipboardFormat));
+    CHECK(text.contains("Both"));
+    ui::actions::run(json("nodeEditor.paste"));
+    pump();
+    gn::Group g = gn::readGroup(*gn::findGroupNode(scene::Graph::current(), "G"));
+    CHECK(g.nodes.size() == 4);
+    REQUIRE(g.frames.size() == 2);
+    // The note keeps its place relative to the node it was copied with.
+    const gn::GNode* pasted = nullptr;
+    for (const gn::GNode& n : g.nodes)
+        if (n.type == "Value" && n.name != "V")
+            pasted = &n;
+    REQUIRE(pasted);
+    CHECK(g.frames[1].position.y - pasted->position.y == doctest::Approx(-600.0 - 300.0).epsilon(0.01));
 }

@@ -1,0 +1,55 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "logic",
+  "label": "Logic",
+  "category": "Utility",
+  "doc": "Combines masks as true (white) and false (black): and, or, not, xor and their inverses. Soft masks blend: and takes the smaller, or the larger, xor the difference.",
+  "keywords": [
+    "boolean",
+    "and",
+    "or",
+    "not",
+    "xor",
+    "mask"
+  ],
+  "inputs": [
+    {
+      "id": "a",
+      "type": "gray",
+      "default": 0.0
+    },
+    {
+      "id": "b",
+      "type": "gray",
+      "default": 0.0,
+      "doc": "Not used by not."
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "operation",
+      "type": "enum",
+      "default": "and",
+      "options": [
+        "and",
+        "or",
+        "not",
+        "xor",
+        "nand",
+        "nor",
+        "xnor"
+      ]
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float x = saturate(a.sample(uv));\nif (p.operation == 2)\n    return 1.0 - x;\nfloat y = saturate(b.sample(uv));\nif (p.operation == 0)\n    return min(x, y);\nif (p.operation == 1)\n    return max(x, y);\nif (p.operation == 3)\n    return abs(x - y);\nif (p.operation == 4)\n    return 1.0 - min(x, y);\nif (p.operation == 5)\n    return 1.0 - max(x, y);\nreturn 1.0 - abs(x - y);"
+  }
+}

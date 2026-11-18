@@ -1,18 +1,29 @@
 #include "ui/TexParams.h"
 
+#include "core/Log.h"
 #include "ops/CommandOptions.h"
+#include "ops/Undo.h"
+#include "scene/Graph.h"
+#include "scene/Node.h"
+#include "scene/Transform.h"
+#include "tex/Generators.h"
+#include "tex/TextureSet.h"
 #include "tex/Types.h"
+#include "ui/CameraBookmarks.h"
 #include "ui/ChoiceTips.h"
 #include "ui/CodeEdit.h"
 #include "ui/ColorPopup.h"
 #include "ui/FlagFields.h"
 #include "ui/Icons.h"
 #include "ui/ImagePicker.h"
+#include "ui/NodePicker.h"
 #include "ui/TexturePicker.h"
 #include "ui/Theme.h"
+#include "ui/ViewportWidget.h"
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -185,6 +196,18 @@ public:
     }
 
     std::string interpolation = "linear";
+    /** Called with the selected stop's position, or a negative value when none is selected. */
+    std::function<void(double)> selectionChanged;
+
+    /** Moves the selected stop to t and emits the change. */
+    void setSelectedPosition(double t)
+    {
+        if (mSelected < 0 || size_t(mSelected) >= mStops.size())
+            return;
+        mStops[size_t(mSelected)].t = std::clamp(t, 0.0, 1.0);
+        update();
+        mChanged();
+    }
 
     json stops() const
     {
@@ -250,7 +273,7 @@ protected:
             if (hit >= 0 && mStops.size() > 1)
             {
                 mStops.erase(mStops.begin() + hit);
-                mSelected = -1;
+                select(-1);
                 update();
                 mChanged();
             }
@@ -265,7 +288,7 @@ protected:
             hit = int(mStops.size()) - 1;
             mMoved = true;
         }
-        mSelected = hit;
+        select(hit);
         mDragging = hit >= 0;
         update();
     }
@@ -276,6 +299,8 @@ protected:
             return;
         mStops[size_t(mSelected)].t = tAt(e->position().x());
         mMoved = true;
+        if (selectionChanged)
+            selectionChanged(mStops[size_t(mSelected)].t);
         update();
     }
 
@@ -303,6 +328,13 @@ protected:
     }
 
 private:
+    void select(int i)
+    {
+        mSelected = i;
+        if (selectionChanged)
+            selectionChanged(i >= 0 ? mStops[size_t(i)].t : -1.0);
+    }
+
     std::vector<Stop> mStops;
     std::function<void()> mChanged;
     int mSelected = -1;
@@ -474,6 +506,100 @@ QWidget* codeEditor(QWidget* parent, const std::string& value, const QString& ti
     box->setToolTip(tip);
     QObject::connect(box, &CodeEdit::applied, box, [changed](const QString& text) { changed(text.toStdString()); });
     return box;
+}
+
+bool hasUnlinkedInput(const json& node, std::string_view id)
+{
+    for (const json& in : node.value("inputs", json::array()))
+        if (in.value("id", "") == id)
+            return !in.value("linked", false);
+    return false;
+}
+
+json vec3Json(const glm::dvec3& v) { return json::array({v.x, v.y, v.z}); }
+
+/**
+ * Writes a camera pose into the node's viewDirection and cameraPosition inputs, and the set's baked position-map bounds
+ * into boundsMin and boundsMax, as one undo step. Inputs the node lacks or has linked are left alone.
+ */
+void takeCameraPose(const json& node, const SetFn& set, const glm::dvec3& eye, const glm::dvec3& forward, const std::string& cameraParam,
+                    const std::string& cameraName)
+{
+    UndoChunk chunk("Take Camera");
+    set(cameraParam, cameraName);
+    if (hasUnlinkedInput(node, "viewDirection"))
+        set("viewDirection", vec3Json(glm::normalize(forward)));
+    if (hasUnlinkedInput(node, "cameraPosition"))
+        set("cameraPosition", vec3Json(eye));
+    if (!hasUnlinkedInput(node, "boundsMin") || !hasUnlinkedInput(node, "boundsMax"))
+        return;
+    scene::Graph& g = scene::Graph::current();
+    const std::string setName = node.value("set", "");
+    scene::Node* setNode = setName.empty() ? nullptr : tex::findSet(g, setName);
+    double lo[3], hi[3];
+    if (setNode && tex::bakedPositionBounds(g, tex::readSettings(*setNode).bakeProject, lo, hi))
+    {
+        set("boundsMin", json::array({lo[0], lo[1], lo[2]}));
+        set("boundsMax", json::array({hi[0], hi[1], hi[2]}));
+        return;
+    }
+    for (const json& p : node.value("params", json::array()))
+        if (p.value("id", "") == "view" && p.value("value", json()) == "cameraPosition")
+            log::warn("{}: the set has no baked position map, so Bounds Min and Max keep their values; bake the position map for Camera Position",
+                      node.value("name", std::string("Fresnel")));
+}
+
+/** A node parameter: a picker for scene nodes of its options' types; a camera one also takes the active view's pose. */
+void addNodeParam(QFormLayout* form, QWidget* parent, const json& p, const json& node, const SetFn& set)
+{
+    const std::string id = p.value("id", "");
+    const json options = p.value("options", json::array());
+    std::string types;
+    for (const json& o : options)
+        types += (types.empty() ? "" : "|") + o.get<std::string>();
+    const bool camera = types == "camera";
+    auto* row = new QWidget(parent);
+    auto* h = new QHBoxLayout(row);
+    h->setContentsMargins(0, 0, 0, 0);
+    h->setSpacing(4);
+    auto* picker = new NodePicker(types.empty() ? "node" : types, false, row);
+    picker->setValue(p.contains("value") ? p["value"] : p.value("default", json("")));
+    picker->setToolTip(qs(p.value("doc", "")));
+    h->addWidget(picker, 1);
+    if (!camera)
+    {
+        QObject::connect(picker, &NodePicker::edited, picker, [set, id](const json& v) { set(id, v); });
+        form->addRow(new QLabel(labelOf(p), parent), row);
+        return;
+    }
+    QObject::connect(picker, &NodePicker::edited, picker, [set, id, node](const json& v) {
+        const std::string name = v.is_string() ? v.get<std::string>() : std::string();
+        scene::Graph& g = scene::Graph::current();
+        scene::Node* cam = name.empty() ? nullptr : g.find(name);
+        if (!cam)
+        {
+            set(id, name);
+            return;
+        }
+        const glm::dmat4 world = std::get<glm::dmat4>(g.value({cam->id(), scene::Transform::kWorldMatrix}));
+        // Cameras look down their local -Z.
+        takeCameraPose(node, set, glm::dvec3(world[3]), -glm::dvec3(world[2]), id, name);
+    });
+    auto* view = new QToolButton(row);
+    view->setText("Active View");
+    view->setToolTip("Take the active viewport's direction and position");
+    QObject::connect(view, &QToolButton::clicked, view, [set, id, node] {
+        ViewportWidget* vp = cameraBookmarks::activeView();
+        if (!vp)
+        {
+            log::warn("Active View: no viewport to take the view from");
+            return;
+        }
+        const Camera& c = vp->camera();
+        takeCameraPose(node, set, c.eye(), c.forward(), id, "");
+    });
+    h->addWidget(view);
+    form->addRow(new QLabel(labelOf(p), parent), row);
 }
 
 /** Adds the editor for one parameter to the form. */
@@ -720,8 +846,28 @@ QWidget* gradientEditor(QWidget* parent, const json& value, std::function<void(c
         bar->update();
         emitValue();
     });
+    auto* position = new QDoubleSpinBox(w);
+    position->setRange(0.0, 1.0);
+    position->setDecimals(3);
+    position->setSingleStep(0.01);
+    position->setKeyboardTracking(false);
+    position->setAlignment(Qt::AlignRight);
+    position->setPrefix("Position  ");
+    position->setEnabled(false);
+    position->setToolTip("The selected stop's position, 0 to 1. Click a stop to select it");
+    bar->selectionChanged = [position](double t) {
+        QSignalBlocker block(position);
+        position->setEnabled(t >= 0.0);
+        position->setValue(std::max(t, 0.0));
+    };
+    QObject::connect(position, &QDoubleSpinBox::valueChanged, w, [bar](double t) { bar->setSelectedPosition(t); });
+    auto* row = new QHBoxLayout();
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(4);
+    row->addWidget(interp, 1);
+    row->addWidget(position, 1);
     v->addWidget(bar);
-    v->addWidget(interp);
+    v->addLayout(row);
     return w;
 }
 
@@ -759,7 +905,7 @@ QWidget* nodePanel(QWidget* parent, const json& node, SetFn set)
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(3);
     const std::string name = node.value("name", "");
-    QString title = qs(node.value("label", node.value("type", ""))) + (name.empty() ? QString() : "  (" + qs(name) + ")");
+    QString title = qs(node.value("title", node.value("label", node.value("type", "")))) + (name.empty() ? QString() : "  (" + qs(name) + ")");
     QLabel* head = heading(w, title);
     head->setToolTip(qs(node.value("type", "")) + (node.contains("category") ? ", " + qs(node["category"].get<std::string>()) : QString()));
     v->addWidget(head);
@@ -775,7 +921,10 @@ QWidget* nodePanel(QWidget* parent, const json& node, SetFn set)
         auto* form = new QFormLayout();
         form->setContentsMargins(0, 0, 0, 0);
         for (const json& p : params)
-            addParam(form, w, p, set);
+            if (p.value("type", "") == "node")
+                addNodeParam(form, w, p, node, set);
+            else
+                addParam(form, w, p, set);
         v->addLayout(form);
     }
 

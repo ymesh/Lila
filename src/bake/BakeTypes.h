@@ -86,7 +86,7 @@ struct LILA_SCENE_API MapSettings
     bool enabled = true;
     /** The {map} token; empty uses the map's default suffix. */
     std::string suffix;
-    /** 0 uses the output's. */
+    /** 0 uses the output's, raised to the map's preferred depth (16 for height and position). */
     int bits = 0;
     /** Empty uses the output's. */
     std::string format;

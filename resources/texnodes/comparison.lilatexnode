@@ -1,0 +1,59 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "comparison",
+  "label": "Comparison",
+  "category": "Utility",
+  "doc": "Compares a with b: white where the test holds, black where it doesn't. Every input takes a value or a link.",
+  "keywords": [
+    "compare",
+    "greater",
+    "less",
+    "equal",
+    "if",
+    "test"
+  ],
+  "inputs": [
+    {
+      "id": "a",
+      "type": "float",
+      "default": 0.5
+    },
+    {
+      "id": "b",
+      "type": "float",
+      "default": 0.5
+    },
+    {
+      "id": "tolerance",
+      "type": "float",
+      "default": 0.001,
+      "doc": "How close counts as equal, for equal and notEqual."
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "operation",
+      "type": "enum",
+      "default": "greaterThan",
+      "options": [
+        "greaterThan",
+        "lessThan",
+        "greaterOrEqual",
+        "lessOrEqual",
+        "equal",
+        "notEqual"
+      ]
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float x = a.sample(uv);\nfloat y = b.sample(uv);\nbool r;\nif (p.operation == 0)\n    r = x > y;\nelse if (p.operation == 1)\n    r = x < y;\nelse if (p.operation == 2)\n    r = x >= y;\nelse if (p.operation == 3)\n    r = x <= y;\nelse if (p.operation == 4)\n    r = abs(x - y) <= tolerance.sample(uv);\nelse\n    r = abs(x - y) > tolerance.sample(uv);\nreturn r ? 1.0 : 0.0;"
+  }
+}

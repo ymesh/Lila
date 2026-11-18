@@ -4,9 +4,11 @@
 #include "core/Profile.h"
 #include "link/UnrealLink.h"
 
+#include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <set>
+#include <thread>
 
 namespace lila::link
 {
@@ -37,7 +39,15 @@ void writeManifest(const fs::path& p, const json& tiles)
         std::ofstream out(tmp, std::ios::trunc);
         out << json{{"tiles", tiles}}.dump(1);
     }
-    fs::rename(tmp, p, ec);
+    // A scanner or indexer can briefly hold the manifest open, which makes the rename fail on Windows.
+    for (int attempt = 0; attempt < 50; ++attempt)
+    {
+        fs::rename(tmp, p, ec);
+        if (!ec)
+            return;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    log::warn("sendTiles: couldn't write the tile manifest {}: {}; the next send resends these tiles", p.string(), ec.message());
 }
 
 std::string hex(uint64_t h)

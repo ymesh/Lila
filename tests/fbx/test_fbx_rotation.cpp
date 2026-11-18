@@ -70,3 +70,27 @@ TEST_CASE("rotation curves round-trip through FBX, keyed and baked, and import a
         CHECK(worst < 1e-3);
     }
 }
+
+TEST_CASE("the exported take spans the playback range in frames at the scene fps")
+{
+    // Frames 1 to 120 at 30 fps: Lila's times are seconds, so the take is 119 frames long, not 119 seconds.
+    run("newScene");
+    run("playbackOptions", {{"fps", 30.0}, {"minTime", 1.0 / 30.0}, {"maxTime", 120.0 / 30.0}, {"animationStartTime", 1.0 / 30.0},
+                            {"animationEndTime", 120.0 / 30.0}});
+    run("spaceLocator", {{"name", "Mover"}});
+    run("setKeyframe", {{"args", {"Mover.translateX"}}, {"time", 1.0 / 30.0}, {"value", 0.0}});
+    run("setKeyframe", {{"args", {"Mover.translateX"}}, {"time", 120.0 / 30.0}, {"value", 100.0}});
+    for (bool bake : {false, true})
+    {
+        CAPTURE(bake);
+        const fs::path file = tempFile(bake ? "range_baked.fbx" : "range.fbx");
+        run("exportFbx", {{"args", {file.string(), "Mover"}}, {"kind", "sequence"}, {"bakeAnimation", bake}});
+        UfbxScene s(file);
+        REQUIRE(s.scene);
+        REQUIRE(s.scene->anim_stacks.count == 1);
+        const ufbx_anim_stack* stack = s.scene->anim_stacks.data[0];
+        CHECK(stack->time_begin == doctest::Approx(1.0 / 30.0));
+        CHECK(stack->time_end == doctest::Approx(120.0 / 30.0));
+        CHECK(s.scene->settings.frames_per_second == doctest::Approx(30.0));
+    }
+}

@@ -30,6 +30,7 @@ const std::unordered_map<std::string_view, std::string_view>& defaultIcons()
     {"file.gameExporter", "device-gamepad-2"},
     {"file.exportMeshSequence", "movie"},
     {"file.exportWebViewer", "world-www"},
+    {"file.exportOnSave", "device-floppy"},
     {"window.batchRun", "list-check"},
     {"file.createReference", "link"},
     {"unreal.send", "send"},

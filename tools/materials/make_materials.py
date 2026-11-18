@@ -1,4 +1,4 @@
-"""Writes Lila's built-in procedural materials (resources/materials) and the Meadowlight and Brushwork extension packs as
+"""Writes Lila's built-in procedural materials (resources/materials) and the Meadowlight and Paintbox extension packs as
 .lilamat texture graphs, plus Meadowlight's smart masks (.lilasmart). Those files are what ships; this script is how they are authored.
 
     python tools/materials/make_materials.py [--only substring]
@@ -16,7 +16,7 @@ from matgraph import ROOT, write  # noqa: E402
 PACKS = [
     ("resources/materials", ["builtin_metals", "builtin_woods", "builtin_stone", "builtin_ground", "builtin_fabrics", "builtin_misc", "builtin_layers"]),
     ("extensions/Meadowlight/resources/materials", ["meadowlight"]),
-    ("extensions/Brushwork/resources/materials", ["brushwork"]),
+    ("extensions/Paintbox/resources/materials", ["paintbox"]),
 ]
 
 

@@ -30,9 +30,23 @@ struct Options
     int changeStreamPort = -1;
     /** --version: print it and exit. */
     bool printVersion = false;
+    /** -h/--help: print the usage and exit. */
+    bool printHelp = false;
+    /** --export/--convert <scene> <out>: open the scene and export all of it by out's extension. */
+    std::string exportScene;
+    std::string exportOut;
+    /** --export-args "<python kwargs>": flags for the format's export command. */
+    std::string exportArgs;
+    /** -q/--quiet: only warnings and errors on the console. */
+    bool quiet = false;
+    /** A malformed command line: what is wrong with it. */
+    std::string error;
 };
 
 LILA_SCENE_API Options parse(int argc, char** argv);
+
+/** lilabatch's -h/--help text. */
+LILA_SCENE_API std::string usage();
 
 /** Prefs, the up axis, node types and every non-UI command. Call right after crash::install. */
 LILA_SCENE_API void startCore();

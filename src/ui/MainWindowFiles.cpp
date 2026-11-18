@@ -2,6 +2,7 @@
 #include "ui/AchievementRules.h"
 #include "ui/FileDialog.h"
 #include "ui/FileDrop.h"
+#include "ui/Shelf.h"
 #include "ui/ViewportToast.h"
 #include "scene/Skin.h"
 
@@ -206,7 +207,8 @@ void MainWindow::showVersions()
 
 void MainWindow::startup(const std::vector<io::recovery::Session>& stale, bool showStartup)
 {
-    if (themeChooserPending())
+    const bool firstRun = themeChooserPending();
+    if (firstRun)
         runFirstRunSetup(this);
     std::vector<io::recovery::Candidate> candidates = io::recovery::findRecoverable(stale);
     io::recovery::keep(candidates);
@@ -266,6 +268,13 @@ void MainWindow::startup(const std::vector<io::recovery::Session>& stale, bool s
     const bool welcome = PrefStore::get().value<bool>("general", kShowWelcomePref, true);
     if (welcome || PrefStore::get().value<bool>("general", kShowRecentPref, true))
         showStartupDialog(welcome);
+    if (!firstRun)
+        return;
+    // The shelf comes up only once the welcome page is gone, so the two never compete.
+    if (mStartupDialog)
+        connect(mStartupDialog, &QDialog::finished, this, [] { FloatingShelf::introduce(); });
+    else
+        FloatingShelf::introduce();
 }
 
 void MainWindow::showStartupDialog(bool welcome)

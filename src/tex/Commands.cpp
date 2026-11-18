@@ -1,13 +1,16 @@
 #include "tex/TextureSet.h"
 
+#include "core/Log.h"
 #include "core/Profile.h"
 #include "gn/Routing.h"
 #include "ops/Command.h"
+#include "ops/CommandOptions.h"
 #include "tex/PatchFill.h"
 #include "tex/Ptex.h"
 #include "scene/Materials.h"
 #include "scene/Node.h"
 #include "tex/Evaluate.h"
+#include "tex/Generators.h"
 #include "tex/Interop.h"
 #include "tex/Layers.h"
 #include "tex/PainterImport.h"
@@ -61,6 +64,29 @@ json editGraph(const Args& a, const char* cmd, const std::function<json(Graph&, 
     json result = fn(g, s);
     writeGraph(graph(), n, g);
     return result;
+}
+
+/**
+ * Fills a node's unset boundsMin and boundsMax inputs from the bake project's last position map, for nodes that turn that
+ * map's 0-1 values back into proportions (Triplanar, Fresnel).
+ */
+void fillBakeBounds(GNode& n, const SetSettings& s, const char* cmd)
+{
+    const NodeDef* def = findNode(n.type);
+    if (!def || !def->input("boundsMin") || !def->input("boundsMax") || n.values.contains("boundsMin") || n.values.contains("boundsMax"))
+        return;
+    double lo[3], hi[3];
+    if (!bakedPositionBounds(graph(), s.bakeProject, lo, hi))
+    {
+        // Unset bounds follow live maps while they feed the set.
+        if (liveMeshMapMeta(s.bakeProject, "position").is_object())
+            return;
+        log::warn("{}: {} has no baked position map to take its bounds from, so it treats the mesh's bounds as a cube; bake Position, "
+                  "then set Bounds Min and Max", cmd, n.name);
+        return;
+    }
+    n.values["boundsMin"] = json::array({lo[0], lo[1], lo[2]});
+    n.values["boundsMax"] = json::array({hi[0], hi[1], hi[2]});
 }
 
 std::pair<std::string, std::string> splitPlug(const std::string& s, const char* cmd)
@@ -162,6 +188,8 @@ json nodeJson(const GNode& n, const Graph& g, const SetSettings& s)
         j["category"] = p.def->category;
         j["kind"] = nodeKindName(p.def->kind);
     }
+    if (!n.label.empty())
+        j["title"] = n.label;
     json ins = json::array(), outs = json::array(), prms = json::array();
     for (const PortDecl& d : p.inputs)
         ins.push_back(portStateJson(d, &n, &g, true));
@@ -180,6 +208,15 @@ json defJson(const NodeDef& d, bool detail)
     json e = {{"type", d.type}, {"label", d.label}, {"category", d.category}, {"doc", d.doc}, {"kind", nodeKindName(d.kind)}, {"tier", d.tier}};
     if (!d.owner.empty())
         e["owner"] = d.owner;
+    if (!d.keywords.empty())
+        e["keywords"] = d.keywords;
+    if (const ParamDecl* op = d.param("operation"); op && op->type == ParamType::Enum)
+    {
+        json variants = json::array();
+        for (const std::string& o : op->options)
+            variants.push_back({{"label", ops::options::prettyLabel(o)}, {"values", {{"operation", o}}}});
+        e["variants"] = variants;
+    }
     if (detail)
     {
         json ins = json::array(), outs = json::array(), prms = json::array();
@@ -541,13 +578,14 @@ void registerCommands()
             std::string type = positionalString(a, 1, "texAddNode", "type");
             if (!findNode(type))
                 throw CommandError("texAddNode: unknown node type '" + type + "'");
-            return editGraph(a, "texAddNode", [&](Graph& g, const SetSettings&) -> json {
+            return editGraph(a, "texAddNode", [&](Graph& g, const SetSettings& s) -> json {
                 std::string base = a.get<std::string>("name", type);
                 if (!gn::validIdentifier(base))
                     throw CommandError("texAddNode: '" + base + "' isn't a valid name");
                 GNode n{g.uniqueNodeName(base), type, {0.0, 0.0}, json::object()};
                 if (a.has("position"))
                     n.position = {a.flags["position"][0].get<double>(), a.flags["position"][1].get<double>()};
+                fillBakeBounds(n, s, "texAddNode");
                 g.nodes.push_back(n);
                 return n.name;
             });
@@ -754,11 +792,13 @@ void registerCommands()
 
     ops::registerCommand({
         .name = "texSetNodeFlags",
-        .doc = "Set how nodes draw and run, as gnSetNodeFlags does: muted, collapsed, hideUnused. Flags left out stay as they are.",
+        .doc = "Set how nodes draw and run, as gnSetNodeFlags does: muted, collapsed, hideUnused, hidePreview. Flags left out stay as "
+               "they are.",
         .positionalDoc = "set nodes...",
         .flags = {{"muted", "", T::Bool, nullptr, "Bypass the nodes."},
                   {"collapsed", "", T::Bool, nullptr, "Draw only their headers."},
-                  {"hideUnused", "", T::Bool, nullptr, "Draw only their linked sockets."}},
+                  {"hideUnused", "", T::Bool, nullptr, "Draw only their linked sockets."},
+                  {"hidePreview", "", T::Bool, nullptr, "Draw them without their image previews."}},
         .run = [](const Args& a) -> json {
             return editGraph(a, "texSetNodeFlags", [&](Graph& g, const SetSettings&) -> json {
                 for (size_t i = 1; i < a.positional.size(); ++i)
@@ -775,8 +815,26 @@ void registerCommands()
                         n.collapsed = a.get<bool>("collapsed", false);
                     if (a.has("hideUnused"))
                         n.hideUnused = a.get<bool>("hideUnused", false);
+                    if (a.has("hidePreview"))
+                        n.hidePreview = a.get<bool>("hidePreview", false);
                 }
                 return nullptr;
+            });
+        },
+    });
+
+    ops::registerCommand({
+        .name = "texSetNodeLabel",
+        .doc = "Show a node under its own title on the canvas, as gnSetNodeLabel does: texSetNodeLabel(set, 'Noise', 'Rust Breakup'). The "
+               "node keeps its name; an empty label shows the node type's again.",
+        .positionalDoc = "set node label",
+        .run = [](const Args& a) -> json {
+            if (a.positional.size() < 3 || !a.positional[2].is_string())
+                throw CommandError("texSetNodeLabel: expected (set, node, label)");
+            const std::string label = gn::cleanNodeLabel(a.positional[2].get<std::string>());
+            return editGraph(a, "texSetNodeLabel", [&](Graph& g, const SetSettings&) -> json {
+                nodeIn(g, a.positional[1].get<std::string>(), "texSetNodeLabel").label = label;
+                return label;
             });
         },
     });
@@ -798,8 +856,8 @@ void registerCommands()
 
     ops::registerCommand({
         .name = "texSetFrames",
-        .doc = "Replace a texture set's frames, shaped as gnSetFrames takes them. Display only; names not in the graph are dropped. "
-               "Returns how many frames there are.",
+        .doc = "Replace a texture set's frames, shaped as gnSetFrames takes them (a frame with text is a note). Display only; names not "
+               "in the graph are dropped. Returns how many frames there are.",
         .positionalDoc = "set frames",
         .run = [](const Args& a) -> json {
             if (a.positional.size() < 2 || !a.positional[1].is_array())
@@ -978,6 +1036,8 @@ void registerCommands()
 
             std::vector<std::string> errors;
             Graph g = graphFromSpec(spec, name, settings, errors);
+            for (GNode& node : g.nodes)
+                fillBakeBounds(node, settings, "texBuildGraph");
             if (!errors.empty())
             {
                 std::string msg = "texBuildGraph: " + std::to_string(errors.size()) + " problem" + (errors.size() == 1 ? "" : "s");
@@ -1052,7 +1112,8 @@ void registerCommands()
 
     ops::registerCommand({
         .name = "texNodeTypes",
-        .doc = "The texture node library: type, label, category, kind, tier and description of each. With linkType, only nodes that can "
+        .doc = "The texture node library: type, label, category, kind, tier, description, search keywords and variants (an operation's "
+               "options, each {label, values} to set on the new node) of each. With linkType, only nodes that can "
                "take a link from (or, with linkInput, give one to) a port of that type, each with the socket it would use.",
         .flags = {{"linkType", "", T::String, nullptr, "Port type of a dragged link's loose end."},
                   {"linkInput", "", T::Bool, false, "The drag started at an input, so the node needs a matching output."},

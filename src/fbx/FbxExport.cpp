@@ -1112,7 +1112,7 @@ bool parseProfile(std::string_view name, AxisProfile* out)
     std::string n = toLower(name);
     if (n == "ue5")
         *out = AxisProfile::Ue5;
-    else if (n == "ue6")
+    else if (n == "ue6" || n == "unity")
         *out = AxisProfile::Ue6;
     else if (n == "generic")
         *out = AxisProfile::Generic;

@@ -208,6 +208,53 @@ TEST_CASE("collapsed and hide-unused flags store, copy and undo")
     CHECK_THROWS(run("gnSetNodeFlags", {{"args", {"T", "GroupOutput"}}, {"muted", true}}));
 }
 
+TEST_CASE("node labels show on the header, keep the name, store, copy and undo")
+{
+    run("newScene");
+    buildTiedGrid("T");
+    CHECK(run("gnSetNodeLabel", args({"T", "CombineXYZ", "  Height\nOffset "})) == "Height Offset");
+    gn::Group g = group("T");
+    CHECK(g.node("CombineXYZ")->label == "Height Offset");
+    CHECK(gn::Group::fromJson(g.toJson()).node("CombineXYZ")->label == "Height Offset");
+    // The name is untouched, so links, exposed inputs and scripts still find the node by it.
+    CHECK(g.linksInto("SetPosition", "offset").size() == 1);
+    json info = run("gnGroupInfo", args({"T"}));
+    for (const json& n : info["nodes"])
+        if (n["name"] == "CombineXYZ")
+            CHECK(n["title"] == "Height Offset");
+
+    json clip = json::parse(run("gnCopyNodes", args({"T", "CombineXYZ"})).get<std::string>());
+    run("gnPasteNodes", {{"args", {"T", clip.dump()}}, {"position", {0, 900}}});
+    CHECK(group("T").node("CombineXYZ1")->label == "Height Offset");
+    run("undo");
+
+    run("gnSetNodeLabel", args({"T", "CombineXYZ", ""}));
+    CHECK(group("T").node("CombineXYZ")->label.empty());
+    run("undo");
+    run("undo");
+    CHECK(group("T").node("CombineXYZ")->label.empty());
+    CHECK_THROWS(run("gnSetNodeLabel", args({"T", "Nope", "X"})));
+}
+
+TEST_CASE("a frame's text makes it a note that stores, copies and undoes")
+{
+    run("newScene");
+    buildTiedGrid("T");
+    json frames = json::array({{{"label", "Note"}, {"position", {0, -200}}, {"size", {240, 100}}, {"text", "Tweak height here.\nSecond line."},
+                                {"nodes", {"CombineXYZ"}}},
+                               {{"label", "Plain"}, {"position", {600, 0}}, {"size", {200, 100}}, {"nodes", json::array()}}});
+    run("gnSetFrames", args({"T", frames}));
+    gn::Group g = group("T");
+    CHECK(g.frames[0].text == "Tweak height here.\nSecond line.");
+    CHECK(g.frames[1].text.empty());
+    CHECK_FALSE(gn::framesToJson(g.frames)[1].contains("text"));
+    CHECK(gn::Group::fromJson(g.toJson()).frames == g.frames);
+    json clip = json::parse(run("gnCopyNodes", args({"T", "CombineXYZ"})).get<std::string>());
+    CHECK(clip["frames"][0]["text"] == "Tweak height here.\nSecond line.");
+    run("undo");
+    CHECK(group("T").frames.empty());
+}
+
 TEST_CASE("bookmarks store with the group and undo")
 {
     run("newScene");

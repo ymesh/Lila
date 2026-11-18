@@ -48,6 +48,7 @@ add_executable(lila_tex_gpu_tests
     test_tex_paint_symmetry.cpp
     test_tex_paint_tools.cpp
     test_tex_stencil.cpp
+    test_tex_live_projection.cpp
     test_tex_path.cpp
     test_tex_pick.cpp
     test_tex_tilt.cpp

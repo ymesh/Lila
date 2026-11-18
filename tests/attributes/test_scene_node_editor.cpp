@@ -9,6 +9,7 @@
 #include <QGraphicsItem>
 #include <QGraphicsPathItem>
 #include <QGraphicsView>
+#include <QMouseEvent>
 
 using namespace lila;
 
@@ -85,4 +86,78 @@ TEST_CASE("Scene node editor: the selection's nodes and wires, rebuilt as connec
     snePump();
     CHECK(canvasNodes(view) == 3);
     CHECK(canvasWires(view) == 2);
+}
+
+TEST_CASE("Scene node editor: a modifier shows its sockets, goes into the selected mesh's stack, and edits on the node")
+{
+    sneCmd("newScene");
+    const std::string cube = sneCmd("polyCube", {{"name", "Box"}})[0];
+    sneCmd("select", {{"args", {cube}}});
+    QWidget host;
+    auto* editor = new ui::NodeEditor(&host, ui::kSceneGraphBackend);
+    host.resize(1000, 700);
+    host.show();
+    snePump();
+    auto* view = editor->findChild<QGraphicsView*>();
+    REQUIRE(view);
+    auto stack = [&] { return sneCmd("modifiers", {{"args", {cube}}}); };
+
+    // Added with the mesh selected, a modifier goes on top of its stack, as the Modifiers panel puts it: one undo step.
+    const std::string onTop = sneCmd("sceneGraphAddNode", {{"args", {"Selection", "subdivisionModifier"}}, {"position", {400, 0}}});
+    CHECK(stack() == json::array({onTop}));
+    sneCmd("undo");
+    CHECK(stack().empty());
+    CHECK_FALSE(scene::Graph::current().find(onTop));
+
+    // insert=False leaves it unlinked, with its mesh sockets and parameters showing.
+    const std::string loose = sneCmd("sceneGraphAddNode", {{"args", {"Selection", "subdivisionModifier"}}, {"position", {600, 0}}, {"insert", false}});
+    snePump();
+    CHECK(stack().empty());
+    json info = sneCmd("sceneGraphInfo", {{"args", {"Selection"}}});
+    const json* mod = nullptr;
+    std::string from;
+    for (const json& n : info["nodes"])
+        if (n["name"] == loose)
+            mod = &n;
+    for (const json& l : info["definition"]["links"])
+        if (l[2] == cube && l[3] == "inMesh")
+            from = l[0].get<std::string>() + "." + l[1].get<std::string>();
+    REQUIRE(mod);
+    REQUIRE(!from.empty());
+    CHECK((*mod)["inputs"][0]["id"] == "inMesh");
+    CHECK(std::any_of((*mod)["outputs"].begin(), (*mod)["outputs"].end(), [](const json& s) { return s["id"] == "outMesh" && s["type"] == "mesh"; }));
+    QGraphicsItem* item = nullptr;
+    for (QGraphicsItem* i : view->scene()->items())
+        if ((i->flags() & QGraphicsItem::ItemIsSelectable) && i->pos() == QPointF(600, 0))
+            item = i;
+    REQUIRE(item);
+    const size_t rows = (*mod)["outputs"].size() + (*mod)["inputs"].size();
+    CHECK(item->boundingRect().height() >= 24.0 + 20.0 * double(rows));
+
+    // Clicking its Enabled check turns it off, undoably.
+    int enabled = -1;
+    for (size_t i = 0; i < (*mod)["inputs"].size(); ++i)
+        if ((*mod)["inputs"][i]["id"] == "enabled")
+            enabled = int(i);
+    REQUIRE(enabled >= 0);
+    const QPointF check(600 + 85, 24 + 20.0 * double((*mod)["outputs"].size() + size_t(enabled)) + 10);
+    for (QEvent::Type t : {QEvent::MouseButtonPress, QEvent::MouseButtonRelease})
+    {
+        QPoint p = view->mapFromScene(check);
+        QMouseEvent e(t, QPointF(p), QPointF(view->viewport()->mapToGlobal(p)), Qt::LeftButton,
+                      t == QEvent::MouseButtonPress ? Qt::LeftButton : Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(view->viewport(), &e);
+        snePump();
+    }
+    CHECK(sneCmd("getAttr", {{"args", {loose + ".enabled"}}}) == false);
+    sneCmd("undo");
+    CHECK(sneCmd("getAttr", {{"args", {loose + ".enabled"}}}) == true);
+
+    // Dropped on the mesh's history wire, it goes into the stack the same way.
+    CHECK(sneCmd("sceneGraphInsertNode", {{"args", {"Selection", loose, from, cube + ".inMesh"}}}) == true);
+    CHECK(stack() == json::array({loose}));
+    sneCmd("undo");
+    CHECK(stack().empty());
+    // Anything else is left for the editor to wire.
+    CHECK(sneCmd("sceneGraphInsertNode", {{"args", {"Selection", cube, from, cube + ".inMesh"}}}) == false);
 }

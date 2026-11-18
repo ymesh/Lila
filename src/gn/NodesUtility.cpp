@@ -21,6 +21,13 @@ double wrapf(double v, double hi, double lo)
     return r == 0.0 ? lo : v - r * std::floor((v - lo) / r);
 }
 double pingpong(double a, double s) { return s == 0.0 ? 0.0 : std::abs(flooredMod(a - s, 2.0 * s) - s); }
+double smoothStep(double x, double lo, double hi)
+{
+    if (lo == hi)
+        return x < lo ? 0.0 : 1.0;
+    double t = std::clamp((x - lo) / (hi - lo), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
 double smoothMin(double a, double b, double k)
 {
     if (k <= 0.0)
@@ -47,6 +54,9 @@ const std::map<std::string, MathOp>& mathOps()
         {"maximum", {2, [](double a, double b, double) { return std::max(a, b); }}},
         {"lessThan", {2, [](double a, double b, double) { return a < b ? 1.0 : 0.0; }}},
         {"greaterThan", {2, [](double a, double b, double) { return a > b ? 1.0 : 0.0; }}},
+        // a against the edge b; smoothStep eases a from b to c.
+        {"step", {2, [](double a, double b, double) { return a >= b ? 1.0 : 0.0; }}},
+        {"smoothStep", {3, [](double a, double b, double c) { return smoothStep(a, b, c); }}},
         {"sign", {1, [](double a, double, double) { return a > 0.0 ? 1.0 : a < 0.0 ? -1.0 : 0.0; }}},
         {"compare", {3, [](double a, double b, double c) { return std::abs(a - b) <= std::max(c, 1e-5) ? 1.0 : 0.0; }}},
         {"smoothMin", {3, [](double a, double b, double c) { return smoothMin(a, b, c); }}},

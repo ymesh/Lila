@@ -1,0 +1,54 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "smoothStep",
+  "label": "Smooth Step",
+  "category": "Utility",
+  "doc": "Eases from black at Low to white at High. Every input takes a value or a link.",
+  "keywords": [
+    "smoothstep",
+    "smootherstep",
+    "ease",
+    "ramp"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "float",
+      "default": 0.5
+    },
+    {
+      "id": "low",
+      "type": "float",
+      "default": 0.25
+    },
+    {
+      "id": "high",
+      "type": "float",
+      "default": 0.75
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "curve",
+      "type": "enum",
+      "default": "smooth",
+      "options": [
+        "smooth",
+        "smoother",
+        "linear"
+      ],
+      "doc": "smooth: the classic smoothstep. smoother: flatter at both ends. linear: a straight ramp."
+    }
+  ],
+  "cost": 2,
+  "body": {
+    "out": "float lo = low.sample(uv);\nfloat hi = high.sample(uv);\nfloat x = input.sample(uv);\nif (abs(hi - lo) < 1e-9)\n    return x < lo ? 0.0 : 1.0;\nfloat t = saturate((x - lo) / (hi - lo));\nif (p.curve == 0)\n    return t * t * (3.0 - 2.0 * t);\nif (p.curve == 1)\n    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);\nreturn t;"
+  }
+}

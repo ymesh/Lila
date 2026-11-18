@@ -52,6 +52,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
@@ -97,6 +98,8 @@ inline constexpr const char* kPrefWireStyle = "/nodeEditor/wireStyle";
 inline constexpr const char* kPrefDimUnrelated = "/nodeEditor/dimUnrelated";
 /** In a grey theme, draw every wire one grey rather than in its socket type's shade. */
 inline constexpr const char* kPrefGreyWires = "/nodeEditor/greyWiresInMonotone";
+/** Image previews on the nodes that have one; off hides them on every node. */
+inline constexpr const char* kPrefPreviews = "/nodeEditor/previews";
 
 enum class WireStyle : uint8_t
 {
@@ -112,6 +115,7 @@ struct CanvasPrefs
     WireStyle wires = WireStyle::Curved;
     bool dimUnrelated = false;
     bool greyWires = false;
+    bool previews = true;
 };
 
 inline CanvasPrefs readCanvasPrefs()
@@ -124,6 +128,7 @@ inline CanvasPrefs readCanvasPrefs()
     p.wires = style == "straight" ? WireStyle::Straight : style == "rightAngle" ? WireStyle::RightAngle : WireStyle::Curved;
     p.dimUnrelated = s.value<bool>("general", kPrefDimUnrelated, false);
     p.greyWires = s.value<bool>("general", kPrefGreyWires, false);
+    p.previews = s.value<bool>("general", kPrefPreviews, true);
     return p;
 }
 
@@ -289,7 +294,33 @@ struct SocketInfo
     json value;
     std::string implicit;
     std::string doc;
+    /** An input's min, max, softMin, softMax and step, and an enum's names, where the backend gives them. */
+    json limits = json::object();
 };
+
+/** How an input row edits its value on the node: a slider to drag, a check to click, a swatch that opens the colour picker. */
+enum class FieldKind : uint8_t
+{
+    None,
+    Number,
+    Toggle,
+    Color,
+};
+
+/** The range a slider fill spans: soft limits first, then hard ones. Nullopt unless both ends are known. */
+inline std::optional<std::pair<double, double>> fieldRange(const json& limits)
+{
+    auto end = [&](const char* soft, const char* hard) -> std::optional<double> {
+        for (const char* k : {soft, hard})
+            if (auto it = limits.find(k); it != limits.end() && it->is_number())
+                return it->get<double>();
+        return std::nullopt;
+    };
+    std::optional<double> lo = end("softMin", "min"), hi = end("softMax", "max");
+    if (!lo || !hi || *hi <= *lo)
+        return std::nullopt;
+    return std::pair{*lo, *hi};
+}
 
 class NodeItem final : public QGraphicsItem
 {
@@ -300,6 +331,8 @@ public:
     std::string type;
     std::string category;
     QString label;
+    /** The header the backend gives the node before a label set on it replaces it. */
+    QString typeLabel;
     std::vector<SocketInfo> inputs, outputs;
     std::vector<std::pair<std::string, std::string>> props;
     /** Props with a text editor (code, multiline, font): drawn as typed, first line only. */
@@ -307,6 +340,8 @@ public:
     bool viewer = false;
     bool viewerActive = false;
     std::string groupRef; // the group a Group node runs
+    /** The backend's preview size for the type; thumbSize is what is drawn, 0 while previews are hidden. */
+    int previewSize = 0;
     int thumbSize = 0;
     QImage thumb;
 
@@ -319,6 +354,7 @@ public:
     /** Shown as a badge on the header, such as a Receive naming no Send. */
     QString problem;
     QRectF badgeRect() const { return QRectF(kNodeWidth - kHeader + 2, 3, kHeader - 6, kHeader - 6); }
+    QRectF headerRect() const { return QRectF(0.0, 0.0, kNodeWidth, kHeader); }
     /** Header label, with a portal's name. */
     QString title() const;
     QString shownTitle() const { return muted ? title() + " (muted)" : title(); }
@@ -335,11 +371,24 @@ public:
     bool collapsed = false;
     bool hideUnused = false;
     bool muted = false;
+    bool hidePreview = false;
     /** The socket rows drawn: indices into outputs and inputs. */
     std::vector<int> shownOut, shownIn;
 
-    /** Picks the rows to draw from the flags and what is linked; call after either changes. */
+    /**
+     * Picks the rows to draw from the flags and what is linked; call after either changes. Hiding unused sockets keeps
+     * the backend's primary ones, and a node with neither links nor primary sockets shows every row so it can be wired.
+     */
     void layoutRows();
+
+    /** How input i edits on the node; None when it is linked, valueless, implicit, or a type the side panel edits. */
+    FieldKind fieldKind(int i) const;
+    /** Input i's drawn field in item coordinates; empty when the row isn't drawn. */
+    QRectF fieldRect(int i) const;
+    /** The editable input under a scene point, -1 for none. */
+    int fieldAt(QPointF scenePos) const;
+    /** The input the cursor is over, drawn lit. */
+    int hotField = -1;
 
     /** Where the socket rows start: under the header and the thumbnail. */
     double top() const { return kHeader + (thumbSize > 0 ? thumbSize + 8.0 : 0.0); }
@@ -444,15 +493,24 @@ public:
     QPen base;
 };
 
-/** A frame's box behind the nodes it holds: a title band with its label and collapse arrow, and a resize grip. */
+/**
+ * A frame's box behind the nodes it holds: a title band with its label and collapse arrow, and a resize grip. A note is a
+ * frame with text, drawn wrapped in its body.
+ */
 class FrameItem final : public QGraphicsItem
 {
 public:
-    explicit FrameItem(int index) : index(index) { setZValue(-2.0); }
+    explicit FrameItem(int index) : index(index)
+    {
+        setZValue(-2.0);
+        setFlag(QGraphicsItem::ItemIsSelectable);
+    }
 
     static constexpr double kTitle = 22.0;
+    static constexpr double kTextPad = 8.0;
     int index;
     QString label;
+    QString text;
     QSizeF size{300.0, 200.0};
     QColor color;
     bool collapsed = false;
@@ -462,7 +520,16 @@ public:
     QRectF titleRect() const { return QRectF(0.0, 0.0, size.width(), kTitle); }
     QRectF arrowRect() const { return QRectF(3.0, 3.0, kTitle - 6.0, kTitle - 6.0); }
     QRectF gripRect() const { return collapsed ? QRectF() : QRectF(size.width() - 14.0, size.height() - 14.0, 14.0, 14.0); }
+    /** Where the text wraps: the body under the title, padded. */
+    QRectF textRect() const { return QRectF(kTextPad, kTitle + kTextPad * 0.5, size.width() - 2.0 * kTextPad, size.height() - kTitle - kTextPad * 1.5); }
     QRectF boundingRect() const override { return box().adjusted(-2, -2, 2, 2); }
+    /** Only the title selects it, so a rubber band over the nodes inside leaves the frame alone. */
+    QPainterPath shape() const override
+    {
+        QPainterPath p;
+        p.addRect(titleRect());
+        return p;
+    }
     void paint(QPainter* p, const QStyleOptionGraphicsItem*, QWidget*) override;
 };
 
@@ -638,6 +705,10 @@ public:
     QPointF cursorScenePos() const;
 
     std::vector<std::string> selectedNames() const;
+    /** Indices of the selected frames and notes, in order; a click on a title selects one. */
+    std::vector<int> selectedFrames() const;
+    /** Frames to select when the canvas next builds, by index: copies just pasted or duplicated. */
+    void selectFramesAfterBuild(std::vector<int> frames) { mSelectFramesNext = std::move(frames); }
 
     void selectAll();
 
@@ -709,12 +780,39 @@ public:
     /** A frame around the selected nodes, or an empty one at the cursor when nothing is selected. */
     void frameSelection();
 
+    /** Whether the backend shows labels on its nodes (gn, tex) or renames them (the scene's own nodes). */
+    bool canRenameNodes() const { return backend->supports("SetNodeLabel"); }
+    /**
+     * Opens a box over the node's header to type its label in: Enter keeps it, Esc cancels. An empty label shows the type's
+     * again where the backend keeps labels apart from names. False when the node can't be renamed.
+     */
+    bool renameNode(const std::string& name);
+    /** The node to rename: the one selected, else the one under the cursor; empty for none. */
+    std::string renameTarget() const;
+    /** A note box at scene point at to type in; Ctrl+Enter or clicking away adds it as a note, Esc adds nothing. */
+    void addNote(QPointF at);
+    /** A node renamed by a backend whose labels are names (the scene's): its new name, to keep it selected. */
+    std::function<void(const std::string&)> onRenamed;
+    /** The in-place title or text box open on the canvas, for tests; null when none is. */
+    QWidget* inPlaceEditor() const { return mInPlace; }
+
     const std::vector<gn::GFrame>& frames() const { return mFrames; }
 
     /**
      * Flips a node flag ("muted", "collapsed", "hideUnused") on the selection: on for all when any lacks it, else off.
      */
     void toggleFlag(const char* flag);
+    /** True when every selected node the flag applies to has it on; false when none does. */
+    bool flagOn(const char* flag) const;
+
+    /** Image previews on every node that has one; kept as a pref. */
+    void setPreviews(bool on);
+    bool previews() const { return mPrefs.previews; }
+    /** Whether any node (or any selected one) draws an image preview when previews show. */
+    bool hasPreviews(bool selectedOnly) const;
+
+    /** After a value edited on a node lands: the editor brings its side panel up to date. */
+    std::function<void()> onValuesEdited;
 
     /** The nodes as (name, what shows on the header), for the find popup. */
     std::vector<std::pair<std::string, QString>> nodeList() const;
@@ -867,6 +965,8 @@ private:
 
     /** Wires n into the link, then (with the auto-offset pref) slides what is downstream right to make room. */
     void insertOnLink(LinkItem* l);
+    /** With the auto-offset pref, slides `to` and what it feeds right to clear n. */
+    void offsetDownstream(NodeItem* n, NodeItem* to);
 
     /** A wire's colour: its socket type's, or one grey in a grey theme when the pref asks. */
     QColor wireColor(const std::string& type) const;
@@ -892,7 +992,19 @@ private:
 
     void dragFrame(QPointF sp);
 
+    /** The frame's title as a box over its band, Enter keeps and Esc cancels. */
     void renameFrame(int f);
+    /** The frame's text as a box over its body. */
+    void editFrameText(int f);
+    /**
+     * A one-line box over scene rect r holding text; done gets the typed text when kept. Enter or clicking away keeps it, Esc
+     * cancels.
+     */
+    void editTitleInPlace(QRectF r, const QString& text, std::function<void(const QString&)> done);
+    /** A multi-line box over scene rect r; Ctrl+Enter or clicking away keeps it, Esc cancels. */
+    void editTextInPlace(QRectF r, const QString& text, std::function<void(const QString&)> done);
+    /** A note's size for its text at a width: the title plus the wrapped lines, padded. */
+    QSizeF noteSize(const QString& text, double width) const;
 
     void frameMenu(int f, QPoint global);
 
@@ -920,6 +1032,38 @@ public:
 private:
 
     void commitMoves();
+
+    /** A number field held by the mouse; kept by name, since every edit rebuilds the items (NodeCanvasFields.cpp). */
+    struct FieldDrag
+    {
+        std::string node;
+        std::string socket;
+        bool integer = false;
+        json limits;
+        double value = 0.0;
+        double sent = 0.0;
+        QPoint press, last;
+        double pxPerField = 1.0; // the field's width on screen, for a bounded slider's scale
+        bool dragging = false;
+    };
+    std::optional<FieldDrag> mField;
+    QPointer<QLineEdit> mFieldEdit;
+    QPointer<QWidget> mInPlace;
+    NodeItem* mHotFieldNode = nullptr;
+    bool mFieldCursor = false; // the viewport cursor is a field's, so leaving the field resets it
+
+    /** A left press on an editable row: a toggle flips, a swatch opens the picker, a number arms a scrub. */
+    void pressField(NodeItem* n, int input, QMouseEvent* e);
+    /** Scrubs the armed number by the mouse's travel: Shift ten times as fast, Ctrl a tenth. One undo step per drag. */
+    void dragField(QMouseEvent* e);
+    void releaseField();
+    /** A box over the field to type a number in; Enter or leaving it sets it, Esc cancels. */
+    void editFieldText(NodeItem* n, int input);
+    void pickFieldColor(NodeItem* n, int input, QPoint global);
+    /** Lights the field under the cursor and sets the cursor its kind uses. */
+    void hoverField(QPointF sp);
+    /** Sets one input as the side panel does; live edits during a drag leave the panel alone until the drag ends. */
+    void setFieldValue(const std::string& node, const std::string& socket, const json& value, bool live);
 
     void updateGrab(QPointF sp, Qt::KeyboardModifiers mods);
     void endGrab(bool keep);
@@ -961,6 +1105,7 @@ private:
     std::string mHoverPortal; // portal name whose ghost lines are drawn
     std::vector<gn::GFrame> mFrames;
     std::vector<FrameItem*> mFrameItems;
+    std::vector<int> mSelectFramesNext;
     int mFrameDrag = -1;
     bool mFrameResize = false;
     QPointF mFrameGrab;

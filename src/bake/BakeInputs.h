@@ -55,6 +55,8 @@ struct MeshSoup
 struct LowInput
 {
     MeshSoup soup;
+    /** The world matrix the soup was moved into bake space with. */
+    glm::dmat4 world{1.0};
     /** MikkTSpace tangents per corner (xyz, w bitangent sign), on the export triangulation. */
     std::vector<glm::vec4> tangents;
     /** Smooth point normals per corner (hard edges ignored): the auto cage pushes along these. */

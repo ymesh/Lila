@@ -89,6 +89,10 @@ private:
     void addElement(const std::vector<int>& attrs, int element);
     /** Removes the element attr names (attr[3], or group[3].child for the whole group[3]). */
     void removeElement(const std::string& attr);
+    /** Removes elements of an array (or every child of a grouped array) as one undo step. */
+    void removeElements(const std::vector<int>& attrs, const std::vector<int>& elements);
+    /** The changed element is a value edit in an array table, which redraws itself without a rebuild. */
+    bool tableKeepsUp(const scene::PlugRef& plug) const;
     /** Runs the command on the shown node, its path as the first argument; errors go to the log. */
     void runOnNode(const char* command, scene::json call);
     /** Deletes the added attributes under one heading: a component. */
@@ -155,6 +159,10 @@ private:
     /** Count badges of the last multi-object edits, by attribute, kept until the selection changes. */
     std::map<std::string, int> mBadgeCounts;
     std::map<std::string, QLabel*> mBadges;
+    /** Element counts of the attrs shown as array tables; a value change that keeps the count only redraws the table. */
+    std::map<int, size_t> mTableCounts;
+    /** Scroll position of each array table of mNode, kept across rebuilds. */
+    std::map<std::string, int> mArrayScroll;
     int mViewListener = 0;
     std::string mViewSig;
     /** Arrays (node path + "." + plug) the user asked to show past the element cap. */

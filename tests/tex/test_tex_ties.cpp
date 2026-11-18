@@ -44,6 +44,32 @@ TEST_CASE("tex: frames store, copy and undo")
     CHECK(graph("Rock").frames.empty());
 }
 
+TEST_CASE("tex: node labels and note text store, copy and undo")
+{
+    build();
+    CHECK(run("texSetNodeLabel", args({"Rock", "Tint", "Mortar Tint"})) == "Mortar Tint");
+    CHECK(graph("Rock").node("Tint")->label == "Mortar Tint");
+    CHECK(tex::Graph::fromJson(graph("Rock").toJson()).node("Tint")->label == "Mortar Tint");
+    CHECK(graph("Rock").linksInto("Output", "baseColor").front().fromNode == "Tint");
+    json info = run("texGraphInfo", args({"Rock"}));
+    for (const json& n : info["nodes"])
+        if (n["name"] == "Tint")
+            CHECK(n["title"] == "Mortar Tint");
+    json clip = json::parse(run("texCopyNodes", args({"Rock", "Tint"})).get<std::string>());
+    run("texPasteNodes", {{"args", {"Rock", clip.dump()}}, {"position", {400, 400}}});
+    CHECK(graph("Rock").node("Tint1")->label == "Mortar Tint");
+    run("undo");
+
+    json frames = json::array({{{"label", "Note"}, {"position", {0, 0}}, {"size", {240, 100}}, {"text", "Mortar colour"}, {"nodes", json::array()}}});
+    run("texSetFrames", args({"Rock", frames}));
+    CHECK(graph("Rock").frames[0].text == "Mortar colour");
+    CHECK(tex::Graph::fromJson(graph("Rock").toJson()).frames == graph("Rock").frames);
+    run("undo");
+    run("undo");
+    CHECK(graph("Rock").node("Tint")->label.empty());
+    CHECK(graph("Rock").frames.empty());
+}
+
 TEST_CASE("tex: zip ties store, prune, copy and undo like graph edits")
 {
     build();

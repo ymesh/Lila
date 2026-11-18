@@ -1,0 +1,15 @@
+{
+    "id": "Blockwork",
+    "name": "Blockwork",
+    "version": "0.1.0",
+    "vendor": "Lila",
+    "description": "Grid-first level blocking: draw boxes, wedges, cylinders, arches, stairs and prisms on the grid, extend, clip, carve and hollow them, with textures that stay put through every edit.",
+    "sdk": "1.0",
+    "entry": {
+        "windows": "Blockwork.dll",
+        "linux": "Blockwork.so",
+        "macos": "Blockwork.dylib"
+    },
+    "enabledByDefault": true,
+    "resources": "resources"
+}

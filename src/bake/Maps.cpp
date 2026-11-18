@@ -135,6 +135,18 @@ void positionMeta(const MapSettings&, const BakeInputs& in, TextureBuffer&, json
 {
     meta["boundsMin"] = {in.highMin.x, in.highMin.y, in.highMin.z};
     meta["boundsMax"] = {in.highMax.x, in.highMax.y, in.highMax.z};
+    // Layer projections live in a low's object space: each low's world matrix takes them to the map's world space.
+    json lows = json::array();
+    for (const GroupInputs& g : in.groups)
+        for (const LowInput& l : g.lows)
+        {
+            json m = json::array();
+            for (int c = 0; c < 4; ++c)
+                for (int r = 0; r < 4; ++r)
+                    m.push_back(l.world[c][r]);
+            lows.push_back({{"node", l.soup.name}, {"world", std::move(m)}, {"materials", l.soup.materialNames}});
+        }
+    meta["lows"] = std::move(lows);
 }
 
 void heightKernel(const MapContext&, std::span<const TexelSample> samples, std::span<const HitRecord> hits, std::span<glm::vec4> out,
@@ -450,7 +462,7 @@ void registerBuiltinMaps()
     registerMap({.id = "position",
                  .label = "Position",
                  .suffix = "position",
-                 .doc = "The high's surface position normalised to the bounds of every high in the bake (meta boundsMin/boundsMax).",
+                 .doc = "The high's surface position normalised to the bounds of every high in the bake (meta boundsMin/boundsMax), and each low's world matrix, column-major (meta lows: node, world, materials).",
                  .preferredBits = 16,
                  .cpu = positionKernel,
                  .finalize = positionMeta});

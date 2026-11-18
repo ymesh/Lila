@@ -1,4 +1,4 @@
-//! Layer projections: where a layer's content lands on the mesh, from a box placed in object space.
+//! Layer projections: where a layer's content lands on the mesh, from a box placed in the mesh's object space.
 
 float3x3 projRotation(float3 deg)
 {
@@ -10,7 +10,21 @@ float3x3 projRotation(float3 deg)
     return mul(rz, mul(ry, rx));
 }
 
-/** An object-space point in the projector's frame: centred and turned, still in object units. */
+/** A bake-space point in the mesh's object space; x, y, z, w are the columns of the bake's world-to-object matrix. */
+float3 projToObject(float3 pos, float3 x, float3 y, float3 z, float3 w)
+{
+    return x * pos.x + y * pos.y + z * pos.z + w;
+}
+
+/** A bake-space normal in the mesh's object space: through that matrix's inverse transpose (its cofactors over the determinant), unit length. */
+float3 projNormalToObject(float3 n, float3 x, float3 y, float3 z)
+{
+    float3 o = cross(y, z) * n.x + cross(z, x) * n.y + cross(x, y) * n.z;
+    float l = length(o);
+    return l > 1e-12 ? o / l * sign(dot(x, cross(y, z))) : n;
+}
+
+/** An object-space point in the projector's frame: centred and turned, still in cm. */
 float3 projFrame(float3 pos, float3 centre, float3 deg)
 {
     return mul(transpose(projRotation(deg)), pos - centre);

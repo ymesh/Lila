@@ -16,6 +16,7 @@ here = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() els
 out_dir = sys.argv[1] if len(sys.argv) > 1 else here
 
 FRAMES = 120
+FPS = 30.0
 TAIL_X, ARM_X = -45.0, 45.0
 
 
@@ -53,7 +54,11 @@ def chain(names, points):
 def key(attr, values):
     """Keys attr at evenly spaced frames across the animation, the last equal to the first so it loops."""
     for i, v in enumerate(values):
-        ops.setKeyframe(attr, time=1 + i * (FRAMES - 1) / (len(values) - 1), value=v)
+        ops.setKeyframe(attr, time=seconds(1 + i * (FRAMES - 1) / (len(values) - 1)), value=v)
+
+
+def seconds(frame):
+    return frame / FPS
 
 
 def combine(pieces, name):
@@ -61,7 +66,7 @@ def combine(pieces, name):
 
 
 ops.newScene()
-ops.playbackOptions(minTime=1, maxTime=FRAMES, fps=30)
+ops.playbackOptions(fps=FPS, minTime=seconds(1), maxTime=seconds(FRAMES), animationStartTime=seconds(1), animationEndTime=seconds(FRAMES))
 body = material("M_Body", (0.55, 0.42, 0.36), roughness=0.7)
 scale_mat = material("M_Scale", (0.22, 0.42, 0.3), roughness=0.35, metallic=0.1)
 steel = material("M_Steel", (0.62, 0.63, 0.66), roughness=0.3, metallic=1.0)
@@ -136,6 +141,6 @@ ops.group(arm, couter, arm_joints[0], *label("ArmLabel", "Lames", ARM_X), name="
 camera("Cam_Tail", (TAIL_X + 35, 50, 95), (TAIL_X, 30, 0))
 camera("Cam_Arm", (ARM_X + 70, 45, 75), (ARM_X, 28, 0))
 camera("Cam_All", (0, 70, 190), (0, 28, 0))
-ops.currentTime(40)
+ops.currentTime(seconds(40))
 ops.select(clear=True)
 ops.saveScene(os.path.join(out_dir, "RigidBind.lila"))

@@ -3119,7 +3119,7 @@ def exportFbx(*objects: Any, profile: str | None = None, kind: str | None = None
 
     Args:
         objects: path objects...
-        profile: Axis profile: ue5 (Z up), ue6 (Y up) or generic (the scene's own axes). Default 'ue5'.
+        profile: Axis profile: ue5 (Z up), ue6 (Y up, +Z forward; unity is the same axes) or generic (the scene's own axes). Default 'ue5'.
         kind: auto | static | skeletal | animation | sequence. auto is skeletal when a skinned mesh is exported, sequence when only cameras are. Short form k. Default 'auto'.
         maxInfluences: Skin influences per vertex, heaviest kept and renormalised (4 for mobile). Short form mi. Default 8.
         animation: Write the take for skeletal and sequence exports (always for kind=animation). Short form anim. Default True.
@@ -3257,6 +3257,21 @@ def exportObj(*objects: Any) -> Any:
 
     Args:
         objects: path objects...
+    """
+
+def exportOnSave(path: str | None = None, enable: bool | None = None, options: Any | None = None, query: bool | None = None, *, p: str | None = None, e: bool | None = None, o: Any | None = None, q: bool | None = None) -> Any:
+    """Query or set the scene's export on save: while enabled, every save also exports the whole scene to path, relative to the scene file, in the format its extension names (.fbx, .glb, .gltf, .obj, ...). Saved with the scene. Returns the setting and, for a saved scene, the file it writes.
+
+    Args:
+        path: File to write, relative to the scene file or absolute. Giving it turns the setting on. Short form p.
+        enable: Turn export on save on or off, keeping the path. Short form e.
+        options: {flag: value} for the format's export command, e.g. {'profile': 'unity', 'units': 'm'}. Short form o.
+        query: Short form q. Default False.
+
+    Examples:
+        exportOnSave(path='Exports/Ship.fbx', options={'profile': 'unity', 'units': 'm'})
+
+        exportOnSave(enable=False)
     """
 
 def exportPicker(*objects: Any, file: str | None = None, f: str | None = None) -> Any:
@@ -4062,7 +4077,7 @@ def gnMoveNodes(*objects: Any, positions: Any | None = None) -> Any:
     """
 
 def gnNodeTypes(linkType: str | None = None, linkInput: bool | None = None, group: str | None = None, detail: bool | None = None) -> Any:
-    """The node library: type, label, category and description of each node. With linkType, only nodes that can take a link from (or, with linkInput, give one to) a socket of that type, each with the socket it would use.
+    """The node library: type, label, category and description of each node, and for a node with an operation its options as variants ({label, values} to set on the new node). With linkType, only nodes that can take a link from (or, with linkInput, give one to) a socket of that type, each with the socket it would use.
 
     Args:
         linkType: Socket type of a dragged link's loose end.
@@ -4159,7 +4174,7 @@ def gnSetDefinition(*objects: Any) -> Any:
     """
 
 def gnSetFrames(*objects: Any) -> Any:
-    """Replace a group's frames: gnSetFrames(group, [{label: 'Inputs', position: [x, y], size: [w, h], color: '', collapsed: false, nodes: [names]}]). Frames only change the canvas; names not in the group are dropped. Returns how many frames there are.
+    """Replace a group's frames: gnSetFrames(group, [{label: 'Inputs', position: [x, y], size: [w, h], color: '', collapsed: false, nodes: [names], text: ''}]). A frame with text is a note, its text shown in its body. Frames only change the canvas; names not in the group are dropped. Returns how many frames there are.
 
     Args:
         objects: group frames.
@@ -4191,14 +4206,22 @@ def gnSetItems(*objects: Any, renames: Any | None = None) -> Any:
         renames: {old: new} item names, so their links and values carry over.
     """
 
-def gnSetNodeFlags(*objects: Any, muted: bool | None = None, collapsed: bool | None = None, hideUnused: bool | None = None) -> Any:
-    """Set how nodes draw and run: gnSetNodeFlags(group, 'Math', 'Noise', muted=True). muted bypasses a node (its first input of a matching type passes through to each output); collapsed draws only its header; hideUnused draws only its linked sockets. Flags left out stay as they are.
+def gnSetNodeFlags(*objects: Any, muted: bool | None = None, collapsed: bool | None = None, hideUnused: bool | None = None, hidePreview: bool | None = None) -> Any:
+    """Set how nodes draw and run: gnSetNodeFlags(group, 'Math', 'Noise', muted=True). muted bypasses a node (its first input of a matching type passes through to each output); collapsed draws only its header; hideUnused draws only its linked sockets; hidePreview leaves out its image preview. Flags left out stay as they are.
 
     Args:
         objects: group nodes...
         muted: Bypass the nodes.
         collapsed: Draw only their headers.
         hideUnused: Draw only their linked sockets.
+        hidePreview: Draw them without their image previews.
+    """
+
+def gnSetNodeLabel(*objects: Any) -> Any:
+    """Show a node under its own title on the canvas: gnSetNodeLabel(group, 'Math', 'Height Scale'). Display only; the node keeps its name, which links, scripts and exposed inputs use. An empty label shows the node type's again.
+
+    Args:
+        objects: group node label.
     """
 
 def gnSetTies(*objects: Any) -> Any:
@@ -8071,7 +8094,7 @@ def retopoDrawDelete(mesh: str | None = None, faces: Sequence[Any] | None = None
     """
 
 def retopoDrawInsertLoop(mesh: str | None = None, edge: int | None = None, fraction: float | None = None) -> Any:
-    """Retopo Draw: insert an edge loop across the ring through an edge (base mesh id), mirrored with symmetry.
+    """Retopo Draw: insert an edge loop across the ring through an edge (base mesh id), mirrored with symmetry. The new points land on the reference surface.
 
     Args:
         mesh: Retopo mesh.
@@ -8084,7 +8107,7 @@ def retopoDrawMove(mesh: str | None = None, points: Sequence[Any] | None = None,
 
     Args:
         mesh: Retopo mesh.
-        points: Point ids.
+        points: Point ids. With symmetry, a point that is an earlier listed point's mirror image follows that point.
         positions: World [x, y, z] per point.
         weld: Merge a moved point into another point closer than this, cm. Default 0.0.
     """
@@ -8515,13 +8538,14 @@ def sceneData(*objects: Any, value: Any | None = None, remove: bool | None = Non
         remove: Delete the key. Short form rm. Default False.
     """
 
-def sceneGraphAddNode(*objects: Any, position: Sequence[Any] | None = None, name: str | None = None) -> Any:
-    """Create a scene node from the node editor and add it to the selection, so the view shows it. Returns its path.
+def sceneGraphAddNode(*objects: Any, position: Sequence[Any] | None = None, name: str | None = None, insert: bool | None = None) -> Any:
+    """Create a scene node from the node editor and add it to the selection, so the view shows it. Returns its path. A modifier added with a mesh (or one of its modifiers) selected goes on top of that mesh's stack, as addModifier puts it, and is laid out in the stack's columns rather than at position.
 
     Args:
         objects: view type.
         position: [x, y] on the canvas.
         name: Wanted name; made unique.
+        insert: Put a modifier into the selected mesh's stack; off leaves it unlinked. Default True.
     """
 
 def sceneGraphConnect(*objects: Any) -> Any:
@@ -8560,6 +8584,13 @@ def sceneGraphInfo(*objects: Any, depth: int | None = None, all: bool | None = N
         sceneGraphInfo("Upstream", depth=3)
     """
 
+def sceneGraphInsertNode(*objects: Any) -> Any:
+    """Drop an unlinked modifier into a link of a mesh's stack from the node editor: sceneGraphInsertNode(view, 'bevel1', 'polyCube1.outMesh', 'Cube.inMesh') wires it in as addModifier does. Returns False, changing nothing, for any other node or link; the editor then wires the node through its matching sockets.
+
+    Args:
+        objects: view node from to.
+    """
+
 def sceneGraphMoveNodes(*objects: Any, positions: Any | None = None) -> Any:
     """Move nodes on the node editor's canvas: sceneGraphMoveNodes(view, positions={'Box': [0, 100]}). Kept per view with the scene.
 
@@ -8576,13 +8607,27 @@ def sceneGraphNodeTypes(linkType: str | None = None, linkInput: bool | None = No
         linkInput: The drag started at an input, so the node needs a matching output. Default False.
     """
 
+def sceneGraphRenameNode(*objects: Any) -> Any:
+    """Rename a scene node from the node editor, as rename does, keeping its place, flags and frames in every view: sceneGraphRenameNode(view, 'pCube1', 'Crate'). Returns its new path.
+
+    Args:
+        objects: view node name.
+    """
+
+def sceneGraphSetFrames(*objects: Any) -> Any:
+    """Replace a view's frames and notes, shaped as gnSetFrames takes them: sceneGraphSetFrames(view, [{label: 'Arm', position: [x, y], size: [w, h], nodes: ['L_arm'], text: ''}]). Members that name no node are dropped. Kept with the scene.
+
+    Args:
+        objects: view frames.
+    """
+
 def sceneGraphSetNodeFlags(*objects: Any, collapsed: bool | None = None, hideUnused: bool | None = None, muted: bool | None = None) -> Any:
-    """Show nodes collapsed, or with every plug (hideUnused=False) rather than only the connected ones. Kept with the scene.
+    """Show nodes collapsed, or with every plug (hideUnused=False) rather than only the connected ones and their meshes. A node with neither shows every plug. Kept with the scene.
 
     Args:
         objects: view nodes...
         collapsed: Only the header.
-        hideUnused: Only the connected plugs; on for every node until turned off.
+        hideUnused: Only the connected plugs and meshes; on for every node but modifiers until turned off.
         muted: Accepted for the editor's mute key; scene nodes don't mute.
     """
 
@@ -10240,7 +10285,7 @@ def texAddLayer(*objects: Any, name: str | None = None, above: str | None = None
         filter: Filter: the node type (blur, hsv, levels...).
         values: Filter: its parameter values.
         channels: Per-channel {enabled, mode, opacity}.
-        projection: Fill, procedural, decal and text: layerProjection's values {mode, positionX...}.
+        projection: Fill, procedural, decal and text: layerProjection's values {mode, positionX...} in the object space of mesh (a node path; the bake's first low when unset).
         decal: Decal: {maps {channel: file}, columns, rows, cell}.
         text: Text: {text, font, tracking, outline, outlineColor, resolution}.
         scatter: Scatter: {pattern, maps, countX, countY, perCell, size, sizeRandom, rotationRandom, hueRandom, seed, avoidOverlap}.
@@ -10657,7 +10702,7 @@ def texMoveStroke(*objects: Any, stroke: int | None = None, index: int | None = 
     """
 
 def texNodeTypes(linkType: str | None = None, linkInput: bool | None = None, detail: bool | None = None, reload: bool | None = None) -> Any:
-    """The texture node library: type, label, category, kind, tier and description of each. With linkType, only nodes that can take a link from (or, with linkInput, give one to) a port of that type, each with the socket it would use.
+    """The texture node library: type, label, category, kind, tier, description, search keywords and variants (an operation's options, each {label, values} to set on the new node) of each. With linkType, only nodes that can take a link from (or, with linkInput, give one to) a port of that type, each with the socket it would use.
 
     Args:
         linkType: Port type of a dragged link's loose end.
@@ -10872,7 +10917,7 @@ def texSetDefinition(*objects: Any) -> Any:
     """
 
 def texSetFrames(*objects: Any) -> Any:
-    """Replace a texture set's frames, shaped as gnSetFrames takes them. Display only; names not in the graph are dropped. Returns how many frames there are.
+    """Replace a texture set's frames, shaped as gnSetFrames takes them (a frame with text is a note). Display only; names not in the graph are dropped. Returns how many frames there are.
 
     Args:
         objects: set frames.
@@ -10892,14 +10937,22 @@ def texSetMask(*objects: Any) -> Any:
         objects: set layer mask props.
     """
 
-def texSetNodeFlags(*objects: Any, muted: bool | None = None, collapsed: bool | None = None, hideUnused: bool | None = None) -> Any:
-    """Set how nodes draw and run, as gnSetNodeFlags does: muted, collapsed, hideUnused. Flags left out stay as they are.
+def texSetNodeFlags(*objects: Any, muted: bool | None = None, collapsed: bool | None = None, hideUnused: bool | None = None, hidePreview: bool | None = None) -> Any:
+    """Set how nodes draw and run, as gnSetNodeFlags does: muted, collapsed, hideUnused, hidePreview. Flags left out stay as they are.
 
     Args:
         objects: set nodes...
         muted: Bypass the nodes.
         collapsed: Draw only their headers.
         hideUnused: Draw only their linked sockets.
+        hidePreview: Draw them without their image previews.
+    """
+
+def texSetNodeLabel(*objects: Any) -> Any:
+    """Show a node under its own title on the canvas, as gnSetNodeLabel does: texSetNodeLabel(set, 'Noise', 'Rust Breakup'). The node keeps its name; an empty label shows the node type's again.
+
+    Args:
+        objects: set node label.
     """
 
 def texSetSettings(*objects: Any) -> Any:

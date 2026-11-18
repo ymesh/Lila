@@ -39,6 +39,10 @@ struct MapMaterial
     std::vector<std::string> warnings;
 };
 
+/** The image node's colorSpace for a file feeding a channel: srgb for colour channels (baseColor, emissive) stored as integer images,
+    linear for data channels and for EXR and HDR files. */
+LILA_SCENE_API const char* imageColorSpace(const std::filesystem::path& file, const std::string& channel);
+
 /** Groups map files into materials: files in one folder whose names differ only by the channel token. Unknown files are listed as warnings. */
 LILA_SCENE_API std::vector<MapMaterial> group(const std::vector<std::filesystem::path>& files);
 

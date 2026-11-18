@@ -532,7 +532,8 @@ private:
         case ParamType::Gradient: return "TexGradient " + p.id;
         case ParamType::Curve: return "TexCurve " + p.id;
         case ParamType::Image:
-        case ParamType::Code: return {};
+        case ParamType::Code:
+        case ParamType::Node: return {};
         }
         return {};
     }
@@ -659,7 +660,8 @@ private:
             case ParamType::Gradient:
             case ParamType::Curve: s << "    p." << p.id << ".base = " << slot << "u;\n"; break;
             case ParamType::Image:
-            case ParamType::Code: break;
+            case ParamType::Code:
+            case ParamType::Node: break;
             }
         }
         s << "    return p;\n}\n";
@@ -1108,7 +1110,8 @@ private:
             return;
         }
         case ParamType::Image:
-        case ParamType::Code: return;
+        case ParamType::Code:
+        case ParamType::Node: return;
         }
         packFloat4(u, slot, f);
     }

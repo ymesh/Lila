@@ -93,6 +93,7 @@ void NodeCanvas::layoutFrames()
         const gn::GFrame& f = mFrames[i];
         FrameItem* item = mFrameItems[i];
         item->label = f.label.empty() ? QString("Frame") : qs(f.label);
+        item->text = qs(f.text);
         item->color = paletteColor(f.color, 95);
         item->setBox(QSizeF(f.size.x, f.size.y), f.collapsed);
         item->setPos(f.position.x, f.position.y);
@@ -138,19 +139,68 @@ void NodeCanvas::dragFrame(QPointF sp)
 
 void NodeCanvas::renameFrame(int f)
 {
-    bool ok = false;
-    QString text = QInputDialog::getText(this, "Rename Frame", "Label", QLineEdit::Normal, qs(mFrames[size_t(f)].label), &ok);
-    if (!ok)
+    FrameItem* item = mFrameItems[size_t(f)];
+    editTitleInPlace(item->mapRectToScene(item->titleRect().adjusted(FrameItem::kTitle, 0, 0, 0)), item->label, [this, f](const QString& typed) {
+        if (size_t(f) >= mFrames.size() || typed.simplified().toStdString() == mFrames[size_t(f)].label)
+            return;
+        std::vector<gn::GFrame> next = mFrames;
+        next[size_t(f)].label = typed.simplified().toStdString();
+        commitFrames(next);
+    });
+}
+
+QSizeF NodeCanvas::noteSize(const QString& text, double width) const
+{
+    const QRect lines = QFontMetrics(font()).boundingRect(QRect(0, 0, int(width - 2.0 * FrameItem::kTextPad), 100000), Qt::TextWordWrap,
+                                                         text.isEmpty() ? QString("M") : text);
+    return {width, FrameItem::kTitle + FrameItem::kTextPad * 1.5 + double(lines.height()) + 4.0};
+}
+
+void NodeCanvas::editFrameText(int f)
+{
+    FrameItem* item = mFrameItems[size_t(f)];
+    if (item->collapsed)
         return;
-    std::vector<gn::GFrame> next = mFrames;
-    next[size_t(f)].label = text.trimmed().toStdString();
-    commitFrames(next);
+    editTextInPlace(item->mapRectToScene(item->textRect()), item->text, [this, f](const QString& typed) {
+        if (size_t(f) >= mFrames.size() || typed.toStdString() == mFrames[size_t(f)].text)
+            return;
+        std::vector<gn::GFrame> next = mFrames;
+        gn::GFrame& frame = next[size_t(f)];
+        frame.text = typed.toStdString();
+        // The box grows to show all of its text; it never shrinks under a size the user dragged.
+        frame.size.y = std::max(frame.size.y, noteSize(typed, frame.size.x).height());
+        commitFrames(next);
+    });
+}
+
+void NodeCanvas::addNote(QPointF at)
+{
+    if (!backend->supports("SetFrames") || mGroup.empty())
+        return;
+    static constexpr double kWidth = 240.0;
+    const QRectF body(at.x() + FrameItem::kTextPad, at.y() + FrameItem::kTitle + FrameItem::kTextPad * 0.5, kWidth - 2.0 * FrameItem::kTextPad, 80.0);
+    editTextInPlace(body, {}, [this, at](const QString& typed) {
+        if (typed.trimmed().isEmpty())
+            return;
+        gn::GFrame note;
+        note.label = "Note";
+        note.text = typed.toStdString();
+        note.position = {at.x(), at.y()};
+        const QSizeF size = noteSize(typed, kWidth);
+        note.size = {size.width(), std::max(size.height(), 90.0)};
+        note.color = "light";
+        std::vector<gn::GFrame> next = mFrames;
+        next.push_back(std::move(note));
+        commitFrames(next);
+    });
 }
 
 void NodeCanvas::frameMenu(int f, QPoint global)
 {
     QMenu menu(this);
-    menu.addAction("Rename...", this, [this, f] { renameFrame(f); });
+    menu.addAction("Rename", this, [this, f] { renameFrame(f); });
+    if (!mFrames[size_t(f)].collapsed)
+        menu.addAction("Edit Text", this, [this, f] { editFrameText(f); });
     QMenu* colors = menu.addMenu("Colour");
     fillPaletteMenu(colors, [this, f](std::string id) {
         std::vector<gn::GFrame> next = mFrames;

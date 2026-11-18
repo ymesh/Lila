@@ -98,6 +98,13 @@ LILA_SCENE_API std::string kindDoc(std::string_view kind);
 /** What feeds the bottom of the stack: a generator, a meshSource, or kNoNode when the mesh stores its own base. */
 LILA_SCENE_API NodeId stackSource(Graph& g, NodeId mesh);
 
+/**
+ * Wires a new, unlinked modifier into mesh's stack where `into` reads (the mesh's inMesh for the top, or a modifier's
+ * input to go under it), as addModifier does: its create hook runs first, and a mesh storing its own base gets a
+ * meshSource under the stack. Throws std::invalid_argument when mod is not a modifier.
+ */
+LILA_SCENE_API void insert(Graph& g, Node& mod, NodeId mesh, PlugRef into);
+
 /** The mesh node at the top of a modifier's chain, kNoNode if it feeds none. */
 LILA_SCENE_API NodeId meshOf(Graph& g, NodeId modifier);
 

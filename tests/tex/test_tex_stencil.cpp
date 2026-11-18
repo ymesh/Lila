@@ -113,3 +113,48 @@ TEST_CASE("texture paint stencil: colour mode paints the picture's colour")
     CHECK(t[1] == doctest::Approx(0.5).epsilon(0.02));
     CHECK(t[2] == doctest::Approx(0.8).epsilon(0.02));
 }
+
+TEST_CASE("texture paint pictures: an 8-bit file decodes from sRGB in colour channels and reads raw in data channels")
+{
+    if (!gpu())
+        return;
+    newScene();
+    addMesh("PanelMesh", seamPanel());
+    scene::Node& set = makeSet("Panel", 256);
+    const std::string file = (tempDir("paint_pictures") / "grey.png").string();
+    image::writePng(file, 8, 8, std::vector<float>(8 * 8 * 4, 0.5f), 8);
+    const float stored = 128.0f / 255.0f, decoded = std::pow((stored + 0.055f) / 1.055f, 2.4f);
+    auto value = [&](const char* layer, const char* channel) {
+        const image::Image img = gp::readChannel(set.id(), layer, channel);
+        const float* t = at(img, seamUv(0, -10.0, 0.0));
+        REQUIRE(t[3] > 0.5f);
+        return t[0];
+    };
+
+    // A texture source sampled once feeds both channels: decoded for base colour, raw for roughness.
+    json src = stencilStroke(json());
+    src.erase("stencil");
+    src["layer"] = "Source";
+    src["payload"] = {{"channels", {{"baseColor", {1.0, 1.0, 1.0}}, {"roughness", 1.0}}},
+                      {"source", {{"node", "layerImage"}, {"values", {{"file", file}}}, {"resolution", 64}}}};
+    src["brush"]["falloff"] = "constant";
+    run("texPaintStroke", src);
+    CHECK(value("Source", "baseColor") == doctest::Approx(decoded).epsilon(0.02));
+    CHECK(value("Source", "roughness") == doctest::Approx(stored).epsilon(0.02));
+
+    // A colour stencil and a projection decode by the channel they paint.
+    for (const char* channel : {"baseColor", "roughness"})
+    {
+        json st = stencilStroke({{"image", file}, {"mode", "color"}, {"colorChannel", channel}});
+        st["layer"] = std::string("Stencil_") + channel;
+        st["payload"] = {{"channels", {{channel, channel == std::string("baseColor") ? json{1.0, 1.0, 1.0} : json(1.0)}}}};
+        st["brush"]["falloff"] = "constant";
+        run("texPaintStroke", st);
+        CHECK(value(st["layer"].get<std::string>().c_str(), channel) == doctest::Approx(channel == std::string("baseColor") ? decoded : stored).epsilon(0.02));
+
+        const std::string layer = std::string("Project_") + channel;
+        const json payload = {{"kind", "project"}, {"image", file}, {"channels", json::object()}, {"colorChannel", channel}};
+        run("texPaintStroke", {{"args", {"Panel", layer}}, {"stroke", {{"mesh", "PanelMesh"}, {"payload", payload}}}, {"view", kStencilView}});
+        CHECK(value(layer.c_str(), channel) == doctest::Approx(channel == std::string("baseColor") ? decoded : stored).epsilon(0.02));
+    }
+}

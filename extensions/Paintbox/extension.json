@@ -1,0 +1,10 @@
+{
+    "id": "Paintbox",
+    "name": "Paintbox",
+    "version": "1.0.0",
+    "vendor": "Lila",
+    "description": "Twelve painterly looks for the Painterly shading model: stroke sheets, palettes and stroke settings tuned as a set, from soft gouache to heavy impasto.",
+    "sdk": "1.0",
+    "resources": "resources",
+    "enabledByDefault": true
+}

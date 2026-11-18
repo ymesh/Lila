@@ -40,18 +40,11 @@ std::optional<geo::SymmetryPlane> symmetryPlane(const Node& n)
     return geo::axisPlane(int(axis - 1), scene::symmetryOffset(n, int(axis - 1)));
 }
 
-/** The reference surface in the retopo mesh's object space, with its Bvh; the last one is kept for the next call. */
-struct Surface
-{
-    MeshPtr source;
-    glm::dmat4 toLocal{1.0};
-    geo::Mesh mesh;
-    geo::MeshBvh bvh;
-};
+} // namespace
 
-const Surface* surfaceFor(const Node& retopo)
+const ReferenceSurface* referenceSurface(const Node& retopo)
 {
-    static Surface cache;
+    static ReferenceSurface cache;
     scene::NodeId ref = retopoDrawReference(Graph::current(), retopo.id());
     Node* r = Graph::current().node(ref);
     if (!r)
@@ -75,6 +68,8 @@ const Surface* surfaceFor(const Node& retopo)
     return &cache;
 }
 
+namespace
+{
 json vec(const glm::dvec3& p) { return json::array({p.x, p.y, p.z}); }
 
 glm::dvec3 toVec(const json& j, const char* what)
@@ -488,7 +483,7 @@ void registerTopologyCommands()
                 throw CommandError(std::string("retopoConstruct: kind must be ") + kKindChoicesDoc);
             Graph& g = Graph::current();
             Node& n = target(a, "retopoConstruct");
-            const Surface* surface = surfaceFor(n);
+            const ReferenceSurface* surface = referenceSurface(n);
             if (!surface && kind != ConstructKind::Stroke)
                 throw CommandError("retopoConstruct: " + n.path() + " has no reference surface; give reference=");
             PlugRef base = scene::modifiers::editPlug(g, n.id());
@@ -657,7 +652,7 @@ void registerTopologyCommands()
         .run = [](const Args& a) -> json {
             Graph& g = Graph::current();
             Node& n = meshArg(a.get<std::string>("mesh"), "retopoSettle");
-            const Surface* surface = surfaceFor(n);
+            const ReferenceSurface* surface = referenceSurface(n);
             PlugRef base = scene::modifiers::editPlug(g, n.id());
             geo::Mesh m = baseMesh(base);
             std::vector<uint8_t> active;

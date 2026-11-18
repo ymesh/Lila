@@ -1,0 +1,35 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "step",
+  "label": "Step",
+  "category": "Utility",
+  "doc": "Black below the edge, white from it up. Both inputs take a value or a link.",
+  "keywords": [
+    "threshold",
+    "cutoff"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "float",
+      "default": 0.5
+    },
+    {
+      "id": "edge",
+      "type": "float",
+      "default": 0.5
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [],
+  "cost": 1,
+  "body": {
+    "out": "return input.sample(uv) >= edge.sample(uv) ? 1.0 : 0.0;"
+  }
+}

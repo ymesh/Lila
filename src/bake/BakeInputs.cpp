@@ -249,6 +249,7 @@ LowInput lowFromMesh(const geo::Mesh& mesh, const glm::dmat4& world, std::string
     LILA_ZONE();
 
     LowInput low;
+    low.world = world;
     const Xform x(world);
     const geo::Triangulation tris = geo::triangulate(mesh);
     std::vector<glm::vec3> storage;

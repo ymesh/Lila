@@ -21,6 +21,7 @@ class Context;
  *
  *   { "format": "lilatexnode", "version": 1,
  *     "type": "levels", "label": "Levels", "category": "Filter", "doc": "...",
+ *     "keywords": ["contrast"],           // more words the add-node search finds it by
  *     "kind": "slang",                    // slang | graph | native | buffer | output
  *     "inputs":  [{"id": "in", "type": "color", "default": [0.5, 0.5, 0.5, 1], "taps": 1, "doc": "..."}],
  *     "outputs": [{"id": "out", "type": "color"}],
@@ -35,6 +36,7 @@ class Context;
  * samplers called with any coordinate (`in.sample(uv * 2.0)`), so transforms and warps are exact. Parameters are fields
  * of `p` (`p.gamma`; enums and seeds are ints, gradients have `p.colors.eval(t)`, curves `p.curve.eval(x)`). `texel()` is
  * the size of one output texel in uv. Ids can't be Slang keywords (`in`, `out`, `sample`...). An input's taps is how many times the body samples it per output sample.
+ * An enum parameter with the id "operation" also lists each option in the add-node search (Comparison > Greater Than).
  *
  * kind "graph" carries "graph": a texture graph whose Group Input/Output and exposed inputs form the node's interface.
  * kind "native" runs as its own pass (blur, flood fill); its inputs are always buffered. kind "buffer" caches its input
@@ -99,6 +101,8 @@ struct LILA_SCENE_API NodeDef
     std::string label;
     std::string category;
     std::string doc;
+    /** Other words the add-node search finds it by ("rim", "facing ratio"). */
+    std::vector<std::string> keywords;
     NodeKind kind = NodeKind::Slang;
     std::vector<PortDecl> inputs;
     std::vector<PortDecl> outputs;

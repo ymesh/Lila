@@ -8,6 +8,7 @@ lila_module(lila_io Scene
     SceneHistory.cpp
     SceneFormats.cpp
     ScenePreview.cpp
+    ExportOnSave.cpp
     FileTranslators.cpp
     FileTypes.cpp)
 

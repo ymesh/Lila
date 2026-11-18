@@ -12,6 +12,7 @@
 #include "render/VirtualTexture.h"
 #include "scene/Graph.h"
 #include "scene/Materials.h"
+#include "tex/Layers.h"
 #include "tex/TextureSet.h"
 #include "ui/ViewportTool.h"
 
@@ -1038,6 +1039,7 @@ void replan(LiveSet& s)
     {
         job.graph = tex::readGraph(*n);
         job.settings = tex::readSettings(*n);
+        tex::followLiveFrame(job.graph, job.settings);
     }
     catch (const std::exception& e)
     {

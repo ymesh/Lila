@@ -74,7 +74,70 @@ TEST_CASE("tex material from maps: files group into materials, packed maps split
     CHECK(texel(channel("metallic", PortType::Gray), 3, 3)[0] == doctest::Approx(1.0).epsilon(0.01));
     // Green 0.75 in DirectX's convention is 0.25 in OpenGL's.
     CHECK(texel(channel("normal", PortType::Color), 3, 3)[1] == doctest::Approx(0.25).epsilon(0.01));
+    // An EXR base colour is linear already: read as stored.
     CHECK(texel(channel("baseColor", PortType::Color), 3, 3)[0] == doctest::Approx(0.5).epsilon(0.01));
+}
+
+TEST_CASE("tex material from maps: 8-bit colour maps are decoded from sRGB, data maps and EXR read as stored")
+{
+    CHECK(std::string(mm::imageColorSpace("a_BaseColor.png", "baseColor")) == "srgb");
+    CHECK(std::string(mm::imageColorSpace("a_Emissive.jpg", "emissive")) == "srgb");
+    CHECK(std::string(mm::imageColorSpace("a_BaseColor.exr", "baseColor")) == "linear");
+    CHECK(std::string(mm::imageColorSpace("a_BaseColor.HDR", "baseColor")) == "linear");
+    for (const char* data : {"roughness", "metallic", "normal", "height", "ao", "opacity", "packed"})
+        CHECK(std::string(mm::imageColorSpace("a.png", data)) == "linear");
+
+    const std::filesystem::path dir = tempDir("from_maps_png");
+    std::vector<float> px(8 * 8 * 4);
+    for (size_t i = 0; i < px.size(); i += 4)
+        px[i] = 128.0f / 255.0f, px[i + 1] = 64.0f / 255.0f, px[i + 2] = 32.0f / 255.0f, px[i + 3] = 1.0f;
+    image::writePng(dir / "Brick_BaseColor.png", 8, 8, px, 8);
+    std::vector<float> grey(px.size(), 128.0f / 255.0f);
+    image::writePng(dir / "Brick_Roughness.png", 8, 8, grey, 8);
+    const std::vector<mm::MapMaterial> mats = mm::group({dir / "Brick_BaseColor.png", dir / "Brick_Roughness.png"});
+    REQUIRE(mats.size() == 1);
+    const Graph g = mm::buildGraph(mats[0]);
+    auto channel = [&](const std::string& name, PortType type) {
+        PlanRequest r;
+        r.width = r.height = 8;
+        r.outputs = materialRequests(g, {{name, type}});
+        Plan p = buildPlan(g, r);
+        REQUIRE_MESSAGE(p.error.empty(), p.error);
+        return evaluateCpu(p).outputs.at(name);
+    };
+    // sRGB 128/255 is linear 0.2158.
+    CHECK(texel(channel("baseColor", PortType::Color), 3, 3)[0] == doctest::Approx(0.2158).epsilon(0.005));
+    CHECK(texel(channel("roughness", PortType::Gray), 3, 3)[0] == doctest::Approx(128.0 / 255.0).epsilon(0.005));
+}
+
+TEST_CASE("tex material from maps: an 8-bit sRGB base colour exports as it was read")
+{
+    run("newScene");
+    const std::filesystem::path dir = tempDir("from_maps_roundtrip");
+    const int n = 16;
+    std::vector<float> px(size_t(n) * n * 4);
+    for (int y = 0; y < n; ++y)
+        for (int x = 0; x < n; ++x)
+        {
+            float* p = &px[(size_t(y) * n + x) * 4];
+            p[0] = float((x * 17) % 256) / 255.0f;
+            p[1] = float((y * 17) % 256) / 255.0f;
+            p[2] = float(((x + y) * 9) % 256) / 255.0f;
+            p[3] = 1.0f;
+        }
+    image::writePng(dir / "Tile_BaseColor.png", n, n, px, 8);
+    run("texCreateSet", {{"args", {"Tile"}}, {"resolution", n}});
+    run("texMaterialFromMaps", {{"args", {(dir / "Tile_BaseColor.png").string()}}, {"set", "Tile"}});
+    const std::filesystem::path out = dir / "out";
+    run("texExport", {{"args", {"Tile"}}, {"preset", "unreal"}, {"folder", out.string()}, {"backend", "cpu"}});
+    const image::Image bc = image::read(out / "T_Tile_BC.png");
+    REQUIRE(bc.width == n);
+    double worst = 0.0;
+    for (size_t i = 0; i < px.size(); ++i)
+        if (i % 4 != 3)
+            worst = std::max(worst, std::abs(double(bc.rgba[i]) - double(px[i])));
+    CAPTURE(worst * 255.0);
+    CHECK(worst <= 1.0 / 255.0 + 1e-6);
 }
 
 TEST_CASE("tex material from maps: texMaterialFromMaps writes a library material per group")

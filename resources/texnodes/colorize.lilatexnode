@@ -4,12 +4,30 @@
   "type": "colorize",
   "label": "Colorize",
   "category": "Filter",
-  "doc": "Maps a gray value through a gradient.",
+  "doc": "Maps a gray value through a gradient: Low reads the gradient's left end, High its right. Each bound takes a value or a link. The gradient's own setting picks linear, smooth or constant blending between stops.",
+  "keywords": [
+    "gradient map",
+    "color ramp",
+    "colour ramp",
+    "lookup"
+  ],
   "inputs": [
     {
       "id": "input",
       "type": "gray",
       "default": 0.5
+    },
+    {
+      "id": "low",
+      "type": "float",
+      "default": 0.0,
+      "doc": "The value that reads the gradient's left end."
+    },
+    {
+      "id": "high",
+      "type": "float",
+      "default": 1.0,
+      "doc": "The value that reads the gradient's right end."
     }
   ],
   "outputs": [
@@ -26,6 +44,6 @@
   ],
   "cost": 8,
   "body": {
-    "out": "return p.gradient.eval(saturate(input.sample(uv)));"
+    "out": "float lo = low.sample(uv);\nfloat hi = high.sample(uv);\nfloat span = abs(hi - lo) < 1e-9 ? 1e-9 : hi - lo;\nreturn p.gradient.eval(saturate((input.sample(uv) - lo) / span));"
   }
 }

@@ -4,7 +4,11 @@
   "type": "clamp",
   "label": "Clamp",
   "category": "Filter",
-  "doc": "Limits every colour channel to a range.",
+  "doc": "Limits every colour channel to a range. Low and High each take a value or a link.",
+  "keywords": [
+    "limit",
+    "saturate"
+  ],
   "inputs": [
     {
       "id": "input",
@@ -15,6 +19,16 @@
         0.5,
         1
       ]
+    },
+    {
+      "id": "low",
+      "type": "float",
+      "default": 0.0
+    },
+    {
+      "id": "high",
+      "type": "float",
+      "default": 1.0
     }
   ],
   "outputs": [
@@ -23,24 +37,9 @@
       "type": "color"
     }
   ],
-  "params": [
-    {
-      "id": "low",
-      "type": "float",
-      "default": 0.0,
-      "softMin": 0,
-      "softMax": 1
-    },
-    {
-      "id": "high",
-      "type": "float",
-      "default": 1.0,
-      "softMin": 0,
-      "softMax": 1
-    }
-  ],
+  "params": [],
   "cost": 1,
   "body": {
-    "out": "float4 c = input.sample(uv);\nreturn float4(clamp(c.rgb, p.low, p.high), c.a);"
+    "out": "float4 c = input.sample(uv);\nreturn float4(clamp(c.rgb, low.sample(uv), high.sample(uv)), c.a);"
   }
 }

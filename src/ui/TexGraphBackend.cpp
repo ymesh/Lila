@@ -144,7 +144,7 @@ public:
     {
         static const std::set<std::string_view> kVerbs = {"GroupInfo", "NodeTypes",  "AddNode",    "DeleteNode",     "Connect",
                                                           "Disconnect", "MoveNodes", "SetValue",   "CopyNodes",      "PasteNodes",
-                                                          "DuplicateNodes", "ExportGroup", "ImportGroup", "SetTies", "SetFrames", "SetNodeFlags", "SetBookmarks"};
+                                                          "DuplicateNodes", "ExportGroup", "ImportGroup", "SetTies", "SetFrames", "SetNodeFlags", "SetNodeLabel", "SetBookmarks"};
         return kVerbs.contains(verb);
     }
 
@@ -298,7 +298,9 @@ public:
         std::string group = editor.group().toStdString();
         std::string name = node.value("name", "");
         QPointer<NodeEditor> ed(&editor);
-        QWidget* panel = texParams::nodePanel(parent, node, [ed, group, name](const std::string& id, const json& v) {
+        json withSet = node;
+        withSet["set"] = group;
+        QWidget* panel = texParams::nodePanel(parent, withSet, [ed, group, name](const std::string& id, const json& v) {
             if (ed)
                 ed->setValueFromField(argsCall({group, name + "." + id, v}));
         });

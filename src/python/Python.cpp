@@ -236,6 +236,23 @@ Result run(std::string_view code, std::string_view filename)
     }
 }
 
+Result evalJson(std::string_view expression)
+{
+    if (!gInitialized)
+        return {false, "python not initialized"};
+    nb::gil_scoped_acquire gil;
+    try
+    {
+        nb::object globals = nb::module_::import_("__main__").attr("__dict__");
+        nb::object value = nb::module_::import_("builtins").attr("eval")(nb::str(expression.data(), expression.size()), globals);
+        return {true, nb::cast<std::string>(nb::module_::import_("json").attr("dumps")(value))};
+    }
+    catch (const nb::python_error& e)
+    {
+        return {false, e.what()};
+    }
+}
+
 Result runFile(const std::filesystem::path& path)
 {
     if (!gInitialized)

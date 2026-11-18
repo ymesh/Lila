@@ -298,7 +298,8 @@ glm::dvec3 TopologyTool::normalAt(const glm::dvec3& p) const
 
 bool TopologyTool::visible(const glm::dvec3& p, const ViewInfo& view) const
 {
-    if (mRefBvh.empty())
+    // X-Ray Reference shows the retopo mesh through the reference, so what it shows can be picked.
+    if (mRefBvh.empty() || xrayReference())
         return true;
     glm::dvec3 d = p - view.eye;
     double len = glm::length(d);

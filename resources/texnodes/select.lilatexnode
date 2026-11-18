@@ -1,0 +1,67 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "select",
+  "label": "Select",
+  "category": "Utility",
+  "doc": "Picks ifTrue where the condition is at or above the threshold, else ifFalse. Feed it a Comparison or Logic node for an if-then-else. With soft on, the condition blends the two instead.",
+  "keywords": [
+    "switch",
+    "if",
+    "choose",
+    "condition",
+    "branch"
+  ],
+  "inputs": [
+    {
+      "id": "condition",
+      "type": "gray",
+      "default": 0.0
+    },
+    {
+      "id": "ifTrue",
+      "type": "color",
+      "default": [
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "id": "ifFalse",
+      "type": "color",
+      "default": [
+        0,
+        0,
+        0,
+        1
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "threshold",
+      "type": "float",
+      "default": 0.5,
+      "min": 0,
+      "max": 1
+    },
+    {
+      "id": "soft",
+      "type": "bool",
+      "default": false,
+      "doc": "Blend ifFalse to ifTrue by the condition, for soft masks."
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float c = condition.sample(uv);\nif (p.soft)\n    return lerp(ifFalse.sample(uv), ifTrue.sample(uv), saturate(c));\nreturn c >= p.threshold ? ifTrue.sample(uv) : ifFalse.sample(uv);"
+  }
+}

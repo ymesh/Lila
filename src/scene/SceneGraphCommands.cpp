@@ -6,6 +6,7 @@
 #include "scene/MeshNodes.h"
 #include "scene/Modifiers.h"
 #include "scene/SceneData.h"
+#include "gn/Group.h"
 
 #include <algorithm>
 #include <functional>
@@ -21,7 +22,10 @@ namespace
 {
 using T = ArgType;
 
-/** View state kept with the scene: {"positions": {view: {fullPath: [x, y]}}, "flags": {fullPath: {flag: bool}}}. */
+/**
+ * View state kept with the scene: {"positions": {view: {fullPath: [x, y]}}, "flags": {fullPath: {flag: bool}},
+ * "frames": {view: [frame with fullPath members, see gn::framesToJson]}}.
+ */
 constexpr const char* kLayoutKey = "nodeEditor.scene";
 constexpr const char* kParentSocket = "@parent";
 constexpr const char* kChildrenSocket = "@children";
@@ -122,15 +126,20 @@ bool hasComponents(const AttrDef& d)
     return true;
 }
 
+/** A node's mesh in or out: hidden from attribute editors, but the wire a modifier stack is built from. */
+bool meshPlug(const AttrDef& d) { return d.type == PlugType::Mesh && !(d.flags & AttrArray) && (d.name == "inMesh" || d.name == "outMesh"); }
+
 /** An output, or an input animators drive other things from (keyable or added by hand). */
 bool offeredAsSource(const AttrDef& d)
 {
+    if (meshPlug(d))
+        return (d.flags & AttrOutput) != 0;
     if ((d.flags & (AttrArray | AttrHidden)))
         return false;
     return (d.flags & AttrOutput) || ((d.flags & AttrInput) && (d.flags & (AttrKeyable | AttrUser)));
 }
 
-bool offeredAsInput(const AttrDef& d) { return (d.flags & AttrInput) && !(d.flags & AttrHidden); }
+bool offeredAsInput(const AttrDef& d) { return (d.flags & AttrInput) && (!(d.flags & AttrHidden) || meshPlug(d)); }
 
 /** Nodes the views look through: they rarely matter when reading a rig. */
 bool passThrough(const Node& n)
@@ -370,6 +379,20 @@ json socketJson(const std::string& id, const std::string& type, const std::strin
     return s;
 }
 
+/** The attr's editor limits as GroupInfo inputs carry them (min, max, softMin, softMax, step); an enum spans its names, listed under "enum". */
+void putLimits(json& s, const AttrDef& d)
+{
+    for (auto [key, v] : {std::pair{"min", &d.minValue}, {"max", &d.maxValue}, {"softMin", &d.softMin}, {"softMax", &d.softMax}, {"step", &d.step}})
+        if (*v)
+            s[key] = **v;
+    if (d.type == PlugType::Enum && !d.enumNames.empty())
+    {
+        s["min"] = 0;
+        s["max"] = int(d.enumNames.size()) - 1;
+        s["enum"] = d.enumNames;
+    }
+}
+
 /** A node as GroupInfo lists it: its plugs as sockets, a Vec3 one socket plus its components where they are wired or keyable. */
 json nodeJson(const Graph& g, const Edges& e, NodeId id, bool hierarchy)
 {
@@ -408,6 +431,7 @@ json nodeJson(const Graph& g, const Edges& e, NodeId id, bool hierarchy)
             {
                 s["value"] = std::move(v);
                 s["default"] = valueJson(d, d.defaultValue);
+                putLimits(s, d);
             }
             if (d.flags & AttrArray)
                 s["multi"] = true;
@@ -523,7 +547,8 @@ json viewInfo(const std::string& view, int depth, bool all)
     {
         const std::string full = g.fullPath(v.order[i]);
         const json f = flags.value(full, json::object());
-        const bool hideUnused = f.value("hideUnused", true), collapsed = f.value("collapsed", false);
+        // A modifier's few parameters are what it is opened for; other nodes carry dozens of plugs.
+        const bool hideUnused = f.value("hideUnused", !modifiers::asModifier(g.node(v.order[i]))), collapsed = f.value("collapsed", false);
         json n = nodeJson(g, e, v.order[i], hierarchy);
         json def = {{"name", paths[i]}, {"type", n["type"]}, {"hideUnused", hideUnused}};
         if (collapsed)
@@ -532,12 +557,25 @@ json viewInfo(const std::string& view, int depth, bool all)
             n["position"] = p;
         else
         {
+            // The rows the canvas draws: with unused sockets hidden, the linked ones and the meshes, or every one on a node with neither.
             size_t rows = 0;
             if (!collapsed)
             {
+                size_t trimmed = usedOutputs[i].size(), every = n["outputs"].size() + n["inputs"].size();
+                bool anchored = !usedOutputs[i].empty();
                 for (const json& s : n["inputs"])
-                    rows += !hideUnused || s.value("linked", false) ? 1 : 0;
-                rows += hideUnused ? usedOutputs[i].size() : n["outputs"].size();
+                {
+                    const bool mesh = s.value("type", "") == "mesh";
+                    anchored |= s.value("linked", false) || mesh;
+                    trimmed += s.value("linked", false) || mesh ? 1 : 0;
+                }
+                for (const json& s : n["outputs"])
+                    if (s.value("type", "") == "mesh" && !usedOutputs[i].contains(s.value("id", "")))
+                    {
+                        anchored = true;
+                        ++trimmed;
+                    }
+                rows = !hideUnused || !anchored ? every : trimmed;
             }
             double& y = columnY[rank[i]];
             n["position"] = json::array({double(rank[i]) * kColumnWidth, y});
@@ -547,11 +585,50 @@ json viewInfo(const std::string& view, int depth, bool all)
         defNodes.push_back(std::move(def));
     }
 
+    json frames = layout.value("frames", json::object()).value(view, json::array());
+    if (frames.is_array())
+    {
+        std::map<std::string, std::string> shown;
+        for (size_t i = 0; i < v.order.size(); ++i)
+            shown[g.fullPath(v.order[i])] = paths[i];
+        for (json& f : frames)
+            if (f.is_object() && f.contains("nodes") && f["nodes"].is_array())
+                for (json& m : f["nodes"])
+                    if (auto it = m.is_string() ? shown.find(m.get<std::string>()) : shown.end(); it != shown.end())
+                        m = it->second;
+    }
     json out = {{"name", view}, {"view", view}, {"nodes", nodes}};
-    out["definition"] = {{"nodes", defNodes}, {"links", links}};
+    out["definition"] = {{"nodes", defNodes}, {"links", links}, {"frames", frames.is_array() ? frames : json::array()}};
     if (g.selection().empty())
         out["error"] = "Nothing selected. Select objects in the viewport or the Outliner to show their nodes.";
     return out;
+}
+
+/** The addModifier kind a node type is ("bevel" for bevelModifier); empty for anything else. */
+std::string modifierKind(const std::string& type)
+{
+    constexpr std::string_view kSuffix = "Modifier";
+    if (!type.ends_with(kSuffix))
+        return {};
+    std::string kind = type.substr(0, type.size() - kSuffix.size());
+    std::vector<std::string> all = modifiers::kinds();
+    return std::find(all.begin(), all.end(), kind) != all.end() ? kind : std::string();
+}
+
+/** The mesh the newest selected mesh or modifier stands for, kNoNode when the selection holds neither. */
+NodeId selectedMesh(Graph& g)
+{
+    const std::vector<NodeId> sel = g.selection();
+    for (auto it = sel.rbegin(); it != sel.rend(); ++it)
+    {
+        Node* n = g.node(*it);
+        if (n && n->type().isA("mesh"))
+            return *it;
+        if (modifiers::asModifier(n))
+            if (NodeId mesh = modifiers::meshOf(g, *it); mesh != kNoNode)
+                return mesh;
+    }
+    return kNoNode;
 }
 
 /** The socket a new node of type t would link a dragged wire of linkType through; empty when none fits. */
@@ -648,9 +725,13 @@ void registerCommands()
 
     ops::registerCommand({
         .name = "sceneGraphAddNode",
-        .doc = "Create a scene node from the node editor and add it to the selection, so the view shows it. Returns its path.",
+        .doc = "Create a scene node from the node editor and add it to the selection, so the view shows it. Returns its path. A "
+               "modifier added with a mesh (or one of its modifiers) selected goes on top of that mesh's stack, as addModifier puts it, "
+               "and is laid out in the stack's columns rather than at position.",
         .positionalDoc = "view type",
-        .flags = {{"position", "", T::List, nullptr, "[x, y] on the canvas."}, {"name", "", T::String, nullptr, "Wanted name; made unique."}},
+        .flags = {{"position", "", T::List, nullptr, "[x, y] on the canvas."},
+                  {"name", "", T::String, nullptr, "Wanted name; made unique."},
+                  {"insert", "", T::Bool, true, "Put a modifier into the selected mesh's stack; off leaves it unlinked."}},
         .run = [](const Args& a) -> json {
             const char* cmd = "sceneGraphAddNode";
             std::string view = viewArg(a, cmd);
@@ -659,9 +740,24 @@ void registerCommands()
             if (!t)
                 throw CommandError(std::string(cmd) + ": unknown node type '" + typeName + "'");
             Graph& g = sceneGraphOf();
-            Node* n = rethrown([&] { return g.createNode(*t, a.get<std::string>("name", "")); });
+            Node* n = nullptr;
+            bool stacked = false;
+            if (std::string kind = modifierKind(typeName); !kind.empty() && a.get<bool>("insert", true))
+                if (NodeId mesh = selectedMesh(g); mesh != kNoNode)
+                {
+                    json made = ops::execute("addModifier", {{"args", {g.path(mesh)}}, {"kind", kind}});
+                    n = made.is_string() ? g.find(made.get<std::string>()) : nullptr;
+                    stacked = n != nullptr;
+                    if (n && a.has("name"))
+                        rethrown([&] {
+                            g.rename(n->id(), a.get<std::string>("name"));
+                            return 0;
+                        });
+                }
+            if (!n)
+                n = rethrown([&] { return g.createNode(*t, a.get<std::string>("name", "")); });
             g.select({n->id()}, SelectMode::Add);
-            if (a.has("position"))
+            if (a.has("position") && !stacked)
                 storePositions(view, {std::pair{n->id(), positionArg(a.flags.at("position"), cmd)}});
             return n->path();
         },
@@ -766,6 +862,39 @@ void registerCommands()
     });
 
     ops::registerCommand({
+        .name = "sceneGraphInsertNode",
+        .doc = "Drop an unlinked modifier into a link of a mesh's stack from the node editor: sceneGraphInsertNode(view, 'bevel1', "
+               "'polyCube1.outMesh', 'Cube.inMesh') wires it in as addModifier does. Returns False, changing nothing, for any other "
+               "node or link; the editor then wires the node through its matching sockets.",
+        .positionalDoc = "view node from to",
+        .run = [](const Args& a) -> json {
+            const char* cmd = "sceneGraphInsertNode";
+            viewArg(a, cmd);
+            Graph& g = sceneGraphOf();
+            Node& node = nodeArg(stringArg(a, 1, cmd, "node"), cmd);
+            const ModifierNode* mod = modifiers::asModifier(&node);
+            if (!mod || g.source({node.id(), mod->inAttr, -1}) || !g.destinations({node.id(), mod->outAttr, -1}).empty())
+                return false;
+            PlugRef from = plugArg(stringArg(a, 2, cmd, "from")), into = plugArg(stringArg(a, 3, cmd, "to"));
+            if (g.source(into) != std::optional<PlugRef>(from))
+                return false;
+            const Node* target = g.node(into.node);
+            NodeId mesh = kNoNode;
+            if (target && target->type().isA("mesh") && into.attr == MeshNode::kInMesh)
+                mesh = into.node;
+            else if (const ModifierNode* below = modifiers::asModifier(target); below && into.attr == below->inAttr)
+                mesh = modifiers::meshOf(g, into.node);
+            if (mesh == kNoNode)
+                return false;
+            rethrown([&] {
+                modifiers::insert(g, node, mesh, into);
+                return 0;
+            });
+            return true;
+        },
+    });
+
+    ops::registerCommand({
         .name = "sceneGraphMoveNodes",
         .doc = "Move nodes on the node editor's canvas: sceneGraphMoveNodes(view, positions={'Box': [0, 100]}). Kept per view with the "
                "scene.",
@@ -815,11 +944,90 @@ void registerCommands()
     });
 
     ops::registerCommand({
+        .name = "sceneGraphSetFrames",
+        .doc = "Replace a view's frames and notes, shaped as gnSetFrames takes them: sceneGraphSetFrames(view, [{label: 'Arm', position: "
+               "[x, y], size: [w, h], nodes: ['L_arm'], text: ''}]). Members that name no node are dropped. Kept with the scene.",
+        .positionalDoc = "view frames",
+        .run = [](const Args& a) -> json {
+            const char* cmd = "sceneGraphSetFrames";
+            std::string view = viewArg(a, cmd);
+            if (a.positional.size() < 2 || !a.positional[1].is_array())
+                throw CommandError(std::string(cmd) + ": frames must be a list");
+            std::vector<gn::GFrame> frames = gn::framesFromJson(a.positional[1]);
+            const Graph& g = sceneGraphOf();
+            for (gn::GFrame& f : frames)
+            {
+                std::vector<std::string> members;
+                for (const std::string& m : f.nodes)
+                    if (const Node* n = g.find(m))
+                        members.push_back(g.fullPath(n->id()));
+                f.nodes = std::move(members);
+            }
+            json layout = layoutData();
+            layout["frames"][view] = gn::framesToJson(frames);
+            data::set(kLayoutKey, layout);
+            return int(frames.size());
+        },
+    });
+
+    ops::registerCommand({
+        .name = "sceneGraphRenameNode",
+        .doc = "Rename a scene node from the node editor, as rename does, keeping its place, flags and frames in every view: "
+               "sceneGraphRenameNode(view, 'pCube1', 'Crate'). Returns its new path.",
+        .positionalDoc = "view node name",
+        .run = [](const Args& a) -> json {
+            const char* cmd = "sceneGraphRenameNode";
+            viewArg(a, cmd);
+            Graph& g = sceneGraphOf();
+            const NodeId id = nodeArg(stringArg(a, 1, cmd, "node"), cmd).id();
+            const std::string name = stringArg(a, 2, cmd, "name");
+            const std::string before = g.fullPath(id);
+            json renamed = ops::execute("rename", {{"args", {g.path(id), name}}});
+            const std::string after = g.fullPath(id);
+            if (after != before)
+            {
+                // Children's full paths start with the node's, so their stored state moves with it.
+                auto moved = [&](const std::string& key) -> std::optional<std::string> {
+                    if (key == before)
+                        return after;
+                    if (key.starts_with(before + "|"))
+                        return after + key.substr(before.size());
+                    return std::nullopt;
+                };
+                auto rekey = [&](json& byPath) {
+                    if (!byPath.is_object())
+                        return;
+                    json next = json::object();
+                    for (auto& [key, value] : byPath.items())
+                        next[moved(key).value_or(key)] = value;
+                    byPath = std::move(next);
+                };
+                json layout = layoutData();
+                if (layout.contains("positions") && layout["positions"].is_object())
+                    for (auto& [view, positions] : layout["positions"].items())
+                        rekey(positions);
+                if (layout.contains("flags"))
+                    rekey(layout["flags"]);
+                if (layout.contains("frames") && layout["frames"].is_object())
+                    for (auto& [view, frames] : layout["frames"].items())
+                        for (json& f : frames)
+                            if (f.is_object() && f.contains("nodes") && f["nodes"].is_array())
+                                for (json& m : f["nodes"])
+                                    if (m.is_string())
+                                        m = moved(m.get<std::string>()).value_or(m.get<std::string>());
+                data::set(kLayoutKey, layout);
+            }
+            return renamed;
+        },
+    });
+
+    ops::registerCommand({
         .name = "sceneGraphSetNodeFlags",
-        .doc = "Show nodes collapsed, or with every plug (hideUnused=False) rather than only the connected ones. Kept with the scene.",
+        .doc = "Show nodes collapsed, or with every plug (hideUnused=False) rather than only the connected ones and their meshes. A node "
+               "with neither shows every plug. Kept with the scene.",
         .positionalDoc = "view nodes...",
         .flags = {{"collapsed", "", T::Bool, nullptr, "Only the header."},
-                  {"hideUnused", "", T::Bool, nullptr, "Only the connected plugs; on for every node until turned off."},
+                  {"hideUnused", "", T::Bool, nullptr, "Only the connected plugs and meshes; on for every node but modifiers until turned off."},
                   {"muted", "", T::Bool, nullptr, "Accepted for the editor's mute key; scene nodes don't mute."}},
         .run = [](const Args& a) -> json {
             const char* cmd = "sceneGraphSetNodeFlags";

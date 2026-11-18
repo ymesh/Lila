@@ -128,6 +128,7 @@ std::string setForDock(const std::string& dock)
         {"renderToolkit", "Render"},
         {"scopesDock", "Render"},
         {"stagehand.library", "Level"},
+        {"blockworkToolkit", "Level"},
         {"terrain.sculptPalette", "Level"},
         {"clayPalette", "Sculpt"},
         {"modelingToolkit", "Model"},

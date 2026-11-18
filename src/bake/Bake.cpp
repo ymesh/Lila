@@ -547,7 +547,8 @@ BakeResult runBake(const BakeInputs& in, const ProjectSettings& ps, const BakeOp
             tex->height = os.height;
             tex->udim = udim;
             tex->format = t.ext;
-            const int bits = m.settings.bits ? m.settings.bits : os.bits;
+            // Maps that band at 8 bits (height, position) ask for more; an explicit per-map depth still wins.
+            const int bits = m.settings.bits ? m.settings.bits : std::max(os.bits, m.def ? m.def->preferredBits : 8);
             tex->bits = formatBits(t.ext, bits);
             if (tex->bits < bits)
                 result.warnings.push_back(paths::toUtf8(file.filename()) + ": " + t.ext + " holds " + std::to_string(tex->bits) + " bits, not the " +

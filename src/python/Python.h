@@ -25,6 +25,8 @@ struct Result
 /** Runs like the script editor: a lone expression is evaluated and its repr returned. Output goes to the log. */
 LILA_SCENE_API Result run(std::string_view code, std::string_view filename = "<script>");
 LILA_SCENE_API Result runFile(const std::filesystem::path& path);
+/** Evaluates one expression in __main__ and returns it as JSON text, or the error, without printing either. */
+LILA_SCENE_API Result evalJson(std::string_view expression);
 
 /** The UI installs these so lila.ui can reach its action registry; headless they stay empty. */
 struct UiHooks

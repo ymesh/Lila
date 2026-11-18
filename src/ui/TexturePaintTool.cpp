@@ -4,6 +4,7 @@
 #include "render/PaintGpu.h"
 #include "tex/BrushPresets.h"
 #include "tex/Library.h"
+#include "tex/MaterialFromMaps.h"
 #include "tex/PaintBuffer.h"
 #include "tex/PaintParticles.h"
 #include "tex/PatchFill.h"
@@ -4436,7 +4437,8 @@ private:
         viewportTools::requestRedraw();
     }
 
-    static std::optional<image::Image> openImage(const char* title)
+    /** A picture the user picks, its colour decoded as a file painted into channel decodes. */
+    static std::optional<image::Image> openImage(const char* title, const std::string& channel)
     {
         const QString f = ui::fileDialog::getOpenFileName(mainWindow(), title, {}, "Images (*.png *.jpg *.jpeg *.exr *.tga *.tif *.tiff *.psd)");
         if (f.isEmpty())
@@ -4448,17 +4450,25 @@ private:
             log::warn("Texture paint: {}: {}", f.toStdString(), err);
             return std::nullopt;
         }
+        decodeForChannel(img, f.toStdString(), channel);
         return img;
+    }
+
+    /** Decodes a picture file's colour to linear when it lands in a colour channel; data channels and float files read as stored. */
+    static void decodeForChannel(image::Image& img, const std::string& file, const std::string& channel)
+    {
+        if (std::string_view(tex::maps::imageColorSpace(paths::fromUtf8(file), channel)) != "srgb")
+            return;
+        for (size_t i = 0; i < img.rgba.size(); ++i)
+            if (i % 4 != 3)
+                img.rgba[i] = srgbToLinear(std::clamp(img.rgba[i], 0.0f, 1.0f));
     }
 
     void loadBufferImage()
     {
-        std::optional<image::Image> img = openImage("Project Image");
+        std::optional<image::Image> img = openImage("Project Image", payloadFor(texturePaintState(), false).colorChannel);
         if (!img)
             return;
-        for (size_t i = 0; i < img->rgba.size(); ++i)
-            if (i % 4 != 3)
-                img->rgba[i] = srgbToLinear(std::clamp(img->rgba[i], 0.0f, 1.0f));
         mBuffer.bake();
         mBuffer.place(*img);
         texturePaintState().transform = true;
@@ -4704,9 +4714,7 @@ private:
                 log::warn("Texture paint: reveal picture {}: {}", s.revealImage, err);
                 return std::nullopt;
             }
-            for (size_t i = 0; i < img.rgba.size(); ++i)
-                if (i % 4 != 3)
-                    img.rgba[i] = srgbToLinear(std::clamp(img.rgba[i], 0.0f, 1.0f));
+            decodeForChannel(img, s.revealImage, tp::StrokeStencil().colorChannel);
             mRevealPicture = tp::PaintImage::fromRgba(img.width, img.height, img.rgba);
             mRevealPath = s.revealImage;
         }
@@ -4725,15 +4733,11 @@ private:
             return std::nullopt;
         if (!mStencilPicture || mStencilPictureVersion != s.stencilVersion)
         {
-            std::vector<float> rgba = s.stencil.image.rgba;
-            // A colour stencil paints its colour, which 8-bit files hold as sRGB; a mask reads the file's values as they are.
-            std::string ext = paths::fromUtf8(s.stencilPath).extension().string();
-            std::transform(ext.begin(), ext.end(), ext.begin(), [](char c) { return char(std::tolower(static_cast<unsigned char>(c))); });
-            if (s.stencilMode == "color" && ext != ".exr" && ext != ".hdr")
-                for (size_t i = 0; i < rgba.size(); ++i)
-                    if (i % 4 != 3)
-                        rgba[i] = srgbToLinear(rgba[i]);
-            mStencilPicture = tp::PaintImage::fromRgba(s.stencil.image.width, s.stencil.image.height, rgba);
+            image::Image pic = s.stencil.image;
+            // A mask reads the file's values as they are.
+            if (s.stencilMode == "color")
+                decodeForChannel(pic, s.stencilPath, tp::StrokeStencil().colorChannel);
+            mStencilPicture = tp::PaintImage::fromRgba(pic.width, pic.height, pic.rgba);
             mStencilPictureVersion = s.stencilVersion;
         }
         tp::holdImage(mStencilPicture);

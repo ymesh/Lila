@@ -44,6 +44,15 @@ LILA_FOUNDATION_API std::vector<LogEntry> since(uint64_t since, size_t maxCount 
 
 LILA_FOUNDATION_API const char* levelName(LogLevel level);
 
+/**
+ * The lowest of Debug, Info, Warning and Error printed to the console; sinks and since() still get every entry. Starts
+ * from the LILA_LOG_LEVEL environment variable (debug, info, warning or error), Debug when unset.
+ */
+LILA_FOUNDATION_API LogLevel consoleLevel();
+LILA_FOUNDATION_API void setConsoleLevel(LogLevel level);
+/** The level a name such as "warning" or "error" stands for. */
+LILA_FOUNDATION_API bool levelFromName(std::string_view name, LogLevel& out);
+
 template <class... Args> void debug(std::format_string<Args...> f, Args&&... a) { write(LogLevel::Debug, std::format(f, std::forward<Args>(a)...)); }
 template <class... Args> void info(std::format_string<Args...> f, Args&&... a) { write(LogLevel::Info, std::format(f, std::forward<Args>(a)...)); }
 template <class... Args> void warn(std::format_string<Args...> f, Args&&... a) { write(LogLevel::Warning, std::format(f, std::forward<Args>(a)...)); }

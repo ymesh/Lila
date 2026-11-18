@@ -610,6 +610,33 @@ void registerTypes()
     registerBooleanModifier();
 }
 
+void insert(Graph& g, Node& mod, NodeId mesh, PlugRef into)
+{
+    auto* mn = asModifier(&mod);
+    if (!mn)
+        throw std::invalid_argument(mod.path() + " is not a modifier");
+    if (auto hook = createHooks().find(mod.type().name); hook != createHooks().end())
+        hook->second(g, mod, mesh);
+    if (auto src = g.source(into))
+    {
+        g.disconnect(into);
+        g.connect(*src, {mod.id(), mn->inAttr, -1});
+    }
+    else
+    {
+        // The mesh's stored base moves into a source node so it stays editable under the stack.
+        Node* source = g.createNode(*types::find("meshSource"), {}, kNoNode, true);
+        g.setValue({source->id(), MeshSourceNode::kMesh, -1}, g.storedValue(into));
+        g.setValue(into, MeshPtr());
+        g.connect({source->id(), MeshSourceNode::kOutMesh, -1}, {mod.id(), mn->inAttr, -1});
+    }
+    g.connect({mod.id(), mn->outAttr, -1}, into);
+    // The modifiers below rerun to carry the spacing layers their first one adds for a subdivision.
+    if (isSubdivision(mod))
+        for (NodeId id : stack(g, mesh))
+            g.touch(id);
+}
+
 void registerCommands()
 {
     autoBevel::registerCommands();
@@ -638,30 +665,8 @@ void registerCommands()
             if (!t)
                 throw CommandError("addModifier: unknown kind '" + a.get<std::string>("kind") + "'");
 
-            PlugRef top{mesh.id(), MeshNode::kInMesh, -1};
-            auto src = g.source(top);
             Node* mod = g.createNode(*t, {}, kNoNode, true);
-            auto* mn = static_cast<ModifierNode*>(mod);
-            if (auto hook = createHooks().find(t->name); hook != createHooks().end())
-                hook->second(g, *mod, mesh.id());
-            if (src)
-            {
-                g.disconnect(top);
-                g.connect(*src, {mod->id(), mn->inAttr, -1});
-            }
-            else
-            {
-                // The mesh's stored base moves into a source node so it stays editable under the stack.
-                Node* source = g.createNode(*types::find("meshSource"), {}, kNoNode, true);
-                g.setValue({source->id(), MeshSourceNode::kMesh, -1}, g.storedValue(top));
-                g.setValue(top, MeshPtr());
-                g.connect({source->id(), MeshSourceNode::kOutMesh, -1}, {mod->id(), mn->inAttr, -1});
-            }
-            g.connect({mod->id(), mn->outAttr, -1}, top);
-            // The modifiers below rerun to carry the spacing layers their first one adds for a subdivision.
-            if (isSubdivision(*mod))
-                for (NodeId id : stack(g, mesh.id()))
-                    g.touch(id);
+            insert(g, *mod, mesh.id(), {mesh.id(), MeshNode::kInMesh, -1});
             if (a.has("params"))
                 for (auto& [k, val] : a.flags["params"].items())
                 {

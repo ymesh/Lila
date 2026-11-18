@@ -4,7 +4,7 @@
   "type": "triplanar",
   "label": "Triplanar",
   "category": "Input",
-  "doc": "Projects the input onto the mesh from three axes in object or world space, blended by the surface normal, so it needs no uvs and has no seams.",
+  "doc": "Projects the input onto the mesh from three axes, blended by the surface normal, so it needs no uvs and has no seams.",
   "inputs": [
     {
       "id": "input",
@@ -16,6 +16,26 @@
         1
       ],
       "taps": 3
+    },
+    {
+      "id": "boundsMin",
+      "type": "vector",
+      "default": [
+        0,
+        0,
+        0
+      ],
+      "doc": "The bake's position map spans boundsMin to boundsMax. Adding the node fills both from the set's last bake, and they follow live mesh maps while those run, so the pattern keeps its proportions on a mesh that isn't a cube."
+    },
+    {
+      "id": "boundsMax",
+      "type": "vector",
+      "default": [
+        1,
+        1,
+        1
+      ],
+      "doc": "The far corner of the position map's bounds."
     }
   ],
   "outputs": [
@@ -26,21 +46,12 @@
   ],
   "params": [
     {
-      "id": "space",
-      "type": "enum",
-      "default": "object",
-      "options": [
-        "object",
-        "world"
-      ]
-    },
-    {
       "id": "scale",
       "type": "float",
       "default": 1.0,
       "min": 0,
       "softMax": 16,
-      "doc": "Repeats per unit."
+      "doc": "Repeats across the longest side of the bake's bounds."
     },
     {
       "id": "sharpness",
@@ -54,11 +65,9 @@
   "cost": 12,
   "externals": [
     "position",
-    "normal",
-    "worldPosition",
     "worldNormal"
   ],
   "body": {
-    "out": "float3 pos = (p.space == 0 ? position.sample(uv).xyz : worldPosition.sample(uv).xyz) * p.scale;\nfloat3 n = p.space == 0 ? normal.sample(uv).xyz : worldNormal.sample(uv).xyz;\nfloat3 w = pow(abs(n) + 1e-5, float3(p.sharpness, p.sharpness, p.sharpness));\nw /= w.x + w.y + w.z;\nreturn input.sample(pos.yz) * w.x + input.sample(pos.xz) * w.y + input.sample(pos.xy) * w.z;"
+    "out": "float3 lo = boundsMin.sample(uv);\nfloat3 ext = max(boundsMax.sample(uv) - lo, float3(1e-6, 1e-6, 1e-6));\nfloat3 pos = position.sample(uv).xyz * ext / max(ext.x, max(ext.y, ext.z)) * p.scale;\nfloat3 n = worldNormal.sample(uv).xyz * 2.0 - 1.0;\nfloat3 w = pow(abs(n) + 1e-5, float3(p.sharpness, p.sharpness, p.sharpness));\nw /= w.x + w.y + w.z;\nreturn input.sample(pos.yz) * w.x + input.sample(pos.xz) * w.y + input.sample(pos.xy) * w.z;"
   }
 }

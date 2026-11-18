@@ -30,10 +30,19 @@ struct GNode
     bool collapsed = false;
     /** Drawn with only its linked sockets. */
     bool hideUnused = false;
+    /** Drawn without its image preview, where the editor draws one. */
+    bool hidePreview = false;
+    /** What the canvas shows on its header instead of the type's label; empty for the type's. Display only, never unique. */
+    std::string label;
 };
 
-/** Writes a node's flags into its JSON object ("muted", "collapsed", "hideUnused"), leaving out the ones that are off. */
+/**
+ * Writes a node's flags ("muted", "collapsed", "hideUnused", "hidePreview") and its "label" into its JSON object, leaving
+ * out the ones that are off or empty.
+ */
 LILA_SCENE_API void putNodeFlags(const GNode& n, json& o);
+/** A node label as typed, made one line: line breaks become spaces and the ends are trimmed. */
+LILA_SCENE_API std::string cleanNodeLabel(std::string_view text);
 LILA_SCENE_API void getNodeFlags(GNode& n, const json& o);
 template <class Json> void putNodeFlagsTo(const GNode& n, Json& o)
 {
@@ -43,6 +52,10 @@ template <class Json> void putNodeFlagsTo(const GNode& n, Json& o)
         o["collapsed"] = true;
     if (n.hideUnused)
         o["hideUnused"] = true;
+    if (n.hidePreview)
+        o["hidePreview"] = true;
+    if (!n.label.empty())
+        o["label"] = n.label;
 }
 
 struct GLink
@@ -73,7 +86,8 @@ struct GTie
 
 /**
  * A frame: a labelled, coloured box on the canvas holding nodes, which move with it. Display only. position is its
- * top-left corner; color is a palette name, empty for the theme's default.
+ * top-left corner; color is a palette name, empty for the theme's default. A frame with text is a note: the text shows
+ * in its body.
  */
 struct GFrame
 {
@@ -83,11 +97,12 @@ struct GFrame
     std::string color;
     bool collapsed = false;
     std::vector<std::string> nodes;
+    std::string text;
 
     bool operator==(const GFrame&) const = default;
 };
 
-/** [{label, position: [x, y], size: [w, h], color, collapsed, nodes: [names]}]; color and collapsed left out at their defaults. */
+/** [{label, position: [x, y], size: [w, h], color, collapsed, nodes: [names], text}]; color, collapsed and text left out at their defaults. */
 LILA_SCENE_API json framesToJson(const std::vector<GFrame>& frames);
 /** Skips malformed entries. */
 LILA_SCENE_API std::vector<GFrame> framesFromJson(const json& j);

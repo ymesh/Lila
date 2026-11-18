@@ -103,7 +103,8 @@ json typeDefault(const ParamDecl& p)
     case ParamType::Gradient: return json{{"stops", json::array({json::array({0.0, json::array({0, 0, 0, 1})}), json::array({1.0, json::array({1, 1, 1, 1})})})}};
     case ParamType::Curve: return json{{"points", json::array({json::array({0.0, 0.0}), json::array({1.0, 1.0})})}};
     case ParamType::Image:
-    case ParamType::Code: return "";
+    case ParamType::Code:
+    case ParamType::Node: return "";
     }
     return nullptr;
 }
@@ -399,6 +400,8 @@ json NodeDef::toJson() const
     json o = {{"format", "lilatexnode"}, {"version", 1}, {"type", type}, {"label", label}, {"category", category}, {"kind", nodeKindName(kind)}};
     if (!doc.empty())
         o["doc"] = doc;
+    if (!keywords.empty())
+        o["keywords"] = keywords;
     json ins = json::array(), outs = json::array(), prms = json::array();
     for (const PortDecl& p : inputs)
         ins.push_back(portJson(p, true));
@@ -436,6 +439,7 @@ NodeDef NodeDef::fromJson(const json& j)
         d.label = j.value("label", d.type);
         d.category = j.value("category", std::string("Other"));
         d.doc = j.value("doc", std::string());
+        d.keywords = j.value("keywords", std::vector<std::string>());
         std::string kind = j.value("kind", j.contains("graph") ? "graph" : "slang");
         auto k = std::find(std::begin(kKindNames), std::end(kKindNames), kind);
         if (k == std::end(kKindNames) || k - std::begin(kKindNames) >= int(NodeKind::GroupInput))

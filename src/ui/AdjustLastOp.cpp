@@ -35,9 +35,11 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 namespace lila::ui
@@ -445,6 +447,12 @@ void install()
     };
     scene::Graph::current().addListener([checkLive](scene::Change, scene::NodeId) { checkLive(); });
     scene::components::addListener(checkLive);
+    // Picking a transform tool (Q, W, E, R) finishes with the op, as in Maya.
+    actions::addRunListener([](const actions::RunEvent& e) {
+        static const std::array<std::string_view, 4> kTools = {"tool.select", "tool.move", "tool.rotate", "tool.scale"};
+        if (e.done && e.target.is_string() && std::ranges::find(kTools, e.target.get_ref<const std::string&>()) != kTools.end())
+            hidePopup();
+    });
 
     actions::add({.id = "adjustLastOp.show", .label = "Adjust Last Operation", .category = "Edit", .run = [] {
                       if (lo::reachable())

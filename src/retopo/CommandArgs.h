@@ -1,5 +1,6 @@
 #pragma once
 
+#include "geo/Bvh.h"
 #include "geo/Mesh.h"
 #include "ops/Command.h"
 #include "scene/Graph.h"
@@ -32,4 +33,16 @@ inline geo::Mesh baseMesh(const scene::PlugRef& p)
 }
 
 inline glm::dmat4 worldOf(const scene::Node& n) { return n.as<glm::dmat4>(scene::Transform::kWorldMatrix); }
+
+/** A retopo mesh's reference surface in the retopo mesh's object space, with its Bvh. */
+struct ReferenceSurface
+{
+    scene::MeshPtr source;
+    glm::dmat4 toLocal{1.0};
+    geo::Mesh mesh;
+    geo::MeshBvh bvh;
+};
+
+/** The reference surface of retopo, null when it has none; the last one built is kept for the next call. */
+const ReferenceSurface* referenceSurface(const scene::Node& retopo);
 } // namespace lila::retopo

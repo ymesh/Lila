@@ -693,8 +693,11 @@ private:
     qreal mT = 0;
 };
 
-/** The welcome page's title row: the app icon and name on the left, the support card and Essentials button on the right. */
-QWidget* makeWelcomeHeader(QWidget* parent, QPushButton*& essentials)
+/**
+ * The welcome page's title row: the app icon and name on the left, the support card, Essentials button and close button
+ * on the right.
+ */
+QWidget* makeWelcomeHeader(QWidget* parent, QPushButton*& essentials, QToolButton*& close)
 {
     auto* header = new QWidget(parent);
     auto* row = new QHBoxLayout(header);
@@ -723,6 +726,12 @@ QWidget* makeWelcomeHeader(QWidget* parent, QPushButton*& essentials)
         row->addWidget(support);
     }
     row->addWidget(essentials);
+    close = new QToolButton(header);
+    close->setObjectName("welcomeClose");
+    close->setIcon(ui::icon("x"));
+    close->setAutoRaise(true);
+    close->setToolTip("Close (Esc)");
+    row->addWidget(close, 0, Qt::AlignTop);
     return header;
 }
 
@@ -1144,7 +1153,9 @@ StartupDialog::StartupDialog(Hooks hooks, bool welcome, QWidget* parent) : QDial
     if (welcome)
     {
         QPushButton* essentials = nullptr;
-        layout->addWidget(makeWelcomeHeader(this, essentials));
+        QToolButton* close = nullptr;
+        layout->addWidget(makeWelcomeHeader(this, essentials, close));
+        connect(close, &QToolButton::clicked, this, &QDialog::reject);
         connect(essentials, &QPushButton::clicked, this, [this] {
             reject();
             docs::open("essentials");
@@ -1407,7 +1418,16 @@ void StartupDialog::present()
 
 bool StartupDialog::eventFilter(QObject* obj, QEvent* e)
 {
-    if (e->type() == QEvent::KeyPress && isVisible() && qobject_cast<QWidget*>(obj) && static_cast<QWidget*>(obj)->window() == this)
+    const bool key = e->type() == QEvent::KeyPress && isVisible() && obj->isWidgetType();
+    const bool mine = key && static_cast<QWidget*>(obj)->window() == this;
+    // Esc dismisses from any window, since the main window often holds the keyboard; a menu or modal dialog keeps its own.
+    if (key && (mine || (!QApplication::activePopupWidget() && !QApplication::activeModalWidget())))
+        if (auto* ke = static_cast<QKeyEvent*>(e); ke->key() == Qt::Key_Escape && ke->modifiers() == Qt::NoModifier)
+        {
+            reject();
+            return true;
+        }
+    if (mine)
     {
         auto* ke = static_cast<QKeyEvent*>(e);
         // The main window's shortcuts don't reach a tool window, and these two replace what the dialog is for.
@@ -1421,12 +1441,6 @@ bool StartupDialog::eventFilter(QObject* obj, QEvent* e)
             reject();
             if (run)
                 run();
-            return true;
-        }
-        // The app's Esc hotkey (viewport.escape) would otherwise take it first.
-        if (ke->key() == Qt::Key_Escape && ke->modifiers() == Qt::NoModifier)
-        {
-            reject();
             return true;
         }
         // Space opens the highlighted scene or example like Enter, instead of toggling the list selection.

@@ -236,6 +236,92 @@ TEST_CASE("commands: retopo draw edits")
     UndoStack::get().clear();
 }
 
+TEST_CASE("commands: retopo draw move keeps a face across the symmetry plane mirrored")
+{
+    scene::Graph& g = scene::Graph::current();
+    g.clear();
+    UndoStack::get().clear();
+    auto P = [](double x, double y) { return json::array({x, y, 0.0}); };
+    ops::execute("retopoDrawAddFace", {{"mesh", "sym"}, {"create", true}, {"points", {P(-10, 0), P(10, 0), P(10, 10), P(-10, 10)}}});
+    g.setValue({g.find("sym")->id(), scene::MeshNode::kSymmetry, -1}, int64_t(1));
+
+    // Every corner shifted +5 in x, the grabbed left side listed first: the right side mirrors it instead.
+    const geo::Mesh before = toolOutMesh("sym");
+    json points = json::array(), positions = json::array();
+    for (double side : {-10.0, 10.0})
+        for (geo::Index p = 0; p < before.pointCapacity(); ++p)
+            if (before.pointValid(p) && before.position(p).x == side)
+            {
+                points.push_back(p);
+                positions.push_back(P(side + 5.0, before.position(p).y));
+            }
+    ops::execute("retopoDrawMove", {{"mesh", "sym"}, {"points", points}, {"positions", positions}});
+    const geo::Mesh& m = toolOutMesh("sym");
+    for (geo::Index p = 0; p < m.pointCapacity(); ++p)
+        if (m.pointValid(p))
+            CHECK(std::abs(m.position(p).x) == doctest::Approx(5.0));
+    g.clear();
+    UndoStack::get().clear();
+}
+
+TEST_CASE("commands: retopo draw insert loop puts the new points on the reference")
+{
+    scene::Graph& g = scene::Graph::current();
+    g.clear();
+    UndoStack::get().clear();
+    const geo::Mesh ball = sphere(32);
+    makeMeshNode("ref", ball);
+    g.setValue({g.find("ref")->id(), scene::MeshNode::kSymmetry, -1}, int64_t(1));
+    geo::MeshBvh bvh(ball);
+    auto offSurface = [&](const glm::dvec3& p) {
+        geo::BvhClosest c;
+        REQUIRE(bvh.closestPoint(p, c));
+        return glm::length(c.point - p);
+    };
+    // A quad on the front of the 50 cm sphere, to one side of the symmetry plane.
+    auto S = [](double x, double y) {
+        const glm::dvec3 p = glm::normalize(glm::dvec3(x, y, 1.0)) * 50.0;
+        return json::array({p.x, p.y, p.z});
+    };
+    ops::execute("retopoDrawAddFace", {{"mesh", "ref_retopo"}, {"reference", "ref"}, {"create", true},
+                                       {"points", {S(0.1, -0.4), S(0.9, -0.4), S(0.9, 0.4), S(0.1, 0.4)}}});
+    const geo::Mesh before = toolOutMesh("ref_retopo");
+    REQUIRE(before.numFaces() == 2);
+    REQUIRE(before.numPoints() == 8);
+    auto existed = [&](const glm::dvec3& p) {
+        for (Index q = 0; q < before.pointCapacity(); ++q)
+            if (before.pointValid(q) && glm::length(before.position(q) - p) < 1e-9)
+                return true;
+        return false;
+    };
+
+    ops::execute("retopoDrawInsertLoop", {{"mesh", "ref_retopo"}, {"edge", int(before.findEdge(0, 1))}});
+    const geo::Mesh& m = toolOutMesh("ref_retopo");
+    CHECK(m.numFaces() == 4);
+    CHECK(geo::test::isValid(m));
+    int added = 0;
+    for (Index p = 0; p < m.pointCapacity(); ++p)
+        if (m.pointValid(p) && !existed(m.position(p)))
+        {
+            ++added;
+            CAPTURE(p);
+            // The middle of a straight edge is centimetres under the surface.
+            CHECK(offSurface(m.position(p)) < 1e-6);
+        }
+    // Two on the drawn quad, two on its mirror image, and the two sides still mirror each other.
+    CHECK(added == 4);
+    double sumX = 0.0;
+    for (Index p = 0; p < m.pointCapacity(); ++p)
+        if (m.pointValid(p))
+            sumX += m.position(p).x;
+    CHECK(sumX == doctest::Approx(0.0).epsilon(1e-6));
+
+    UndoStack::get().undo();
+    CHECK(toolOutMesh("ref_retopo").numFaces() == 2);
+    g.clear();
+    UndoStack::get().clear();
+}
+
 TEST_CASE("commands: retopo draw dots undo, and fill consumes dots in one step")
 {
     scene::Graph& g = scene::Graph::current();

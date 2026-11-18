@@ -47,11 +47,25 @@ std::optional<double> getOpt(const json& o, const char* key)
 
 void putNodeFlags(const GNode& n, json& o) { putNodeFlagsTo(n, o); }
 
+std::string cleanNodeLabel(std::string_view text)
+{
+    std::string out(text);
+    for (char& c : out)
+        if (c == '\n' || c == '\r' || c == '\t')
+            c = ' ';
+    const size_t first = out.find_first_not_of(' ');
+    if (first == std::string::npos)
+        return {};
+    return out.substr(first, out.find_last_not_of(' ') - first + 1);
+}
+
 void getNodeFlags(GNode& n, const json& o)
 {
     n.muted = o.value("muted", false);
     n.collapsed = o.value("collapsed", false);
     n.hideUnused = o.value("hideUnused", false);
+    n.hidePreview = o.value("hidePreview", false);
+    n.label = o.contains("label") && o["label"].is_string() ? o["label"].get<std::string>() : std::string();
 }
 
 json tiesToJson(const std::vector<GTie>& ties)
@@ -148,6 +162,8 @@ json framesToJson(const std::vector<GFrame>& frames)
             o["color"] = f.color;
         if (f.collapsed)
             o["collapsed"] = true;
+        if (!f.text.empty())
+            o["text"] = f.text;
         out.push_back(std::move(o));
     }
     return out;
@@ -174,6 +190,8 @@ std::vector<GFrame> framesFromJson(const json& j)
         if (f.contains("color") && f["color"].is_string())
             frame.color = f["color"].get<std::string>();
         frame.collapsed = f.value("collapsed", false);
+        if (f.contains("text") && f["text"].is_string())
+            frame.text = f["text"].get<std::string>();
         for (const json& n : f.value("nodes", json::array()))
             if (n.is_string())
                 frame.nodes.push_back(n.get<std::string>());

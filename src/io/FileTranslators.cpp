@@ -55,7 +55,8 @@ json invoke(const Operation& o, const fs::path& path, const json& options, CallS
     if (source == CallSource::UI)
         call = ops::options::callWith(o.command, call);
     for (auto& [k, v] : o.flags.items())
-        call[k] = v;
+        if (!call.contains(k))
+            call[k] = v;
     call["args"] = json::array({pathArg(path)});
     return ops::execute(o.command, call, source);
 }

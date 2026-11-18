@@ -13,7 +13,7 @@ struct InstanceData
 struct WirePush
 {
     float4x4 viewProj;
-    /** Clip z = z * x + w * y: pulls the wire toward the camera along its view ray (see depthPull in Renderer.cpp). z: display gamma. */
+    /** Clip z = z * x + w * y: pulls the wire toward the camera along its view ray (see depthPull in Renderer.cpp). z: display gamma, negative for a display-space target. */
     float4 depthPull;
     float4 eye; // xyz camera position, w the draw's offset toward it (cm)
     InstanceData* instances; // the frame's instance buffer
@@ -48,5 +48,5 @@ WireOut wireVS(WireIn v, uint instanceId: SV_InstanceID)
 [shader("fragment")]
 float4 wirePS(WireOut i) : SV_Target
 {
-    return float4(fromDisplay(i.color.rgb, wpc.depthPull.z), i.color.a);
+    return float4(wpc.depthPull.z < 0.0 ? i.color.rgb : fromDisplay(i.color.rgb, wpc.depthPull.z), i.color.a);
 }

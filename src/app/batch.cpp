@@ -1,5 +1,6 @@
 #include "app/Host.h"
 #include "core/CrashHandler.h"
+#include "core/Log.h"
 #include "core/Paths.h"
 #include "core/Version.h"
 
@@ -39,11 +40,25 @@ int main(int argc, char** argv)
     crash::install();
     host::Options opts = host::parse(argc, argv);
     opts.batch = true;
+    if (opts.error.empty() && !opts.exportArgs.empty() && opts.exportOut.empty())
+        opts.error = "--export-args needs --export <scene> <out>";
+    if (!opts.error.empty())
+    {
+        std::fprintf(stderr, "lilabatch: %s\nlilabatch --help lists the options.\n", opts.error.c_str());
+        return 2;
+    }
+    if (opts.printHelp)
+    {
+        std::fputs(host::usage().c_str(), stdout);
+        return 0;
+    }
     if (opts.printVersion)
     {
         std::printf("Lila %s\n", version::full().c_str());
         return 0;
     }
+    if (opts.quiet)
+        log::setConsoleLevel(LogLevel::Warning);
 
     host::startCore();
     loadUiCommands();

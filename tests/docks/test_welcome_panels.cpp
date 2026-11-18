@@ -14,12 +14,15 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPointer>
 #include <QPushButton>
 #include <QScrollBar>
+#include <QToolButton>
 #include <QTreeWidget>
 
 using namespace lila;
@@ -85,6 +88,57 @@ TEST_CASE("welcome dialog shows whole example cards in one column and ignores cl
     CHECK((!recent || !recent->isVisible()));
     delete welcome.data();
     delete recent.data();
+}
+
+TEST_CASE("welcome dialog closes on Esc from the main window and from its close button")
+{
+    QWidget main;
+    auto* field = new QLineEdit(&main);
+    main.show();
+    auto escTo = [](QWidget* w) {
+        QKeyEvent press(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(w, &press);
+        pump();
+    };
+    auto open = [&] {
+        QPointer<ui::StartupDialog> welcome = new ui::StartupDialog({}, true, &main);
+        welcome->present();
+        pump();
+        REQUIRE(welcome->isVisible());
+        return welcome;
+    };
+
+    // The key goes to a widget of the main window, as when it holds the keyboard focus.
+    QPointer<ui::StartupDialog> welcome = open();
+    field->setFocus();
+    escTo(field);
+    CHECK((!welcome || !welcome->isVisible()));
+
+    // A menu open over it takes Esc for itself.
+    welcome = open();
+    QMenu menu;
+    menu.addAction("Item");
+    menu.popup(main.geometry().center());
+    pump();
+    REQUIRE(QApplication::activePopupWidget() == &menu);
+    escTo(&menu);
+    REQUIRE(welcome);
+    CHECK(welcome->isVisible());
+    menu.close();
+    pump();
+
+    auto* close = welcome->findChild<QToolButton*>("welcomeClose");
+    REQUIRE(close);
+    CHECK(close->isVisible());
+    CHECK(close->toolTip() == "Close (Esc)");
+    // In the top right corner, inside the page margins.
+    const QPoint corner = close->mapTo(welcome.data(), close->rect().topRight());
+    CHECK(welcome->width() - corner.x() <= 24);
+    CHECK(corner.y() <= 24);
+    close->click();
+    pump();
+    CHECK((!welcome || !welcome->isVisible()));
+    delete welcome.data();
 }
 
 TEST_CASE("material editor filters by name and shows icon-only buttons in order")

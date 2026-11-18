@@ -224,8 +224,9 @@ public:
     QString canvasHint() const override
     {
         return GraphBackend::canvasHint() +
-               " Repeat, For Each, Simulation and Closure zones run the nodes between their input and output. Ctrl+G groups the selection, Ctrl+Alt+G ungroups, double-click a Group node to open its group, Ctrl+Shift+click a "
-               "node to preview it in a Viewer. Drop a .lilanodes file here to import it.";
+               QString(" Repeat, For Each, Simulation and Closure zones run the nodes between their input and output. %1 groups the selection, %2 ungroups, "
+                       "double-click a Group node to open its group, Ctrl+Shift+click a node to preview it in a Viewer. Drop a .lilanodes file here to import it.")
+                   .arg(hintKey("nodeEditor.groupNodes"), hintKey("nodeEditor.ungroup"));
     }
 
     void addToolbarButtons(QBoxLayout* bar, NodeEditor& editor) const override;

@@ -1,8 +1,74 @@
 #include "ui/NodeCanvas.h"
+#include "ui/ColorPopup.h"
 #include "ui/Hotkeys.h"
 
 namespace lila::ui::canvas
 {
+namespace
+{
+/** An input row's value as the node edits it: a slider box, a check, or a swatch, with the input's name. */
+void paintField(QPainter& p, const SocketInfo& s, FieldKind kind, QRectF r, bool hot)
+{
+    QRectF text = r.adjusted(6, 0, -6, 0);
+    QFontMetrics fm = p.fontMetrics();
+    QString label = pretty(s.id);
+    if (kind == FieldKind::Toggle)
+    {
+        const bool on = s.value.is_boolean() ? s.value.get<bool>() : s.value.get<double>() != 0.0;
+        QRectF box(r.left() + 4, r.center().y() - 5.5, 11, 11);
+        p.setPen(QPen(gray(on ? 205 : hot ? 160 : 110), 1.0));
+        p.setBrush(on ? gray(205) : gray(hot ? 52 : 40));
+        p.drawRoundedRect(box, 2, 2);
+        if (on)
+        {
+            p.setPen(QPen(gray(30), 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            QPolygonF tick;
+            tick << box.topLeft() + QPointF(2.5, 5.8) << box.topLeft() + QPointF(4.7, 8.2) << box.topLeft() + QPointF(8.6, 3.0);
+            p.drawPolyline(tick);
+        }
+        p.setPen(gray(hot ? 225 : 195));
+        QRectF t = r.adjusted(box.width() + 10, 0, -4, 0);
+        p.drawText(t, Qt::AlignVCenter | Qt::AlignLeft, fm.elidedText(label, Qt::ElideRight, int(t.width())));
+        return;
+    }
+    if (kind == FieldKind::Color)
+    {
+        glm::dvec3 c(s.value[0].get<double>(), s.value[1].get<double>(), s.value[2].get<double>());
+        QRectF swatch(r.right() - 38, r.top() + 1, 38, r.height() - 2);
+        p.setPen(QPen(gray(hot ? 200 : 20), 1.0));
+        p.setBrush(colorMath::display(c, 1.0));
+        p.drawRoundedRect(swatch, 3, 3);
+        p.setPen(gray(hot ? 225 : 195));
+        QRectF t(text.left() - 2, r.top(), swatch.left() - text.left() - 4, r.height());
+        p.drawText(t, Qt::AlignVCenter | Qt::AlignLeft, fm.elidedText(label, Qt::ElideRight, int(t.width())));
+        return;
+    }
+    p.setPen(QPen(gray(hot ? 75 : 40), 1));
+    p.setBrush(gray(hot ? 52 : 44));
+    p.drawRoundedRect(r, 3, 3);
+    const double v = s.value.get<double>();
+    if (auto range = fieldRange(s.limits))
+    {
+        double t = std::clamp((v - range->first) / (range->second - range->first), 0.0, 1.0);
+        QPainterPath box;
+        box.addRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3);
+        p.save();
+        p.setClipPath(box);
+        p.fillRect(QRectF(r.left(), r.top(), r.width() * t, r.height()), gray(hot ? 76 : 66));
+        p.restore();
+    }
+    QString value = valueText(s.value, s.type);
+    if (auto names = s.limits.find("enum"); names != s.limits.end() && v >= 0.0 && v < double(names->size()) && (*names)[size_t(v)].is_string())
+        value = pretty((*names)[size_t(v)].get<std::string>());
+    int valueWidth = fm.horizontalAdvance(value);
+    p.setPen(gray(hot ? 240 : 225));
+    p.drawText(text, Qt::AlignVCenter | Qt::AlignRight, value);
+    p.setPen(gray(hot ? 200 : 170));
+    QRectF t = text.adjusted(0, 0, -valueWidth - 6, 0);
+    p.drawText(t, Qt::AlignVCenter | Qt::AlignLeft, fm.elidedText(label, Qt::ElideRight, int(std::max(0.0, t.width()))));
+}
+} // namespace
+
 NodeItem::NodeItem(NodeCanvas* canvas, const json& info) : mCanvas(canvas)
 {
     name = info.value("name", "");
@@ -10,8 +76,15 @@ NodeItem::NodeItem(NodeCanvas* canvas, const json& info) : mCanvas(canvas)
     category = info.value("category", "");
     label = qs(info.value("label", type));
     for (const json& s : info.value("inputs", json::array()))
+    {
         inputs.push_back({s.value("id", ""), s.value("type", ""), s.value("field", false), s.value("multi", false), s.value("linked", false),
                           s.value("value", json()), s.value("implicit", ""), s.value("doc", "")});
+        for (const char* k : {"min", "max", "softMin", "softMax", "step"})
+            if (s.contains(k) && s[k].is_number())
+                inputs.back().limits[k] = s[k];
+        if (s.contains("enum") && s["enum"].is_array())
+            inputs.back().limits["enum"] = s["enum"];
+    }
     for (const json& s : info.value("outputs", json::array()))
         outputs.push_back({s.value("id", ""), s.value("type", ""), s.value("field", false), false, false, json(), "", s.value("doc", "")});
     for (const json& p : info.value("props", json::array()))
@@ -21,7 +94,7 @@ NodeItem::NodeItem(NodeCanvas* canvas, const json& info) : mCanvas(canvas)
             textProps.insert(props.back().first);
     }
     viewer = !canvas->backend->viewerType().empty() && type == canvas->backend->viewerType();
-    thumbSize = canvas->backend->thumbnailSize(type);
+    previewSize = canvas->backend->thumbnailSize(type);
     if (canvas->backend->runsSubgroup(type))
         for (auto& [id, v] : props)
             if (id == "group")
@@ -29,6 +102,7 @@ NodeItem::NodeItem(NodeCanvas* canvas, const json& info) : mCanvas(canvas)
     // A loop node keeps its kind in the title so a Repeat and a For Each over the same group tell apart.
     if (!groupRef.empty())
         label = type == canvas->backend->subgroupNodeType() ? qs(groupRef) : label + ": " + qs(groupRef);
+    typeLabel = label;
     reroute = type == gn::kRerouteType;
     portal = type == gn::kSendType || type == gn::kReceiveType;
     problem = qs(info.value("problem", ""));
@@ -162,17 +236,22 @@ void NodeItem::paint(QPainter* p, const QStyleOptionGraphicsItem*, QWidget*)
     for (int ii : shownIn)
     {
         const SocketInfo& s = inputs[size_t(ii)];
-        QString text = pretty(s.id);
-        bool valueless = backend.valueless(s.type);
-        if (!s.linked && !valueless)
+        if (FieldKind kind = fieldKind(ii); kind != FieldKind::None)
+            paintField(*p, s, kind, QRectF(8, y + 2, kNodeWidth - 16, kRow - 4), ii == hotField);
+        else
         {
-            QString v = !s.implicit.empty() && s.value.is_null() ? pretty(s.implicit) : valueText(s.value, s.type);
-            if (!v.isEmpty())
-                text += "  " + v;
+            QString text = pretty(s.id);
+            bool valueless = backend.valueless(s.type);
+            if (!s.linked && !valueless)
+            {
+                QString v = !s.implicit.empty() && s.value.is_null() ? pretty(s.implicit) : valueText(s.value, s.type);
+                if (!v.isEmpty())
+                    text += "  " + v;
+            }
+            p->setPen(s.linked || valueless ? gray(205) : gray(170));
+            p->drawText(QRectF(12, y, kNodeWidth - 18, kRow), Qt::AlignVCenter | Qt::AlignLeft,
+                        p->fontMetrics().elidedText(text, Qt::ElideRight, int(kNodeWidth - 20)));
         }
-        p->setPen(s.linked || valueless ? gray(205) : gray(170));
-        p->drawText(QRectF(12, y, kNodeWidth - 18, kRow), Qt::AlignVCenter | Qt::AlignLeft,
-                    p->fontMetrics().elidedText(text, Qt::ElideRight, int(kNodeWidth - 20)));
         drawSocket(*p, QPointF(0, y + kRow * 0.5), backend.socketStyle(s.type), s.field);
         if (s.multi)
         {
@@ -217,14 +296,51 @@ void NodeItem::layoutRows()
     prepareGeometryChange();
     shownOut.clear();
     shownIn.clear();
+    thumbSize = hidePreview || !mCanvas->previews() ? 0 : previewSize;
     if (collapsed)
         return;
+    const GraphBackend& backend = *mCanvas->backend;
+    auto anchors = [&](const SocketInfo& s) { return s.linked || backend.primarySocket(s.type); };
+    const bool all = !hideUnused || (std::none_of(inputs.begin(), inputs.end(), anchors) && std::none_of(outputs.begin(), outputs.end(), anchors));
     for (int i = 0; i < int(outputs.size()); ++i)
-        if (!hideUnused || outputs[size_t(i)].linked)
+        if (all || anchors(outputs[size_t(i)]))
             shownOut.push_back(i);
     for (int i = 0; i < int(inputs.size()); ++i)
-        if (!hideUnused || inputs[size_t(i)].linked)
+        if (all || anchors(inputs[size_t(i)]))
             shownIn.push_back(i);
+}
+
+FieldKind NodeItem::fieldKind(int i) const
+{
+    const SocketInfo& s = inputs[size_t(i)];
+    if (s.linked || s.value.is_null() || mCanvas->backend->valueless(s.type))
+        return FieldKind::None;
+    if (s.type == "bool")
+        return s.value.is_boolean() || s.value.is_number() ? FieldKind::Toggle : FieldKind::None;
+    if (s.type == "color")
+        return s.value.is_array() && (s.value.size() == 3 || s.value.size() == 4) && s.value[0].is_number() && s.value[1].is_number() &&
+                       s.value[2].is_number()
+                   ? FieldKind::Color
+                   : FieldKind::None;
+    return s.value.is_number() ? FieldKind::Number : FieldKind::None;
+}
+
+QRectF NodeItem::fieldRect(int i) const
+{
+    auto it = std::find(shownIn.begin(), shownIn.end(), i);
+    if (collapsed || reroute || it == shownIn.end())
+        return {};
+    double row = double(shownOut.size() + props.size()) + double(it - shownIn.begin());
+    return QRectF(8, top() + kRow * row + 2, kNodeWidth - 16, kRow - 4);
+}
+
+int NodeItem::fieldAt(QPointF scenePos) const
+{
+    QPointF local = mapFromScene(scenePos);
+    for (int i : shownIn)
+        if (fieldKind(i) != FieldKind::None && fieldRect(i).contains(local))
+            return i;
+    return -1;
 }
 
 double NodeItem::height() const
@@ -334,6 +450,12 @@ void FrameItem::paint(QPainter* p, const QStyleOptionGraphicsItem*, QWidget*)
     p->setPen(Qt::NoPen);
     p->setBrush(title);
     p->drawPath(head.simplified());
+    if (isSelected())
+    {
+        p->setPen(QPen(themeColor("nodeSelected"), 2.0));
+        p->setBrush(Qt::NoBrush);
+        p->drawRoundedRect(collapsed ? titleRect() : box(), 5, 5);
+    }
     QColor ink = title.lightness() > 140 ? gray(25) : gray(235);
     p->setPen(ink);
     p->setBrush(ink);
@@ -349,6 +471,16 @@ void FrameItem::paint(QPainter* p, const QStyleOptionGraphicsItem*, QWidget*)
     p->setFont(f);
     p->drawText(titleRect().adjusted(kTitle, 0, -6, 0), Qt::AlignVCenter | Qt::AlignLeft,
                 p->fontMetrics().elidedText(label, Qt::ElideRight, int(size.width() - kTitle - 6)));
+    if (!collapsed && !text.isEmpty())
+    {
+        f.setBold(false);
+        p->setFont(f);
+        p->setPen(gray(215));
+        p->save();
+        p->setClipRect(textRect());
+        p->drawText(textRect(), Qt::AlignTop | Qt::AlignLeft | Qt::TextWordWrap, text);
+        p->restore();
+    }
     if (!collapsed)
     {
         QRectF g = gripRect();
@@ -467,8 +599,8 @@ NodeCanvas::NodeCanvas(QWidget* parent) : QGraphicsView(parent)
         updateEmphasis();
         if (mBuilding)
             return;
-        auto sel = mScene.selectedItems();
-        onSelect(sel.size() == 1 ? static_cast<NodeItem*>(sel[0])->name : std::string());
+        const std::vector<std::string> sel = selectedNames();
+        onSelect(sel.size() == 1 && mScene.selectedItems().size() == 1 ? sel[0] : std::string());
     });
 }
 
@@ -497,6 +629,10 @@ void NodeCanvas::build(const std::string& group, const json& info, const std::se
 {
     mBuilding = true;
     bool newGroup = group != mGroup;
+    // Frames have no names: they keep their selection by index across an edit's rebuild.
+    std::vector<int> framesSelected = std::exchange(mSelectFramesNext, {});
+    if (framesSelected.empty() && !newGroup)
+        framesSelected = selectedFrames();
     mGroup = group;
     mLinks.clear();
     mNodes.clear();
@@ -508,6 +644,7 @@ void NodeCanvas::build(const std::string& group, const json& info, const std::se
     mFrameDrag = -1;
     mLazyFrom = nullptr;
     mHoverNode = nullptr;
+    mHotFieldNode = nullptr;
     mTieDrag = -1;
     mTieStroke = false;
     mHotTie = -1;
@@ -535,7 +672,10 @@ void NodeCanvas::build(const std::string& group, const json& info, const std::se
             const gn::GNode& f = flags[item->name];
             item->collapsed = f.collapsed;
             item->hideUnused = f.hideUnused;
+            item->hidePreview = f.hidePreview;
             item->muted = f.muted;
+            if (!f.label.empty())
+                item->label = qs(f.label);
             item->viewerActive = active[item->name];
             mScene.addItem(item);
             mNodes[item->name] = item;
@@ -572,6 +712,7 @@ void NodeCanvas::build(const std::string& group, const json& info, const std::se
             auto* item = new FrameItem(i);
             mScene.addItem(item);
             mFrameItems.push_back(item);
+            item->setSelected(std::ranges::find(framesSelected, i) != framesSelected.end());
         }
         layoutFrames();
         layoutTies();
@@ -632,10 +773,21 @@ std::vector<std::string> NodeCanvas::selectedNames() const
     return out;
 }
 
+std::vector<int> NodeCanvas::selectedFrames() const
+{
+    std::vector<int> out;
+    for (FrameItem* f : mFrameItems)
+        if (f->isSelected())
+            out.push_back(f->index);
+    return out;
+}
+
 void NodeCanvas::selectAll()
 {
     for (auto& [n, item] : mNodes)
         item->setSelected(true);
+    for (FrameItem* f : mFrameItems)
+        f->setSelected(true);
 }
 
 void NodeCanvas::nodeMoved(NodeItem* n)
@@ -727,16 +879,56 @@ void NodeCanvas::frameSelection()
     commitFrames(next);
 }
 
+namespace
+{
+/** The selected nodes a flag applies to: not reroutes or portals, nothing that can't mute for "muted", only previewed ones for "hidePreview". */
+std::vector<NodeItem*> flagTargets(std::vector<NodeItem*> nodes, std::string_view flag)
+{
+    std::erase_if(nodes, [&](NodeItem* n) {
+        return n->reroute || n->portal || (flag == "muted" && (n->type == "GroupInput" || n->type == "GroupOutput" || n->type == "materialOutput")) ||
+               (flag == "hidePreview" && n->previewSize <= 0);
+    });
+    return nodes;
+}
+
+bool nodeFlagOf(const NodeItem* n, std::string_view flag)
+{
+    if (flag == "muted")
+        return n->muted;
+    if (flag == "collapsed")
+        return n->collapsed;
+    if (flag == "hidePreview")
+        return n->hidePreview;
+    return n->hideUnused;
+}
+} // namespace
+
+bool NodeCanvas::flagOn(const char* flag) const
+{
+    std::vector<NodeItem*> nodes = flagTargets(selectedNodes(), flag);
+    return !nodes.empty() && std::all_of(nodes.begin(), nodes.end(), [&](NodeItem* n) { return nodeFlagOf(n, flag); });
+}
+
+void NodeCanvas::setPreviews(bool on)
+{
+    PrefStore::get().set("general", kPrefPreviews, on);
+    reloadPrefs();
+}
+
+bool NodeCanvas::hasPreviews(bool selectedOnly) const
+{
+    for (auto& [name, n] : mNodes)
+        if (n->previewSize > 0 && (!selectedOnly || n->isSelected()))
+            return true;
+    return false;
+}
+
 void NodeCanvas::toggleFlag(const char* flag)
 {
-    std::vector<NodeItem*> nodes = selectedNodes();
-    std::erase_if(nodes, [&](NodeItem* n) {
-        return n->reroute || n->portal || (std::string_view(flag) == "muted" && (n->type == "GroupInput" || n->type == "GroupOutput" ||
-                                                                                  n->type == "materialOutput"));
-    });
+    std::vector<NodeItem*> nodes = flagTargets(selectedNodes(), flag);
     if (nodes.empty() || !backend->supports("SetNodeFlags"))
         return;
-    auto get = [flag](NodeItem* n) { return std::string_view(flag) == "muted" ? n->muted : std::string_view(flag) == "collapsed" ? n->collapsed : n->hideUnused; };
+    auto get = [flag](NodeItem* n) { return nodeFlagOf(n, flag); };
     bool on = std::any_of(nodes.begin(), nodes.end(), [&](NodeItem* n) { return !get(n); });
     json a = json::array({mGroup});
     for (NodeItem* n : nodes)
@@ -857,6 +1049,9 @@ void NodeCanvas::reloadPrefs()
 {
     mPrefs = readCanvasPrefs();
     gWireStyle = mPrefs.wires;
+    for (auto& [name, item] : mNodes)
+        if (item->previewSize > 0)
+            item->layoutRows();
     for (LinkItem* l : mLinks)
     {
         l->base.setColor(wireColor(l->from->outputs[size_t(l->out)].type));
@@ -866,6 +1061,7 @@ void NodeCanvas::reloadPrefs()
     }
     layoutTies();
     updateEmphasis();
+    refreshThumbs();
     viewport()->update();
 }
 

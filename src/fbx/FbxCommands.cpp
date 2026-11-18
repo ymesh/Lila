@@ -263,7 +263,7 @@ void registerCommands()
                "and arrive as CineCameras. Cameras are written as FBX cameras in every kind. "
                "start/end are frames. Returns the path.",
         .positionalDoc = "path objects...",
-        .flags = {{"profile", "", T::String, "ue5", "Axis profile: ue5 (Z up), ue6 (Y up) or generic (the scene's own axes)."},
+        .flags = {{"profile", "", T::String, "ue5", "Axis profile: ue5 (Z up), ue6 (Y up, +Z forward; unity is the same axes) or generic (the scene's own axes)."},
                   {"kind", "k", T::String, "auto", "auto | static | skeletal | animation | sequence. auto is skeletal when a skinned mesh is exported, sequence when only cameras are."},
                   {"maxInfluences", "mi", T::Int, 8, "Skin influences per vertex, heaviest kept and renormalised (4 for mobile).", {}, {}, 0.0},
                   {"animation", "anim", T::Bool, true, "Write the take for skeletal and sequence exports (always for kind=animation)."},
@@ -299,7 +299,7 @@ void registerCommands()
             ExportOptions opts;
             std::string profile = a.get<std::string>("profile", "ue5");
             if (!parseProfile(profile, &opts.profile))
-                throw CommandError("exportFbx: unknown profile '" + profile + "' (ue5, ue6 or generic)");
+                throw CommandError("exportFbx: unknown profile '" + profile + "' (ue5, ue6, unity or generic)");
             opts.triangulate = a.get<bool>("triangulate", true);
             opts.tangents = a.get<bool>("tangents", true);
             opts.worldSpace = a.get<bool>("worldSpace", false);

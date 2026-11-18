@@ -4,6 +4,7 @@
 #include "ui/Actions.h"
 #include "ui/DisplayAids.h"
 #include "ui/PaintSelect.h"
+#include "ui/Shelf.h"
 #include "ui/Tools.h"
 #include "ui/ViewportTool.h"
 
@@ -125,5 +126,8 @@ void registerItems(std::function<ViewportWidget*()> active)
     add({.id = "toolBox/backfaceTint", .action = "viewport.aid.backfaceTint", .icon = "arrows-exchange"});
     add({.id = "toolBox/display", .kind = Kind::Menu, .icon = "eye", .label = "Mesh Display (active view)",
          .fill = [active](QMenu* m) { displayAids::fillMenu(m, active()); }});
+    add({.id = "toolBox/-windows", .kind = Kind::Separator});
+    add({.id = "toolBox/floatingShelf", .action = "shelf.floatingOpen", .icon = "layout-grid",
+         .checked = [] { return FloatingShelf::isOpen(); }});
 }
 } // namespace lila::ui::toolBox

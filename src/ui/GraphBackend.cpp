@@ -2,6 +2,7 @@
 
 #include "core/ExtensionContext.h"
 #include "scene/Graph.h"
+#include "ui/Hotkeys.h"
 #include "ui/Theme.h"
 
 #include <algorithm>
@@ -10,7 +11,7 @@ namespace lila::ui
 {
 GraphBackend::~GraphBackend() = default;
 
-bool GraphBackend::supports(std::string_view) const { return true; }
+bool GraphBackend::supports(std::string_view verb) const { return verb != "InsertNode"; }
 
 bool GraphBackend::isQuery(std::string_view verb) const { return verb == "GroupInfo" || verb == "NodeTypes"; }
 
@@ -74,13 +75,25 @@ QColor GraphBackend::headerColor(const std::string& type, const std::string&) co
     return themeColor("nodeHeader");
 }
 
+QString GraphBackend::hintKey(const char* actionId)
+{
+    const QString k = Hotkeys::get().keyFor(actionId);
+    return k.isEmpty() ? QStringLiteral("(unbound)") : k;
+}
+
 QString GraphBackend::canvasHint() const
 {
-    return "Select a node to edit its values.\n\nTab / Shift+A add a node under the cursor; while dragging a wire, or letting one go "
-           "on empty canvas, it lists only nodes that connect. Ctrl+drag cuts links, Alt+click a socket disconnects it, Delete / X deletes, Ctrl+C / Ctrl+V copy "
-           "and paste as text, Ctrl+D duplicates, F frames the selection, Home frames all. Hold Z and drag across wires to zip-tie "
-           "them; drag a tie to move it, Shift+drag to turn it, right-click it for colour and removal. Alt+right-drag from one node to "
-           "another connects them; Ctrl+drag a linked input moves its link, Shift+drag copies it.";
+    const QString add = hintKey("nodeEditor.addNode");
+    return QString("Select a node to edit its values.\n\n%1 adds a node under the cursor; while dragging a wire, or letting one go "
+                   "on empty canvas, it lists only nodes that connect. Ctrl+drag cuts links, Alt+click a socket disconnects it, %2 / %3 deletes, %4 / %5 copy "
+                   "and paste as text, %6 duplicates, %7 frames the selection, %8 frames all. %9 or a double-click on a title renames a node or note; "
+                   "a click on a note's or frame's title selects it. ")
+               .arg(add, hintKey("edit.delete"), hintKey("nodeEditor.delete"), hintKey("nodeEditor.copy"), hintKey("nodeEditor.paste"),
+                    hintKey("nodeEditor.duplicate"), hintKey("nodeEditor.frameSelected"), hintKey("nodeEditor.frameAll"), hintKey("nodeEditor.renameNode")) +
+           QString("Add Note (%1, then type note) leaves a note. Hold %2 and drag across wires to zip-tie "
+                   "them; drag a tie to move it, Shift+drag to turn it, right-click it for colour and removal. Alt+right-drag from one node to "
+                   "another connects them; Ctrl+drag a linked input moves its link, Shift+drag copies it.")
+               .arg(add, hintKey("nodeEditor.zipTieOn"));
 }
 
 Registry<GraphBackendPtr>& graphBackends::registry()

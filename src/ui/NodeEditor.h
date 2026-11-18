@@ -24,6 +24,11 @@ namespace lila::scene
 class Node;
 }
 
+namespace lila::gn
+{
+struct GFrame;
+}
+
 namespace lila::ui
 {
 class NodeCanvas;
@@ -108,10 +113,21 @@ public:
     void showCanvasMenu(QPoint global);
     /** Trades the links and values of the selected node's first two inputs of one type. */
     void swapInputs();
-    /** Flips "muted", "collapsed" or "hideUnused" on the selected nodes. */
+    /** Flips "muted", "collapsed", "hideUnused" or "hidePreview" on the selected nodes. */
     void toggleNodeFlag(const char* flag);
+    /** True when every selected node the flag applies to has it on. */
+    bool nodeFlagOn(const char* flag) const;
+    /** Image previews on every node that has one; remembered as a pref. */
+    void setPreviews(bool on);
+    bool previews() const;
     /** A frame around the selected nodes, or an empty one at the cursor. */
     void frameSelection();
+    /** Types a new label (a scene node's name) over the selected node's header, or the hovered node's. */
+    void renameSelected();
+    /** A note at the cursor: a box to type it in, added as a frame with text when kept. */
+    void addNote();
+    /** The title or note box open on the canvas, for tests; null when none is. */
+    QWidget* inPlaceEditor() const;
     /** Lights the selection's upstream and downstream and dims the rest: hold true for the held key, else the toggle. */
     void setFlowHighlight(bool on, bool hold);
     bool flowHighlight() const;
@@ -148,6 +164,12 @@ public:
 private:
     void openAddMenu(QPointF scenePos, const WireDrag* wire);
     void selectAfterRefresh(const std::vector<std::string>& names);
+    /** The selected frames none of whose members are in names: notes and empty frames, or frames chosen without their nodes. */
+    std::vector<int> framesOnly(const std::vector<std::string>& names) const;
+    /** Rebuilds the canvas now when the group changed since it last built, instead of waiting for the queued refresh. */
+    void catchUp();
+    /** Appends frames (SetFrames) and selects them once the canvas rebuilds. */
+    void addFrameCopies(const std::vector<gn::GFrame>& copies);
     void showError(const QString& message);
     /** panel false: only the canvas needs it, so a field being scrubbed in the side panel survives. */
     void scheduleRefresh(bool panel = true);

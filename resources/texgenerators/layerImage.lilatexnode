@@ -4,7 +4,7 @@
   "type": "layerImage",
   "label": "Layer Image",
   "category": "Layer",
-  "doc": "A paint layer's buffer: an image file sampled in uv (black when there is none yet).",
+  "doc": "A layer's image file (a paint buffer, an image fill, a decal or scatter picture) sampled in uv (black when there is none yet).",
   "inputs": [],
   "outputs": [
     {
@@ -17,10 +17,21 @@
       "id": "file",
       "type": "image",
       "default": ""
+    },
+    {
+      "id": "colorSpace",
+      "type": "enum",
+      "default": "linear",
+      "options": [
+        "linear",
+        "srgb"
+      ],
+      "doc": "How the file's colour values are read. linear: as stored, for paint buffers, data maps and EXR. srgb: decoded from sRGB to linear, for colour pictures saved as 8 or 16-bit PNG, JPEG, TGA or TIFF. Alpha is never decoded."
     }
   ],
   "cost": 2,
+  "code": "float3 layerImageSrgbToLinear(float3 c)\n{\n    float3 lo = c / 12.92;\n    float3 hi = pow(max((c + 0.055) / 1.055, float3(0.0)), float3(2.4));\n    return lerp(hi, lo, step(c, float3(0.04045)));\n}",
   "body": {
-    "out": "return file.sample(uv);"
+    "out": "float4 c = file.sample(uv);\nreturn p.colorSpace == 1 ? float4(layerImageSrgbToLinear(c.rgb), c.a) : c;"
   }
 }

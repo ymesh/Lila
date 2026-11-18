@@ -62,7 +62,7 @@ struct GridPush
     glm::vec4 color;
     glm::vec4 axisX;
     glm::vec4 axisZ;
-    glm::vec4 origin;
+    glm::vec4 origin; // xyz the grid origin, w how many pixels of depth slope to sink it by
     glm::vec4 offset; // the eye's ground coordinates from the grid origin: xy as they are (axes), zw wrapped by a major cell (lines)
 };
 
@@ -885,6 +885,8 @@ struct Renderer::Impl
     VkPipeline meshPipeline = VK_NULL_HANDLE, wirePipeline = VK_NULL_HANDLE, wireXrayPipeline = VK_NULL_HANDLE;
     /** Depth only, in the frame pass: marks the wires' empty-background pixels so behind image planes leave them. */
     VkPipeline wireCoverPipeline = VK_NULL_HANDLE;
+    /** wirePipeline and wireXrayPipeline in the frame pass, for wires drawn after temporal AA (wiresAfterTaa). */
+    VkPipeline wireFramePipeline = VK_NULL_HANDLE, wireXrayFramePipeline = VK_NULL_HANDLE;
     std::unordered_map<uint64_t, GpuMesh> meshCache; // render thread only
     std::unordered_map<uint64_t, GpuPoints> pointCache; // render thread only
     std::unordered_map<uint64_t, GpuStrands> strandCache; // render thread only
@@ -2731,6 +2733,15 @@ struct Renderer::Impl
     }
 
     /**
+     * Whether mesh wires and the grid draw in the frame pass, after temporal AA, rather than with the scene: one-pixel lines
+     * don't survive the jitter and history blend, and flicker as the camera moves.
+     */
+    bool wiresAfterTaa(const FrameState& s) const { return (s.taa || s.accumulateOnly) && taaPipeline && !s.externalScene; }
+
+    /** Whether shaded meshes draw their wire in their own shader, which puts it under temporal AA with the scene. */
+    bool shaderWireFor(const FrameState& s) const { return meshWirePipeline != VK_NULL_HANDLE && !wiresAfterTaa(s); }
+
+    /**
      * Groups the frame's mesh draws for instancing and writes their placements into the frame's instance buffer. kept, a
      * view's batches from its last frame, is reused when reuse says this frame draws the same list, and refreshed otherwise.
      */
@@ -2745,7 +2756,7 @@ struct Renderer::Impl
         }
         else
         {
-            frameBatches = batchDraws(s, meshWirePipeline != VK_NULL_HANDLE);
+            frameBatches = batchDraws(s, shaderWireFor(s));
             if (kept)
                 *kept = frameBatches;
         }
@@ -5766,6 +5777,10 @@ struct Renderer::Impl
                                          false, false, true);
             wireXrayPipeline = buildPipeline(wireLayout, wire, "wireVS", "wirePS", sceneFormat, VK_PRIMITIVE_TOPOLOGY_LINE_LIST, wvin, false, true, false,
                                              0.0f, false, false, true);
+            wireFramePipeline = buildPipeline(wireLayout, wire, "wireVS", "wirePS", format, VK_PRIMITIVE_TOPOLOGY_LINE_LIST, wvin, false, true, true, 0.0f,
+                                              false, false, true);
+            wireXrayFramePipeline = buildPipeline(wireLayout, wire, "wireVS", "wirePS", format, VK_PRIMITIVE_TOPOLOGY_LINE_LIST, wvin, false, true, false,
+                                                  0.0f, false, false, true);
             VkPipelineColorBlendAttachmentState noColor{};
             wireCoverPipeline = buildPipeline(wireLayout, wire, "wireVS", "wirePS", format, VK_PRIMITIVE_TOPOLOGY_LINE_LIST, wvin, true, false, true,
                                               0.0f, false, false, true, &noColor);
@@ -5825,7 +5840,7 @@ struct Renderer::Impl
     {
         for (VkPipeline* p : {&gridPipeline, &linesPipeline, &overlayPipeline, &overlayTrisPipeline, &meshPipeline, &meshBlendPipeline, &meshWirePipeline,
                               &meshWireBlendPipeline, &meshLeanPipeline, &meshWireLeanPipeline, &aoApplyPipeline, &pointsPipeline, &wirePipeline,
-                              &wireXrayPipeline, &wireCoverPipeline, &backgroundPipeline, &linesOnTopPipeline, &tris3dPipeline, &linesOverPipeline, &contactPipeline, &prepassPipeline, &gtaoPipeline, &pointsNearestPipeline, &pointsKeepPipeline,
+                              &wireXrayPipeline, &wireCoverPipeline, &wireFramePipeline, &wireXrayFramePipeline, &backgroundPipeline, &linesOnTopPipeline, &tris3dPipeline, &linesOverPipeline, &contactPipeline, &prepassPipeline, &gtaoPipeline, &pointsNearestPipeline, &pointsKeepPipeline,
                               &denoisePipeline, &imageOverPipeline, &imageDepthPipeline, &imageBlendPipeline, &imageBehindPipeline, &gridFramePipeline, &externalDepthPipeline, &heightfields.shaded,
                               &heightfields.wire, &heightfields.prepass, &heightfields.shadow,
                               &composeOverPipeline, &postPipeline, &externalPipeline,
@@ -6108,7 +6123,7 @@ struct Renderer::Impl
         LILA_GPU_SECTION(gpuFrame, "Viewport frame");
         LILA_GPU_SECTION(gpuPass, "Uploads");
         ++frameCounter;
-        const bool shaderWire = meshWirePipeline != VK_NULL_HANDLE;
+        const bool shaderWire = shaderWireFor(s);
         const bool sameMeshes = !v.offscreen && v.keptShaderWire == shaderWire && (s.meshes.sameList(v.keptMeshes) || sameDraws(s.meshes.list(), v.keptMeshes.list()));
         if (!sameMeshes && !v.offscreen)
         {
@@ -6397,9 +6412,9 @@ struct Renderer::Impl
 
         if (s.externalScene)
             drawExternal(cmd, s, externalDepthPipeline);
-        // Grid next: it writes no depth, so anything on the ground plane draws over it. An external image draws it in the
-        // frame pass instead, against that image's depth.
-        if (gridPipeline && s.grid && !s.externalScene)
+        // Grid next: it writes no depth, so anything on the ground plane draws over it. An external image or temporal AA
+        // draws it in the frame pass instead, against the scene's depth.
+        if (gridPipeline && s.grid && !s.externalScene && !wiresAfterTaa(s))
         {
             GridPush gp;
             gp.viewProj = vpScene;
@@ -6596,6 +6611,12 @@ struct Renderer::Impl
             if (s.externalScene)
                 drawUnderScene(cmd, s, vpF);
             drawCompose(s.externalScene && composeOverPipeline ? composeOverPipeline : composePipeline);
+        }
+        if (wiresAfterTaa(s))
+        {
+            // The depth buffer carries this frame's jitter: sinking the grid a pixel's slope keeps ground-plane surfaces over it.
+            drawFrameGrid(cmd, s, vpF, 1.0f);
+            drawWires(cmd, s, vpF, v.extent.height, true);
         }
         drawOverScene(cmd, s, vpF);
 
@@ -7248,7 +7269,14 @@ struct Renderer::Impl
     {
         drawImagePlanes(cmd, s, viewProj, ImagePlaneDraw::Depth::Behind, false);
         drawExternal(cmd, s, externalPipeline);
-        if (!gridFramePipeline || !s.grid || !s.externalDepth)
+        if (s.externalDepth)
+            drawFrameGrid(cmd, s, viewProj, 0.0f);
+    }
+
+    /** The grid in display space in the frame pass, sunk by sinkPixels of its depth slope (GridPush::origin.w). */
+    void drawFrameGrid(VkCommandBuffer cmd, const FrameState& s, const glm::mat4& viewProj, float sinkPixels)
+    {
+        if (!gridFramePipeline || !s.grid)
             return;
         GridPush gp;
         gp.viewProj = viewProj;
@@ -7258,7 +7286,7 @@ struct Renderer::Impl
         gp.color = glm::vec4(s.gridColor, 1.0f);
         gp.axisX = glm::vec4(s.gridAxisX, 1.0f);
         gp.axisZ = glm::vec4(s.gridAxisZ, 1.0f);
-        gp.origin = glm::vec4(glm::vec3(s.gridOrigin), 0.0f);
+        gp.origin = glm::vec4(glm::vec3(s.gridOrigin), sinkPixels);
         gp.offset = gridOffset(s);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gridFramePipeline);
         vkCmdPushConstants(cmd, gridLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(GridPush), &gp);
@@ -7478,7 +7506,7 @@ struct Renderer::Impl
         key.table = frameTableAddress != 0;
         key.instances = frameInstanceAddress != 0;
         key.bindless = bindless;
-        key.wire = meshWirePipeline != VK_NULL_HANDLE;
+        key.wire = shaderWireFor(s);
         key.uploads = uploadEpoch;
         key.evictions = meshEvictions;
         key.textureTable.assign(frameTable.begin() + std::min<size_t>(frameTable.size(), vt::kTableHeaderWords), frameTable.end());
@@ -7855,21 +7883,34 @@ struct Renderer::Impl
         }
         evictTextures();
 
-        if (wirePipeline && frameInstanceAddress)
+        if (!wiresAfterTaa(s))
+            drawWires(cmd, s, viewProj, heightPx, false);
+        else
             for (const DrawBatch& b : frameBatches.wire)
-            {
-                const MeshDraw& d = *b.draw;
-                WirePush p;
-                p.viewProj = viewProj;
-                p.eye = glm::vec4(glm::vec3(s.eye), std::max(d.drawOffset, 0.0f));
-                bool shaded = d.flags & (DrawShaded | DrawWireDepth);
-                if (shaded)
-                    p.depthPull = depthPull(s.proj, heightPx, kLinePullPixels + 0.5 * lineWidth(d.wireWidth));
-                p.depthPull.z = s.gamma;
-                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shaded ? wirePipeline : wireXrayPipeline);
-                drawWireBatch(cmd, b, p);
-            }
+                gpuMesh(b.draw->mesh); // marks it used, so the eviction below keeps it for the frame pass
         evictMeshes();
+    }
+
+    /** The frame's wire batches: with the scene, or in the frame pass (display space) after temporal AA. */
+    void drawWires(VkCommandBuffer cmd, const FrameState& s, const glm::mat4& viewProj, uint32_t heightPx, bool framePass)
+    {
+        const VkPipeline shadedPipeline = framePass ? wireFramePipeline : wirePipeline;
+        const VkPipeline xrayPipeline = framePass ? wireXrayFramePipeline : wireXrayPipeline;
+        if (!shadedPipeline || !xrayPipeline || !frameInstanceAddress)
+            return;
+        for (const DrawBatch& b : frameBatches.wire)
+        {
+            const MeshDraw& d = *b.draw;
+            WirePush p;
+            p.viewProj = viewProj;
+            p.eye = glm::vec4(glm::vec3(s.eye), std::max(d.drawOffset, 0.0f));
+            bool shaded = d.flags & (DrawShaded | DrawWireDepth);
+            if (shaded)
+                p.depthPull = depthPull(s.proj, heightPx, kLinePullPixels + 0.5 * lineWidth(d.wireWidth));
+            p.depthPull.z = framePass ? -1.0f : s.gamma;
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shaded ? shadedPipeline : xrayPipeline);
+            drawWireBatch(cmd, b, p);
+        }
     }
 
     void drawWireBatch(VkCommandBuffer cmd, const DrawBatch& b, WirePush& p)
@@ -8310,12 +8351,19 @@ struct Renderer::Impl
             // Big uploads leave big staging buffers, slow to free: they go once the GPU is done with them, while the
             // thread is idle, instead of in front of the next frame drawn into the same slot.
             const auto wake = nextWake();
+            // A frame submitted under the cap is due later than this wait would end; wake to re-arm for its time.
+            auto readyOrSooner = [&] {
+                if (ready())
+                    return true;
+                const auto next = nextWake();
+                return next && (!wake || *next < *wake);
+            };
             if (reclaimStaging())
-                cv.wait_for(lock, std::chrono::milliseconds(20), ready);
+                cv.wait_for(lock, std::chrono::milliseconds(20), readyOrSooner);
             else if (wake)
-                cv.wait_until(lock, *wake, ready);
+                cv.wait_until(lock, *wake, readyOrSooner);
             else
-                cv.wait(lock, ready);
+                cv.wait(lock, readyOrSooner);
             if (quit)
                 break;
 

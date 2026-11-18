@@ -25,6 +25,7 @@ lila_module(lila_ui UI
     ApiReference.cpp ApiReference.h
     Docs.cpp Docs.h
     DocsUi.cpp DocsUi.h
+    ArrayTable.cpp ArrayTable.h
     AttributeEditor.cpp AttributeEditor.h
     AttrAuthoring.cpp AttrAuthoring.h
     AttrView.cpp AttrView.h
@@ -125,7 +126,7 @@ lila_module(lila_ui UI
     ModelingToolkit.cpp ModelingToolkit.h LevelToolkit.cpp LevelToolkit.h
     SoftSelectPanel.cpp SoftSelectPanel.h
     ModifierStack.cpp ModifierStack.h
-    NodeEditor.cpp NodeEditor.h NodeCanvas.cpp NodeCanvas.h NodeCanvasLayout.cpp NodeCanvasInput.cpp NodeCanvasWires.cpp NodeCanvasTies.cpp NodeCanvasFrames.cpp NodeCanvasGrab.cpp GraphBackend.cpp GraphBackend.h GnGraphBackend.cpp
+    NodeEditor.cpp NodeEditor.h NodeCanvas.cpp NodeCanvas.h NodeCanvasLayout.cpp NodeCanvasInput.cpp NodeCanvasWires.cpp NodeCanvasTies.cpp NodeCanvasFrames.cpp NodeCanvasGrab.cpp NodeCanvasFields.cpp GraphBackend.cpp GraphBackend.h GnGraphBackend.cpp
     SceneGraphBackend.cpp
     TexGraphBackend.cpp TexParams.cpp TexParams.h TexPreview.cpp TexPreview.h Texture2DView.cpp TextureGraphUi.h TextureSetPanel.cpp TextureSetPanel.h
     Overlay.cpp Overlay.h

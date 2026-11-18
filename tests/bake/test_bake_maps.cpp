@@ -732,3 +732,23 @@ TEST_CASE("per-material output: each texture set bakes at its own resolution in 
     for (const json& o : r2["outputs"])
         CHECK(o["width"] == 16);
 }
+
+TEST_CASE("a png bake writes the position map at 16 bits, so positions read back to a fraction of a texel")
+{
+    newScene();
+    const fs::path dir = tempDir("lila_bakemaps_posbits");
+    const std::string low = addMesh("box_low", geo::makeCube());
+    const std::string p = project(dir, 32, 1, "png");
+    ops::execute("bakeGroup", {{"args", {"box"}}, {"project", p}, {"lows", {low}}, {"self", true}});
+    const json r = ops::execute("bake", {{"project", p}, {"maps", {"position"}}});
+    const image::Image pos = readImage(outputFor(r, "position"));
+    // The output asks for 8 bits; position prefers 16, so its values fall between 8-bit steps.
+    bool fine = false;
+    for (int y = 0; y < 32 && !fine; ++y)
+        for (int x = 0; x < 32 && !fine; ++x)
+        {
+            const float v = texel(pos, x, y).r * 255.0f;
+            fine = std::abs(v - std::round(v)) > 0.01f;
+        }
+    CHECK(fine);
+}

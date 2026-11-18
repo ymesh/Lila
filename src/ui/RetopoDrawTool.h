@@ -35,7 +35,9 @@ namespace lila::ui
  *   Tab Shift drag       extrude the whole border loop the edge is on
  *   Tab Ctrl drag        extrude along the border until it turns more than the extrude angle (Tab Ctrl wheel adjusts)
  *   Ctrl Shift click     delete (Ctrl Alt click too) the face, vertex or dot under the cursor (highlighted while hovering)
- *   MMB or LMB drag      tweak a vertex or dot along the surface; dropping a vertex on another welds them
+ *   MMB or LMB drag      tweak a vertex or dot along the surface; dropping a vertex on another welds them; on an edge or
+ *                        face, moves it along the surface (a plain LMB click there still places a dot)
+ *   Ctrl MMB drag        move the edge loop through the edge under the cursor
  *   Esc, Q/W/E/R         leave the tool
  *
  * Targets come from retopo::resolveRetopoDraw. The retopo mesh is created with the first dot, and keeps its reference
@@ -91,6 +93,7 @@ private:
     {
         None,
         Tweak,
+        Move,
         DotMove,
         Relax,
         Loop,
@@ -126,7 +129,9 @@ private:
     std::optional<glm::dvec3> anchorWorld() const;
     void drawLineSnap(OverlayPainter& p, const ViewInfo& view) const;
     std::vector<std::optional<QPointF>> projectPoints(const ViewInfo& view) const;
+    /** Whether p is drawn and can be picked: not behind the reference, or anywhere with X-Ray Reference on. */
     bool visible(const glm::dvec3& p, const ViewInfo& view) const;
+    bool behindReference(const glm::dvec3& p, const ViewInfo& view) const;
     Hover pick(QPointF px, const ViewInfo& view) const;
     glm::dvec3 pointWorld(geo::Index p) const;
 
@@ -141,6 +146,11 @@ private:
     void relaxStep(QPointF px, const ViewInfo& view);
     void loopPreview(geo::Index edge, double fraction, std::vector<std::pair<glm::dvec3, glm::dvec3>>& out) const;
     double edgeFraction(geo::Index edge, QPointF px, const ViewInfo& view) const;
+    /** Starts moving the edge (its whole loop with loop) or else the face under h; false with neither. */
+    bool beginMove(const Hover& h, bool loop, QPointF px, const ViewInfo& view);
+    void updateMove(QPointF px, const ViewInfo& view);
+    /** Where the cursor's ray meets the view-facing plane through at. */
+    static glm::dvec3 viewPlaneHit(QPointF px, const ViewInfo& view, const glm::dvec3& at);
     void commitDrag(const ViewInfo& view);
     bool run(const char* command, const nlohmann::json& call, nlohmann::json* result = nullptr);
     /** Adds the retopo mesh, the reference to connect, and create=True. */
@@ -193,7 +203,12 @@ private:
     geo::Index mDragEdge = geo::kInvalid;
     double mLoopFraction = 0.5;
     glm::dvec3 mDragStartHit{0.0};
-    std::map<geo::Index, glm::dvec3> mMoved; // tweak and relax preview positions
+    std::map<geo::Index, glm::dvec3> mMoved; // tweak, move and relax preview positions
+    Hover mPressHover;                       // what a plain LMB press was over; dragging past the click distance moves it
+    std::vector<geo::Index> mMovePoints;     // grabbed component's points first, so they win over mirror partners
+    std::vector<geo::Index> mMoveEdges;
+    bool mMoveOnSurface = true; // the press hit the reference, so the drag follows it; else the view plane
+    glm::dvec3 mMoveCentre{0.0};
     std::array<glm::dvec3, 2> mExtendTo{};
     retopo::BorderRun mRun;
     std::vector<glm::dvec3> mRunOut;    // per run point: outward along the surface, scaled for even strip width

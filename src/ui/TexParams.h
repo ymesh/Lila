@@ -19,8 +19,9 @@ using SetFn = std::function<void(const std::string& id, const json& value)>;
 
 /**
  * Editors for one node as texGraphInfo lists it ("nodes" entry): its parameters (float and int sliders, enums, bools,
- * colour swatches, gradient and curve editors, seeds with a randomise button, image pickers, code editors), then its unlinked
- * inputs. A graph node's parameters are its exposed ones. Every edit goes to set.
+ * colour swatches, gradient and curve editors, seeds with a randomise button, image pickers, code editors, scene node pickers),
+ * then its unlinked inputs. A graph node's parameters are its exposed ones. Every edit goes to set. node's "set", when given,
+ * names the texture set, for editors that read its bake (a camera picker filling position-map bounds).
  */
 LILA_UI_API QWidget* nodePanel(QWidget* parent, const json& node, SetFn set);
 

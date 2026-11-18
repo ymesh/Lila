@@ -111,12 +111,17 @@ NodeEditor*& lastFocused()
     return e;
 }
 
-/** Search-as-you-type node picker. Enter or a click adds the node. */
+/**
+ * Search-as-you-type node picker. Enter or a click adds the node. A type's variants (its operations) are listed while
+ * searching, each adding the node with its values set; keywords match like the label.
+ */
 class AddNodePopup final : public QFrame
 {
 public:
+    using PickFn = std::function<void(const std::string& type, const std::string& socket, const json& values)>;
+
     /** types as the backend's NodeTypes returns them; pick gets the type and, for a filtered list, the socket to link. */
-    AddNodePopup(QWidget* parent, const json& types, std::function<void(const std::string&, const std::string&)> pick)
+    AddNodePopup(QWidget* parent, const json& types, PickFn pick)
         : QFrame(parent, Qt::Popup), mPick(std::move(pick))
     {
         setFrameShape(QFrame::StyledPanel);
@@ -129,8 +134,16 @@ public:
         lay->addWidget(mList);
         resize(300, 380);
         for (const json& t : types)
-            mAll.push_back({t.value("type", ""), qs(t.value("category", "") + " / " + t.value("label", "")), qs(t.value("doc", "")),
-                            t.value("socket", "")});
+        {
+            QString keywords;
+            for (const json& k : t.value("keywords", json::array()))
+                keywords += qs(k.get<std::string>()) + " ";
+            const QString text = qs(t.value("category", "") + " / " + t.value("label", ""));
+            mAll.push_back({t.value("type", ""), text, qs(t.value("doc", "")), t.value("socket", ""), keywords, json(), false});
+            for (const json& v : t.value("variants", json::array()))
+                mAll.push_back({t.value("type", ""), text + ": " + qs(v.value("label", "")), qs(t.value("doc", "")), t.value("socket", ""),
+                                keywords, v.value("values", json::object()), true});
+        }
         std::sort(mAll.begin(), mAll.end(), [](const Entry& a, const Entry& b) { return a.text < b.text; });
         filter();
         connect(mSearch, &QLineEdit::textChanged, this, [this] { filter(); });
@@ -190,20 +203,39 @@ private:
         QString text;
         QString doc;
         std::string socket;
+        QString keywords;
+        json values;
+        bool variant = false;
     };
 
     void filter()
     {
         mList->clear();
         QString q = mSearch->text().trimmed();
+        // Variants only while searching, so the full list stays one row per node; a label match ranks above a keyword match.
+        std::vector<const Entry*> first, second;
         for (const Entry& e : mAll)
-            if (q.isEmpty() || e.text.contains(q, Qt::CaseInsensitive) || qs(e.type).contains(q, Qt::CaseInsensitive))
+        {
+            if (q.isEmpty())
             {
-                auto* item = new QListWidgetItem(e.socket.empty() ? e.text : e.text + "  (" + pretty(e.socket) + ")", mList);
-                item->setData(Qt::UserRole, qs(e.type));
-                item->setData(Qt::UserRole + 1, qs(e.socket));
-                item->setToolTip(e.doc);
+                if (!e.variant)
+                    first.push_back(&e);
+                continue;
             }
+            if (e.text.contains(q, Qt::CaseInsensitive) || qs(e.type).contains(q, Qt::CaseInsensitive))
+                first.push_back(&e);
+            else if (!e.variant && e.keywords.contains(q, Qt::CaseInsensitive))
+                second.push_back(&e);
+        }
+        first.insert(first.end(), second.begin(), second.end());
+        for (const Entry* e : first)
+        {
+            auto* item = new QListWidgetItem(e->socket.empty() ? e->text : e->text + "  (" + pretty(e->socket) + ")", mList);
+            item->setData(Qt::UserRole, qs(e->type));
+            item->setData(Qt::UserRole + 1, qs(e->socket));
+            item->setData(Qt::UserRole + 2, qs(e->values.dump()));
+            item->setToolTip(e->doc);
+        }
         mList->setCurrentRow(0);
     }
 
@@ -213,13 +245,14 @@ private:
             return;
         std::string type = i->data(Qt::UserRole).toString().toStdString();
         std::string socket = i->data(Qt::UserRole + 1).toString().toStdString();
+        json values = json::parse(i->data(Qt::UserRole + 2).toString().toStdString(), nullptr, false);
         mPicked = true;
         close();
-        mPick(type, socket);
+        mPick(type, socket, values.is_object() ? values : json());
         deleteLater();
     }
 
-    std::function<void(const std::string&, const std::string&)> mPick;
+    PickFn mPick;
     bool mPicked = false;
     std::vector<Entry> mAll;
     QLineEdit* mSearch;
@@ -483,6 +516,8 @@ NodeEditor::NodeEditor(QWidget* parent, const std::string& backend) : QWidget(pa
         mSelectedNode = qs(n);
         rebuildSidePanel();
     };
+    mCanvas->onValuesEdited = [this] { QTimer::singleShot(0, this, [this] { rebuildSidePanel(); }); };
+    mCanvas->onRenamed = [this](const std::string& name) { selectAfterRefresh({name}); };
 
     mListener = scene::Graph::current().addListener([this](scene::Change c, scene::NodeId id) {
         scene::Graph& g = scene::Graph::current();
@@ -722,6 +757,7 @@ NodeEditor::~NodeEditor()
     // The canvas outlives this body; its scene emits selectionChanged as it clears on destruction.
     mCanvas->onSelect = nullptr;
     mCanvas->onFocused = nullptr;
+    mCanvas->onValuesEdited = nullptr;
     scene::Graph::current().removeListener(mListener);
     graphBackends::registry().removeListener(mBackendListener);
     PrefStore::get().removeOnChanged(mPrefsListener);
@@ -801,6 +837,12 @@ void NodeEditor::addNodeAtCursor()
     openAddMenu(mCanvas->cursorScenePos(), nullptr);
 }
 
+namespace
+{
+/** The Add menu's entry for a note, which is no node type. */
+constexpr const char* kNoteEntry = "@note";
+} // namespace
+
 void NodeEditor::openAddMenu(QPointF at, const WireDrag* wire)
 {
     if (mGroup.isEmpty())
@@ -817,7 +859,18 @@ void NodeEditor::openAddMenu(QPointF at, const WireDrag* wire)
     json types = run("NodeTypes", query);
     if (!types.is_array())
         types = json::array();
-    auto* pop = new AddNodePopup(this, types, [this, backend = mBackend, group, at, drag](const std::string& type, const std::string& socket) {
+    // Notes are frames with text, not nodes, but are found and placed like one.
+    if (!wire && mBackend->supports("SetFrames"))
+        types.push_back({{"type", kNoteEntry}, {"label", "Note"}, {"category", "Layout"},
+                         {"keywords", {"comment", "sticky", "annotation", "text", "memo"}},
+                         {"doc", "A note on the canvas: a box of text, saved with the graph. Ctrl+Enter finishes typing it."}});
+    auto* pop = new AddNodePopup(this, types, [this, backend = mBackend, group, at, drag](const std::string& type, const std::string& socket,
+                                                                                       const json& values) {
+        if (type == kNoteEntry)
+        {
+            mCanvas->addNote(at);
+            return;
+        }
         // The new node sits beside the loose end, on the side its linked socket is on.
         QPointF pos(at.x() - kNodeWidth * 0.5, at.y() - 12.0);
         if (drag)
@@ -825,10 +878,16 @@ void NodeEditor::openAddMenu(QPointF at, const WireDrag* wire)
         UndoChunk chunk("Add Node");
         if (drag && drag->detached)
             runVerb(*backend, "Disconnect", {{"args", {group, drag->detached->second}}, {"source", drag->detached->first}});
-        json r = runVerb(*backend, "AddNode", {{"args", {group, type}}, {"position", {pos.x(), pos.y()}}});
+        json call = {{"args", {group, type}}, {"position", {pos.x(), pos.y()}}};
+        if (drag && backend->supports("InsertNode"))
+            call["insert"] = false;
+        json r = runVerb(*backend, "AddNode", call);
         if (!r.is_string())
             return;
         std::string name = r.get<std::string>();
+        if (values.is_object())
+            for (auto& [k, v] : values.items())
+                runVerb(*backend, "SetValue", args({group, name + "." + k, v}));
         if (drag && !socket.empty())
         {
             std::string mine = name + "." + socket, theirs = drag->node + "." + drag->socket;
@@ -854,23 +913,130 @@ json selectionCall(const QString& group, const std::vector<std::string>& names)
         a.push_back(n);
     return {{"args", a}};
 }
+
+/** Clipboard text of frames and notes alone, for a selection without nodes and for backends that can't copy nodes. */
+constexpr const char* kFramesClipFormat = "lila.nodeFrames";
+
+/** The JSON object in clipboard text, or null: from the first '{' to the last '}', so text around it doesn't matter. */
+json clipboardJson(const std::string& text)
+{
+    const size_t a = text.find('{'), b = text.rfind('}');
+    if (a == std::string::npos || b == std::string::npos || b < a)
+        return nullptr;
+    try
+    {
+        return json::parse(text.substr(a, b - a + 1));
+    }
+    catch (const json::exception&)
+    {
+        return nullptr;
+    }
+}
 } // namespace
+
+void NodeEditor::catchUp()
+{
+    const std::optional<size_t> stamp = mGroup.isEmpty() ? std::nullopt : mBackend->groupStamp(scene::Graph::current(), mGroup.toStdString());
+    // A backend without stamps (the scene graph) can't say whether it changed: rebuild.
+    if (!stamp || stamp != mBuiltStamp)
+        refresh(false);
+}
+
+std::vector<int> NodeEditor::framesOnly(const std::vector<std::string>& names) const
+{
+    std::vector<int> out;
+    const std::vector<gn::GFrame>& frames = mCanvas->frames();
+    for (int f : mCanvas->selectedFrames())
+        if (size_t(f) < frames.size() &&
+            std::none_of(frames[size_t(f)].nodes.begin(), frames[size_t(f)].nodes.end(),
+                         [&](const std::string& m) { return std::find(names.begin(), names.end(), m) != names.end(); }))
+            out.push_back(f);
+    return out;
+}
+
+void NodeEditor::addFrameCopies(const std::vector<gn::GFrame>& copies)
+{
+    if (copies.empty() || !mBackend->supports("SetFrames"))
+        return;
+    std::vector<gn::GFrame> next = mCanvas->frames();
+    std::vector<int> added;
+    for (const gn::GFrame& f : copies)
+    {
+        added.push_back(int(next.size()));
+        next.push_back(f);
+    }
+    mCanvas->selectFramesAfterBuild(std::move(added));
+    run("SetFrames", {{"args", {mGroup.toStdString(), gn::framesToJson(next)}}});
+}
 
 void NodeEditor::deleteSelected()
 {
-    json call = selectionCall(mGroup, mCanvas->selectedNames());
+    // Frames go by index into the canvas copy, so it has to show the group as it is now.
+    catchUp();
+    const std::vector<std::string> names = mCanvas->selectedNames();
+    const std::vector<int> frames = mCanvas->selectedFrames();
+    UndoChunk chunk("Delete Nodes");
+    if (!frames.empty() && mBackend->supports("SetFrames") && !mGroup.isEmpty())
+    {
+        std::vector<gn::GFrame> next;
+        for (int i = 0; i < int(mCanvas->frames().size()); ++i)
+            if (std::find(frames.begin(), frames.end(), i) == frames.end())
+                next.push_back(mCanvas->frames()[size_t(i)]);
+        run("SetFrames", {{"args", {mGroup.toStdString(), gn::framesToJson(next)}}});
+    }
+    json call = selectionCall(mGroup, names);
     if (!call.is_null())
         run("DeleteNode", call);
 }
 
 void NodeEditor::copySelected()
 {
-    json call = selectionCall(mGroup, mCanvas->selectedNames());
-    if (call.is_null())
+    catchUp();
+    if (mGroup.isEmpty())
         return;
-    json text = run("CopyNodes", call);
-    if (text.is_string())
-        QApplication::clipboard()->setText(qs(text.get<std::string>()));
+    const std::vector<std::string> names = mCanvas->selectedNames();
+    json clip;
+    json call = selectionCall(mGroup, names);
+    if (!call.is_null() && mBackend->supports("CopyNodes"))
+        if (json text = run("CopyNodes", call); text.is_string())
+            clip = clipboardJson(text.get<std::string>());
+    // Frames whose members aren't copied (notes, empty frames) go along empty, at the same offset as the nodes.
+    std::vector<gn::GFrame> extra;
+    for (int f : framesOnly(clip.is_object() ? names : std::vector<std::string>{}))
+    {
+        gn::GFrame copy = mCanvas->frames()[size_t(f)];
+        copy.nodes.clear();
+        extra.push_back(std::move(copy));
+    }
+    if (!clip.is_object() && extra.empty())
+        return;
+    glm::dvec2 centre(0.0);
+    if (clip.is_object() && !clip.value("nodes", json::array()).empty())
+    {
+        const json& first = clip["nodes"][0];
+        const QPointF at = mCanvas->positionOf(first.value("name", std::string()));
+        const json rel = first.value("position", json::array({0.0, 0.0}));
+        centre = glm::dvec2(at.x(), at.y()) - glm::dvec2(rel[0].get<double>(), rel[1].get<double>());
+    }
+    else
+    {
+        for (const gn::GFrame& f : extra)
+            centre += f.position + f.size * 0.5;
+        centre /= double(extra.size());
+    }
+    if (!clip.is_object())
+        clip = {{"format", kFramesClipFormat}, {"version", 1}, {"nodes", json::array()}};
+    if (!extra.empty())
+    {
+        std::vector<gn::GFrame> frames = gn::framesFromJson(clip.value("frames", json::array()));
+        for (gn::GFrame& f : extra)
+        {
+            f.position = glm::round(f.position - centre);
+            frames.push_back(std::move(f));
+        }
+        clip["frames"] = gn::framesToJson(frames);
+    }
+    QApplication::clipboard()->setText(qs(clip.dump(2)));
 }
 
 void NodeEditor::cutSelected()
@@ -891,12 +1057,31 @@ void NodeEditor::paste()
         return;
     }
     QPointF at = mCanvas->cursorScenePos();
+    catchUp();
+    const json clip = clipboardJson(text.toStdString());
+    const bool hasNodes = !clip.is_object() || !clip.value("nodes", json::array()).empty();
     try
     {
-        json r = ops::execute(mBackend->command("PasteNodes"), {{"args", {mGroup.toStdString(), text.toStdString()}}, {"position", {at.x(), at.y()}}},
-                               CallSource::UI);
-        if (r.is_array())
-            selectAfterRefresh(r.get<std::vector<std::string>>());
+        UndoChunk chunk("Paste Nodes");
+        // Empty frames (notes) go in first; the backend pastes the frames holding nodes itself, after them.
+        std::vector<gn::GFrame> copies;
+        if (clip.is_object())
+            for (gn::GFrame& f : gn::framesFromJson(clip.value("frames", json::array())))
+                if (f.nodes.empty())
+                {
+                    f.position += glm::dvec2(at.x(), at.y());
+                    copies.push_back(std::move(f));
+                }
+        addFrameCopies(copies);
+        if (!hasNodes && copies.empty())
+            showError("Nothing to paste: the clipboard has no nodes or notes.");
+        if (hasNodes && mBackend->supports("PasteNodes"))
+        {
+            json r = ops::execute(mBackend->command("PasteNodes"), {{"args", {mGroup.toStdString(), text.toStdString()}}, {"position", {at.x(), at.y()}}},
+                                   CallSource::UI);
+            if (r.is_array())
+                selectAfterRefresh(r.get<std::vector<std::string>>());
+        }
     }
     catch (const std::exception& e)
     {
@@ -906,8 +1091,20 @@ void NodeEditor::paste()
 
 void NodeEditor::duplicateSelected()
 {
-    json call = selectionCall(mGroup, mCanvas->selectedNames());
-    if (call.is_null())
+    catchUp();
+    const std::vector<std::string> names = mCanvas->selectedNames();
+    UndoChunk chunk("Duplicate Nodes");
+    std::vector<gn::GFrame> copies;
+    for (int f : framesOnly(names))
+    {
+        gn::GFrame copy = mCanvas->frames()[size_t(f)];
+        copy.nodes.clear();
+        copy.position += glm::dvec2(40.0, 40.0);
+        copies.push_back(std::move(copy));
+    }
+    addFrameCopies(copies);
+    json call = selectionCall(mGroup, names);
+    if (call.is_null() || !mBackend->supports("DuplicateNodes"))
         return;
     call["offset"] = {40, 40};
     json r = run("DuplicateNodes", call);
@@ -1624,6 +1821,30 @@ void NodeEditor::jumpToPortalSource() { mCanvas->jumpToPortal(true); }
 
 void NodeEditor::frameSelection() { mCanvas->frameSelection(); }
 
+void NodeEditor::renameSelected()
+{
+    if (!mCanvas->canRenameNodes())
+    {
+        showError(mBackend->title() + " nodes can't be renamed.");
+        return;
+    }
+    std::string name = mCanvas->renameTarget();
+    if (name.empty() || !mCanvas->renameNode(name))
+        showError("Select one node to rename.");
+}
+
+void NodeEditor::addNote()
+{
+    if (!mBackend->supports("SetFrames") || mGroup.isEmpty())
+    {
+        showError(mBackend->title() + " graphs don't take notes.");
+        return;
+    }
+    mCanvas->addNote(mCanvas->cursorScenePos());
+}
+
+QWidget* NodeEditor::inPlaceEditor() const { return mCanvas->inPlaceEditor(); }
+
 void NodeEditor::swapInputs()
 {
     if (!mCanvas->swapInputs())
@@ -1631,6 +1852,12 @@ void NodeEditor::swapInputs()
 }
 
 void NodeEditor::toggleNodeFlag(const char* flag) { mCanvas->toggleFlag(flag); }
+
+bool NodeEditor::nodeFlagOn(const char* flag) const { return mCanvas->flagOn(flag); }
+
+void NodeEditor::setPreviews(bool on) { mCanvas->setPreviews(on); }
+
+bool NodeEditor::previews() const { return mCanvas->previews(); }
 
 void NodeEditor::alignSelected(int how) { mCanvas->align(NodeCanvas::Align(how)); }
 
@@ -1683,7 +1910,7 @@ void NodeEditor::findNode()
     json entries = json::array();
     for (auto& [name, title] : mCanvas->nodeList())
         entries.push_back({{"type", name}, {"category", title.toStdString()}, {"label", name}});
-    auto* pop = new AddNodePopup(this, entries, [this](const std::string& name, const std::string&) { focusNode(name); });
+    auto* pop = new AddNodePopup(this, entries, [this](const std::string& name, const std::string&, const json&) { focusNode(name); });
     pop->popup(QCursor::pos());
 }
 
@@ -1706,8 +1933,12 @@ void NodeEditor::showCanvasMenu(QPoint global)
     };
     for (const char* id : {"nodeEditor.addNode", "nodeEditor.duplicate", "nodeEditor.copy", "nodeEditor.paste", "nodeEditor.delete"})
         item(&menu, id);
-    menu.addSeparator();
     std::vector<std::string> selected = mCanvas->selectedNames();
+    if (selected.size() == 1 && mCanvas->canRenameNodes())
+        item(&menu, "nodeEditor.renameNode");
+    if (mBackend->supports("SetFrames"))
+        item(&menu, "nodeEditor.addNote");
+    menu.addSeparator();
     bool groupNode = std::any_of(selected.begin(), selected.end(), [this](const std::string& n) { return mBackend->runsSubgroup(mCanvas->typeOf(n)); });
     if (groupNode)
         item(&menu, "nodeEditor.openGroup");
@@ -1730,10 +1961,14 @@ void NodeEditor::showCanvasMenu(QPoint global)
     item(&menu, "nodeEditor.toggleMute");
     item(&menu, "nodeEditor.toggleCollapse");
     item(&menu, "nodeEditor.toggleUnusedSockets");
+    if (mCanvas->hasPreviews(true))
+        item(&menu, "nodeEditor.toggleNodePreview");
     menu.addSeparator();
     item(&menu, "nodeEditor.toggleFlow");
     item(&menu, "nodeEditor.toggleSelectedWires");
     item(&menu, "nodeEditor.toggleMinimap");
+    if (mCanvas->hasPreviews(false))
+        item(&menu, "nodeEditor.togglePreviews");
     item(&menu, "nodeEditor.find");
     item(&menu, "nodeEditor.portalSource");
     item(&menu, "nodeEditor.portalReaders");
@@ -1796,7 +2031,7 @@ void NodeEditor::rebuildSidePanel()
     else if (node)
     {
         std::string nodeName = node->value("name", "");
-        lay->addWidget(heading(panel, qs(node->value("label", "")) + "  (" + qs(nodeName) + ")"));
+        lay->addWidget(heading(panel, qs(node->value("title", node->value("label", ""))) + "  (" + qs(nodeName) + ")"));
         auto* form = new QFormLayout();
         form->setContentsMargins(0, 0, 0, 0);
         if (std::string type = node->value("type", ""); type == gn::kSendType || type == gn::kReceiveType)
@@ -1958,13 +2193,13 @@ void registerEditActions()
     };
     add("nodeEditor.addNode", "Add Node...", &NodeEditor::addNodeAtCursor,
         "Search for a node to add under the cursor. While dragging a wire it lists only nodes that connect to it.");
-    add("nodeEditor.delete", "Delete Nodes", &NodeEditor::deleteSelected, "Delete the selected nodes and their links.");
+    add("nodeEditor.delete", "Delete Nodes", &NodeEditor::deleteSelected, "Delete the selected nodes and their links, and the selected frames and notes.");
     add("nodeEditor.copy", "Copy Nodes", &NodeEditor::copySelected,
-        "Copy the selected nodes as text: paste them in another group or scene, or share them in a post.");
+        "Copy the selected nodes, frames and notes as text: paste them in another group or scene, or share them in a post.");
     add("nodeEditor.cut", "Cut Nodes", &NodeEditor::cutSelected, "Copy the selected nodes as text, then delete them.");
     add("nodeEditor.paste", "Paste Nodes", &NodeEditor::paste, "Paste nodes from clipboard text at the cursor.");
-    add("nodeEditor.duplicate", "Duplicate Nodes", &NodeEditor::duplicateSelected, "Duplicate the selected nodes with the links between them.");
-    add("nodeEditor.selectAll", "Select All Nodes", &NodeEditor::selectAll, "Select every node in the group.");
+    add("nodeEditor.duplicate", "Duplicate Nodes", &NodeEditor::duplicateSelected, "Duplicate the selected nodes with the links between them, and the selected frames and notes.");
+    add("nodeEditor.selectAll", "Select All Nodes", &NodeEditor::selectAll, "Select every node, frame and note in the group.");
     add("nodeEditor.frameSelected", "Frame Selected Nodes", &NodeEditor::frameSelected, "Fit the view to the selected nodes.");
     add("nodeEditor.frameAll", "Frame All Nodes", &NodeEditor::frameAll, "Fit the view to the whole group.");
     add("nodeEditor.groupNodes", "Group Selected Nodes", &NodeEditor::groupSelected,
@@ -2080,18 +2315,42 @@ void registerEditActions()
                                            "Bypass the selected nodes: each passes its first input of a matching type straight to its outputs."},
                                 FlagAction{"nodeEditor.toggleCollapse", "Collapse Nodes", "collapsed", "Draw the selected nodes as their headers only, or open them again."},
                                 FlagAction{"nodeEditor.toggleUnusedSockets", "Hide Unused Sockets", "hideUnused",
-                                           "Draw only the linked sockets of the selected nodes, or all of them again."}})
+                                           "Draw only the linked sockets of the selected nodes (and their meshes in the scene graph), or "
+                                           "all of them again."},
+                                FlagAction{"nodeEditor.toggleNodePreview", "Hide Preview", "hidePreview",
+                                           "Draw the selected nodes without their image previews, or with them again."}})
         actions::add({.id = f.id, .label = f.label, .category = "Node Editor",
                       .run =
                           [flag = f.flag] {
                               if (NodeEditor* e = NodeEditor::active())
                                   e->toggleNodeFlag(flag);
                           },
-                      .doc = f.doc});
+                      .doc = f.doc,
+                      .checked = [flag = f.flag] { return NodeEditor::active() && NodeEditor::active()->nodeFlagOn(flag); }});
+    actions::add({.id = "nodeEditor.togglePreviews", .label = "Node Previews", .category = "Node Editor",
+                  .run =
+                      [] {
+                          if (NodeEditor* e = NodeEditor::active())
+                              e->setPreviews(!e->previews());
+                      },
+                  .doc = "Show image previews on the nodes that have one, such as texture graph nodes. Hide Preview turns one node's off.",
+                  .checked = [] { return NodeEditor::active() && NodeEditor::active()->previews(); }});
     add("nodeEditor.swapInputs", "Swap Inputs", &NodeEditor::swapInputs,
         "Trade the links and values of the selected node's first two inputs of one type, such as a Math node's operands.");
     add("nodeEditor.frameNodes", "Frame Selected Nodes", &NodeEditor::frameSelection,
         "Put a labelled frame around the selected nodes, or an empty one at the cursor. Drag its title to move it with what it holds.");
+    add("nodeEditor.renameNode", "Rename Node", &NodeEditor::renameSelected,
+        "Type a new title over the selected node's header; Enter keeps it, Esc cancels. Geometry and texture nodes keep their "
+        "names for links and scripts, and an empty title shows the type's again. Scene nodes are renamed.");
+    actions::add({.id = "nodeEditor.addNote", .label = "Add Note", .category = "Node Editor",
+                  .run =
+                      [] {
+                          if (NodeEditor* e = NodeEditor::active())
+                              e->addNote();
+                      },
+                  .doc = "Type a note at the cursor; Ctrl+Enter or clicking away adds it. A note is a frame with text: drag its title to "
+                         "move it, its corner to resize it, and double-click its text to edit it.",
+                  .keywords = {"comment", "sticky", "annotation", "memo"}});
     add("nodeEditor.portalSource", "Jump to Send", &NodeEditor::jumpToPortalSource,
         "From a selected Send or Receive, select and centre the Send of its name.");
     add("nodeEditor.portalReaders", "Jump to Receives", &NodeEditor::jumpToPortalReaders,
@@ -2135,6 +2394,8 @@ void registerNodeEditorActions()
     prefPages::add({.id = "nodeEditor", .title = "Node Editor", .build = [](prefPages::PageBuilder& b) {
                         b.section("Editing");
                         b.toggle("Slide downstream nodes aside when a node drops into a wire", kPrefAutoOffset, true);
+                        b.section("Nodes");
+                        b.toggle("Node previews", kPrefPreviews, true);
                         b.section("Wires");
                         b.choice("Wire style", kPrefWireStyle, {{"Curved", "curved"}, {"Straight", "straight"}, {"Right angle", "rightAngle"}}, "curved");
                         b.toggle("Dim wires away from the hovered and selected nodes", kPrefDimUnrelated, false);

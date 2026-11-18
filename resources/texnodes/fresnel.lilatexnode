@@ -1,0 +1,129 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "fresnel",
+  "label": "Fresnel",
+  "category": "Input",
+  "doc": "Brighter where the surface turns away from the viewer, from the mesh's world normal map. A texture has no camera of its own, so the view comes from View Direction, or per texel from Camera Position through the bake's position map. Pick a camera or take the active view in the panel to fill them.",
+  "keywords": [
+    "facing ratio",
+    "rim",
+    "edge",
+    "view angle",
+    "incidence",
+    "sheen",
+    "camera"
+  ],
+  "inputs": [
+    {
+      "id": "viewDirection",
+      "type": "vector",
+      "default": [
+        0,
+        0,
+        -1
+      ],
+      "doc": "The way the camera looks, in world space. Used when View is direction."
+    },
+    {
+      "id": "cameraPosition",
+      "type": "vector",
+      "default": [
+        0,
+        0,
+        500
+      ],
+      "doc": "Where the camera is, in world space (cm). Used when View is cameraPosition."
+    },
+    {
+      "id": "boundsMin",
+      "type": "vector",
+      "default": [
+        0,
+        0,
+        0
+      ],
+      "doc": "The bake's position map spans boundsMin to boundsMax in world space. Picking a camera or taking the view fills both from the last bake; they follow live mesh maps while those run."
+    },
+    {
+      "id": "boundsMax",
+      "type": "vector",
+      "default": [
+        1,
+        1,
+        1
+      ],
+      "doc": "The far corner of the position map's bounds."
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "view",
+      "type": "enum",
+      "default": "direction",
+      "options": [
+        "direction",
+        "cameraPosition"
+      ],
+      "doc": "direction: one view direction everywhere, as an orthographic camera sees it. cameraPosition: from the camera to each texel's surface, as a perspective camera sees it; needs the position map."
+    },
+    {
+      "id": "camera",
+      "type": "node",
+      "default": "",
+      "options": [
+        "camera"
+      ],
+      "doc": "The camera whose pose fills View Direction and Camera Position. Pick it again after moving it."
+    },
+    {
+      "id": "model",
+      "type": "enum",
+      "default": "schlick",
+      "options": [
+        "schlick",
+        "power"
+      ],
+      "doc": "schlick: physical reflectance from the index of refraction. power: one minus the facing ratio, raised to Power."
+    },
+    {
+      "id": "ior",
+      "label": "IOR",
+      "type": "float",
+      "default": 1.5,
+      "min": 1,
+      "softMax": 3,
+      "doc": "Index of refraction, for schlick: 1.33 water, 1.5 glass and plastic, 2.4 diamond."
+    },
+    {
+      "id": "power",
+      "type": "float",
+      "default": 5.0,
+      "min": 0,
+      "softMax": 16,
+      "doc": "For power: higher pulls the effect to the silhouette."
+    },
+    {
+      "id": "bias",
+      "type": "float",
+      "default": 0.0,
+      "min": 0,
+      "max": 1,
+      "doc": "Lifts the result where the surface faces the viewer."
+    }
+  ],
+  "cost": 12,
+  "externals": [
+    "worldNormal",
+    "position"
+  ],
+  "body": {
+    "out": "float3 n = worldNormal.sample(uv).xyz * 2.0 - 1.0;\nfloat ln = length(n);\nn = ln > 1e-6 ? n / ln : float3(0.0, 0.0, 1.0);\nfloat3 v;\nif (p.view == 0)\n    v = -viewDirection.sample(uv);\nelse\n{\n    float3 lo = boundsMin.sample(uv);\n    float3 surface = lo + position.sample(uv).xyz * (boundsMax.sample(uv) - lo);\n    v = cameraPosition.sample(uv) - surface;\n}\nfloat lv = length(v);\nv = lv > 1e-9 ? v / lv : float3(0.0, 0.0, 1.0);\nfloat c = saturate(dot(n, v));\nfloat f;\nif (p.model == 0)\n{\n    float r0 = (p.ior - 1.0) / (p.ior + 1.0);\n    r0 *= r0;\n    f = r0 + (1.0 - r0) * pow(1.0 - c, 5.0);\n}\nelse\n    f = pow(1.0 - c, p.power);\nreturn saturate(p.bias + (1.0 - p.bias) * f);"
+  }
+}

@@ -121,6 +121,9 @@ bool drawsWire(const MeshDraw& d) { return (d.flags & (DrawWire | DrawSelected |
 
 bool wireInShader(const MeshDraw& d) { return (d.flags & DrawShaded) && drawsWire(d) && d.mesh && !d.mesh->edgeMask.empty(); }
 
+/** In the shader when the frame asks for it, or when the mesh has no edge lines to draw instead (sculpt meshes carry only the mask). */
+static bool wireDrawnInShader(const MeshDraw& d, bool shaderWire) { return wireInShader(d) && (shaderWire || d.mesh->edgePoints.empty()); }
+
 glm::vec4 wireColor(const FrameState& s, const MeshDraw& d)
 {
     return (d.flags & DrawSelected)        ? ((d.flags & DrawSelectedOther) ? s.wireSelectedOther : s.wireSelected)
@@ -146,7 +149,7 @@ DrawBatches batchDraws(const FrameState& s, bool shaderWire)
         if ((d.flags & DrawShaded) && !d.mesh->indices.empty())
         {
             const ShadedKey key{d.mesh.get(), uint32_t(d.vertexColors) | uint32_t(d.colorChannel) << 8, d.baseColor, d.roughness,
-                                shaderWire && wireInShader(d) ? std::max(d.wireWidth, 1.0f) : 0.0f, d.drawOffset};
+                                wireDrawnInShader(d, shaderWire) ? std::max(d.wireWidth, 1.0f) : 0.0f, d.drawOffset};
             std::vector<size_t>& candidates = shadedIndex[key];
             size_t batch = SIZE_MAX;
             for (size_t c : candidates)
@@ -163,7 +166,7 @@ DrawBatches batchDraws(const FrameState& s, bool shaderWire)
             }
             shadedMembers[batch].push_back(&d);
         }
-        if (drawsWire(d) && !d.mesh->edgePoints.empty() && !(shaderWire && wireInShader(d)))
+        if (drawsWire(d) && !d.mesh->edgePoints.empty() && !wireDrawnInShader(d, shaderWire))
         {
             const WireKey key{d.mesh.get(), (d.flags & (DrawShaded | DrawWireDepth)) != 0, d.wireWidth, d.drawOffset};
             auto [it, added] = wireIndex.try_emplace(key, wireMembers.size());
@@ -192,7 +195,7 @@ DrawBatches batchDraws(const FrameState& s, bool shaderWire)
         DrawBatch b{members.front(), uint32_t(members.front() - s.meshes.data()), uint32_t(out.instances.size()), 0};
         for (const MeshDraw* d : members)
         {
-            const bool wire = shaderWire && wireInShader(*d);
+            const bool wire = wireDrawnInShader(*d, shaderWire);
             b.wire = b.wire || wire;
             const glm::vec4 color = wire ? wireColor(s, *d) : glm::vec4(0.0f);
             forEachPlacement(*d, [&](const glm::dmat4& world) { place(world, color); });

@@ -1,0 +1,22 @@
+{
+    "format": "lilaentities",
+    "version": 1,
+    "classes": [
+        {"name": "PlayerStart", "kind": "point", "unreal": "/Script/Engine.PlayerStart", "size": [84, 184, 84], "color": [0.3, 0.9, 0.4], "doc": "Where a player spawns.",
+         "properties": [{"name": "PlayerStartTag", "type": "string", "default": "", "doc": "Picks this start from game code."}]},
+        {"name": "PointLight", "kind": "point", "unreal": "/Script/Engine.PointLight", "size": [32, 32, 32], "color": [1.0, 0.85, 0.4], "doc": "A light shining every way."},
+        {"name": "SpotLight", "kind": "point", "unreal": "/Script/Engine.SpotLight", "size": [32, 32, 48], "color": [1.0, 0.85, 0.4], "doc": "A light in a cone along its forward."},
+        {"name": "Sound", "kind": "point", "unreal": "/Script/Engine.AmbientSound", "size": [48, 48, 48], "color": [0.4, 0.7, 1.0], "doc": "A sound playing from this point."},
+        {"name": "Target", "kind": "point", "unreal": "/Script/Engine.TargetPoint", "size": [32, 32, 32], "color": [0.9, 0.4, 0.9], "doc": "A named point for scripts to find, a spawn or a goal.",
+         "properties": [{"name": "next", "type": "node", "default": "", "unreal": "", "doc": "The next point along a path."}]},
+        {"name": "Note", "kind": "point", "unreal": "/Script/Engine.Note", "size": [32, 32, 32], "color": [0.95, 0.95, 0.6], "doc": "A note for other designers.",
+         "properties": [{"name": "Text", "type": "string", "default": "", "doc": "What it says."}]},
+        {"name": "Trigger", "kind": "volume", "unreal": "/Script/Engine.TriggerVolume", "color": [1.0, 0.55, 0.1], "doc": "Fires events when something enters or leaves it."},
+        {"name": "Blocking", "kind": "volume", "unreal": "/Script/Engine.BlockingVolume", "color": [0.9, 0.2, 0.2], "doc": "Invisible collision."},
+        {"name": "KillZone", "kind": "volume", "unreal": "/Script/Engine.PainCausingVolume", "color": [0.8, 0.1, 0.4], "doc": "Hurts whatever is inside.",
+         "properties": [{"name": "DamagePerSec", "type": "number", "default": 1000, "doc": "Damage a second."}]},
+        {"name": "PostProcess", "kind": "volume", "unreal": "/Script/Engine.PostProcessVolume", "color": [0.5, 0.4, 1.0], "doc": "Post processing that applies inside.",
+         "properties": [{"name": "bUnbound", "type": "bool", "default": false, "doc": "Applies everywhere, not just inside."}]},
+        {"name": "Audio", "kind": "volume", "unreal": "/Script/Engine.AudioVolume", "color": [0.3, 0.6, 1.0], "doc": "Reverb and sound settings inside."}
+    ]
+}

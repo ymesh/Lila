@@ -5,6 +5,12 @@
   "label": "Image",
   "category": "Input",
   "doc": "An image file sampled in uv, wrapping at the edges, repeated tiles times. Relative paths resolve against the workspace, the scene's folder, then Lila's resources (strokes/strokes_soft.png names a shipped stroke sheet). The set samples the image at the set's resolution: when the image is larger, Match Set on the node raises the set to fit. To show an image on an object without authoring maps, set it as a material's map in the Material Editor instead.",
+  "keywords": [
+    "texture",
+    "file",
+    "bitmap",
+    "alpha"
+  ],
   "inputs": [
     {
       "id": "coord",
@@ -18,6 +24,11 @@
     {
       "id": "out",
       "type": "color"
+    },
+    {
+      "id": "alpha",
+      "type": "gray",
+      "doc": "The file's alpha; 1 where the file has none."
     }
   ],
   "params": [
@@ -33,10 +44,22 @@
       "min": 1,
       "softMax": 16,
       "doc": "Repeats across the texture."
+    },
+    {
+      "id": "colorSpace",
+      "type": "enum",
+      "default": "linear",
+      "options": [
+        "linear",
+        "srgb"
+      ],
+      "doc": "How the file's colour values are read. linear: as stored, for data maps (roughness, normal, height) and EXR. srgb: decoded from sRGB to linear, for colour maps saved as 8 or 16-bit PNG, JPEG, TGA or TIFF. Alpha is never decoded."
     }
   ],
-  "cost": 2,
+  "cost": 3,
+  "code": "float3 imageSrgbToLinear(float3 c)\n{\n    float3 lo = c / 12.92;\n    float3 hi = pow(max((c + 0.055) / 1.055, float3(0.0)), float3(2.4));\n    return lerp(hi, lo, step(c, float3(0.04045)));\n}",
   "body": {
-    "out": "return file.sample(coord.sample(uv).xy * float(p.tiles));"
+    "out": "float4 c = file.sample(coord.sample(uv).xy * float(p.tiles));\nreturn p.colorSpace == 1 ? float4(imageSrgbToLinear(c.rgb), c.a) : c;",
+    "alpha": "return file.sample(coord.sample(uv).xy * float(p.tiles)).a;"
   }
 }

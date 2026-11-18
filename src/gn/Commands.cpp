@@ -8,6 +8,7 @@
 #include "gn/Zones.h"
 
 #include "ops/Command.h"
+#include "ops/CommandOptions.h"
 #include "ops/Undo.h"
 #include "core/Log.h"
 #include "core/Paths.h"
@@ -166,6 +167,8 @@ json nodeJson(const GNode& n, const Group& grp)
         return j;
     }
     j["label"] = d->label;
+    if (!n.label.empty())
+        j["title"] = n.label;
     j["category"] = d->category;
     Sockets s = d->socketsFor(grp, n);
     json ins = json::array(), outs = json::array(), props = json::array();
@@ -667,12 +670,13 @@ void registerCommands()
     ops::registerCommand({
         .name = "gnSetNodeFlags",
         .doc = "Set how nodes draw and run: gnSetNodeFlags(group, 'Math', 'Noise', muted=True). muted bypasses a node (its first input of a "
-               "matching type passes through to each output); collapsed draws only its header; hideUnused draws only its linked sockets. "
-               "Flags left out stay as they are.",
+               "matching type passes through to each output); collapsed draws only its header; hideUnused draws only its linked sockets; "
+               "hidePreview leaves out its image preview. Flags left out stay as they are.",
         .positionalDoc = "group nodes...",
         .flags = {{"muted", "", T::Bool, nullptr, "Bypass the nodes."},
                   {"collapsed", "", T::Bool, nullptr, "Draw only their headers."},
-                  {"hideUnused", "", T::Bool, nullptr, "Draw only their linked sockets."}},
+                  {"hideUnused", "", T::Bool, nullptr, "Draw only their linked sockets."},
+                  {"hidePreview", "", T::Bool, nullptr, "Draw them without their image previews."}},
         .run = [](const Args& a) -> json {
             return editGroup(a, "gnSetNodeFlags", [&](Group& grp) -> json {
                 for (size_t i = 1; i < a.positional.size(); ++i)
@@ -689,8 +693,26 @@ void registerCommands()
                         n.collapsed = a.get<bool>("collapsed", false);
                     if (a.has("hideUnused"))
                         n.hideUnused = a.get<bool>("hideUnused", false);
+                    if (a.has("hidePreview"))
+                        n.hidePreview = a.get<bool>("hidePreview", false);
                 }
                 return nullptr;
+            });
+        },
+    });
+
+    ops::registerCommand({
+        .name = "gnSetNodeLabel",
+        .doc = "Show a node under its own title on the canvas: gnSetNodeLabel(group, 'Math', 'Height Scale'). Display only; the node keeps "
+               "its name, which links, scripts and exposed inputs use. An empty label shows the node type's again.",
+        .positionalDoc = "group node label",
+        .run = [](const Args& a) -> json {
+            if (a.positional.size() < 3 || !a.positional[2].is_string())
+                throw CommandError("gnSetNodeLabel: expected (group, node, label)");
+            const std::string label = cleanNodeLabel(a.positional[2].get<std::string>());
+            return editGroup(a, "gnSetNodeLabel", [&](Group& grp) -> json {
+                nodeIn(grp, a.positional[1].get<std::string>(), "gnSetNodeLabel").label = label;
+                return label;
             });
         },
     });
@@ -714,7 +736,8 @@ void registerCommands()
     ops::registerCommand({
         .name = "gnSetFrames",
         .doc = "Replace a group's frames: gnSetFrames(group, [{label: 'Inputs', position: [x, y], size: [w, h], color: '', collapsed: false, "
-               "nodes: [names]}]). Frames only change the canvas; names not in the group are dropped. Returns how many frames there are.",
+               "nodes: [names], text: ''}]). A frame with text is a note, its text shown in its body. Frames only change the canvas; names "
+               "not in the group are dropped. Returns how many frames there are.",
         .positionalDoc = "group frames",
         .run = [](const Args& a) -> json {
             if (a.positional.size() < 2 || !a.positional[1].is_array())
@@ -844,7 +867,8 @@ void registerCommands()
 
     ops::registerCommand({
         .name = "gnNodeTypes",
-        .doc = "The node library: type, label, category and description of each node. With linkType, only nodes that can take a "
+        .doc = "The node library: type, label, category and description of each node, and for a node with an operation its options as "
+               "variants ({label, values} to set on the new node). With linkType, only nodes that can take a "
                "link from (or, with linkInput, give one to) a socket of that type, each with the socket it would use.",
         .flags = {{"linkType", "", T::String, nullptr, "Socket type of a dragged link's loose end."},
                   {"linkInput", "", T::Bool, false, "The drag started at an input, so the node needs a matching output."},
@@ -874,6 +898,13 @@ void registerCommands()
                 json e = {{"type", d->type}, {"label", d->label}, {"category", d->category}, {"doc", d->doc}};
                 if (const std::string* owner = declRegistry().ownerOf(d->type); owner && !owner->empty())
                     e["owner"] = *owner;
+                if (const PropDecl* op = d->prop("operation"); op && op->options.size() > 1)
+                {
+                    json variants = json::array();
+                    for (const std::string& o : op->options)
+                        variants.push_back({{"label", ops::options::prettyLabel(o)}, {"values", {{"operation", o}}}});
+                    e["variants"] = variants;
+                }
                 if (a.get<bool>("detail", false))
                 {
                     GNode probe{d->type, d->type, {0.0, 0.0}, json::object()};

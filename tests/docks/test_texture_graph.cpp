@@ -3,6 +3,7 @@
 #include "TestUtil.h"
 
 #include "core/MainQueue.h"
+#include "core/PrefStore.h"
 #include "gn/Gn.h"
 #include "ops/Command.h"
 #include "scene/Graph.h"
@@ -13,6 +14,7 @@
 #include "ui/Actions.h"
 #include "ui/Hotkeys.h"
 #include "ui/NodeEditor.h"
+#include "ui/NodePicker.h"
 #include "ui/TexParams.h"
 #include "ui/TexPreview.h"
 #include "ui/TextureGraphUi.h"
@@ -23,12 +25,16 @@
 #include <QGraphicsItem>
 #include <QGraphicsView>
 #include <QKeyEvent>
+#include <QLayout>
 #include <QLineEdit>
 #include <QMainWindow>
 #include <QMouseEvent>
+#include <QPlainTextEdit>
 #include <QThread>
+#include <QToolButton>
 
 #include <chrono>
+#include <map>
 
 using namespace lila;
 using json = nlohmann::json;
@@ -234,6 +240,113 @@ TEST_CASE("texture graph backend follows texture sets and their meshes")
     REQUIRE(groups);
 }
 
+TEST_CASE("node previews hide per node with the graph, and for every node from the view toggle")
+{
+    registerTexGraphUi();
+    run("newScene");
+    run("texCreateSet", {{"args", {"Rock"}}, {"resolution", 64}});
+    const std::string perlin = run("texAddNode", {{"args", {"Rock", "perlin"}}, {"position", {-400, 0}}}).get<std::string>();
+    QMainWindow win;
+    auto* editor = new ui::NodeEditor(&win, ui::kTextureGraphBackend);
+    win.setCentralWidget(editor);
+    win.resize(1000, 700);
+    win.show();
+    win.activateWindow();
+    editor->setGroup("Rock");
+    pump();
+    auto* view = editor->findChild<QGraphicsView*>();
+    REQUIRE(view);
+    view->setFocus();
+    pump();
+    REQUIRE(editor->previews());
+    const double shown = nodeItem(view, perlin)->boundingRect().height();
+
+    // The per-node flag is kept with the graph and undoes.
+    view->scene()->clearSelection();
+    nodeItem(view, perlin)->setSelected(true);
+    ui::actions::run(json("nodeEditor.toggleNodePreview"));
+    pump();
+    CHECK(rock().node(perlin)->hidePreview);
+    CHECK(nodeItem(view, perlin)->boundingRect().height() == doctest::Approx(shown - 96 - 8));
+    CHECK(editor->nodeFlagOn("hidePreview"));
+    run("undo");
+    pump();
+    CHECK_FALSE(rock().node(perlin)->hidePreview);
+    CHECK(nodeItem(view, perlin)->boundingRect().height() == doctest::Approx(shown));
+
+    // The view toggle hides every preview and is remembered as a pref.
+    ui::actions::run(json("nodeEditor.togglePreviews"));
+    pump();
+    CHECK_FALSE(editor->previews());
+    CHECK_FALSE(PrefStore::get().value<bool>("general", "/nodeEditor/previews", true));
+    CHECK(nodeItem(view, perlin)->boundingRect().height() == doctest::Approx(shown - 96 - 8));
+    ui::actions::run(json("nodeEditor.togglePreviews"));
+    pump();
+    CHECK(editor->previews());
+    CHECK(nodeItem(view, perlin)->boundingRect().height() == doctest::Approx(shown));
+}
+
+TEST_CASE("fresnel's camera field takes a picked camera's pose, and the gradient editor types a stop's position")
+{
+    registerTexGraphUi();
+    run("newScene");
+    const std::string set = run("texCreateSet", {{"args", {"FresnelPanel"}}, {"resolution", 64}}).get<std::string>();
+    const std::string fres = run("texAddNode", {{"args", {set, "fresnel"}}}).get<std::string>();
+    const std::string cam = run("createNode", {{"args", {"camera"}}, {"name", "rimCam"}}).get<std::string>();
+    run("setAttr", {{"args", {cam + ".translate", 0.0, 0.0, 500.0}}});
+    json node;
+    const json info = run("texGraphInfo", {{"args", {set}}});
+    for (const json& n : info["nodes"])
+        if (n.value("name", "") == fres)
+            node = n;
+    REQUIRE(node.is_object());
+
+    std::map<std::string, json> sets;
+    QWidget host;
+    QWidget* panel = ui::texParams::nodePanel(&host, node, [&](const std::string& id, const json& v) { sets[id] = v; });
+    REQUIRE(panel);
+    QToolButton* activeView = nullptr;
+    for (QToolButton* b : panel->findChildren<QToolButton*>())
+        if (b->text() == "Active View")
+            activeView = b;
+    CHECK(activeView);
+    const QList<ui::NodePicker*> pickers = panel->findChildren<ui::NodePicker*>();
+    REQUIRE(pickers.size() == 1);
+
+    Q_EMIT pickers.front()->edited(json(cam));
+    CHECK(sets["camera"] == json(cam));
+    REQUIRE(sets.contains("viewDirection"));
+    // A new camera looks down -Z from +Z, so the view runs toward the origin.
+    CHECK(sets["viewDirection"][2].get<double>() == doctest::Approx(-1.0));
+    REQUIRE(sets.contains("cameraPosition"));
+    CHECK(sets["cameraPosition"][2].get<double>() == doctest::Approx(500.0));
+
+    json gradient;
+    QWidget* editor = ui::texParams::gradientEditor(&host, json::array({json::array({0.0, "#000000"}), json::array({1.0, "#ffffff"})}),
+                                                    [&](const json& v) { gradient = v; });
+    editor->resize(300, 80);
+    QWidget* bar = editor->layout()->itemAt(0)->widget();
+    REQUIRE(bar);
+    // A click on a stop's handle under the bar selects it; the Position field then edits that stop.
+    const QPointF handle(bar->width() - 8.0, 26.0);
+    QMouseEvent press(QEvent::MouseButtonPress, handle, bar->mapToGlobal(handle), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(bar, &press);
+    QMouseEvent release(QEvent::MouseButtonRelease, handle, bar->mapToGlobal(handle), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(bar, &release);
+    QDoubleSpinBox* position = nullptr;
+    for (QDoubleSpinBox* s : editor->findChildren<QDoubleSpinBox*>())
+        if (s->prefix().startsWith("Position"))
+            position = s;
+    REQUIRE(position);
+    position->setValue(0.25);
+    REQUIRE(!gradient.is_null());
+    json stops = ui::texParams::gradientStops(gradient);
+    bool moved = false;
+    for (const json& s : stops)
+        moved = moved || s[0].get<double>() == doctest::Approx(0.25);
+    CHECK(moved);
+}
+
 TEST_CASE("texture parameter editors read every value form the evaluator takes")
 {
     json stops = ui::texParams::gradientStops(json::array({json::array({1.0, "#ffffff"}), json::array({0.0, 0.5})}));
@@ -248,4 +361,48 @@ TEST_CASE("texture parameter editors read every value form the evaluator takes")
     CHECK(ui::texParams::evalCurve(pts, false, 0.25) == doctest::Approx(0.75));
     CHECK(ui::texParams::evalCurve(pts, true, 0.5) == doctest::Approx(0.5));
     CHECK(ui::texParams::evalCurve(pts, true, -1.0) == doctest::Approx(1.0));
+}
+
+TEST_CASE("texture graph nodes rename in place and the graph takes notes")
+{
+    registerTexGraphUi();
+    run("newScene");
+    run("texCreateSet", {{"args", {"Rock"}}, {"resolution", 64}});
+    const std::string perlin = run("texAddNode", {{"args", {"Rock", "perlin"}}, {"position", {-400, 0}}}).get<std::string>();
+    QMainWindow win;
+    auto* editor = new ui::NodeEditor(&win, ui::kTextureGraphBackend);
+    win.setCentralWidget(editor);
+    win.resize(1000, 700);
+    win.show();
+    win.activateWindow();
+    editor->setGroup("Rock");
+    pump();
+    auto* view = editor->findChild<QGraphicsView*>();
+    REQUIRE(view);
+    view->setFocus();
+    pump();
+
+    view->scene()->clearSelection();
+    nodeItem(view, perlin)->setSelected(true);
+    pressWithText(view, Qt::Key_F2);
+    auto* edit = qobject_cast<QLineEdit*>(editor->inPlaceEditor());
+    REQUIRE(edit);
+    edit->setText("Rust Breakup");
+    pressWithText(edit, Qt::Key_Return);
+    CHECK(rock().node(perlin)->label == "Rust Breakup");
+    run("undo");
+    pump();
+    CHECK(rock().node(perlin)->label.empty());
+
+    ui::actions::run(json("nodeEditor.addNote"));
+    pump();
+    auto* text = qobject_cast<QPlainTextEdit*>(editor->inPlaceEditor());
+    REQUIRE(text);
+    text->setPlainText("Breakup only drives roughness.");
+    pressWithText(text, Qt::Key_Return, Qt::ControlModifier);
+    REQUIRE(rock().frames.size() == 1);
+    CHECK(rock().frames[0].text == "Breakup only drives roughness.");
+    run("undo");
+    pump();
+    CHECK(rock().frames.empty());
 }

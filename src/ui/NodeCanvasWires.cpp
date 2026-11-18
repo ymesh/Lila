@@ -271,7 +271,7 @@ std::set<NodeItem*> NodeCanvas::selectionFlow() const
 void NodeCanvas::updateEmphasis()
 {
     std::set<LinkItem*> lit = rerouteChains();
-    bool flowOn = (mFlowToggle || mFlowHold) && !mScene.selectedItems().isEmpty();
+    bool flowOn = (mFlowToggle || mFlowHold) && !selectedNodes().empty();
     std::set<NodeItem*> flow = flowOn ? selectionFlow() : std::set<NodeItem*>{};
     if (flowOn)
         for (LinkItem* l : mLinks)
@@ -434,16 +434,26 @@ void NodeCanvas::insertOnLink(LinkItem* l)
         n = dynamic_cast<NodeItem*>(i);
     if (!n)
         return;
+    std::string src = l->from->name + "." + l->from->outputs[l->out].id, dst = l->to->name + "." + l->to->inputs[l->in].id;
+    NodeItem* to = l->to;
+    if (backend->supports("InsertNode") && runVerb(*backend, "InsertNode", args({mGroup, n->name, src, dst})) == json(true))
+    {
+        offsetDownstream(n, to);
+        return;
+    }
     auto [in, out] = insertSockets(n, l);
     if (in < 0 || out < 0)
         return;
-    std::string src = l->from->name + "." + l->from->outputs[l->out].id, dst = l->to->name + "." + l->to->inputs[l->in].id;
     std::string mineIn = n->name + "." + (n->reroute ? std::string(gn::kRerouteIn) : n->inputs[in].id);
     std::string mineOut = n->name + "." + (n->reroute ? std::string(gn::kRerouteOut) : n->outputs[out].id);
-    NodeItem* to = l->to;
     runVerb(*backend, "Disconnect", {{"args", {mGroup, dst}}, {"source", src}});
     runVerb(*backend, "Connect", args({mGroup, src, mineIn}));
     runVerb(*backend, "Connect", args({mGroup, mineOut, dst}));
+    offsetDownstream(n, to);
+}
+
+void NodeCanvas::offsetDownstream(NodeItem* n, NodeItem* to)
+{
     if (!mPrefs.autoOffset)
         return;
     double shift = n->sceneBoundingRect().right() + 40.0 - to->sceneBoundingRect().left();

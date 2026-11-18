@@ -213,6 +213,7 @@ private:
         geo::BvhHit hit;
         if (!mPaint->bvh->raycast(glm::dvec3(inv * glm::dvec4(o, 1.0)), glm::dvec3(inv * glm::dvec4(d, 0.0)), hit, std::numeric_limits<double>::max(), false))
             return;
+        // The projection lives in the mesh's object space, so it moves with the mesh.
         mNormal = glm::dvec3(mPaint->normal(uint32_t(hit.triangle), float(hit.bary.y), float(hit.bary.z)));
         mProj["positionX"] = hit.point.x;
         mProj["positionY"] = hit.point.y;
@@ -225,7 +226,10 @@ private:
 
     void store()
     {
-        const json p = mProj;
+        json p = mProj;
+        // The compile reads the bake's position map in this mesh's object space, as the box is drawn.
+        if (!mMeshPath.empty())
+            p["mesh"] = mMeshPath;
         try
         {
             if (mMask.empty())

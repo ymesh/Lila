@@ -204,6 +204,7 @@
       "L": { "press": "nodeEditor.flowHoldOn", "release": "nodeEditor.flowHoldOff" },
       "Shift+L": "nodeEditor.toggleFlow",
       "Ctrl+J": "nodeEditor.frameNodes",
+      "F2": "nodeEditor.renameNode",
       "H": "nodeEditor.toggleCollapse",
       "M": "nodeEditor.toggleMute",
       "Alt+S": "nodeEditor.swapInputs",

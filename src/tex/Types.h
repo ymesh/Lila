@@ -42,6 +42,11 @@ enum class ParamType : uint8_t
     Seed,
     /** Slang source spliced into the node's body wherever `$id` appears. The one parameter whose edits recompile. */
     Code,
+    /**
+     * A scene node's name, for the panel to read scene data from (a camera's pose) into the node's inputs. Its options name
+     * the node types it takes ("camera"). The graph itself never reads it.
+     */
+    Node,
 };
 
 LILA_SCENE_API const char* portTypeName(PortType t);

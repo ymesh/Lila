@@ -9,6 +9,7 @@
 #include "ui/FeatureStatus.h"
 #include "ui/FlowLayout.h"
 #include "ui/Hotkeys.h"
+#include "ui/IconBars.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
 #include "ui/TokenCompleter.h"
@@ -34,6 +35,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFormLayout>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QKeyEvent>
@@ -1069,9 +1071,22 @@ void ShelfPanel::rebuild()
 namespace
 {
 QPointer<FloatingShelf> gFloating;
+qint64 gClickAwayClosedAt = 0;
+
+/** Queued, so buttons showing whether the shelf is up read the state after the open or close has landed. */
+void refreshIconBars()
+{
+    QTimer::singleShot(0, qApp, [] {
+        if (QMainWindow* mw = mainWindow())
+            for (auto* bar : mw->findChildren<iconBars::IconBar*>())
+                bar->refresh();
+    });
+}
 }
 
 FloatingShelf* FloatingShelf::active() { return gFloating; }
+
+bool FloatingShelf::isOpen() { return gFloating && gFloating->isVisible(); }
 
 std::string FloatingShelf::shelf() const
 {
@@ -1210,6 +1225,37 @@ void FloatingShelf::build()
     });
 }
 
+void FloatingShelf::showIntro()
+{
+    QString key = Hotkeys::get().keyFor("shelf.floatingOpen");
+    // A backtick alone is easy to miss, and keys bind by position, so name where it is.
+    QString shown = key == "`" ? QString("<b>`</b> (left of 1)") : QString("<b>%1</b>").arg(key.toHtmlEscaped());
+    auto* row = new QFrame(this);
+    row->setObjectName("floatingShelfIntro");
+    row->setStyleSheet("#floatingShelfIntro { background: rgb(58, 58, 58); border-radius: 4px; }");
+    auto* h = new QHBoxLayout(row);
+    h->setContentsMargins(8, 6, 4, 6);
+    auto* text = new QLabel(QString("Press %1 to open or close this shelf").arg(shown), row);
+    text->setWordWrap(true);
+    h->addWidget(text, 1);
+    auto* ok = new QPushButton("Got It", row);
+    connect(ok, &QPushButton::clicked, row, &QObject::deleteLater);
+    h->addWidget(ok);
+    static_cast<QVBoxLayout*>(layout())->insertWidget(1, row);
+    row->show();
+}
+
+void FloatingShelf::introduce()
+{
+    PrefStore& prefs = PrefStore::get();
+    if (prefs.value<bool>("general", "/floatingShelf/introduced", false) || Hotkeys::get().keyFor("shelf.floatingOpen").isEmpty())
+        return;
+    prefs.set("general", "/floatingShelf/introduced", true);
+    if (!gFloating)
+        open(true);
+    gFloating->showIntro();
+}
+
 void FloatingShelf::settingsMenu(QMenu* menu)
 {
     QMenu* openAt = menu->addMenu("Open At");
@@ -1323,6 +1369,7 @@ void FloatingShelf::open(bool pinned)
         s->raise();
         s->activateWindow();
     }
+    refreshIconBars();
 }
 
 void FloatingShelf::toggle()
@@ -1335,6 +1382,9 @@ void FloatingShelf::toggle()
 
 void FloatingShelf::popup()
 {
+    // A click on a button that just closed the shelf as a click-away must not open it again.
+    if (QDateTime::currentMSecsSinceEpoch() - gClickAwayClosedAt < 400)
+        return;
     if (gFloating)
         gFloating->close();
     else
@@ -1405,7 +1455,10 @@ bool FloatingShelf::eventFilter(QObject* obj, QEvent* e)
     {
         auto* w = qobject_cast<QWidget*>(obj);
         if (w && w->window() != this)
+        {
+            gClickAwayClosedAt = QDateTime::currentMSecsSinceEpoch();
             close();
+        }
     }
     return QWidget::eventFilter(obj, e);
 }
@@ -1466,6 +1519,7 @@ void FloatingShelf::closeEvent(QCloseEvent* e)
     mPositionTimer.stop();
     rememberPosition();
     QWidget::closeEvent(e);
+    refreshIconBars();
 }
 
 void FloatingShelf::keyPressEvent(QKeyEvent* e)
@@ -1535,7 +1589,7 @@ void registerShelfActions()
     actions::add({.id = "shelf.floatingToggle", .label = "Toggle Floating Shelf", .category = "Windows", .run = [] { FloatingShelf::toggle(); },
                   .doc = "Open the floating shelf, pinned until toggled again."});
     actions::add({.id = "shelf.floatingOpen", .label = "Floating Shelf", .category = "Windows", .run = [] { FloatingShelf::popup(); },
-                  .doc = "Open the shelf at the cursor."});
+                  .doc = "Open or close the floating shelf. Hold the key, then release over a button to run it."});
     actions::add({.id = "shelf.floatingRelease", .label = "Floating Shelf (release)", .category = "Windows",
                   .run = [] { FloatingShelf::releaseKey(); },
                   .doc = "Release half of the floating shelf key: after a hold, runs the button under the cursor and closes the shelf."});

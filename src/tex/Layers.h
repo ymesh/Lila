@@ -241,6 +241,15 @@ struct StackState
     bool edited = false;
 };
 
+/**
+ * While live mesh maps feed the set's bake project, puts the graph's projecting nodes in the live position map's frame,
+ * so projections and decals stay on their mesh as it moves or deforms: layer projections and decals take its bounds and
+ * their low's world matrix, and Position, Triplanar, Projection and Fresnel nodes its bounds when theirs are unset or
+ * still the last bake's. Values only, so a plan built from the graph keeps its passes and only its uniforms change. For
+ * evaluation; the set's stored graph keeps the bake's frame. True when anything changed.
+ */
+LILA_SCENE_API bool followLiveFrame(Graph& g, const SetSettings& settings);
+
 /** The set's stack as its graph stands, with value edits made in the graph folded in. */
 LILA_SCENE_API StackState readStack(const Graph& g, const SetSettings& settings);
 

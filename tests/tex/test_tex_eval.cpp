@@ -342,6 +342,17 @@ TEST_CASE("tex: externals feed position, with uv as the fallback")
     o.externals["position"] = {1, 1, {3.0f, 4.0f, 5.0f, 1.0f}};
     image::Image given = evaluateCpu(p, o).outputs.at("out");
     CHECK(texel(given, 4, 4)[2] == doctest::Approx(5.0));
+
+    // With the bake's bounds, its 0-1 positions come out in cm.
+    g.node("Pos")->values["boundsMin"] = json::array({250.0, 0.0, -50.0});
+    g.node("Pos")->values["boundsMax"] = json::array({350.0, 400.0, 50.0});
+    Plan sized = plan(into(g, "Pos.position"), "Output", "baseColor", 8);
+    REQUIRE(sized.error.empty());
+    o.externals["position"] = {1, 1, {0.5f, 0.25f, 1.0f, 1.0f}};
+    image::Image cm = evaluateCpu(sized, o).outputs.at("out");
+    CHECK(texel(cm, 4, 4)[0] == doctest::Approx(300.0));
+    CHECK(texel(cm, 4, 4)[1] == doctest::Approx(100.0));
+    CHECK(texel(cm, 4, 4)[2] == doctest::Approx(50.0));
 }
 
 TEST_CASE("tex: an unlinked UV input reads the coordinate, Mapping moves it")
@@ -403,14 +414,14 @@ TEST_CASE("tex: spherical Projection lines up with a sphere's own uvs")
     }
     CHECK(checked > 100);
 
-    // The node itself, fed object positions, gives the same coordinate.
+    // The node itself, fed the bake's 0-1 positions and its bounds, gives the same coordinate about the bounds' middle.
     Graph g;
-    add(g, "P", "projection", {{"shape", "spherical"}});
+    add(g, "P", "projection", {{"shape", "spherical"}, {"boundsMin", {-50.0, -50.0, -50.0}}, {"boundsMax", {50.0, 50.0, 50.0}}});
     Plan plan_ = plan(into(g, "P.out"), "Output", "baseColor", 4);
     REQUIRE(plan_.error.empty());
     EvalOptions o;
     const glm::vec3 point(30.0f, 20.0f, -10.0f);
-    o.externals["position"] = {1, 1, {point.x, point.y, point.z, 1.0f}};
+    o.externals["position"] = {1, 1, {point.x / 100.0f + 0.5f, point.y / 100.0f + 0.5f, point.z / 100.0f + 0.5f, 1.0f}};
     image::Image out = evaluateCpu(plan_, o).outputs.at("out");
     CHECK(texel(out, 1, 2)[0] == doctest::Approx(sphericalUv(point).x).epsilon(1e-4));
     CHECK(texel(out, 1, 2)[1] == doctest::Approx(sphericalUv(point).y).epsilon(1e-4));
@@ -430,4 +441,37 @@ TEST_CASE("tex: Image reads through its UV input")
 
     g.node("M")->values["offsetX"] = 0.37;
     CHECK(maxDiff(eval(into(g, "I.out"), "Output", "baseColor", 32), expected) > 0.05);
+}
+
+TEST_CASE("tex: Image gives the file's alpha and reads colour as linear or sRGB")
+{
+    const fs::path file = tempDir("image_alpha") / "half.png";
+    const float v = 128.0f / 255.0f, a = 64.0f / 255.0f;
+    image::writePng(file, 2, 2, std::vector<float>{v, v, v, a, v, v, v, a, v, v, v, a, v, v, v, a}, 8);
+
+    Graph g;
+    add(g, "I", "image", {{"file", file.string()}});
+    PlanRequest r;
+    r.width = r.height = 4;
+    r.outputs = {{"color", "I", "out", PortType::Color, {}}, {"alpha", "I", "alpha", PortType::Gray, {}}};
+    EvalResult linear = evaluateCpu(buildPlan(g, r));
+    CHECK(texel(linear.outputs.at("color"), 1, 1)[0] == doctest::Approx(v).epsilon(1e-3));
+    CHECK(texel(linear.outputs.at("color"), 1, 1)[3] == doctest::Approx(a).epsilon(1e-3));
+    CHECK(texel(linear.outputs.at("alpha"), 1, 1)[0] == doctest::Approx(a).epsilon(1e-3));
+
+    g.node("I")->values["colorSpace"] = "srgb";
+    EvalResult srgb = evaluateCpu(buildPlan(g, r));
+    CHECK(texel(srgb.outputs.at("color"), 1, 1)[0] == doctest::Approx(std::pow((v + 0.055) / 1.055, 2.4)).epsilon(1e-3));
+    CHECK(texel(srgb.outputs.at("color"), 1, 1)[3] == doctest::Approx(a).epsilon(1e-3));
+    CHECK(texel(srgb.outputs.at("alpha"), 1, 1)[0] == doctest::Approx(a).epsilon(1e-3));
+
+    SUBCASE("no file reads alpha 1")
+    {
+        Graph none;
+        add(none, "I", "image");
+        PlanRequest one;
+        one.width = one.height = 4;
+        one.outputs = {{"alpha", "I", "alpha", PortType::Gray, {}}};
+        CHECK(texel(evaluateCpu(buildPlan(none, one)).outputs.at("alpha"), 0, 0)[0] == doctest::Approx(1.0));
+    }
 }

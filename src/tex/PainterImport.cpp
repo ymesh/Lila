@@ -6,6 +6,7 @@
 #include "core/PrefStore.h"
 #include "ops/Command.h"
 #include "tex/Layers.h"
+#include "tex/MaterialFromMaps.h"
 #include "tex/Ports.h"
 
 #include <algorithm>
@@ -798,7 +799,7 @@ private:
                     }
                     const std::string file = image(url);
                     if (!file.empty())
-                        nodes.push_back({ch, "image", {{"file", file}, {"tiles", clampInt(scale, 1, 64)}}, "out", gloss});
+                        nodes.push_back({ch, "image", {{"file", file}, {"tiles", clampInt(scale, 1, 64)}, {"colorSpace", maps::imageColorSpace(paths::fromUtf8(file), ch)}}, "out", gloss});
                 }
                 else if (cls == "DataSourceProcedural")
                 {

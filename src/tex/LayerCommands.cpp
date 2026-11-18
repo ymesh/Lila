@@ -5,6 +5,7 @@
 
 #include "bake/Bake.h"
 #include "core/ImageIO.h"
+#include "core/Log.h"
 #include "tex/TextureSet.h"
 #include "tex/Plan.h"
 #include "core/PackedArray.h"
@@ -751,10 +752,48 @@ json exportFlattened(const Args& a)
     return {{"files", files}, {"warnings", warnings}};
 }
 
+/**
+ * Recompiles the stacks of the sets a finished bake feeds: projections take the position map's box and the lows' world
+ * matrices at compile, and both change when a moved mesh rebakes.
+ */
+void recompileAfterBake(const bake::BakeEvent& e)
+{
+    if (e.kind != bake::BakeEvent::Kind::Finished || e.data.value("cancelled", false) || e.data.contains("error"))
+        return;
+    scene::Graph& g = scene();
+    const Node* project = g.node(e.project);
+    if (!project)
+        return;
+    for (const std::string& name : setNames(g))
+    {
+        Node* set = findSet(g, name);
+        if (!set)
+            continue;
+        try
+        {
+            const SetSettings s = readSettings(*set);
+            if (s.bakeProject != project->name())
+                continue;
+            const Graph graph = readGraph(*set);
+            const StackState st = readStack(graph, s);
+            if (st.graphMode || !st.layered)
+                continue;
+            const Graph next = compileStack(st.stack, s, graph).graph;
+            if (next.toJson() != graph.toJson())
+                writeGraph(g, *set, next);
+        }
+        catch (const std::exception& ex)
+        {
+            log::warn("{}: couldn't update its layers after {} baked: {}", name, project->name(), ex.what());
+        }
+    }
+}
 } // namespace
 
 void registerLayerCommands()
 {
+    static const int bakeListener = bake::addBakeListener(recompileAfterBake);
+    (void)bakeListener;
     maps::registerCommands();
     using T = ArgType;
     ops::registerCommand({
@@ -902,7 +941,7 @@ void registerLayerCommands()
                   {"filter", "", T::String, nullptr, "Filter: the node type (blur, hsv, levels...)."},
                   {"values", "", T::Any, nullptr, "Filter: its parameter values."},
                   {"channels", "", T::Any, nullptr, "Per-channel {enabled, mode, opacity}."},
-                  {"projection", "", T::Any, nullptr, "Fill, procedural, decal and text: layerProjection's values {mode, positionX...}."},
+                  {"projection", "", T::Any, nullptr, "Fill, procedural, decal and text: layerProjection's values {mode, positionX...} in the object space of mesh (a node path; the bake's first low when unset)."},
                   {"decal", "", T::Any, nullptr, "Decal: {maps {channel: file}, columns, rows, cell}."},
                   {"text", "", T::Any, nullptr, "Text: {text, font, tracking, outline, outlineColor, resolution}."},
                   {"scatter", "", T::Any, nullptr, "Scatter: {pattern, maps, countX, countY, perCell, size, sizeRandom, rotationRandom, hueRandom, seed, avoidOverlap}."}},

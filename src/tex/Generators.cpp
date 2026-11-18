@@ -18,6 +18,12 @@ LiveMeshMapReader& liveReader()
     return fn;
 }
 
+LiveMeshMapMetaReader& liveMetaReader()
+{
+    static LiveMeshMapMetaReader fn;
+    return fn;
+}
+
 BakedMapsListener& bakedListener()
 {
     static BakedMapsListener fn;
@@ -36,6 +42,15 @@ scene::Node* findProject(scene::Graph& g, const std::string& name)
 std::string bakeMapName(std::string_view external) { return external == "worldNormal" ? std::string("objectNormal") : std::string(external); }
 
 void setLiveMeshMapReader(LiveMeshMapReader fn) { liveReader() = std::move(fn); }
+
+void setLiveMeshMapMetaReader(LiveMeshMapMetaReader fn) { liveMetaReader() = std::move(fn); }
+
+json liveMeshMapMeta(const std::string& bakeProject, const std::string& map)
+{
+    if (bakeProject.empty() || !liveMetaReader())
+        return json();
+    return liveMetaReader()(bakeProject, bakeMapName(map));
+}
 
 void setBakedMapsListener(BakedMapsListener fn) { bakedListener() = std::move(fn); }
 

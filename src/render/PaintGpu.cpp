@@ -14,6 +14,7 @@
 #include "sculpt/SculptSession.h"
 #include "tex/Evaluate.h"
 #include "tex/Library.h"
+#include "tex/MaterialFromMaps.h"
 #include "tex/NodeDef.h"
 #include "tex/PaintSymmetry.h"
 #include "tex/Plan.h"
@@ -985,7 +986,8 @@ std::map<std::string, std::shared_ptr<const ValueImages>> gValueCache;
 std::map<std::string, std::shared_ptr<const brush::AlphaImage>> gTipCache;
 
 /** The graph a source names and what to request of it for the channels. Throws std::runtime_error. */
-tex::Graph sourceGraph(const json& src, const std::vector<std::pair<std::string, tex::PortType>>& channels, std::vector<tex::OutputRequest>& requests)
+tex::Graph sourceGraph(const json& src, const std::vector<std::pair<std::string, tex::PortType>>& channels, std::vector<tex::OutputRequest>& requests,
+                       bool decodeColour)
 {
     if (src.contains("library"))
     {
@@ -1013,19 +1015,35 @@ tex::Graph sourceGraph(const json& src, const std::vector<std::pair<std::string,
             throw std::runtime_error("no texture node type " + type + " with an output");
         tex::Graph g;
         g.name = "BrushSource";
-        g.nodes.push_back({"Source", type, {0.0, 0.0}, src.value("values", json::object())});
+        const json values = src.value("values", json::object());
+        g.nodes.push_back({"Source", type, {0.0, 0.0}, values});
+        // A picture with no colour space of its own decodes per channel it feeds: sRGB for colour, raw for data.
+        const bool perChannel = decodeColour && def->param("colorSpace") && !values.contains("colorSpace") && values.contains("file") &&
+                                values["file"].is_string();
         const tex::PortDecl& out = def->outputs.front();
         for (const auto& [name, t] : channels)
         {
+            std::string node = "Source";
+            if (perChannel && std::string_view(tex::maps::imageColorSpace(paths::fromUtf8(values["file"].get<std::string>()), name)) == "srgb")
+            {
+                node = "SourceSrgb";
+                if (g.nodes.size() == 1)
+                {
+                    json srgb = values;
+                    srgb["colorSpace"] = "srgb";
+                    g.nodes.push_back({node, type, {0.0, 200.0}, std::move(srgb)});
+                }
+            }
             const bool material = out.type == tex::PortType::Material;
-            requests.push_back({name, "Source", out.id, material ? t : tex::PortType::Color, material ? name : std::string()});
+            requests.push_back({name, node, out.id, material ? t : tex::PortType::Color, material ? name : std::string()});
         }
         return g;
     }
     throw std::runtime_error("a brush source needs library, graph or node");
 }
 
-std::shared_ptr<const ValueImages> valueImages(const json& src, const std::vector<std::string>& written)
+/** decodeColour: colour channels read an image file as sRGB; off for tips, whose picture is coverage. */
+std::shared_ptr<const ValueImages> valueImages(const json& src, const std::vector<std::string>& written, bool decodeColour = true)
 {
     std::vector<std::pair<std::string, tex::PortType>> channels;
     const bool node = src.contains("node");
@@ -1044,7 +1062,7 @@ std::shared_ptr<const ValueImages> valueImages(const json& src, const std::vecto
     std::vector<tex::OutputRequest> requests;
     std::optional<tex::Graph> g;
     if (!channels.empty())
-        g = sourceGraph(src, channels, requests);
+        g = sourceGraph(src, channels, requests, decodeColour);
     // Keyed on the graph itself, so a scene set or library file edited since the last stroke evaluates again.
     std::string key = (g ? g->toJson().dump() : std::string()) + "|" + std::to_string(res);
     for (const auto& [c, t] : channels)
@@ -1089,7 +1107,7 @@ std::shared_ptr<const brush::AlphaImage> tipImage(const json& tip)
     }
     json src = tip;
     src["resolution"] = res;
-    std::shared_ptr<const ValueImages> v = valueImages(src, {"baseColor"});
+    std::shared_ptr<const ValueImages> v = valueImages(src, {"baseColor"}, false);
     auto it = v->channels.find("baseColor");
     if (it == v->channels.end())
         throw std::runtime_error("the brush tip graph has no colour output");

@@ -353,7 +353,7 @@ bool repeatable(const json& target)
             "select.", "viewport.", "hotbox.", "window.", "tool.", "snap.", "softSelect.", "shelf.", "help.", "file.", "edit.flush",
             "anim.nextFrame", "anim.prevFrame", "anim.nextKey", "anim.prevKey", "anim.play", "anim.stop", "anim.firstFrame",
             "anim.lastFrame", "anim.ghost", "anim.toggleGhosts", "anim.autoKeyToggle", "adjustLastOp.", "outliner.revealSelected",
-            "graphEditor.", "nodeEditor.frame", "nodeEditor.selectAll", "nodeEditor.zipTie", "nodeEditor.flowHold", "nodeEditor.toggleFlow", "nodeEditor.toggleMinimap", "nodeEditor.bookmarkGo", "nodeEditor.toggleSelectedWires",
+            "graphEditor.", "nodeEditor.frame", "nodeEditor.selectAll", "nodeEditor.zipTie", "nodeEditor.flowHold", "nodeEditor.toggleFlow", "nodeEditor.toggleMinimap", "nodeEditor.togglePreviews", "nodeEditor.bookmarkGo", "nodeEditor.toggleSelectedWires",
             "nodeEditor.find", "mode.", "picker.frame", "measure.toggleShow"};
         static const std::vector<std::string_view> ids = {"edit.undo", "edit.redo", "edit.repeatLast", "edit.selectAll", "edit.deselect", "edit.invertSelection"};
         if (id == "file.exportSelection")

@@ -243,6 +243,8 @@ std::string prettyLabel(std::string_view camel)
         std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char ch) { return char(std::tolower(ch)); });
         if (lower == "uv" || lower == "uvs")
             w = lower == "uv" ? "UV" : "UVs";
+        else if (lower == "srgb")
+            w = "sRGB";
         else if (lower.size() == 1 && std::isalpha(static_cast<unsigned char>(lower[0])))
             w = std::string(1, char(std::toupper(static_cast<unsigned char>(lower[0]))));
         else

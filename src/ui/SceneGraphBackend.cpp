@@ -30,13 +30,15 @@ public:
     {
         if (verb == "GroupInfo")
             return "sceneGraphInfo";
+        if (verb == "SetNodeLabel")
+            return "sceneGraphRenameNode";
         return GraphBackend::command(verb);
     }
 
     bool supports(std::string_view verb) const override
     {
-        static const std::set<std::string_view> kVerbs = {"GroupInfo", "NodeTypes",  "AddNode",  "DeleteNode",  "Connect",
-                                                          "Disconnect", "MoveNodes", "SetValue", "SetNodeFlags"};
+        static const std::set<std::string_view> kVerbs = {"GroupInfo", "NodeTypes",    "AddNode",    "DeleteNode",   "Connect",   "Disconnect",
+                                                          "MoveNodes", "SetValue",     "SetNodeFlags", "InsertNode", "SetFrames", "SetNodeLabel"};
         return kVerbs.contains(verb);
     }
 
@@ -66,6 +68,7 @@ public:
         case scene::Change::Connection:
         case scene::Change::Attrs:
         case scene::Change::Reparented:
+        case scene::Change::Renamed:
             return true;
         case scene::Change::Value:
             return n != nullptr;
@@ -76,6 +79,7 @@ public:
     bool rebuildsOnUndo() const override { return true; }
 
     QString ownerNoun() const override { return "node"; }
+    bool renamesNodes() const override { return true; }
     QString groupNoun() const override { return "View"; }
 
     SocketStyle socketStyle(const std::string& type) const override
@@ -112,6 +116,8 @@ public:
         return type == "matrix" || type == "mesh" || type == "data" || type == scene::sceneGraph::kDagSocketType || type.ends_with("[]");
     }
 
+    bool primarySocket(const std::string& type) const override { return type == "mesh"; }
+
     QColor headerColor(const std::string& type, const std::string& category) const override
     {
         static const std::pair<std::string_view, const char*> kTokens[] = {
@@ -127,8 +133,10 @@ public:
     {
         return "Select a node to edit its values.\n\nEvery view shows the scene's own nodes around the selection: Selection with what is "
                "wired straight in and out of it, History with each mesh's whole modifier stack, Hierarchy with parents and children, Upstream and Downstream to the depth set in the "
-               "toolbar. Nodes show only their connected plugs until Hide Unused Sockets is turned off for them. Drag from an output to "
-               "an input to connect, Ctrl+drag across wires to cut them. Tab / Shift+A adds a node, which joins the selection. In "
+               "toolbar. Modifiers show every plug; other nodes show their meshes and connected plugs until Hide Unused Sockets is turned "
+               "off in their right-click menu. "
+               "Drag a value on a node to change it. Drag from an output to an input to connect, Ctrl+drag across wires to cut them. "
+               "Tab / Shift+A adds a node, which joins the selection; a modifier goes on top of the selected mesh's stack. In "
                "Hierarchy, wire Children into Parent to parent.";
     }
 

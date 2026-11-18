@@ -106,7 +106,7 @@ const std::vector<std::pair<std::string, json>>& presets()
         {"Rig", preset(with({"timeSlider"}), {"channelBox"}, "Rig", {{"outliner", {{"height", 0.5}}}})},
         {"Animate", preset(with({"animLayers", "graphEditor", "timeSlider"}), {"graphEditor", "channelBox"}, "Animate",
                            {{"outliner", {{"height", 0.45}}}, {"graphEditor", {{"height", 0.32}}}})},
-        {"Level", preset(with({"levelToolkit", "stagehand.library", "modelingToolkit"}), {"levelToolkit", "channelBox"}, "Level",
+        {"Level", preset(with({"levelToolkit", "blockworkToolkit", "stagehand.library", "modelingToolkit"}), {"levelToolkit", "channelBox"}, "Level",
                          {{"stagehand.library", {{"height", 0.4}}}}, {"stagehand.library"})},
         {"Effects", preset(with({"timeSlider"}), {"channelBox"}, "Effects")},
         {"Groom", preset(with({"groomPalette"}), {"groomPalette", "channelBox"}, "Groom", {{"groomPalette", {{"width", 300}}}})},

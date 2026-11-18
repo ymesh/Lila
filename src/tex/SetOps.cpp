@@ -16,6 +16,7 @@
 #include "scene/Node.h"
 #include "tex/Evaluate.h"
 #include "tex/Generators.h"
+#include "tex/Layers.h"
 #include "tex/ShadingChannels.h"
 
 #include <algorithm>
@@ -177,9 +178,11 @@ struct TileResult
 };
 
 /** Evaluates every requested channel of every tile. */
-std::vector<TileResult> evaluateTiles(scene::Node& set, const Graph& g, const SetSettings& s, const std::vector<std::string>& channels, int width,
+std::vector<TileResult> evaluateTiles(scene::Node& set, const Graph& stored, const SetSettings& s, const std::vector<std::string>& channels, int width,
                                       int height, const std::string& backend = {}, std::string* used = nullptr)
 {
+    Graph g = stored;
+    followLiveFrame(g, s);
     std::vector<OutputRequest> requests;
     for (const OutputRequest& r : channelRequests(g, s))
         if (channels.empty() || std::find(channels.begin(), channels.end(), r.name) != channels.end())
@@ -278,6 +281,56 @@ fs::path bakedMapFile(scene::Graph& g, const std::string& project, const std::st
     return {};
 }
 
+json bakedPositionMeta(scene::Graph& g, const std::string& project)
+{
+    if (project.empty())
+        return json();
+    for (scene::NodeId id : bake::projects(g))
+    {
+        scene::Node* n = g.node(id);
+        if (!n || n->name() != project)
+            continue;
+        json r = bake::lastResult(id);
+        if (!r.is_object() || !r.contains("outputs"))
+            r = bake::readManifest(*n);
+        if (!r.is_object())
+            return json();
+        for (const json& o : r.value("outputs", json::array()))
+        {
+            const json meta = o.value("meta", json::object());
+            if (o.value("map", std::string()) != "position" || !meta.is_object())
+                continue;
+            const json a = meta.value("boundsMin", json()), b = meta.value("boundsMax", json());
+            if (a.is_array() && b.is_array() && a.size() == 3 && b.size() == 3)
+                return meta;
+        }
+        return json();
+    }
+    return json();
+}
+
+json positionFrame(scene::Graph& g, const std::string& project)
+{
+    json live = liveMeshMapMeta(project, "position");
+    const json a = live.is_object() ? live.value("boundsMin", json()) : json(), b = live.is_object() ? live.value("boundsMax", json()) : json();
+    if (a.is_array() && b.is_array() && a.size() == 3 && b.size() == 3)
+        return live;
+    return bakedPositionMeta(g, project);
+}
+
+bool bakedPositionBounds(scene::Graph& g, const std::string& project, double lo[3], double hi[3])
+{
+    const json meta = bakedPositionMeta(g, project);
+    if (meta.is_null())
+        return false;
+    for (size_t k = 0; k < 3; ++k)
+    {
+        lo[k] = meta["boundsMin"][k].get<double>();
+        hi[k] = meta["boundsMax"][k].get<double>();
+    }
+    return true;
+}
+
 void setExternalSource(ExternalSource fn) { externalSource() = std::move(fn); }
 
 std::map<std::string, image::Image> evaluateOutputs(scene::Node& set, const std::vector<OutputRequest>& requests, int udim, int width, int height,
@@ -286,11 +339,13 @@ std::map<std::string, image::Image> evaluateOutputs(scene::Node& set, const std:
     return evaluateGraphOutputs(set, readGraph(set), requests, udim, width, height, backend, warnings);
 }
 
-std::map<std::string, image::Image> evaluateGraphOutputs(scene::Node& set, const Graph& g, const std::vector<OutputRequest>& requests, int udim,
+std::map<std::string, image::Image> evaluateGraphOutputs(scene::Node& set, const Graph& stored, const std::vector<OutputRequest>& requests, int udim,
                                                          int width, int height, const std::string& backend, std::vector<std::string>* warnings)
 {
     LILA_ZONE();
     SetSettings s = readSettings(set);
+    Graph g = stored;
+    followLiveFrame(g, s);
     const Tile* tile = &s.tiles.front();
     for (const Tile& t : s.tiles)
         if (t.udim == udim)
@@ -360,8 +415,9 @@ json evaluateSet(scene::Node& set, const EvaluateOptions& options)
 json exportSet(scene::Node& set, const ExportOptions& options)
 {
     LILA_ZONE();
-    Graph g = readGraph(set);
     SetSettings s = readSettings(set);
+    Graph g = readGraph(set);
+    followLiveFrame(g, s);
     const std::string presetName = options.preset.empty() ? s.exportPreset : options.preset;
     std::optional<bake::TargetProfile> target = bake::findTarget(presetName);
     if (!target)

@@ -44,9 +44,15 @@ inline constexpr const char* kGeometryNodesBackend = "gn";
  * Every edit is a command named command(verb), "gn" + "AddNode" for geometry nodes, taking the same arguments as the
  * geometry-nodes command of that verb: GroupInfo, NodeTypes, AddNode, DeleteNode, Connect, Disconnect, MoveNodes,
  * SetValue, CopyNodes, PasteNodes, DuplicateNodes, GroupNodes, Ungroup, ExportGroup, ImportGroup, SaveGroup,
- * SetActiveViewer, AddInput, RemoveInput, RenameInput, MoveInput, SetInputInfo, ExposeInput, RemoveOutput. The editor
- * hides what a verb drives when supports() says the backend lacks it. GroupInfo lists the group's owners under "owners"
+ * SetActiveViewer, AddInput, RemoveInput, RenameInput, MoveInput, SetInputInfo, ExposeInput, RemoveOutput, SetTies, SetFrames
+ * (frames and notes), SetNodeFlags, SetNodeLabel (group, node, label: the node's header). The editor hides what a verb
+ * drives when supports() says the backend lacks it. GroupInfo lists the group's owners under "owners"
  * (geometry nodes says "modifiers").
+ *
+ * InsertNode (group, node, "from.socket", "to.socket") lets a backend wire a node dropped on a link its own way; it returns
+ * true when it did, false to have the editor wire the node through matching sockets. It is the one verb supports() leaves
+ * out by default; a backend opting in also takes
+ * insert=False on AddNode, sent when the new node is about to be wired to a dragged wire.
  *
  * Open an editor on a backend with NodeEditor(parent, id), for instance from a panel an extension registers.
  */
@@ -110,6 +116,8 @@ public:
     virtual QString ownerNoun() const { return "owner"; }
     /** What the toolbar's group picker is labelled. */
     virtual QString groupNoun() const { return "Group"; }
+    /** Whether SetNodeLabel renames the node itself (a scene node) rather than setting a label beside its name. */
+    virtual bool renamesNodes() const { return false; }
     /** Whether the editor offers Rename for its groups. */
     virtual bool canRenameGroup() const { return false; }
     /** Renames a group as an undoable UI command; returns the name it ended up with, empty when it failed (already logged). */
@@ -201,11 +209,15 @@ public:
     virtual QString wireSummary(const nlohmann::json& info, const std::string& node, const std::string& socket) const;
     /** Sockets that carry data but no editable value (geometry): no value text, no side-panel field. */
     virtual bool valueless(const std::string&) const { return false; }
+    /** The backend's main data (meshes in the scene graph): drawn even on a node hiding its unused sockets. */
+    virtual bool primarySocket(const std::string&) const { return false; }
     virtual QColor headerColor(const std::string& type, const std::string& category) const;
     /** Types offered for a new exposed input. */
     virtual std::vector<std::string> inputTypes() const { return {"float", "int", "bool", "vector", "color", "string"}; }
     /** Shown under the side panel when no node is selected. */
     virtual QString canvasHint() const;
+    /** The key bound to an action as the hotkey prefs have it now, for hints that follow rebinding; "(unbound)" when none. */
+    static QString hintKey(const char* actionId);
 
     /** Adds backend-specific buttons to the editor's toolbar, after Add Node. */
     virtual void addToolbarButtons(QBoxLayout*, NodeEditor&) const {}

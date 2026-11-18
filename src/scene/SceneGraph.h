@@ -8,7 +8,8 @@
 /**
  * The scene's dependency graph as node-editor groups: each group is a view of real scene nodes around the selection,
  * edited through the sceneGraph* commands (sceneGraphInfo, sceneGraphNodeTypes, sceneGraphAddNode, sceneGraphDeleteNode,
- * sceneGraphConnect, sceneGraphDisconnect, sceneGraphMoveNodes, sceneGraphSetValue, sceneGraphSetNodeFlags).
+ * sceneGraphConnect, sceneGraphDisconnect, sceneGraphMoveNodes, sceneGraphSetValue, sceneGraphSetNodeFlags,
+ * sceneGraphSetFrames, sceneGraphRenameNode).
  */
 namespace lila::scene::sceneGraph
 {
