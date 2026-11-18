@@ -140,7 +140,7 @@ struct ViewPush
     uint width;
     uint height;
     uint groupsX;
-    uint display; // 0 raw, 1 linear colour shown as sRGB
+    uint display; // bit 0: linear colour shown as sRGB; bit 1: alpha kept (else opaque)
 };
 
 [[vk::push_constant]] ViewPush wp;
@@ -201,8 +201,9 @@ void paintViewCS(uint3 gid: SV_GroupID, uint3 local: SV_GroupThreadID)
         uint x = min(uint(uv.x * float(wp.srcWidth)), wp.srcWidth - 1);
         uint y = min(uint((1.0 - uv.y) * float(wp.srcHeight)), wp.srcHeight - 1);
         v = viewTexel(x, y);
-        v.a = 1.0;
-        if (wp.display != 0)
+        if ((wp.display & 2u) == 0u)
+            v.a = 1.0;
+        if ((wp.display & 1u) != 0u)
             v.rgb = float3(toSrgb(saturate(v.r)), toSrgb(saturate(v.g)), toSrgb(saturate(v.b)));
     }
     wp.dst[i] = unorm8(v.r) | (unorm8(v.g) << 8) | (unorm8(v.b) << 16) | (unorm8(v.a) << 24);

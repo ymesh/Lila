@@ -1,10 +1,14 @@
 #include <doctest/doctest.h>
 
+#include "core/ExtensionContext.h"
 #include "extensions/ExtensionManager.h"
 #include "ui/ExtensionManagerDialog.h"
+#include "ui/ExtensionScope.h"
 
+#include <QApplication>
 #include <QCheckBox>
 #include <QTableWidget>
+#include <QTimer>
 
 using namespace lila;
 
@@ -57,4 +61,21 @@ TEST_CASE("extension manager lists packages with version, vendor, SDK and manife
     CHECK(table->item(future, 6)->toolTip().contains("SDK 2.0"));
     CHECK_FALSE(checkAt(table, future, 4)->isChecked());
     delete dialog;
+}
+
+TEST_CASE("an extension's scope drops the deferred calls still queued when it unloads")
+{
+    int ran = 0;
+    {
+        ext::Context ctx("scopeTest");
+        QObject* scope = ui::scope(ctx);
+        REQUIRE(scope);
+        CHECK(ui::scope(ctx) == scope);
+        CHECK(ui::scope("scopeTest") == scope);
+        QTimer::singleShot(0, ui::scope("scopeTest"), [&ran] { ++ran; });
+        ctx.unloadAll();
+        CHECK(ui::scope("scopeTest") == nullptr);
+    }
+    QApplication::processEvents();
+    CHECK(ran == 0);
 }

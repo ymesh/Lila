@@ -11,6 +11,7 @@
 #include "mcp/McpServer.h"
 #include "render/Renderer.h"
 #include "scene/Components.h"
+#include "scene/Camera.h"
 #include "scene/Graph.h"
 #include "scene/MeshNodes.h"
 #include "scene/Modifiers.h"
@@ -26,6 +27,7 @@
 #include "scene/Georef.h"
 #include "ui/ViewportHud.h"
 #include "ui/DroneCamera.h"
+#include "ui/FeatureStatus.h"
 #include "ui/SurfaceSnap.h"
 #include "ui/GizmoMath.h"
 #include "ui/MaterialDraw.h"
@@ -209,7 +211,10 @@ void drawHud(OverlayPainter& painter, const ViewInfo& view, scene::Graph& g, Vie
     ctx.shownNode = [&g](scene::NodeId id) { return scene::effectivelyVisible(g, id); };
     hud::draw(painter, ctx);
     if (widget)
+    {
         drone::draw(painter, widget);
+        featureStatus::draw(painter, widget, view.width);
+    }
 }
 
 /** The viewport's draw overrides (selected last, as it draws them) and extension drawers, into a capture's frame. */
@@ -402,6 +407,10 @@ QImage render(const Options& o, Timing* timing, int repeat)
     s.grid = o.grid && !cam.ortho;
     if (o.ambientOcclusion)
         s.ambientOcclusion = *o.ambientOcclusion;
+    // Looking through a camera takes its lens: depth of field, flare shape, physical exposure and its own post process.
+    if (!o.lookThrough.empty())
+        if (const scene::Node* n = scene::Graph::current().find(o.lookThrough); n && n->type().isA("camera"))
+            viewportDisplay::applyLens(s, scene::camera::lens(*n));
 
     bool showMaterials = materialsShown() && !viewportDisplay::defaultMaterial();
     if (showMaterials)
@@ -444,6 +453,8 @@ QImage render(const Options& o, Timing* timing, int repeat)
         if (textured)
             d.materials = drawMaterials(*shown);
         d.world = n->as<glm::dmat4>(scene::Transform::kWorldMatrix);
+        d.node = uint64_t(id);
+        d.drawOffset = scene::drawOffset(*n);
         if (viewportDisplay::vertexColorMode() != render::VertexColorMode::Off && !geo::colors::current(*shown).empty())
         {
             d.vertexColors = viewportDisplay::vertexColorMode();
@@ -517,7 +528,8 @@ QImage render(const Options& o, Timing* timing, int repeat)
     if (!r.renderOffscreen(std::move(s), w, h, bgra, &err, &stats, repeat, std::max(o.samples, 1)))
         throw std::runtime_error("capture failed: " + err);
     if (timing)
-        *timing = {stats.gpuMs, stats.aoMs, stats.cpuMs, stats.aoCpuMs};
+        *timing = {stats.gpuMs,         stats.aoMs,  stats.cpuMs,          stats.aoCpuMs,     stats.reflectionMs,
+                   stats.flareMs,       stats.dofMs, stats.motionBlurMs,   stats.reflections, stats.reflectionNote};
     QImage img(bgra.data(), w, h, w * 4, QImage::Format_ARGB32);
     return img.convertToFormat(QImage::Format_RGB32);
 }
@@ -736,7 +748,8 @@ void registerCommands()
     ops::registerCommand({
         .name = "measureView",
         .doc = "Draw the scene offscreen several times like captureView and return the median GPU time per frame in ms, with the "
-               "ambient occlusion share, and the render thread's time recording it: {gpuMs, aoMs, cpuMs, aoCpuMs, frames}. 0 where the GPU has no timestamps.",
+               "ambient occlusion and post pass shares, and the render thread's time recording it: {gpuMs, aoMs, cpuMs, aoCpuMs, reflectionMs, "
+               "flareMs, dofMs, motionBlurMs, reflections (which ran), reflectionNote (why not what was asked), frames}. 0 where the GPU has no timestamps.",
         .flags = mflags,
         .undoable = false,
         .run = [](const Args& a) -> json {
@@ -754,13 +767,24 @@ void registerCommands()
             {
                 throw CommandError(std::string("measureView: ") + e.what());
             }
-            return json{{"gpuMs", t.gpuMs}, {"aoMs", t.aoMs}, {"cpuMs", t.cpuMs}, {"aoCpuMs", t.aoCpuMs}, {"frames", frames}};
+            static const char* kReflections[] = {"environment", "screenSpace", "rayTraced"};
+            return json{{"gpuMs", t.gpuMs},
+                        {"aoMs", t.aoMs},
+                        {"cpuMs", t.cpuMs},
+                        {"aoCpuMs", t.aoCpuMs},
+                        {"reflectionMs", t.reflectionMs},
+                        {"flareMs", t.flareMs},
+                        {"dofMs", t.dofMs},
+                        {"motionBlurMs", t.motionBlurMs},
+                        {"reflections", kReflections[std::clamp(t.reflections, 0, 2)]},
+                        {"reflectionNote", t.reflectionNote},
+                        {"frames", frames}};
         },
     });
 
     ops::registerCommand({
         .name = "viewportStats",
-        .doc = "The active viewport's last finished frame as the GPU measured it: {frames, gpuMs, aoMs, cpuMs, meshDrawCalls, meshUploads, renderer}. "
+        .doc = "The active viewport's last finished frame as the GPU measured it: {frames, gpuMs, aoMs, cpuMs, meshDrawCalls, meshUploads, pathSamples, renderer}; pathSamples is how many samples the path-traced view has added up (0 when it is off). "
                "frames counts frames drawn so far, so two calls apart give the frame rate; meshUploads counts GPU mesh copies the same way. Unlike measureView it times what the "
                "view really draws, components and highlights included. When an external renderer such as a Hydra delegate draws "
                "the view, rendererStats holds what it reports.",
@@ -771,7 +795,7 @@ void registerCommands()
                 throw CommandError("viewportStats: no viewport");
             const render::Renderer::FrameStats st = vp->frameStats();
             json out{{"frames", st.frames}, {"gpuMs", st.gpuMs}, {"aoMs", st.aoMs}, {"cpuMs", st.cpuMs}, {"meshDrawCalls", st.meshDrawCalls},
-                     {"meshUploads", st.meshUploads}, {"renderer", viewportRenderers::selected(vp->hudPanel())}};
+                     {"meshUploads", st.meshUploads}, {"pathSamples", st.pathSamples}, {"renderer", viewportRenderers::selected(vp->hudPanel())}};
             if (json rs = viewportRenderers::stats(vp->hudPanel()); !rs.is_null())
                 out["rendererStats"] = std::move(rs);
             return out;

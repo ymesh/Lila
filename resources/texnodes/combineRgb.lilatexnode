@@ -1,0 +1,41 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "combineRgb",
+  "label": "Combine RGB",
+  "category": "Utility",
+  "doc": "Builds a colour from red, green, blue and alpha values.",
+  "inputs": [
+    {
+      "id": "r",
+      "type": "float",
+      "default": 0.0
+    },
+    {
+      "id": "g",
+      "type": "float",
+      "default": 0.0
+    },
+    {
+      "id": "b",
+      "type": "float",
+      "default": 0.0
+    },
+    {
+      "id": "a",
+      "type": "float",
+      "default": 1.0
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [],
+  "cost": 1,
+  "body": {
+    "out": "return float4(r.sample(uv), g.sample(uv), b.sample(uv), a.sample(uv));"
+  }
+}

@@ -11,6 +11,7 @@
 #include <fstream>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 
@@ -181,6 +182,36 @@ std::vector<fs::path> smartMaterialDirs()
     return out;
 }
 
+/** A smart material file read before, kept while the file's time and size stay the same: panels list them on every refresh. */
+SmartMaterial readSmartFileCached(const fs::path& f, const std::string& tier)
+{
+    struct Entry
+    {
+        fs::file_time_type time;
+        uintmax_t size = 0;
+        std::string tier;
+        SmartMaterial material;
+    };
+    static std::mutex mutex;
+    static std::map<fs::path, Entry> cache;
+    std::error_code ec;
+    const fs::file_time_type time = fs::last_write_time(f, ec);
+    const uintmax_t size = ec ? 0 : fs::file_size(f, ec);
+    if (!ec)
+    {
+        std::scoped_lock lock(mutex);
+        if (auto it = cache.find(f); it != cache.end() && it->second.time == time && it->second.size == size && it->second.tier == tier)
+            return it->second.material;
+    }
+    SmartMaterial m = readSmartFile(f, tier);
+    if (!ec)
+    {
+        std::scoped_lock lock(mutex);
+        cache[f] = {time, size, tier, m};
+    }
+    return m;
+}
+
 std::vector<SmartMaterial> listSmartMaterials()
 {
     std::map<std::string, SmartMaterial> byName;
@@ -199,7 +230,7 @@ std::vector<SmartMaterial> listSmartMaterials()
         {
             try
             {
-                SmartMaterial m = readSmartFile(f, dirs[i].second);
+                SmartMaterial m = readSmartFileCached(f, dirs[i].second);
                 byName[m.name] = std::move(m);
             }
             catch (const std::exception&)

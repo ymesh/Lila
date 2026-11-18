@@ -10,7 +10,8 @@
       "id": "height",
       "type": "gray",
       "default": 0.5,
-      "taps": 4
+      "taps": 4,
+      "reach": 1
     }
   ],
   "outputs": [

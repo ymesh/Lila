@@ -452,8 +452,7 @@ TEST_CASE("a fill click fills the polygon under it; a drag fills every polygon i
     const std::string plane = run("polyPlane", {{"width", 100.0}, {"depth", 100.0}, {"subdivisionsX", 10}, {"subdivisionsZ", 10}})[0].get<std::string>();
     run("createMaterial", {{"args", {"FloorMat"}}});
     run("assignMaterial", {{"args", {"FloorMat", plane}}});
-    run("texCreateSet", {{"args", {"Floor"}}, {"resolution", 64}});
-    run("texSetSettings", {{"args", {"Floor", json{{"material", "FloorMat"}}}}});
+    run("texCreateSet", {{"args", {"Floor"}}, {"resolution", 64}, {"materials", {"FloorMat"}}});
 
     QMainWindow win;
     auto* panel = new ui::TextureSetPanel(&win);

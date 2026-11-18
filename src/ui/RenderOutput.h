@@ -9,10 +9,14 @@
 #include <string>
 #include <vector>
 
+#include "core/ImageIO.h"
+
 namespace lila::render
 {
 struct FrameState;
 }
+
+class QImage;
 
 namespace lila::ui::renderOutput
 {
@@ -34,6 +38,8 @@ struct Options
     double environmentSpin = 0.0;
     /** "beauty", "wireframe" (edges over the beauty), or "id": each object a flat colour from its path, exact, for compositing mattes. */
     std::string pass = "beauty";
+    /** Compositing passes written beside the beauty in a multilayer EXR: depth, normal, motion, cryptoObject, cryptoMaterial. */
+    std::vector<std::string> passes;
 };
 
 /** The colour an object gets in the id pass: a hash of its path, saturated and mid-bright so neighbours stay apart. */
@@ -44,6 +50,9 @@ struct Frame
     int width = 0, height = 0;
     std::vector<uint8_t> bgra; // display-encoded, top row first
     std::vector<float> hdr;    // RGBA linear light, when asked for
+    /** Compositing passes and their header attributes (Cryptomatte manifests), written beside the beauty in an EXR. */
+    std::vector<image::ExrChannel> layers;
+    std::vector<image::ExrAttribute> layerAttrs;
 };
 
 /** The scene at `seconds` through the camera, as Options says. Throws std::runtime_error. */
@@ -52,8 +61,15 @@ LILA_UI_API Frame render(const Options& o, double seconds);
 /** Writes a frame by the path's extension: png, jpg, tga, tif, exr (linear light) or psd. Throws std::runtime_error. */
 LILA_UI_API void write(const Frame& f, const std::string& path, bool transparent);
 
+/** The last frame write() wrote, display-encoded; null before any. */
+LILA_UI_API QImage lastImage();
+
 /** Where renders go when nothing says: renders/<scene>.####.png beside the scene, or a Lila Renders folder at home. */
 LILA_UI_API std::string defaultPattern();
+/** The video defaultPattern() goes with: renders/<scene>.mp4. */
+LILA_UI_API std::string defaultVideo();
+/** path with suffix before its frame number run, or before its extension: "a.####.png" + "_tt" is "a_tt.####.png". */
+LILA_UI_API std::string withSuffix(std::string path, const std::string& suffix);
 /** pattern with its run of # replaced by the frame number, zero padded to the run's length; added before the extension if missing. */
 LILA_UI_API std::string framePath(const std::string& pattern, int frame);
 

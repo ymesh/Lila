@@ -6,6 +6,7 @@
 #include "ops/Command.h"
 #include "ui/Actions.h"
 #include "ui/Deletion.h"
+#include "ui/FeatureStatus.h"
 #include "ui/FlowLayout.h"
 #include "ui/Hotkeys.h"
 #include "ui/Icons.h"
@@ -300,6 +301,8 @@ QString tooltipFor(const json& item)
         text += key.isEmpty() ? "" : "  (" + key.toStdString() + ")";
         if (!a->doc.empty() && a->doc != custom)
             text += "\n" + a->doc;
+        if (std::string status = featureStatus::label(a->id); !status.empty())
+            text += "\n" + status;
     }
     QString tip = QString::fromStdString(text);
     std::string code = actions::pythonFor(target);

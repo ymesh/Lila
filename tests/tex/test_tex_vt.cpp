@@ -170,7 +170,7 @@ geo::Mesh tileGrid(int cols, int rows, double size)
     return m;
 }
 
-const uint8_t* pixel(const std::vector<uint8_t>& bgra, int w, int x, int y) { return &bgra[(size_t(y) * size_t(w) + size_t(x)) * 4]; }
+const uint8_t* texelAt(const std::vector<uint8_t>& bgra, int w, int x, int y) { return &bgra[(size_t(y) * size_t(w) + size_t(x)) * 4]; }
 } // namespace
 
 TEST_CASE("virtual texture: pages sample like the whole image")
@@ -178,7 +178,7 @@ TEST_CASE("virtual texture: pages sample like the whole image")
     if (!gpuVt())
         return;
     newSceneWithoutLive();
-    run("texCreateSet", {{"args", {"Rock"}}, {"resolution", 1024}});
+    run("texCreateSet", {{"args", {"Rock"}}, {"resolution", 1024}, {"materials", {"M_Rock"}}});
     scene::Node& set = *tex::findSet(sg(), "Rock");
     tex::Graph g = tex::Graph::makeMaterial("Rock");
     add(g, "Noise", "perlin", {{"scale", 6}, {"octaves", 4}});
@@ -190,7 +190,7 @@ TEST_CASE("virtual texture: pages sample like the whole image")
 
     setMode("off");
     ui::texLive::install();
-    std::optional<ui::texLive::Maps> whole = ui::texLive::mapsFor("Rock");
+    std::optional<ui::texLive::Maps> whole = ui::texLive::mapsFor("M_Rock");
     REQUIRE(whole);
     REQUIRE(ui::texLive::waitIdle(120000));
     CHECK_FALSE(whole->baseColor->vt);
@@ -199,7 +199,7 @@ TEST_CASE("virtual texture: pages sample like the whole image")
 
     setMode("on");
     ui::texLive::install();
-    std::optional<ui::texLive::Maps> paged = ui::texLive::mapsFor("Rock");
+    std::optional<ui::texLive::Maps> paged = ui::texLive::mapsFor("M_Rock");
     REQUIRE(paged);
     REQUIRE(paged->baseColor);
     REQUIRE(paged->baseColor->vt);
@@ -230,7 +230,7 @@ TEST_CASE("virtual texture: feedback asks only for visible pages, and memory fol
         return;
     newSceneWithoutLive();
     run("texCreateSet",
-        {{"args", {"Wall"}}, {"settings", {{"width", 4096}, {"height", 4096}, {"tiles", {1001, 1002, 1011, 1012}}}}});
+        {{"args", {"Wall"}}, {"settings", {{"width", 4096}, {"height", 4096}, {"tiles", {1001, 1002, 1011, 1012}}}}, {"materials", {"M_Wall"}}});
     scene::Node& set = *tex::findSet(sg(), "Wall");
     tex::Graph g = tex::Graph::makeMaterial("Wall");
     add(g, "Noise", "perlin", {{"scale", 8}});
@@ -238,7 +238,7 @@ TEST_CASE("virtual texture: feedback asks only for visible pages, and memory fol
     tex::writeGraph(sg(), set, g);
     setMode("on");
     ui::texLive::install();
-    std::optional<ui::texLive::Maps> maps = ui::texLive::mapsFor("Wall");
+    std::optional<ui::texLive::Maps> maps = ui::texLive::mapsFor("M_Wall");
     REQUIRE(maps);
     REQUIRE(maps->baseColor->vt);
     REQUIRE(ui::texLive::waitIdle(120000));
@@ -303,7 +303,7 @@ TEST_CASE("virtual texture: a 60-tile 8K set opens and paints within its budget"
     json tiles = json::array();
     for (int t = 0; t < 60; ++t)
         tiles.push_back(1001 + t);
-    run("texCreateSet", {{"args", {"Hero"}}, {"settings", {{"width", 8192}, {"height", 8192}, {"tiles", tiles}}}});
+    run("texCreateSet", {{"args", {"Hero"}}, {"settings", {{"width", 8192}, {"height", 8192}, {"tiles", tiles}}}, {"materials", {"M_Hero"}}});
     scene::Node& set = *tex::findSet(sg(), "Hero");
     tex::Graph g = tex::Graph::makeMaterial("Hero");
     add(g, "Paint", "image", {{"file", tp::imageRef("P", "baseColor")}});
@@ -316,7 +316,7 @@ TEST_CASE("virtual texture: a 60-tile 8K set opens and paints within its budget"
     setMode("auto");
     const auto t0 = std::chrono::steady_clock::now();
     ui::texLive::install();
-    std::optional<ui::texLive::Maps> maps = ui::texLive::mapsFor("Hero");
+    std::optional<ui::texLive::Maps> maps = ui::texLive::mapsFor("M_Hero");
     REQUIRE(maps);
     REQUIRE(maps->baseColor);
     REQUIRE(maps->baseColor->vt);
@@ -348,7 +348,7 @@ TEST_CASE("virtual texture: a 60-tile 8K set opens and paints within its budget"
     mainq::drain();
     const std::vector<uint8_t> px = settle(close, 256, 256);
     const double strokeMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();
-    const uint8_t* c = pixel(px, 256, 128, 128);
+    const uint8_t* c = texelAt(px, 256, 128, 128);
     // BGRA: red where the stroke landed.
     CHECK(c[2] > 150);
     CHECK(c[1] < 60);
@@ -375,7 +375,7 @@ TEST_CASE("texture evaluation: painting re-evaluates only the region the stroke 
     newSceneWithoutLive();
     setMode("off");
     const std::string meshPath = addMesh("PanelMesh", tileGrid(1, 1, 100.0));
-    run("texCreateSet", {{"args", {"Panel"}}, {"resolution", 1024}});
+    run("texCreateSet", {{"args", {"Panel"}}, {"resolution", 1024}, {"materials", {"M_Panel"}}});
     scene::Node& set = *tex::findSet(sg(), "Panel");
     tex::Graph g = tex::Graph::makeMaterial("Panel");
     add(g, "Paint", "image", {{"file", tp::imageRef("P", "baseColor")}});
@@ -393,7 +393,7 @@ TEST_CASE("texture evaluation: painting re-evaluates only the region the stroke 
     };
     stroke(30.0, {1, 0, 0});
     ui::texLive::install();
-    REQUIRE(ui::texLive::mapsFor("Panel"));
+    REQUIRE(ui::texLive::mapsFor("M_Panel"));
     REQUIRE(ui::texLive::waitIdle(120000));
 
     // A live stroke elsewhere: only its region is loaded and computed again.
@@ -433,9 +433,90 @@ TEST_CASE("texture evaluation: painting re-evaluates only the region the stroke 
     const std::vector<uint8_t> partial = readGpuImage(live);
     ui::texLive::shutdown();
     ui::texLive::install();
-    REQUIRE(ui::texLive::mapsFor("Panel"));
+    REQUIRE(ui::texLive::mapsFor("M_Panel"));
     REQUIRE(ui::texLive::waitIdle(120000));
     GpuImageRef fresh = ui::texLive::channelImage("Panel", "baseColor");
+    REQUIRE(fresh);
+    const std::vector<uint8_t> whole = readGpuImage(fresh);
+    REQUIRE(partial.size() == whole.size());
+    int worst = 0;
+    for (size_t i = 0; i < whole.size(); ++i)
+        worst = std::max(worst, std::abs(int(partial[i]) - int(whole[i])));
+    CHECK(worst <= 1);
+    render::paint::cancelLive(set.id(), "P");
+    ui::texLive::shutdown();
+    setMode("auto");
+}
+
+TEST_CASE("texture evaluation: strokes far apart re-evaluate their own regions, and neighbour taps grow them")
+{
+    Renderer& r = Renderer::get();
+    if (!r.running() && !r.start())
+        return;
+    newSceneWithoutLive();
+    setMode("off");
+    const std::string meshPath = addMesh("PanelMesh", tileGrid(1, 1, 100.0));
+    run("texCreateSet", {{"args", {"Panel"}}, {"resolution", 1024}, {"materials", {"M_Panel"}}});
+    scene::Node& set = *tex::findSet(sg(), "Panel");
+    // Height painted into a normal through heightToNormal, which reads its neighbours.
+    tex::Graph g = tex::Graph::makeMaterial("Panel");
+    add(g, "Paint", "image", {{"file", tp::imageRef("P", "height")}});
+    add(g, "Slope", "heightToNormal", {{"intensity", 4.0}});
+    link(g, "Paint.out", "Slope.height");
+    link(g, "Slope.normal", "Output.normal");
+    tex::writeGraph(sg(), set, g);
+    auto mesh = render::paint::paintMesh(sg(), meshPath, render::paint::setMaterial(set));
+    REQUIRE(mesh);
+    auto dabsAt = [&](double x, double z) {
+        std::vector<tp::Dab> out;
+        for (int i = 0; i < 6; ++i)
+        {
+            brush::Dab d;
+            d.center = {x + i, 0.0, z};
+            d.radius = 4.0;
+            tp::Dab rd;
+            if (tp::recordDab(*mesh, d, rd))
+                out.push_back(rd);
+        }
+        return out;
+    };
+    auto header = std::make_shared<tp::Stroke>();
+    header->id = 1;
+    header->mesh = meshPath;
+    header->brush = {{"falloff", "smooth"}, {"strength", 1.0}};
+    header->payload.channels = {{"height", {1.0f, 1.0f, 1.0f}}};
+    render::paint::beginLive(sg(), set, "P", header);
+    render::paint::liveDabs(set.id(), "P", dabsAt(50.0, 50.0));
+    ui::texLive::install();
+    REQUIRE(ui::texLive::mapsFor("M_Panel"));
+    REQUIRE(ui::texLive::waitIdle(120000));
+
+    // Dabs at opposite corners in one batch: two small regions, not the box over the texture between them.
+    std::vector<tp::Dab> both = dabsAt(8.0, 8.0);
+    const std::vector<tp::Dab> far = dabsAt(86.0, 92.0);
+    both.insert(both.end(), far.begin(), far.end());
+    REQUIRE(both.size() > 6);
+    const json before = ui::texLive::status();
+    render::paint::liveDabs(set.id(), "P", both);
+    REQUIRE(ui::texLive::waitIdle(60000));
+    const json after = ui::texLive::status();
+    const json& lb = before[0]["tiles"][0]["levels"].back();
+    const json& la = after[0]["tiles"][0]["levels"].back();
+    const double computed = la["texelsComputed"].get<double>() - lb["texelsComputed"].get<double>();
+    std::printf("[regions] two far strokes at 1K: %.0f texels computed of %d (%.1f%%)\n", computed, 1024 * 1024,
+                100.0 * computed / (1024.0 * 1024.0));
+    CHECK(computed > 0.0);
+    CHECK(computed < 0.2 * 1024.0 * 1024.0);
+
+    // The regions, grown by the slope's taps, leave what a whole evaluation makes.
+    GpuImageRef live = ui::texLive::channelImage("Panel", "normal");
+    REQUIRE(live);
+    const std::vector<uint8_t> partial = readGpuImage(live);
+    ui::texLive::shutdown();
+    ui::texLive::install();
+    REQUIRE(ui::texLive::mapsFor("M_Panel"));
+    REQUIRE(ui::texLive::waitIdle(120000));
+    GpuImageRef fresh = ui::texLive::channelImage("Panel", "normal");
     REQUIRE(fresh);
     const std::vector<uint8_t> whole = readGpuImage(fresh);
     REQUIRE(partial.size() == whole.size());
@@ -455,7 +536,7 @@ TEST_CASE("page store: flattened paint lives beside the scene, and a save rewrit
         return;
     newSceneWithoutLive();
     const std::string meshPath = addMesh("PanelMesh", tileGrid(1, 1, 100.0));
-    run("texCreateSet", {{"args", {"Panel"}}, {"resolution", 4096}});
+    run("texCreateSet", {{"args", {"Panel"}}, {"resolution", 4096}, {"materials", {"M_Panel"}}});
     scene::Node* set = tex::findSet(sg(), "Panel");
     auto stroke = [&](double x, double z) {
         json dabs = json::array({{{"position", {x, 0.0, z}}, {"radius", 3.0}}});

@@ -21,7 +21,7 @@ TEST_CASE("tex: a set exports to .lilamat and imports as a new set")
     if (!ops::find("texExportGraph"))
         registerFileCommands();
     run("newScene");
-    run("texCreateSet", {{"args", {"Rock"}}, {"settings", {{"material", "RockMat"}, {"width", 512}, {"height", 512}}}});
+    run("texCreateSet", {{"args", {"Rock"}}, {"settings", {{"width", 512}, {"height", 512}}}});
     run("texAddNode", {{"args", {"Rock", "perlin"}}, {"name", "Noise"}});
     run("texConnect", {{"args", {"Rock", "Noise.out", "Output.roughness"}}});
     run("texSetValue", {{"args", {"Rock", "Noise.scale", 9}}});
@@ -42,7 +42,6 @@ TEST_CASE("tex: a set exports to .lilamat and imports as a new set")
     REQUIRE(g.node("Noise"));
     CHECK(g.node("Noise")->values["scale"] == 9);
     CHECK(g.links.size() == 1);
-    CHECK(readSettings(*n).material == "RockMat");
     CHECK(readSettings(*n).width == 512);
 
     run("undo");

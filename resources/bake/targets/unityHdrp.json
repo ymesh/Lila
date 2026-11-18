@@ -1,0 +1,63 @@
+{
+  "name": "unityHdrp",
+  "label": "Unity (HDRP Lit)",
+  "version": 1,
+  "doc": "Unity's High Definition Render Pipeline Lit shader: Base Map, Mask Map (R metallic, G occlusion, B detail mask, A smoothness = 1 - roughness), OpenGL normals, Height and Emissive, named {material}_{suffix}.",
+  "output": {
+    "name": "{material}_{map}",
+    "format": "png",
+    "bits": 8
+  },
+  "pipeline": {
+    "autoAssign": true
+  },
+  "maps": [
+    {
+      "map": "baseColor",
+      "suffix": "BaseMap",
+      "slot": "_BaseColorMap"
+    },
+    {
+      "map": "orm",
+      "suffix": "MaskMap",
+      "slot": "_MaskMap",
+      "options": {
+        "channels": [
+          {
+            "map": "metallic"
+          },
+          {
+            "map": "ao"
+          },
+          1.0,
+          {
+            "map": "roughness",
+            "invert": true
+          }
+        ]
+      }
+    },
+    {
+      "map": "normal",
+      "suffix": "Normal",
+      "slot": "_NormalMap",
+      "bits": 16,
+      "options": {
+        "greenUp": true
+      }
+    },
+    {
+      "map": "height",
+      "suffix": "Height",
+      "slot": "_HeightMap",
+      "bits": 16,
+      "optional": true
+    },
+    {
+      "map": "emissive",
+      "suffix": "Emissive",
+      "slot": "_EmissiveColorMap",
+      "optional": true
+    }
+  ]
+}

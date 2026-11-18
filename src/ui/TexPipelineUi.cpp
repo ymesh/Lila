@@ -193,7 +193,8 @@ json previewContent(const json& args)
     std::vector<std::string> warnings;
     const auto out = tex::evaluateOutputs(*set, requests, args.value("udim", s.tiles.front().udim), tile, tile, args.value("backend", std::string()), &warnings);
 
-    const std::string slot = s.material.empty() ? set->name() : s.material;
+    const std::vector<std::string> users = tex::materialsUsing(scene::Graph::current(), set->name());
+    const std::string slot = users.empty() ? std::string() : users.front();
     QImage shaded;
     std::string text;
     if (args.value("shaded", true))
@@ -207,7 +208,8 @@ json previewContent(const json& args)
             text += std::string("shaded view failed: ") + e.what() + "\n";
         }
         if (shaded.isNull() && text.empty())
-            text += "no mesh uses slot " + slot + ", so there is no shaded view\n";
+            text += slot.empty() ? std::string("no material uses the set, so there is no shaded view\n")
+                                 : "no mesh uses " + slot + ", so there is no shaded view\n";
     }
 
     // Shaded view on the left (2x2 tiles), channels in two rows to its right.

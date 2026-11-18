@@ -2,7 +2,9 @@
 
 #include "core/Events.h"
 #include "core/Log.h"
+#include "core/Features.h"
 #include "extensions/ExtensionManager.h"
+#include "ui/FeatureStatus.h"
 #include "ui/Icons.h"
 #include "ui/LocateFlash.h"
 #include "ui/FileDialog.h"
@@ -185,6 +187,15 @@ void ExtensionManagerDialog::refresh()
             status->setText(qs(firstLine));
             status->setToolTip(qs(info.error));
             status->setIcon(icon("alert-triangle"));
+        }
+        else if (const features::Feature* f = features::ofExtension(info.name); f && featureStatus::marked(f->status))
+        {
+            const bool notReady = f->status == features::Status::NotReady;
+            status->setText(features::label(f->status));
+            status->setToolTip(notReady ? "Not ready for use yet, so it stays off until you turn it on. Expect broken tools and lost work."
+                                        : "Usable, with bugs to expect. Report them with Help > Report a Bug.");
+            if (notReady)
+                status->setIcon(icon("alert-triangle"));
         }
         else
             status->setText(info.loaded ? "Loaded" : "");

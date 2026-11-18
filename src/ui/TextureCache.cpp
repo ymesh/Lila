@@ -3,9 +3,11 @@
 #include "bake/HeightNormal.h"
 #include "core/Dds.h"
 #include "core/ImageIO.h"
+#include "core/Log.h"
 #include "core/MainQueue.h"
 #include "core/Profile.h"
 #include "render/HdrImage.h"
+#include "render/Ocio.h"
 #include "render/VirtualTexture.h"
 #include "ui/ViewportTool.h"
 
@@ -876,6 +878,67 @@ render::TexturePtr get(const std::string& path, bool srgb, bool udimTiles)
                        return loadTiles(found, srgb);
                }
                return loadSingle(path, srgb);
+           }).image;
+}
+
+render::TexturePtr getOcio(const std::string& path, const std::string& config, const std::string& ocioSpace, bool srgb)
+{
+    if (path.empty())
+        return nullptr;
+    if (ocioSpace.empty())
+        return get(path, srgb, true);
+    const std::string key = "o" + config + "|" + ocioSpace + "|" + path;
+    return entry(key, {path}, [path, config, ocioSpace, srgb] {
+               Result r;
+               r.times = stamps({path});
+               Pixels px = readPixels(path, r.error, true, true);
+               if (px.empty())
+                   return r;
+               std::vector<float> rgba;
+               int w = 0, h = 0;
+               if (!px.floats.rgba.empty())
+               {
+                   rgba = px.floats.rgba;
+                   w = px.floats.width;
+                   h = px.floats.height;
+               }
+               else if (!px.rgba8.isNull())
+               {
+                   const QImage img = px.rgba8.convertToFormat(QImage::Format_RGBA8888);
+                   w = img.width();
+                   h = img.height();
+                   rgba.resize(size_t(w) * size_t(h) * 4);
+                   for (int y = 0; y < h; ++y)
+                   {
+                       const uchar* s = img.constScanLine(y);
+                       for (int x = 0; x < w * 4; ++x)
+                           rgba[size_t(y) * size_t(w) * 4 + size_t(x)] = float(s[x]) / 255.0f;
+                   }
+               }
+               else
+               {
+                   r.error = "OCIO colour spaces need a decoded image, not compressed blocks";
+                   Result plain = loadSingle(path, srgb);
+                   plain.error = r.error;
+                   return plain;
+               }
+               std::string err;
+               if (!render::ocio::toWorking(config, ocioSpace, rgba, &err))
+               {
+                   log::warn("textures: {} in OCIO space {}: {}; read as {}", path, ocioSpace, err, srgb ? "sRGB" : "linear");
+                   Result plain = loadSingle(path, srgb);
+                   plain.error = "OCIO " + ocioSpace + ": " + err;
+                   return plain;
+               }
+               Pixels lin;
+               lin.floats.width = w;
+               lin.floats.height = h;
+               lin.floats.rgba = std::move(rgba);
+               lin.linear = true;
+               if (w > kMaxSize || h > kMaxSize)
+                   shrinkToFit(lin.floats);
+               r.image = toTexture(lin, false);
+               return r;
            }).image;
 }
 

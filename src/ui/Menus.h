@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Export.h"
+#include "core/Features.h"
 #include "core/Registry.h"
 #include "ui/Owner.h"
 
@@ -97,6 +98,9 @@ LILA_UI_API std::vector<const Menu*> menusIn(Area area);
 /** The items directly in a menu path, in display order (after and before applied). */
 LILA_UI_API std::vector<const Item*> itemsIn(const std::string& path);
 
+/** QAction property: what a row adds after its label to state its feature's status, "  (in development)". */
+inline constexpr const char* kStatusSuffix = "lilaStatusSuffix";
+
 /** A row that runs the action, labelled and tooltipped from it. */
 LILA_UI_API QAction* addActionRow(QMenu* menu, const std::string& actionId);
 
@@ -125,7 +129,8 @@ Q_SIGNALS:
     void rebuilt();
 
 private:
-    void fill(QMenu* menu, const std::string& path, std::vector<std::string>& live);
+    /** shownAbove is the status a parent menu already states at its top, so a submenu sharing it stays quiet. */
+    void fill(QMenu* menu, const std::string& path, std::vector<std::string>& live, features::Status shownAbove);
 
     QWidget* mParent;
     std::function<void(QMenu*, bool)> mDecorate;

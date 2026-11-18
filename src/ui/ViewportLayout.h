@@ -40,7 +40,7 @@ public:
     static ViewportLayout* of(const QWidget* inside);
 
     TextureView textureView() const { return mTextureView; }
-    /** Remembered across sessions; other layouts keep showing the viewports alone. */
+    /** Each layout keeps its own; only layouts with the Texture menu set show the 2D View. */
     void setTextureView(TextureView mode);
     /** The 2D View beside the viewports; null until Split or 2D first shows it. */
     QWidget* texture2d() const { return mTexture2d; }

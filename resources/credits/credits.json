@@ -15,7 +15,15 @@
     },
     {
       "name": "RD",
-      "role": "Testing and feedback"
+      "role": "Testing and feedback",
+      "areas": []
+    },
+    {
+      "name": "Lino",
+      "role": "UX and workflow design",
+      "areas": [
+        "Sculpting"
+      ]
     }
   ],
   "testers": []

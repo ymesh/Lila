@@ -84,6 +84,8 @@ public:
     /** For the filter. */
     bool key(int k, Qt::KeyboardModifiers mods, bool down);
     void tablet(double pressure);
+    /** A tablet event's pressure, tilt (degrees each way) and barrel rotation (degrees), as Qt reports them. */
+    void tablet(double pressure, double xTilt, double yTilt, double rotation);
 
 private:
     class Filter;
@@ -104,6 +106,7 @@ private:
 
     double mPressure = 1.0;
     int64_t mPressureAt = 0;
+    double mTilt = 0.0, mTiltDirection = 0.0, mRotation = 0.0;
 };
 
 /** The surface under the cursor, world space. */
@@ -160,5 +163,6 @@ private:
     lila::ui::ImagePicker* mAlpha = nullptr;
     /** Each field's refresh from the settings, without reporting a change. */
     std::vector<std::function<void()>> mSync;
+    std::function<void()> mResetAlpha;
 };
 } // namespace lila::brush::ui

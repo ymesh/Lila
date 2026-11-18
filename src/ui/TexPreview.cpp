@@ -4,11 +4,13 @@
 #include "core/Profile.h"
 #include "core/Workspace.h"
 #include "io/SceneFile.h"
+#include "render/PaintGpu.h"
 #include "scene/Graph.h"
 // Plan.h has a member named like Qt's slots macro.
 #pragma push_macro("slots")
 #undef slots
 #include "tex/Evaluate.h"
+#include "tex/PaintStrokes.h"
 #include "tex/Ports.h"
 #include "tex/TextureSet.h"
 #pragma pop_macro("slots")
@@ -90,6 +92,8 @@ struct Prepared
 {
     std::string error;
     uint64_t key = 0;
+    scene::NodeId set = scene::kNoNode;
+    bool readsPaint = false;
     std::string slot;
     tex::Graph graph;
     tex::OutputRequest output;
@@ -114,8 +118,20 @@ std::set<std::string> upstream(const tex::Graph& g, const std::string& node)
     return seen;
 }
 
-/** Everything the output's pixels depend on, and nothing they don't (positions, unrelated nodes). */
-uint64_t keyOf(const tex::Graph& g, const tex::SetSettings& s, const tex::OutputRequest& out, int size)
+/** Bumped each time a set's paint changes, so a preview reading paint layers evaluates again. */
+std::map<scene::NodeId, uint64_t>& paintVersions()
+{
+    static std::map<scene::NodeId, uint64_t> versions;
+    static const int listener = render::paint::addChangeListener([](scene::NodeId set) { ++versions[set]; });
+    (void)listener;
+    return versions;
+}
+
+/**
+ * Everything the output's pixels depend on, and nothing they don't (positions, unrelated nodes). readsPaint says whether
+ * a paint layer's buffer is among them.
+ */
+uint64_t keyOf(const tex::Graph& g, const tex::SetSettings& s, const tex::OutputRequest& out, int size, bool& readsPaint)
 {
     std::set<std::string> nodes = upstream(g, out.node);
     std::string text = out.node + "." + out.socket + "|" + out.field + "|" + std::to_string(size) + "|";
@@ -138,6 +154,7 @@ uint64_t keyOf(const tex::Graph& g, const tex::SetSettings& s, const tex::Output
     text += inputs.dump();
     if (out.node == (g.firstOfType(tex::kMaterialOutputType) ? g.firstOfType(tex::kMaterialOutputType)->name : std::string()))
         text += s.toJson().dump();
+    readsPaint = text.find("external:paint/") != std::string::npos;
     return tex::hash64(text);
 }
 
@@ -209,7 +226,13 @@ Prepared prepare(const Request& r)
         p.slot = r.set + "/" + n->name + "." + o->id;
     }
     p.slot += "@" + std::to_string(r.size);
-    p.key = keyOf(p.graph, settings, p.output, r.size);
+    p.set = set->id();
+    // Only a preview that reads paint goes stale when the paint changes; the rest stay cached through strokes.
+    p.key = keyOf(p.graph, settings, p.output, r.size, p.readsPaint);
+    // Paint layers can sit in groups the key leaves out; the whole graph says whether any buffer is read.
+    p.readsPaint = r.paint && (p.readsPaint || p.graph.toJson().dump().find("external:paint/") != std::string::npos);
+    if (p.readsPaint)
+        p.key ^= paintVersions()[p.set] * 0x9E3779B97F4A7C15ull;
     return p;
 }
 
@@ -259,6 +282,16 @@ Job makeJob(Prepared& p, int size)
     job.plan = tex::buildPlan(p.graph, req);
     job.output = p.output.name;
     job.options.imageRoot = imageRoot();
+    // Paint layers read their buffers' tiles, as the live set does.
+    for (const tex::BufferDesc& b : p.readsPaint ? job.plan.buffers : std::vector<tex::BufferDesc>{})
+    {
+        std::string buffer, channel;
+        if (b.kind != tex::BufferKind::External || !tex::paint::parseExternalName(b.name, &buffer, &channel))
+            continue;
+        image::Image img = render::paint::readChannel(p.set, buffer, channel);
+        if (img.width > 0)
+            job.options.externals[b.name] = std::move(img);
+    }
     job.type = p.type;
     return job;
 }

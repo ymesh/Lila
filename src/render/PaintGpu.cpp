@@ -11,6 +11,7 @@
 #include "render/Renderer.h"
 #include "scene/MeshNodes.h"
 #include "scene/Node.h"
+#include "sculpt/SculptSession.h"
 #include "tex/Evaluate.h"
 #include "tex/Library.h"
 #include "tex/NodeDef.h"
@@ -22,7 +23,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstring>
 #include <mutex>
@@ -42,7 +45,7 @@ constexpr VkDeviceSize kTexels = VkDeviceSize(kPageSize) * kPageSize;
 constexpr VkDeviceSize kHalfPage = kTexels * 8;
 /** A geometry page (GeoTexel) or a stroke's build-up page (float4). */
 constexpr VkDeviceSize kWidePage = kTexels * 16;
-constexpr uint32_t kMaxChannels = 8;
+constexpr uint32_t kMaxChannels = 24;
 constexpr uint32_t kItemsPerDispatch = 4096;
 constexpr uint32_t kDabsPerBatch = 512;
 constexpr int kMaxDepthSize = 1024;
@@ -78,7 +81,7 @@ struct GpuItem
     VkDeviceAddress dst[kMaxChannels]{};
     VkDeviceAddress src[kMaxChannels]{};
 };
-static_assert(sizeof(GpuItem) == 160);
+static_assert(sizeof(GpuItem) == 32 + 16 * kMaxChannels);
 
 /** A UDIM tile as the kernels see it: size and per channel a table of its pages before the stroke. */
 struct GpuTile
@@ -86,7 +89,7 @@ struct GpuTile
     uint32_t width = 0, height = 0, pagesX = 0, pagesY = 0;
     VkDeviceAddress tables[kMaxChannels]{};
 };
-static_assert(sizeof(GpuTile) == 80);
+static_assert(sizeof(GpuTile) == 16 + 8 * kMaxChannels);
 
 struct GpuParams
 {
@@ -105,13 +108,43 @@ struct GpuParams
     float strength = 1.0f, tilt = 0.5f, depthBias = 0.0f, filterRadius = 4.0f;
     float amount = 1.0f, sourceU = 0.0f, sourceV = 0.0f, facingFade = 0.0f;
     float intensity = 1.0f, valueScale = 1.0f;
-    uint32_t pad[4]{};
+    /** The stroke's stencil: its picture's size, placement (view pixels), kStencil* flags and the view's size. */
+    uint32_t stencilW = 0, stencilH = 0;
+    float stencilX = 0.0f, stencilY = 0.0f, stencilScale = 1.0f, stencilAngle = 0.0f;
+    uint32_t stencilFlags = 0, viewW = 1, viewH = 1, stencilColor = kNone;
+    VkDeviceAddress stencil = 0;
+    /** The view the stencil is pinned to (a projection's symmetry copies project through other views). */
+    glm::mat4 stencilToClip{1.0f};
+    /** Locked triangles (a bit each), and the limit mask's texels (RGBA, its alpha read) with its size. */
+    VkDeviceAddress locked = 0, limit = 0;
+    uint32_t limitW = 0, limitH = 0;
+    /** A gradient fill: its type, space (0 uv, 1 screen), dither, ends, and per channel a ramp of kRamp rgba entries (value, amount). */
+    uint32_t gradType = 0, gradSpace = 0, gradDither = 0, gradOn = 0;
+    float gradA[2]{}, gradB[2]{};
+    VkDeviceAddress ramp = 0;
+    glm::mat4 gradToClip{1.0f};
+    /**
+     * Varied tiling of the source images (hex tiling): on, the channel whose value steers the blend (kNone: the cell
+     * weights alone), how far each cell turns (1 is up to a half turn), the blend's contrast and a per-cell brightness spread.
+     */
+    uint32_t hexOn = 0, hexWeight = kNone;
+    float hexRotate = 0.0f, hexContrast = 0.5f, hexJitter = 0.0f;
+    uint32_t hexColor = kNone;
+    /** Where the source images map: 0 the uvs (valueScale tiles a uv unit), 1 object space, triplanar, valueSize cm a tile. */
+    uint32_t valueSpace = 0;
+    float valueSize = 100.0f;
 };
-static_assert(offsetof(GpuParams, items) == 288);
-static_assert(offsetof(GpuParams, valueImages) == 376);
-static_assert(offsetof(GpuParams, depthW) == 440);
-static_assert(offsetof(GpuParams, strength) == 520);
-static_assert(sizeof(GpuParams) == 576);
+static_assert(offsetof(GpuParams, items) == 160 + 16 * kMaxChannels);
+static_assert(offsetof(GpuParams, valueImages) == 248 + 16 * kMaxChannels);
+static_assert(offsetof(GpuParams, depthW) == 248 + 24 * kMaxChannels);
+static_assert(offsetof(GpuParams, strength) == 328 + 24 * kMaxChannels);
+static_assert(offsetof(GpuParams, stencilW) == 368 + 24 * kMaxChannels);
+static_assert(offsetof(GpuParams, stencil) == 408 + 24 * kMaxChannels);
+static_assert(offsetof(GpuParams, locked) == 480 + 24 * kMaxChannels);
+static_assert(offsetof(GpuParams, ramp) == 536 + 24 * kMaxChannels);
+static_assert(offsetof(GpuParams, hexOn) == 608 + 24 * kMaxChannels);
+static_assert(sizeof(GpuParams) == 640 + 24 * kMaxChannels);
+constexpr int kRamp = 256;
 
 struct DabPush
 {
@@ -130,6 +163,7 @@ struct DepthPush
 static_assert(sizeof(DepthPush) == 96);
 
 constexpr uint32_t kFlagOcclusion = 1, kFlagDirection = 2, kFlagView = 4, kFlagValueImages = 8, kFlagFlow = 16;
+constexpr uint32_t kStencilOn = 1, kStencilInvert = 2, kStencilTile = 4, kStencilColor = 8;
 enum Mode : uint32_t
 {
     kModePaint,
@@ -160,6 +194,36 @@ struct GatherPush
     uint32_t width, height, tileW, tileH, levelW, levelH, pagesX, dstStride, groupsX, pad;
 };
 static_assert(sizeof(GatherPush) == 64);
+
+/** paint_particles.slang ParticlePush. */
+struct ParticlePush
+{
+    glm::vec4 down;
+    VkDeviceAddress nodes, corners, tris, paintable, dabs, out, counts;
+    uint32_t threads, perDab, firstIndex, seed, maxOut, triCount, groupsX, kind, emitter, pad;
+    VkDeviceAddress spec;
+};
+static_assert(sizeof(ParticlePush) == 120);
+
+/** paint_particles.slang Spec: the particle settings the walk reads. */
+struct ParticleSpecGpu
+{
+    float length, size, spread, rate, gravity, friction, wander, pool, fade;
+};
+
+/** paint_particles.slang InDab and OutDab. */
+struct ParticleInDab
+{
+    uint32_t triangle;
+    float u, v, radius, opacity;
+    uint32_t pad[3];
+};
+struct ParticleOutDab
+{
+    uint32_t triangle;
+    float u, v, radius, opacity;
+    uint32_t pad;
+};
 
 struct ViewPush
 {
@@ -245,6 +309,13 @@ struct TriBuffer
     compute::Buffer buffer;
 };
 
+/** A paint mesh's BVH on the device (geo::FlatBvh) and which triangles are paintable, for surface walks. */
+struct BvhBuffer
+{
+    std::shared_ptr<const PaintMesh> mesh;
+    compute::Buffer nodes, corners, paintable;
+};
+
 /** Render-thread state shared by every buffer. */
 struct Gpu
 {
@@ -252,21 +323,26 @@ struct Gpu
     Pool wide{kWidePage, 16};
     uint32_t zeroPage = kNone;
     compute::Submitter sub;
+    /** Live stroke batches: launched by the render thread, waited on by the paint worker. */
+    compute::Submitter batches;
     bool ready = false;
-    Kernel dab, depth, vis, uvmap, view, gather;
+    Kernel dab, depth, vis, uvmap, view, gather, particles;
     std::map<const PaintMesh*, TriBuffer> tris;
+    std::map<const PaintMesh*, BvhBuffer> bvhs;
 
     void init(VulkanContext& vk)
     {
         if (ready)
             return;
         sub.init(vk);
+        batches.init(vk);
         loadKernel(vk, dab, "paint_dab.spv", sizeof(DabPush));
         loadKernel(vk, depth, "paint_depth.spv", sizeof(DepthPush));
         loadKernel(vk, vis, "paint_screen.spv", sizeof(VisPush));
         loadKernel(vk, uvmap, "paint_screen.spv", sizeof(UvPush));
         loadKernel(vk, view, "paint_screen.spv", sizeof(ViewPush));
         loadKernel(vk, gather, "paint_gather.spv", sizeof(GatherPush));
+        loadKernel(vk, particles, "paint_particles.spv", sizeof(ParticlePush));
         zeroPage = half.alloc(vk);
         sub.run(vk, [&](VkCommandBuffer cmd) { vkCmdFillBuffer(cmd, half.buffer(zeroPage), half.offset(zeroPage), kHalfPage, 0); });
         ready = true;
@@ -310,6 +386,29 @@ struct Gpu
         return tris.emplace(mesh.get(), std::move(tb)).first->second;
     }
 
+    const BvhBuffer& bvh(VulkanContext& vk, const std::shared_ptr<const PaintMesh>& mesh)
+    {
+        if (auto it = bvhs.find(mesh.get()); it != bvhs.end())
+            return it->second;
+        const geo::FlatBvh flat = mesh->bvh->exportFlat();
+        std::vector<uint32_t> paint(std::max<size_t>(mesh->triangleCount(), 1), 0);
+        for (size_t i = 0; i < mesh->triangleCount(); ++i)
+            paint[i] = mesh->paintable[i] ? 1u : 0u;
+        auto upload = [&](const void* data, size_t bytes) {
+            compute::Buffer b = compute::makeBuffer(vk, std::max<size_t>(bytes, 16), 0, compute::Host::None);
+            if (bytes > 0)
+            {
+                compute::Buffer staging = compute::hostBuffer(vk, data, bytes);
+                sub.run(vk, [&](VkCommandBuffer cmd) { compute::copy(cmd, staging, b, bytes); });
+                compute::destroy(vk, staging);
+            }
+            return b;
+        };
+        BvhBuffer bb{mesh, upload(flat.nodes.data(), flat.nodes.size() * sizeof(geo::FlatBvh::Node)),
+                     upload(flat.corners.data(), flat.corners.size() * sizeof(glm::vec4)), upload(paint.data(), paint.size() * 4)};
+        return bvhs.emplace(mesh.get(), std::move(bb)).first->second;
+    }
+
     void release(VulkanContext& vk)
     {
         if (!ready)
@@ -317,6 +416,10 @@ struct Gpu
         for (auto& [k, t] : tris)
             compute::destroy(vk, t.buffer);
         tris.clear();
+        for (auto& [k, b] : bvhs)
+            for (compute::Buffer* x : {&b.nodes, &b.corners, &b.paintable})
+                compute::destroy(vk, *x);
+        bvhs.clear();
         for (auto& [k, v] : gViews)
             compute::destroy(vk, v.table);
         gViews.clear();
@@ -325,6 +428,7 @@ struct Gpu
         wide.destroy(vk);
         zeroPage = kNone;
         sub.destroy(vk);
+        batches.destroy(vk);
         ready = false;
     }
 };
@@ -350,9 +454,15 @@ void installStopHook()
     });
 }
 
-/** Runs f on the render thread and waits for it. Main thread. */
+void drain();
+
+/**
+ * Runs f on the render thread and waits for it, once queued live batches have painted. Main thread. f may free what
+ * earlier GPU work (live batches, launched texture graph slices) used: the queue is idle when it starts.
+ */
 template <class F> void gpuRun(F&& f)
 {
+    drain();
     Renderer& r = Renderer::get();
     if (!r.running() && !r.start())
         throw std::runtime_error("texture painting needs a GPU, and the renderer could not start");
@@ -360,6 +470,7 @@ template <class F> void gpuRun(F&& f)
     r.runTask([&](VulkanContext& vk) {
          Gpu& g = gpu();
          g.init(vk);
+         vkQueueWaitIdle(vk.queue);
          f(vk, g);
          return true;
      }).get();
@@ -410,10 +521,20 @@ struct Live
     std::vector<float> falloff;
     std::shared_ptr<const brush::AlphaImage> alpha;
     float roundness = 1.0f;
+    /** Narrows the tip per dab by its pen tilt. */
+    brush::PressureCurve tiltRoundness;
     float strength = 1.0f;
     uint32_t mode = 0, sub = 0;
     /** fill: a bit per triangle. */
     std::vector<uint32_t> triMask;
+    /** A bit per locked triangle, and the limit mask (RGBA floats); empty when the stroke has none. */
+    std::vector<uint32_t> lockMask;
+    std::vector<float> limit;
+    int limitW = 0, limitH = 0;
+    VkDeviceAddress lockAddr = 0, limitAddr = 0;
+    /** Gradient fills: per channel kRamp rgba entries (value, amount). */
+    std::vector<float> ramp;
+    VkDeviceAddress rampAddr = 0;
     /** project: the picture (RGBA floats) and the NDC box (x0, y0, x1, y1) of its covered pixels. */
     std::vector<float> image;
     int imageW = 0, imageH = 0;
@@ -421,9 +542,18 @@ struct Live
     /** normal stamps: the normal map. */
     std::vector<float> stamp;
     int stampW = 0, stampH = 0;
+    /** The stencil's picture (RGBA floats); empty when the stroke has none. */
+    std::vector<float> stencil;
+    int stencilW = 0, stencilH = 0;
+    VkDeviceAddress stencilAddr = 0;
     /** Channel values from a texture graph, and its tiles per uv unit. */
     std::shared_ptr<const ValueImages> sourceImages;
     float valueScale = 1.0f;
+    /** The source maps in object space (payload source space "object"), valueSize cm a tile; else on the uvs. */
+    bool valueObject = false;
+    float valueSize = 100.0f;
+    /** The source's varied tiling (payload source "tiling"); null for a plain repeat. */
+    json tiling;
     /** The above on the device, made on the first batch. */
     bool uploaded = false;
     std::vector<compute::Buffer> uploads;
@@ -442,6 +572,8 @@ struct Live
     PaintSymmetry sym;
     std::vector<StrokeView> views;
     size_t viewIndex = 0;
+    /** Per triangle, 1 where the stroke view sees only its back (the kernel paints none of it); empty until a batch needs it. */
+    std::vector<uint8_t> backFacing;
 
     const StrokeView* view() const
     {
@@ -459,6 +591,8 @@ struct Layer
     std::map<int, std::pair<int, int>> sizes;
     std::map<TileKey, ChannelTile> tiles;
     std::vector<uint64_t> applied;
+    /** Each painted mesh's signature (PaintMesh::signature) when its strokes were last rasterised. */
+    std::map<std::string, uint64_t> meshSignatures;
     std::shared_ptr<const Baseline> baseline;
     uint64_t clears = 0;
     bool synced = false;
@@ -515,6 +649,7 @@ void notify(NodeId set)
 
 Layer& layerFor(const Key& k)
 {
+    drain();
     std::shared_ptr<Layer>& l = gLayers[k];
     if (!l)
         l = std::make_shared<Layer>();
@@ -529,16 +664,27 @@ Layer& layerFor(const Key& k)
     return *l;
 }
 
-Layer* findLayer(const Key& k)
+/** The layer without waiting for queued live batches: for what they leave alone (whether it exists, its live stroke). */
+std::shared_ptr<Layer> peekLayer(const Key& k)
 {
     auto it = gLayers.find(k);
     if (it == gLayers.end() || it->second->epoch != gEpoch.load())
         return nullptr;
-    return it->second.get();
+    return it->second;
 }
+
+Layer* findLayer(const Key& k)
+{
+    drain();
+    return peekLayer(k).get();
+}
+
+/** Guards gSurfaces: the paint worker finds surfaces while the main thread adds warmed ones. */
+std::mutex gSurfaceMutex;
 
 std::shared_ptr<Surface> surface(const std::shared_ptr<const PaintMesh>& mesh, int udim, int w, int h)
 {
+    std::scoped_lock lock(gSurfaceMutex);
     const auto key = std::make_tuple(mesh.get(), udim, w, h);
     if (auto it = gSurfaces.find(key); it != gSurfaces.end())
         return it->second;
@@ -554,6 +700,7 @@ bool meshInUse(const PaintMesh* m);
 /** Frees the geometry pages and triangles of meshes nothing paints any more (render thread, the main thread waiting). */
 void pruneSurfaces(VulkanContext& vk, Gpu& g)
 {
+    std::scoped_lock lock(gSurfaceMutex);
     for (auto it = gSurfaces.begin(); it != gSurfaces.end();)
         if (!meshInUse(it->second->mesh.get()))
         {
@@ -582,9 +729,13 @@ uint32_t channelSlot(Layer& l, const TileKey& k, uint32_t page)
     return p == it->second.pages.end() ? kNone : p->second;
 }
 
+/** Guards Layer::changed: live batches note changes on the render thread while the main thread takes them. */
+std::mutex gChangedMutex;
+
 /** Notes that texels [x0, x1) x [y0, y1) of a tile changed. */
 void noteChanged(Layer& l, int udim, int x0, int y0, int x1, int y1)
 {
+    std::scoped_lock lock(gChangedMutex);
     auto [it, fresh] = l.changed.try_emplace(udim, std::array<int, 4>{x0, y0, x1, y1});
     if (!fresh)
         it->second = {std::min(it->second[0], x0), std::min(it->second[1], y0), std::max(it->second[2], x1), std::max(it->second[3], y1)};
@@ -621,9 +772,13 @@ void dropViews(VulkanContext& vk, NodeId set, const std::string& buffer)
     std::erase_if(gViewSizes, [&](const auto& kv) { return std::get<0>(kv.first) == set && std::get<1>(kv.first) == buffer; });
 }
 
-/** Rebuilds the views of a layer's tiles whose pages changed (render thread, the main thread waiting). */
-void updateViews(VulkanContext& vk, Gpu& g, const Key& key, Layer& l)
+/**
+ * Rebuilds the views of a layer's tiles whose pages changed (render thread, inside a recording): the tables are written
+ * by the commands, so GPU work launched before still reads the tables it was recorded with.
+ */
+void updateViews(VulkanContext& vk, VkCommandBuffer cmd, Gpu& g, const Key& key, Layer& l, std::vector<compute::Buffer>& temps)
 {
+    bool copied = false;
     for (auto& [udim, size] : l.sizes)
         gViewSizes[{key.set, key.buffer, udim}] = size;
     for (auto& [tk, tile] : l.tiles)
@@ -639,24 +794,105 @@ void updateViews(VulkanContext& vk, Gpu& g, const Key& key, Layer& l)
         const VkDeviceSize bytes = std::max<VkDeviceSize>(pagesX * pagesY * sizeof(VkDeviceAddress), 16);
         if (v.table.size != bytes)
         {
+            // The queue is idle when a table changes size (a sync or a rasterise, through gpuRun).
             compute::destroy(vk, v.table);
-            v.table = compute::makeBuffer(vk, bytes, 0, compute::Host::Write);
+            v.table = compute::makeBuffer(vk, bytes, 0, compute::Host::None);
         }
         v.width = w;
         v.height = h;
-        auto* table = static_cast<VkDeviceAddress*>(v.table.mapped);
-        std::fill(table, table + pagesX * pagesY, VkDeviceAddress(0));
+        std::vector<VkDeviceAddress> table(size_t(bytes / sizeof(VkDeviceAddress)), 0);
         for (auto& [page, slot] : tile.pages)
             if (page < pagesX * pagesY)
                 table[page] = g.half.address(slot);
-        vmaFlushAllocation(vk.allocator, v.table.alloc, 0, VK_WHOLE_SIZE);
+        temps.push_back(compute::hostBuffer(vk, table.data(), bytes));
+        compute::copy(cmd, temps.back(), v.table, bytes);
+        copied = true;
     }
+    if (copied)
+        compute::memoryBarrier(cmd);
+}
+
+/**
+ * Pages (row-major ids on a grid pagesX wide) as a few texel rectangles: runs along each row, stacked when rows repeat
+ * them, then the closest pairs merged while there are too many. A stroke over distant uv islands stays several small
+ * regions instead of one box over the texture, which is what the texture set evaluates again.
+ */
+std::vector<std::array<int, 4>> pageRegions(std::span<const uint32_t> pages, int pagesX, int width, int height)
+{
+    constexpr size_t kMaxRegions = 12;
+    std::vector<uint32_t> sorted(pages.begin(), pages.end());
+    std::sort(sorted.begin(), sorted.end());
+    // Runs of consecutive pages in a row: {x0, x1, y} in pages.
+    std::vector<std::array<int, 3>> runs;
+    for (uint32_t p : sorted)
+    {
+        const int x = int(p % uint32_t(pagesX)), y = int(p / uint32_t(pagesX));
+        if (!runs.empty() && runs.back()[2] == y && runs.back()[1] == x)
+            ++runs.back()[1];
+        else
+            runs.push_back({x, x + 1, y});
+    }
+    // Page rectangles {x0, y0, x1, y1}: a run extends the rectangle above it when it spans the same columns.
+    std::vector<std::array<int, 4>> rects;
+    for (const auto& [x0, x1, y] : runs)
+    {
+        auto above = std::find_if(rects.begin(), rects.end(), [&](const std::array<int, 4>& r) { return r[0] == x0 && r[2] == x1 && r[3] == y; });
+        if (above != rects.end())
+            (*above)[3] = y + 1;
+        else
+            rects.push_back({x0, y, x1, y + 1});
+    }
+    auto area = [](const std::array<int, 4>& r) { return int64_t(r[2] - r[0]) * int64_t(r[3] - r[1]); };
+    auto unite = [](const std::array<int, 4>& a, const std::array<int, 4>& b) {
+        return std::array<int, 4>{std::min(a[0], b[0]), std::min(a[1], b[1]), std::max(a[2], b[2]), std::max(a[3], b[3])};
+    };
+    // Many rectangles: first one per cell of an 8 x 8 grid, so the pairwise merging below stays cheap.
+    if (rects.size() > 64)
+    {
+        const int pagesY = (height + kPageSize - 1) / kPageSize;
+        std::map<int, std::array<int, 4>> cells;
+        for (const std::array<int, 4>& r : rects)
+        {
+            const int cell = std::min(7, (r[0] + r[2]) * 4 / std::max(pagesX, 1)) + 8 * std::min(7, (r[1] + r[3]) * 4 / std::max(pagesY, 1));
+            auto [it, fresh] = cells.try_emplace(cell, r);
+            if (!fresh)
+                it->second = unite(it->second, r);
+        }
+        rects.clear();
+        for (const auto& [cell, r] : cells)
+            rects.push_back(r);
+    }
+    // Merge the pair that adds the least area until few enough remain, and merge freely while it adds nothing.
+    while (rects.size() > 1)
+    {
+        int64_t best = INT64_MAX;
+        size_t bi = 0, bj = 0;
+        for (size_t i = 0; i < rects.size(); ++i)
+            for (size_t j = i + 1; j < rects.size(); ++j)
+            {
+                const int64_t waste = area(unite(rects[i], rects[j])) - area(rects[i]) - area(rects[j]);
+                if (waste < best)
+                {
+                    best = waste;
+                    bi = i;
+                    bj = j;
+                }
+            }
+        if (best > 0 && rects.size() <= kMaxRegions)
+            break;
+        rects[bi] = unite(rects[bi], rects[bj]);
+        rects.erase(rects.begin() + std::ptrdiff_t(bj));
+    }
+    std::vector<std::array<int, 4>> out;
+    for (const std::array<int, 4>& r : rects)
+        out.push_back({r[0] * kPageSize, r[1] * kPageSize, std::min(r[2] * kPageSize, width), std::min(r[3] * kPageSize, height)});
+    return out;
 }
 
 /** Copies stale pages into the images the graph reads (render thread, inside a recording). */
 void recordResolve(VulkanContext& vk, VkCommandBuffer cmd, Gpu& g, const Key& key, Layer& l, std::vector<compute::Buffer>& temps)
 {
-    updateViews(vk, g, key, l);
+    updateViews(vk, cmd, g, key, l, temps);
     for (auto& [tk, tile] : l.tiles)
     {
         GpuImageRef img;
@@ -690,6 +926,10 @@ void recordResolve(VulkanContext& vk, VkCommandBuffer cmd, Gpu& g, const Key& ke
         img->beginWrite(cmd);
         compute::memoryBarrier(cmd);
         const int pagesX = (img->width() + kPageSize - 1) / kPageSize;
+        if (!full)
+            img->noteWriteRegions(pageRegions(pages, pagesX, img->width(), img->height()));
+        // One copy command per pool chunk: a copy per page costs several times the bytes it moves.
+        std::map<VkBuffer, std::vector<VkBufferImageCopy>> regions;
         for (uint32_t p : pages)
         {
             const int x0 = int(p % uint32_t(pagesX)) * kPageSize, y0 = int(p / uint32_t(pagesX)) * kPageSize;
@@ -705,8 +945,10 @@ void recordResolve(VulkanContext& vk, VkCommandBuffer cmd, Gpu& g, const Key& ke
             region.imageOffset = {x0, y0, 0};
             region.imageExtent = {uint32_t(std::min(kPageSize, img->width() - x0)), uint32_t(std::min(kPageSize, img->height() - y0)), 1};
             img->noteWriteRect(x0, y0, x0 + std::min(kPageSize, img->width() - x0), y0 + std::min(kPageSize, img->height() - y0));
-            vkCmdCopyBufferToImage(cmd, g.half.buffer(slot), img->image(), VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+            regions[g.half.buffer(slot)].push_back(region);
         }
+        for (const auto& [buffer, list] : regions)
+            vkCmdCopyBufferToImage(cmd, buffer, img->image(), VK_IMAGE_LAYOUT_GENERAL, uint32_t(list.size()), list.data());
         compute::memoryBarrier(cmd);
         img->endWrite(cmd);
     }
@@ -799,7 +1041,12 @@ std::shared_ptr<const ValueImages> valueImages(const json& src, const std::vecto
             channels.emplace_back(c, tex::PortType::Color);
     }
     const int res = std::clamp(src.value("resolution", 512), 16, 4096);
-    std::string key = src.dump() + "|" + std::to_string(res);
+    std::vector<tex::OutputRequest> requests;
+    std::optional<tex::Graph> g;
+    if (!channels.empty())
+        g = sourceGraph(src, channels, requests);
+    // Keyed on the graph itself, so a scene set or library file edited since the last stroke evaluates again.
+    std::string key = (g ? g->toJson().dump() : std::string()) + "|" + std::to_string(res);
     for (const auto& [c, t] : channels)
         key += "|" + c;
     {
@@ -809,14 +1056,12 @@ std::shared_ptr<const ValueImages> valueImages(const json& src, const std::vecto
     }
     auto out = std::make_shared<ValueImages>();
     out->width = out->height = res;
-    if (!channels.empty())
+    if (g)
     {
-        std::vector<tex::OutputRequest> requests;
-        const tex::Graph g = sourceGraph(src, channels, requests);
         tex::PlanRequest req;
         req.width = req.height = res;
         req.outputs = requests;
-        const tex::Plan plan = tex::buildPlan(g, req);
+        const tex::Plan plan = tex::buildPlan(*g, req);
         if (!plan.error.empty())
             throw std::runtime_error("brush source: " + plan.error);
         tex::EvalResult r = tex::evaluate(plan, {}, "");
@@ -825,6 +1070,9 @@ std::shared_ptr<const ValueImages> valueImages(const json& src, const std::vecto
                 out->channels[name] = std::move(img.rgba);
     }
     std::scoped_lock lock(gGraphCacheMutex);
+    // Every graph edit makes a new key; drop the old images rather than keep each version.
+    if (gValueCache.size() >= 16)
+        gValueCache.clear();
     gValueCache[key] = out;
     return out;
 }
@@ -882,14 +1130,62 @@ uint32_t modeOf(const Payload& p, uint32_t& sub)
     return kModePaint;
 }
 
+/**
+ * A gradient's ramps: per stroke channel kRamp entries of (value, amount) between its stops, linear. A stop without the
+ * channel takes the payload's value; amount defaults to 1.
+ */
+std::vector<float> gradientRamp(const Payload& p, const std::vector<std::string>& channels, const std::vector<glm::vec3>& values)
+{
+    struct Stop
+    {
+        float position;
+        float amount;
+        json channels;
+    };
+    std::vector<Stop> stops;
+    for (const json& s : p.gradient.value("stops", json::array()))
+        stops.push_back({std::clamp(s.value("position", 0.0f), 0.0f, 1.0f), std::clamp(s.value("amount", 1.0f), 0.0f, 1.0f), s.value("channels", json::object())});
+    if (stops.empty())
+        stops = {{0.0f, 1.0f, json::object()}, {1.0f, 0.0f, json::object()}};
+    std::stable_sort(stops.begin(), stops.end(), [](const Stop& a, const Stop& b) { return a.position < b.position; });
+    auto valueAt = [&](const Stop& s, size_t c) {
+        const json v = s.channels.value(channels[c], json());
+        if (v.is_array() && v.size() >= 3)
+            return glm::vec3(v[0].get<float>(), v[1].get<float>(), v[2].get<float>());
+        if (v.is_number())
+            return glm::vec3(v.get<float>());
+        return values[c];
+    };
+    std::vector<float> ramp(channels.size() * kRamp * 4);
+    for (size_t c = 0; c < channels.size(); ++c)
+        for (int i = 0; i < kRamp; ++i)
+        {
+            const float t = float(i) / float(kRamp - 1);
+            size_t k = 0;
+            while (k + 1 < stops.size() && stops[k + 1].position < t)
+                ++k;
+            const Stop& a = stops[k];
+            const Stop& b = stops[std::min(k + 1, stops.size() - 1)];
+            const float span = b.position - a.position;
+            const float f = span > 1e-6f ? std::clamp((t - a.position) / span, 0.0f, 1.0f) : (t < a.position ? 0.0f : 1.0f);
+            const glm::vec3 v = glm::mix(valueAt(a, c), valueAt(b, c), f);
+            const float amount = glm::mix(a.amount, b.amount, f);
+            float* e = &ramp[(c * kRamp + size_t(i)) * 4];
+            e[0] = v.x, e[1] = v.y, e[2] = v.z, e[3] = amount;
+        }
+    return ramp;
+}
+
 /** What a stroke needs on the GPU besides its dabs, from its header. image is a project stroke's picture. */
-std::unique_ptr<Live> makeLive(StrokePtr header, std::shared_ptr<const PaintMesh> mesh, std::shared_ptr<const PaintImage> image = nullptr)
+std::unique_ptr<Live> makeLive(StrokePtr header, std::shared_ptr<const PaintMesh> mesh, std::shared_ptr<const PaintImage> image = nullptr,
+                               std::shared_ptr<const PaintImage> stencil = nullptr, std::shared_ptr<const PaintImage> limit = nullptr)
 {
     auto live = std::make_unique<Live>();
     live->header = header;
     live->mesh = std::move(mesh);
     const brush::BrushSettings b = brush::BrushSettings::fromJson(header->brush);
     live->roundness = float(std::clamp(b.roundness, 1e-3, 1.0));
+    live->tiltRoundness = b.tiltRoundness;
     live->strength = float(std::clamp(b.strength, 0.0, 1.0));
     const brush::Falloff f = b.resolveFalloff();
     live->falloff.resize(257);
@@ -909,7 +1205,10 @@ std::unique_ptr<Live> makeLive(StrokePtr header, std::shared_ptr<const PaintMesh
     for (const std::string& c : p.written())
     {
         if (live->channels.size() >= kMaxChannels)
+        {
+            log::warn("paint stroke: paints the first {} channels; {} and the rest are left out", kMaxChannels, c);
             break;
+        }
         live->channels.push_back(c);
         auto it = p.channels.find(c);
         live->values.push_back(it != p.channels.end() ? it->second : glm::vec3(1.0f));
@@ -966,6 +1265,42 @@ std::unique_ptr<Live> makeLive(StrokePtr header, std::shared_ptr<const PaintMesh
     {
         live->sourceImages = valueImages(p.source, live->channels);
         live->valueScale = float(p.source.value("scale", 1.0));
+        live->valueObject = p.source.value("space", std::string("uv")) == "object";
+        live->valueSize = float(p.source.value("size", 100.0));
+        live->tiling = p.source.value("tiling", json());
+    }
+    if (!p.gradient.is_null() && live->mode == kModeFill)
+        live->ramp = gradientRamp(p, live->channels, live->values);
+    if (!header->payload.locked.empty())
+    {
+        live->lockMask.assign((live->mesh->triangleCount() + 31) / 32 + 1, 0u);
+        for (uint32_t t : header->payload.locked)
+            if (t < live->mesh->triangleCount())
+                live->lockMask[t >> 5] |= 1u << (t & 31u);
+    }
+    if (!header->payload.limit.empty())
+    {
+        if (!limit)
+            log::warn("paint stroke {}: its limit mask {} is missing; painted without it", header->id, header->payload.limit);
+        else
+        {
+            live->limit = limit->rgba();
+            live->limitW = limit->width;
+            live->limitH = limit->height;
+        }
+    }
+    if (header->stencil)
+    {
+        if (!header->view)
+            log::warn("paint stroke {}: its stencil needs the view it was painted in; painted without it", header->id);
+        else if (!stencil)
+            log::warn("paint stroke {}: stencil image {} is missing; painted without it", header->id, header->stencil->image);
+        else
+        {
+            live->stencil = stencil->rgba();
+            live->stencilW = stencil->width;
+            live->stencilH = stencil->height;
+        }
     }
     return live;
 }
@@ -996,6 +1331,14 @@ void ensureUploads(VulkanContext& vk, Gpu& g, Live& live)
         live.imageAddr = upload(live.image.data(), live.image.size() * 4);
     if (!live.stamp.empty())
         live.stampAddr = upload(live.stamp.data(), live.stamp.size() * 4);
+    if (!live.stencil.empty())
+        live.stencilAddr = upload(live.stencil.data(), live.stencil.size() * 4);
+    if (!live.lockMask.empty())
+        live.lockAddr = upload(live.lockMask.data(), live.lockMask.size() * 4);
+    if (!live.limit.empty())
+        live.limitAddr = upload(live.limit.data(), live.limit.size() * 4);
+    if (!live.ramp.empty())
+        live.rampAddr = upload(live.ramp.data(), live.ramp.size() * 4);
     if (live.sourceImages)
         for (size_t c = 0; c < live.channels.size(); ++c)
             if (auto it = live.sourceImages->channels.find(live.channels[c]); it != live.sourceImages->channels.end())
@@ -1019,12 +1362,14 @@ GpuDab gpuDab(Live& live, const Dab& d)
     const glm::vec3 c = m.point(d), n = m.normal(d.triangle, d.u, d.v);
     g.centerRadius = glm::vec4(c, d.radius);
     g.normalAmount = glm::vec4(n, d.opacity);
-    const bool round = live.roundness >= 1.0f && !live.alpha && live.stamp.empty();
+    const bool round = live.roundness >= 1.0f && !live.tiltRoundness.enabled && !live.alpha && live.stamp.empty();
     if (!round)
     {
         const glm::vec3 t0 = tipFrame(n), b0 = glm::cross(n, t0);
+        const float roundness =
+            d.tilt > 0.0f ? std::clamp(live.roundness * float(live.tiltRoundness.map(1.0 - d.tilt)), 0.02f, 1.0f) : live.roundness;
         // A negative roundness tells the kernel the copy is mirrored: its tip, alpha and stamp turn the other way.
-        g.tangentRoundness = glm::vec4(t0 * std::cos(d.angle) + b0 * std::sin(d.angle), live.sym.mirrored(d.copy) ? -live.roundness : live.roundness);
+        g.tangentRoundness = glm::vec4(t0 * std::cos(d.angle) + b0 * std::sin(d.angle), live.sym.mirrored(d.copy) ? -roundness : roundness);
     }
     if (auto it = live.last.find(d.copy); it != live.last.end() && it->second != c)
         g.direction = glm::vec4(c - it->second, 1.0f);
@@ -1090,10 +1435,33 @@ struct Batch
     }
 };
 
+/** Marks the triangles whose every corner normal faces away from the stroke's view: the kernel rejects all their texels. */
+void cullBackFacing(Live& live)
+{
+    const StrokeView* view = live.view();
+    if (!view || live.mode == kModeFill || !live.backFacing.empty())
+        return;
+    const PaintMesh& m = *live.mesh;
+    const glm::vec3 toEye = -glm::normalize(view->direction);
+    live.backFacing.assign(m.triangleCount(), 0);
+    for (size_t t = 0; t < m.triangleCount(); ++t)
+    {
+        bool away = true;
+        for (size_t k = 0; k < 3 && away; ++k)
+        {
+            const glm::vec3& n = m.normals[t * 3 + k];
+            // A margin, so rounding in the kernel's interpolation can't turn a culled texel to face the view.
+            away = glm::dot(n, toEye) < -1e-3f * glm::length(n);
+        }
+        live.backFacing[t] = away ? 1 : 0;
+    }
+}
+
 Batch prepareBatch(Layer& l, Live& live, std::span<const Dab> dabs)
 {
     LILA_ZONE();
     Batch b;
+    cullBackFacing(live);
     std::vector<DabReach> reach;
     const float extent = live.alpha || !live.stamp.empty() ? 1.415f : 1.0f;
     for (const Dab& d : dabs)
@@ -1105,7 +1473,13 @@ Batch prepareBatch(Layer& l, Live& live, std::span<const Dab> dabs)
     for (const auto& [udim, size] : l.sizes)
     {
         std::shared_ptr<Surface> s = surface(live.mesh, udim, size.first, size.second);
-        for (auto& [page, list] : s->atlas->pagesFor(reach))
+        const std::map<uint32_t, std::vector<uint32_t>> reached = s->atlas->pagesFor(reach, 0, live.backFacing);
+        // A brush entering unpainted parts reaches many new pages at once; rasterised one by one they stall the stroke.
+        std::vector<uint32_t> pages;
+        for (const auto& [page, list] : reached)
+            pages.push_back(page);
+        s->atlas->preparePages(pages);
+        for (auto& [page, list] : reached)
         {
             b.add(s, page, queued);
             b.items.push_back({s, udim, page, uint32_t(b.index.size()), uint32_t(list.size())});
@@ -1153,7 +1527,9 @@ Batch prepareWhole(Layer& l, Live& live)
     for (const auto& [udim, size] : l.sizes)
     {
         std::shared_ptr<Surface> s = surface(live.mesh, udim, size.first, size.second);
-        for (uint32_t page : s->atlas->pagesWhere([&](uint32_t t) { return reached[t] != 0; }))
+        const std::vector<uint32_t> pages = s->atlas->pagesWhere([&](uint32_t t) { return reached[t] != 0; });
+        s->atlas->preparePages(pages);
+        for (uint32_t page : pages)
         {
             b.add(s, page, queued);
             b.items.push_back({s, udim, page, 0, 0});
@@ -1162,11 +1538,15 @@ Batch prepareWhole(Layer& l, Live& live)
     return b;
 }
 
-/** Paints a batch (render thread): copy on write, build-up pages, the dab kernel, then the images. */
-size_t runBatch(VulkanContext& vk, Gpu& g, const Key& key, Layer& l, Live& live, Batch& b)
+/**
+ * Paints a batch (render thread): copy on write, build-up pages, the dab kernel, then the images. With launched, the work
+ * is launched on Gpu::batches and its temporaries go there, to be freed once it finishes; else it waits for the GPU.
+ */
+size_t runBatch(VulkanContext& vk, Gpu& g, const Key& key, Layer& l, Live& live, Batch& b, std::vector<compute::Buffer>* launched = nullptr)
 {
     LILA_ZONE();
-    pruneSurfaces(vk, g);
+    if (!launched)
+        pruneSurfaces(vk, g);
     ensureDepth(vk, g, live);
     ensureUploads(vk, g, live);
     std::vector<compute::Buffer> temps;
@@ -1208,6 +1588,8 @@ size_t runBatch(VulkanContext& vk, Gpu& g, const Key& key, Layer& l, Live& live,
     params.facingFade = pay.facingFade;
     params.intensity = pay.intensity;
     params.valueScale = live.valueScale;
+    params.valueSpace = live.valueObject ? 1u : 0u;
+    params.valueSize = live.valueSize;
     for (size_t c = 0; c < live.channels.size(); ++c)
     {
         params.values[c] = glm::vec4(live.values[c], 1.0f);
@@ -1229,6 +1611,62 @@ size_t runBatch(VulkanContext& vk, Gpu& g, const Key& key, Layer& l, Live& live,
     {
         params.valueW = uint32_t(live.sourceImages->width);
         params.valueH = uint32_t(live.sourceImages->height);
+        if (live.tiling.is_object())
+        {
+            params.hexOn = 1;
+            params.hexRotate = std::clamp(live.tiling.value("rotate", 1.0f), 0.0f, 1.0f);
+            params.hexContrast = std::clamp(live.tiling.value("contrast", 0.5f), 0.0f, 0.99f);
+            params.hexJitter = std::clamp(live.tiling.value("jitter", 0.0f), 0.0f, 1.0f);
+            // Height steers the blend where the source has one (the higher sample wins the seam), else base colour's brightness.
+            for (const char* steer : {"height", "baseColor"})
+                for (size_t c = 0; c < live.channels.size() && params.hexWeight == kNone; ++c)
+                    if (live.channels[c] == steer && live.valueAddr[c])
+                        params.hexWeight = uint32_t(c);
+            for (size_t c = 0; c < live.channels.size(); ++c)
+                if (live.channels[c] == "baseColor")
+                    params.hexColor = uint32_t(c);
+        }
+    }
+    if (live.rampAddr)
+    {
+        const json& gr = pay.gradient;
+        const std::string type = gr.value("type", std::string("linear"));
+        params.gradOn = 1;
+        params.gradType = type == "radial" ? 1 : type == "reflected" ? 2 : type == "angle" ? 3 : 0;
+        params.gradSpace = gr.value("space", std::string("uv")) == "screen" ? 1 : 0;
+        params.gradDither = gr.value("dither", false) ? 1 : 0;
+        const json from = gr.value("start", json::array({0.0, 0.0})), to = gr.value("end", json::array({1.0, 0.0}));
+        params.gradA[0] = from[0].get<float>(), params.gradA[1] = from[1].get<float>();
+        params.gradB[0] = to[0].get<float>(), params.gradB[1] = to[1].get<float>();
+        params.ramp = live.rampAddr;
+        if (h.view)
+        {
+            params.gradToClip = h.view->objectToClip;
+            params.viewW = uint32_t(h.view->width);
+            params.viewH = uint32_t(h.view->height);
+        }
+    }
+    params.locked = live.lockAddr;
+    params.limit = live.limitAddr;
+    params.limitW = uint32_t(live.limitW);
+    params.limitH = uint32_t(live.limitH);
+    if (live.stencilAddr && h.stencil && h.view)
+    {
+        const StrokeStencil& st = *h.stencil;
+        params.stencil = live.stencilAddr;
+        params.stencilW = uint32_t(live.stencilW);
+        params.stencilH = uint32_t(live.stencilH);
+        params.stencilX = st.offset.x;
+        params.stencilY = st.offset.y;
+        params.stencilScale = st.scale;
+        params.stencilAngle = st.rotation;
+        params.stencilFlags = kStencilOn | (st.invert ? kStencilInvert : 0) | (st.tile ? kStencilTile : 0) | (st.mode == "color" ? kStencilColor : 0);
+        params.viewW = uint32_t(h.view->width);
+        params.viewH = uint32_t(h.view->height);
+        params.stencilToClip = h.view->objectToClip;
+        for (size_t c = 0; c < live.channels.size(); ++c)
+            if (st.mode == "color" && live.channels[c] == st.colorChannel)
+                params.stencilColor = uint32_t(c);
     }
 
     // Copy on write for every channel page the batch reaches, and a cleared build-up page per page.
@@ -1343,7 +1781,7 @@ size_t runBatch(VulkanContext& vk, Gpu& g, const Key& key, Layer& l, Live& live,
     params.itemCount = uint32_t(items.size());
     const VkDeviceAddress paramsAddr = host(&params, sizeof(params));
 
-    g.sub.run(vk, [&](VkCommandBuffer cmd) {
+    auto record = [&](VkCommandBuffer cmd) {
         for (size_t i = 0; i < uploads.size(); ++i)
         {
             VkBufferCopy r{0, g.wide.offset(uploads[i].second), kWidePage};
@@ -1371,7 +1809,15 @@ size_t runBatch(VulkanContext& vk, Gpu& g, const Key& key, Layer& l, Live& live,
             compute::memoryBarrier(cmd);
         }
         recordResolve(vk, cmd, g, key, l, temps);
-    });
+    };
+    if (launched)
+    {
+        g.batches.launch(vk, record);
+        launched->insert(launched->end(), temps.begin(), temps.end());
+        launched->insert(launched->end(), geoStaging.begin(), geoStaging.end());
+        return newPages;
+    }
+    g.sub.run(vk, record);
     for (compute::Buffer& t : temps)
         compute::destroy(vk, t);
     for (compute::Buffer& t : geoStaging)
@@ -1409,6 +1855,162 @@ void paintWhole(const Key& key, Layer& l)
     }
 }
 
+// ---------------------------------------------------------------------------------------------------- live batches
+
+/**
+ * Live strokes paint off the main thread. liveDabs queues dabs and returns; the paint worker takes everything a buffer
+ * has queued, prepares one batch, has the render thread record and launch it, and waits for the GPU itself (the render
+ * thread goes back to drawing). The main thread hears of the change afterwards. Anything else that reads or changes
+ * paint state drains the queue first (findLayer, layerFor, gpuRun), which keeps batches, cancels and commits in order.
+ */
+struct LiveQueue
+{
+    struct Job
+    {
+        std::shared_ptr<Layer> layer;
+        std::vector<Dab> dabs;
+    };
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::map<Key, Job> queued;
+    bool busy = false;
+    bool quit = false;
+    int draining = 0;
+    /** When the next batch may launch: at most one a frame, so dabs arriving meanwhile join it. */
+    std::chrono::steady_clock::time_point nextLaunch{};
+    /** Sets whose paint changed that the main thread hasn't told its listeners about yet. */
+    std::set<NodeId> changedSets;
+    bool tellPosted = false;
+    std::thread thread;
+};
+
+// Leaked on purpose, like gpu(): a joinable thread destroyed at exit would terminate.
+LiveQueue& liveQueue()
+{
+    static LiveQueue* q = new LiveQueue;
+    return *q;
+}
+
+thread_local bool tPaintWorker = false;
+constexpr auto kBatchInterval = std::chrono::milliseconds(8);
+
+/** Tells the change listeners about sets live batches changed. Main thread. */
+void tellListeners()
+{
+    std::set<NodeId> sets;
+    {
+        LiveQueue& q = liveQueue();
+        std::scoped_lock lock(q.mutex);
+        sets.swap(q.changedSets);
+        q.tellPosted = false;
+    }
+    for (NodeId set : sets)
+        notify(set);
+}
+
+/** Paints a job's dabs (the paint worker). */
+void paintQueued(const Key& key, LiveQueue::Job& job)
+{
+    LILA_ZONE();
+    Layer& l = *job.layer;
+    if (!l.live)
+        return;
+    Live& live = *l.live;
+    Renderer& r = Renderer::get();
+    const std::span<const Dab> dabs(job.dabs);
+    for (size_t i = 0; i < dabs.size(); i += kDabsPerBatch)
+    {
+        std::span<const Dab> part = dabs.subspan(i, std::min<size_t>(kDabsPerBatch, dabs.size() - i));
+        Batch b = prepareBatch(l, live, part);
+        std::vector<compute::Buffer> temps;
+        r.runTask([&](VulkanContext& vk) {
+             Gpu& g = gpu();
+             g.init(vk);
+             runBatch(vk, g, key, l, live, b, &temps);
+             return true;
+         }).get();
+        if (VulkanContext* vk = r.context())
+        {
+            gpu().batches.waitLaunched(*vk);
+            for (compute::Buffer& t : temps)
+                compute::destroy(*vk, t);
+        }
+        live.dabs += part.size();
+    }
+}
+
+void workerLoop()
+{
+    LILA_THREAD_NAME("Paint");
+    tPaintWorker = true;
+    LiveQueue& q = liveQueue();
+    std::unique_lock lock(q.mutex);
+    for (;;)
+    {
+        q.cv.wait(lock, [&] { return q.quit || !q.queued.empty(); });
+        if (q.quit)
+            return;
+        q.cv.wait_until(lock, q.nextLaunch, [&] { return q.quit || q.draining > 0; });
+        if (q.quit)
+            return;
+        auto it = q.queued.begin();
+        const Key key = it->first;
+        LiveQueue::Job job = std::move(it->second);
+        q.queued.erase(it);
+        q.busy = true;
+        q.nextLaunch = std::chrono::steady_clock::now() + kBatchInterval;
+        lock.unlock();
+        try
+        {
+            paintQueued(key, job);
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("Texture paint: {}", e.what());
+        }
+        lock.lock();
+        q.busy = false;
+        q.changedSets.insert(key.set);
+        if (!q.tellPosted)
+        {
+            q.tellPosted = true;
+            mainq::post([] { tellListeners(); });
+        }
+        q.cv.notify_all();
+    }
+}
+
+/** Waits until every queued live batch has painted. Anywhere but the paint worker. */
+void drain()
+{
+    if (tPaintWorker)
+        return;
+    LiveQueue& q = liveQueue();
+    std::unique_lock lock(q.mutex);
+    if (q.queued.empty() && !q.busy)
+        return;
+    LILA_ZONE();
+    ++q.draining;
+    q.cv.notify_all();
+    q.cv.wait(lock, [&] { return q.queued.empty() && !q.busy; });
+    --q.draining;
+}
+
+void stopWorker()
+{
+    LiveQueue& q = liveQueue();
+    drain();
+    {
+        std::scoped_lock lock(q.mutex);
+        q.quit = true;
+    }
+    q.cv.notify_all();
+    if (q.thread.joinable())
+        q.thread.join();
+    std::scoped_lock lock(q.mutex);
+    q.quit = false;
+}
+
 /** Ends the live stroke: the build-up pages go back; the originals go to undo (returned) or back to the pool. */
 std::vector<std::pair<std::pair<TileKey, uint32_t>, CowPage>> finishLive(Layer& l, bool keepOriginals)
 {
@@ -1421,6 +2023,7 @@ std::vector<std::pair<std::pair<TileKey, uint32_t>, CowPage>> finishLive(Layer& 
             for (auto& [k, c] : out)
                 g.half.release(c.before);
         releaseLive(vk, *live);
+        pruneSurfaces(vk, g);
     });
     return out;
 }
@@ -1452,8 +2055,75 @@ std::shared_ptr<const PaintImage> imageOf(const scene::Node* set, const Stroke& 
     return it == data->images.end() ? nullptr : it->second;
 }
 
+/** An image a stroke refers to by key: the set's, else one the paint tool holds for a stroke not yet stored. */
+std::shared_ptr<const PaintImage> keyedImage(const scene::Node* set, const std::string& key)
+{
+    if (key.empty())
+        return nullptr;
+    if (set)
+    {
+        PaintPtr data = readPaint(*set);
+        if (auto it = data->images.find(key); it != data->images.end())
+            return it->second;
+    }
+    return heldImage(key);
+}
+
+std::shared_ptr<const PaintImage> stencilOf(const scene::Node* set, const Stroke& s)
+{
+    return s.stencil ? keyedImage(set, s.stencil->image) : nullptr;
+}
+
+std::shared_ptr<const PaintImage> limitOf(const scene::Node* set, const Stroke& s) { return keyedImage(set, s.payload.limit); }
+
+/**
+ * The stroke on a mesh whose triangles or uvs changed since it was painted: each dab moved to the closest surface point to
+ * its anchor; dabs with none within their radius drop out. A fill over the whole mesh fills the new one; any other fill
+ * keeps only what its anchors say, which a fill has none of, so it drops out and is counted.
+ */
+StrokePtr retargetStroke(const StrokePtr& s, const PaintMesh& mesh, RetargetCount& n)
+{
+    auto out = std::make_shared<Stroke>(*s);
+    out->dabs.clear();
+    out->anchors.clear();
+    for (size_t i = 0; i < s->dabs.size() && i < s->anchors.size(); ++i)
+    {
+        const Dab& d = s->dabs[i];
+        geo::BvhClosest hit;
+        if (!mesh.bvh->closestPoint(glm::dvec3(s->anchors[i]), hit, std::max(double(d.radius), 1e-6)) || hit.triangle >= mesh.triangleCount() ||
+            !mesh.paintable[hit.triangle])
+        {
+            ++n.lost;
+            continue;
+        }
+        Dab r = d;
+        r.triangle = uint32_t(hit.triangle);
+        r.u = float(hit.bary.y);
+        r.v = float(hit.bary.z);
+        out->dabs.push_back(r);
+        out->anchors.push_back(s->anchors[i]);
+        ++n.found;
+    }
+    if (s->payload.kind == "fill")
+    {
+        Payload p = s->payload;
+        if (p.fillBy == "mesh")
+            p.triangles = mesh.allTriangles();
+        else
+        {
+            n.lost += p.triangles.size();
+            p.triangles.clear();
+        }
+        out->payload = p;
+    }
+    if (!s->payload.locked.empty())
+        out->payload.locked.clear();
+    out->meshSignature = mesh.signature;
+    return out;
+}
+
 /** Paints a whole stroke with no undo (rasterising from records). */
-void replay(const Key& key, Layer& l, scene::Graph& g, const std::string& material, const StrokePtr& s)
+void replay(const Key& key, Layer& l, scene::Graph& g, const std::string& material, StrokePtr s)
 {
     std::shared_ptr<const PaintMesh> mesh = paintMesh(g, s->mesh, material);
     if (!mesh)
@@ -1461,9 +2131,18 @@ void replay(const Key& key, Layer& l, scene::Graph& g, const std::string& materi
         log::warn("paint buffer {}: stroke {} paints {}, which isn't a mesh any more; skipped", key.buffer, s->id, s->mesh);
         return;
     }
+    l.meshSignatures[s->mesh] = mesh->signature;
+    if (s->meshSignature != 0 && s->meshSignature != mesh->signature)
+    {
+        RetargetCount n;
+        s = retargetStroke(s, *mesh, n);
+        if (n.lost > 0)
+            log::warn("paint buffer {}: stroke {}: {} of {} dabs found no surface on the changed mesh and were left out", key.buffer, s->id, n.lost,
+                      n.lost + n.found);
+    }
     try
     {
-        l.live = makeLive(s, mesh, imageOf(g.node(key.set), *s));
+        l.live = makeLive(s, mesh, imageOf(g.node(key.set), *s), stencilOf(g.node(key.set), *s), limitOf(g.node(key.set), *s));
     }
     catch (const std::exception& e)
     {
@@ -1781,7 +2460,24 @@ void syncOne(scene::Graph& g, scene::Node& set, const std::string& id, const Buf
     const Key key{set.id(), id};
     Layer& l = layerFor(key);
     const std::vector<uint64_t> ids = strokeIds(data);
-    const bool same = l.synced && l.sizes == wantedSizes(set, &data) && l.baseline == data.baseline && l.clears == data.clears;
+    // A mesh whose triangles or uvs changed since its strokes were rasterised: rasterise again, retargeting them.
+    std::map<std::string, uint64_t> signatures;
+    {
+        const std::string material = setMaterial(set);
+        for (const StrokePtr& s : data.strokes)
+            if (!signatures.contains(s->mesh))
+            {
+                std::shared_ptr<const PaintMesh> pm = paintMesh(g, s->mesh, material);
+                signatures[s->mesh] = pm ? pm->signature : 0;
+            }
+    }
+    bool meshesSame = true;
+    for (const auto& [mesh, sig] : signatures)
+        if (auto it = l.meshSignatures.find(mesh); it != l.meshSignatures.end() && it->second != sig)
+            meshesSame = false;
+    for (const auto& [mesh, sig] : signatures)
+        l.meshSignatures[mesh] = sig;
+    const bool same = l.synced && meshesSame && l.sizes == wantedSizes(set, &data) && l.baseline == data.baseline && l.clears == data.clears;
     if (same && l.applied == ids)
         return;
     if (l.live)
@@ -1803,6 +2499,7 @@ void syncOne(scene::Graph& g, scene::Node& set, const std::string& id, const Buf
 
 void dropLayer(const Key& key)
 {
+    drain();
     auto it = gLayers.find(key);
     if (it == gLayers.end())
         return;
@@ -1898,12 +2595,40 @@ void onSceneChange(scene::Change c, NodeId id)
 }
 } // namespace
 
+StrokePtr retarget(const StrokePtr& s, const PaintMesh& mesh, RetargetCount& n) { return retargetStroke(s, mesh, n); }
+
 // ---------------------------------------------------------------------------------------------------- public
 
 std::string setMaterial(const scene::Node& set)
 {
-    const tex::SetSettings s = tex::readSettings(set);
-    return s.material.empty() ? set.name() : s.material;
+    std::string key;
+    for (const std::string& m : tex::materialsUsing(scene::Graph::current(), set.name()))
+        key += (key.empty() ? "" : std::string(1, tex::paint::kMaterialSeparator)) + m;
+    return key;
+}
+
+bool usesSet(const std::vector<std::string>& materialNames, const scene::Node& set)
+{
+    const std::vector<std::string> users = tex::materialsUsing(scene::Graph::current(), set.name());
+    return std::ranges::any_of(materialNames, [&](const std::string& m) { return std::ranges::find(users, m) != users.end(); });
+}
+
+scene::MeshPtr paintSurface(const scene::Node& meshNode)
+{
+    const std::shared_ptr<sculpt::Session> s = sculpt::active();
+    if (!s || s->node != meshNode.id())
+        return meshNode.as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+    // One copy per sculpt shape, so the paint mesh and its bvh rebuild only after the sculpt moved.
+    static std::weak_ptr<sculpt::Session> session;
+    static uint64_t version = 0;
+    static scene::MeshPtr copy;
+    if (!copy || session.lock() != s || version != s->sculpt.version())
+    {
+        copy = std::make_shared<const geo::Mesh>(s->sculpt.mesh());
+        session = s;
+        version = s->sculpt.version();
+    }
+    return copy;
 }
 
 std::shared_ptr<const PaintMesh> paintMesh(scene::Graph& g, const std::string& meshPath, const std::string& material)
@@ -1912,7 +2637,7 @@ std::shared_ptr<const PaintMesh> paintMesh(scene::Graph& g, const std::string& m
     scene::Node* n = g.find(meshPath);
     if (!n || !n->type().isA("mesh"))
         return nullptr;
-    scene::MeshPtr mesh = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+    scene::MeshPtr mesh = paintSurface(*n);
     if (!mesh || !mesh->numFaces())
         return nullptr;
     MeshEntry& e = gMeshes[meshPath];
@@ -1935,7 +2660,7 @@ void prewarmTarget(scene::Graph& g, scene::Node& set, const std::string& meshPat
     scene::Node* n = g.find(meshPath);
     if (!n || !n->type().isA("mesh"))
         return;
-    scene::MeshPtr mesh = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+    scene::MeshPtr mesh = paintSurface(*n);
     if (!mesh || !mesh->numFaces())
         return;
     const std::string material = setMaterial(set);
@@ -1948,6 +2673,7 @@ void prewarmTarget(scene::Graph& g, scene::Node& set, const std::string& meshPat
         have = it->second.paint;
     }
     auto surfaced = [&](const std::shared_ptr<const PaintMesh>& p) {
+        std::scoped_lock lock(gSurfaceMutex);
         for (const auto& [udim, size] : sizes)
             if (!gSurfaces.contains(std::make_tuple(p.get(), udim, size.first, size.second)))
                 return false;
@@ -2003,6 +2729,7 @@ void prewarmTarget(scene::Graph& g, scene::Node& set, const std::string& meshPat
                 if (!e.paint[m])
                     e.paint[m] = p;
             // Atlases only for the paint mesh the cache kept, which is the one strokes will use.
+            std::scoped_lock lock(gSurfaceMutex);
             for (auto& [udim, w, h, sf] : out->surfaces)
                 if (e.paint[material] == sf->mesh)
                     gSurfaces.try_emplace(std::make_tuple(sf->mesh.get(), udim, w, h), sf);
@@ -2080,17 +2807,31 @@ void beginLive(scene::Graph& g, scene::Node& set, const std::string& buffer, Str
     std::shared_ptr<const PaintMesh> mesh = paintMesh(g, header->mesh, setMaterial(set));
     if (!mesh)
         throw std::runtime_error(header->mesh + " isn't a mesh with faces");
-    l.live = makeLive(std::move(header), std::move(mesh));
+    std::shared_ptr<const PaintImage> stencil = stencilOf(&set, *header), limit = limitOf(&set, *header);
+    l.live = makeLive(std::move(header), std::move(mesh), nullptr, std::move(stencil), std::move(limit));
 }
 
 void liveDabs(NodeId set, const std::string& buffer, std::span<const Dab> dabs)
 {
     const Key key{set, buffer};
-    Layer* l = findLayer(key);
+    std::shared_ptr<Layer> l = peekLayer(key);
     if (!l || !l->live || dabs.empty())
         return;
-    paintDabs(key, *l, dabs);
-    notify(set);
+    installStopHook();
+    LiveQueue& q = liveQueue();
+    std::scoped_lock lock(q.mutex);
+    if (!q.thread.joinable())
+        q.thread = std::thread(workerLoop);
+    LiveQueue::Job& job = q.queued[key];
+    job.layer = std::move(l);
+    job.dabs.insert(job.dabs.end(), dabs.begin(), dabs.end());
+    q.cv.notify_all();
+}
+
+void settleLive()
+{
+    drain();
+    tellListeners();
 }
 
 void cancelLive(NodeId set, const std::string& buffer)
@@ -2105,7 +2846,7 @@ void cancelLive(NodeId set, const std::string& buffer)
 
 bool liveActive(NodeId set, const std::string& buffer)
 {
-    Layer* l = findLayer({set, buffer});
+    std::shared_ptr<Layer> l = peekLayer({set, buffer});
     return l && l->live;
 }
 
@@ -2132,12 +2873,14 @@ ApplyResult applyStroke(scene::Graph& g, scene::Node& set, const std::string& bu
         std::shared_ptr<const PaintMesh> mesh = paintMesh(g, stroke.mesh, setMaterial(set));
         if (!mesh)
             throw std::runtime_error(stroke.mesh + " isn't a mesh with faces");
-        l.live = makeLive(header, std::move(mesh), image ? image : imageOf(&set, stroke));
+        l.live = makeLive(header, std::move(mesh), image ? image : imageOf(&set, stroke), stencilOf(&set, stroke), limitOf(&set, stroke));
         paintDabs(key, l, stroke.dabs);
         if (wholeStroke(*l.live))
             paintWhole(key, l);
     }
     r.dabs = l.live->dabs;
+    if (l.live->mesh)
+        l.meshSignatures[stroke.mesh] = l.live->mesh->signature;
     auto record = std::make_shared<PageRecord>();
     record->key = key;
     record->generation = l.generation;
@@ -2352,6 +3095,7 @@ void recordGather(VulkanContext& vk, VkCommandBuffer cmd, const PageView& view, 
 std::map<int, std::array<int, 4>> takeChanges(NodeId set)
 {
     std::map<int, std::array<int, 4>> out;
+    std::scoped_lock lock(gChangedMutex);
     for (auto& [k, l] : gLayers)
     {
         if (k.set != set)
@@ -2425,6 +3169,126 @@ std::pair<uint32_t, uint32_t> linearGroups(uint64_t items)
 }
 } // namespace
 
+std::optional<std::vector<Dab>> withParticlesGpu(const std::shared_ptr<const PaintMesh>& mesh, std::span<const Dab> dabs, uint32_t firstIndex,
+                                                 const tex::paint::ParticleSpec& spec)
+{
+    LILA_ZONE();
+    Renderer& r = Renderer::get();
+    if (!r.running() || !mesh || !mesh->bvh || mesh->bvh->empty())
+        return std::nullopt;
+    std::vector<Dab> out;
+    if (dabs.empty())
+        return out;
+    const uint32_t perDab = uint32_t(std::max(spec.count, 0));
+    if (perDab == 0)
+        return std::vector<Dab>(dabs.begin(), dabs.end());
+    const bool flow = spec.kind != "drips" && spec.kind != "rain" && spec.kind != "sparks";
+    // A walk never takes more steps than its longest travel over its shortest step (2% of the brush radius).
+    const uint32_t steps = std::min<uint32_t>(flow ? 1024u : 512u, uint32_t(std::ceil(double(spec.length) * (flow ? 50.0 : 75.0))) + 1u);
+    const uint32_t maxOut = steps + 2u;
+    const ParticleSpecGpu specGpu{spec.length, spec.size, spec.spread, spec.rate, spec.gravity, spec.friction, spec.wander, spec.pool, spec.fade};
+    const uint32_t kind = spec.kind == "drips" ? 0u : spec.kind == "rain" ? 1u : spec.kind == "sparks" ? 2u : 3u;
+    const uint32_t emitter = spec.emitter == "dab" ? 0u : spec.emitter == "ring" ? 2u : 1u;
+    // Dabs per dispatch, so the output slots stay within about 64 MB.
+    const size_t chunk = std::max<size_t>(1, (size_t(64) << 20) / (size_t(perDab) * maxOut * sizeof(ParticleOutDab)));
+    bool ok = true;
+    std::vector<ParticleOutDab> slots;
+    std::vector<uint32_t> counts;
+    for (size_t first = 0; first < dabs.size() && ok; first += chunk)
+    {
+        const size_t n = std::min(chunk, dabs.size() - first);
+        std::vector<ParticleInDab> in(n);
+        for (size_t i = 0; i < n; ++i)
+        {
+            const Dab& d = dabs[first + i];
+            in[i] = {d.triangle, d.u, d.v, d.radius, d.opacity, {0, 0, 0}};
+        }
+        const uint32_t threads = uint32_t(n) * perDab;
+        slots.assign(size_t(threads) * maxOut, {});
+        counts.assign(threads, 0);
+        gpuRun([&](VulkanContext& vk, Gpu& gp) {
+            if (!vk.shaderInt64)
+            {
+                ok = false;
+                return;
+            }
+            const TriBuffer& tb = gp.triangles(vk, mesh);
+            const BvhBuffer& bb = gp.bvh(vk, mesh);
+            compute::Buffer inBuf = compute::hostBuffer(vk, in.data(), in.size() * sizeof(ParticleInDab));
+            compute::Buffer specBuf = compute::hostBuffer(vk, &specGpu, sizeof(specGpu));
+            const VkDeviceSize outBytes = VkDeviceSize(slots.size()) * sizeof(ParticleOutDab), countBytes = VkDeviceSize(threads) * 4;
+            compute::Buffer outBuf = compute::makeBuffer(vk, outBytes, 0, compute::Host::None);
+            compute::Buffer countBuf = compute::makeBuffer(vk, countBytes, 0, compute::Host::None);
+            compute::Buffer hostOut = compute::makeBuffer(vk, outBytes, 0, compute::Host::Read);
+            compute::Buffer hostCount = compute::makeBuffer(vk, countBytes, 0, compute::Host::Read);
+            const auto [gx, gy] = linearGroups(threads);
+            ParticlePush push{glm::vec4(spec.down, 0.0f), bb.nodes.address, bb.corners.address, tb.buffer.address, bb.paintable.address,
+                              inBuf.address, outBuf.address, countBuf.address, threads, perDab, firstIndex + uint32_t(first), spec.seed, maxOut,
+                              uint32_t(mesh->triangleCount()), gx, kind, emitter, 0, specBuf.address};
+            gp.sub.run(vk, [&](VkCommandBuffer cmd) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, gp.pipeline(vk, gp.particles, "paintParticlesCS"));
+                vkCmdPushConstants(cmd, gp.particles.layout, kCompute, 0, sizeof(push), &push);
+                vkCmdDispatch(cmd, gx, gy, 1);
+                compute::memoryBarrier(cmd);
+                compute::copy(cmd, outBuf, hostOut, outBytes);
+                compute::copy(cmd, countBuf, hostCount, countBytes);
+            });
+            vmaInvalidateAllocation(vk.allocator, hostOut.alloc, 0, VK_WHOLE_SIZE);
+            vmaInvalidateAllocation(vk.allocator, hostCount.alloc, 0, VK_WHOLE_SIZE);
+            std::memcpy(slots.data(), hostOut.mapped, size_t(outBytes));
+            std::memcpy(counts.data(), hostCount.mapped, size_t(countBytes));
+            for (compute::Buffer* b : {&inBuf, &specBuf, &outBuf, &countBuf, &hostOut, &hostCount})
+                compute::destroy(vk, *b);
+        });
+        if (!ok)
+            break;
+        // The CPU reference's order: each brush dab, then its particles' dabs one particle after another.
+        for (size_t i = 0; i < n; ++i)
+        {
+            const Dab& from = dabs[first + i];
+            out.push_back(from);
+            for (uint32_t pi = 0; pi < perDab; ++pi)
+            {
+                const size_t t = i * perDab + pi;
+                for (uint32_t k = 0; k < std::min(counts[t], maxOut); ++k)
+                {
+                    const ParticleOutDab& s = slots[t * maxOut + k];
+                    Dab d;
+                    d.triangle = s.triangle;
+                    d.u = s.u;
+                    d.v = s.v;
+                    d.radius = s.radius;
+                    d.pressure = 1.0f;
+                    d.opacity = s.opacity;
+                    d.angle = 0.0f;
+                    d.copy = from.copy;
+                    out.push_back(d);
+                }
+            }
+        }
+    }
+    if (!ok)
+        return std::nullopt;
+    return out;
+}
+
+std::vector<Dab> withParticles(const std::shared_ptr<const PaintMesh>& mesh, std::span<const Dab> dabs, uint32_t firstIndex,
+                               const tex::paint::ParticleSpec& spec)
+{
+    try
+    {
+        if (std::optional<std::vector<Dab>> gpu = withParticlesGpu(mesh, dabs, firstIndex, spec))
+            return std::move(*gpu);
+    }
+    catch (const std::exception& e)
+    {
+        log::warn("Particle brush: the GPU walk failed ({}); using the CPU", e.what());
+    }
+    static std::once_flag told;
+    std::call_once(told, [] { log::info("Particle brush: walking particles on the CPU (no renderer running)"); });
+    return tex::paint::withParticles(*mesh, dabs, firstIndex, spec);
+}
+
 image::Image screenUvs(scene::Graph& g, const std::string& meshPath, const StrokeView& view, int width, int height)
 {
     LILA_ZONE();
@@ -2473,7 +3337,7 @@ image::Image screenUvs(scene::Graph& g, const std::string& meshPath, const Strok
     return out;
 }
 
-std::vector<uint8_t> viewImage(const GpuImageRef& img, const glm::vec4& uvRect, int width, int height, bool colorDisplay)
+std::vector<uint8_t> viewImage(const GpuImageRef& img, const glm::vec4& uvRect, int width, int height, bool colorDisplay, bool keepAlpha)
 {
     LILA_ZONE();
     width = std::clamp(width, 1, 8192);
@@ -2499,7 +3363,7 @@ std::vector<uint8_t> viewImage(const GpuImageRef& img, const glm::vec4& uvRect, 
                       uint32_t(width),
                       uint32_t(height),
                       gx,
-                      colorDisplay ? 1u : 0u};
+                      (colorDisplay ? 1u : 0u) | (keepAlpha ? 2u : 0u)};
         bool ok = false;
         gp.sub.run(vk, [&](VkCommandBuffer cmd) {
             ok = img->prepare(vk, cmd, temps) && img->realized();
@@ -2526,7 +3390,7 @@ std::vector<uint8_t> viewImage(const GpuImageRef& img, const glm::vec4& uvRect, 
 
 GpuImageRef channelImage(NodeId set, const std::string& buffer, const std::string& channel, int udim)
 {
-    if (!findLayer({set, buffer}))
+    if (!peekLayer({set, buffer}))
         return nullptr;
     return externalImage(set, externalName(buffer, channel), udim);
 }
@@ -2542,6 +3406,7 @@ void removeChangeListener(int id) { gListeners.erase(id); }
 
 void shutdown()
 {
+    stopWorker();
     std::vector<Key> keys;
     for (auto& [k, l] : gLayers)
         keys.push_back(k);

@@ -47,6 +47,12 @@ void destroy(VulkanContext& vk, Buffer& b)
     b = {};
 }
 
+void invalidate(VulkanContext& vk, const Buffer& b)
+{
+    if (b.alloc)
+        vmaInvalidateAllocation(vk.allocator, b.alloc, 0, VK_WHOLE_SIZE);
+}
+
 void copy(VkCommandBuffer cmd, const Buffer& from, const Buffer& to, VkDeviceSize size)
 {
     if (!size)
@@ -259,10 +265,21 @@ void Submitter::init(VulkanContext& vk)
     vkAllocateCommandBuffers(vk.device, &ai, &cmd);
     VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
     vkCreateFence(vk.device, &fci, nullptr, &fence);
+    if (vk.properties.limits.timestampComputeAndGraphics)
+    {
+        VkQueryPoolCreateInfo qci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+        qci.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        qci.queryCount = 2;
+        vkCreateQueryPool(vk.device, &qci, nullptr, &queries);
+    }
 }
 
 void Submitter::destroy(VulkanContext& vk)
 {
+    if (mInFlight)
+        vkWaitForFences(vk.device, 1, &fence, VK_TRUE, 30'000'000'000ull);
+    if (queries)
+        vkDestroyQueryPool(vk.device, queries, nullptr);
     if (fence)
         vkDestroyFence(vk.device, fence, nullptr);
     if (pool)
@@ -270,29 +287,70 @@ void Submitter::destroy(VulkanContext& vk)
     *this = {};
 }
 
-void Submitter::begin()
+void Submitter::begin(VulkanContext& vk)
 {
+    if (mInFlight)
+        poll(vk, 30'000'000'000ull);
     vkResetCommandBuffer(cmd, 0);
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &bi);
     memoryBarrier(cmd);
+    if (queries)
+    {
+        vkCmdResetQueryPool(cmd, queries, 0, 2);
+        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, queries, 0);
+    }
 }
 
-double Submitter::submit(VulkanContext& vk)
+double Submitter::submit(VulkanContext& vk, bool wait)
 {
+    if (queries)
+        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, queries, 1);
     memoryBarrier(cmd, VK_PIPELINE_STAGE_2_HOST_BIT, VK_ACCESS_2_HOST_READ_BIT);
     vkEndCommandBuffer(cmd);
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     si.commandBufferCount = 1;
     si.pCommandBuffers = &cmd;
-    const auto t0 = std::chrono::steady_clock::now();
+    mSubmitted = std::chrono::steady_clock::now();
     if (VkResult r = vkQueueSubmit(vk.queue, 1, &si, fence); r != VK_SUCCESS)
         throw std::runtime_error(std::string("GPU: submit failed (") + vkResultName(r) + ")");
+    mInFlight = true;
+    if (!wait)
+        return 0.0;
     const VkResult r = vkWaitForFences(vk.device, 1, &fence, VK_TRUE, 30'000'000'000ull);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mSubmitted).count();
+    finished(vk, r, ms);
+    return ms;
+}
+
+bool Submitter::poll(VulkanContext& vk, uint64_t timeoutNs)
+{
+    if (!mInFlight)
+        return true;
+    const VkResult r = vkWaitForFences(vk.device, 1, &fence, VK_TRUE, timeoutNs);
+    if (r == VK_TIMEOUT && timeoutNs < 30'000'000'000ull)
+        return false;
+    finished(vk, r, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mSubmitted).count());
+    return true;
+}
+
+void Submitter::waitLaunched(VulkanContext& vk) const
+{
+    if (fence && mInFlight)
+        vkWaitForFences(vk.device, 1, &fence, VK_TRUE, 30'000'000'000ull);
+}
+
+void Submitter::finished(VulkanContext& vk, VkResult waited, double wallMs)
+{
+    mInFlight = false;
     vkResetFences(vk.device, 1, &fence);
-    if (r != VK_SUCCESS)
-        throw std::runtime_error(std::string("GPU: the GPU did not finish (") + vkResultName(r) + ")");
-    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    if (waited != VK_SUCCESS)
+        throw std::runtime_error(std::string("GPU: the GPU did not finish (") + vkResultName(waited) + ")");
+    mGpuMs = wallMs;
+    uint64_t stamps[2]{};
+    if (queries && vkGetQueryPoolResults(vk.device, queries, 0, 2, sizeof(stamps), stamps, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS &&
+        stamps[1] >= stamps[0])
+        mGpuMs = double(stamps[1] - stamps[0]) * double(vk.properties.limits.timestampPeriod) * 1e-6;
 }
 } // namespace lila::render::compute

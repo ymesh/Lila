@@ -222,6 +222,7 @@ void RetopoDrawTool::refresh()
         }
     }
     mRetopo = nullptr;
+    mDrawOffset = 0.0;
     mSymmetry.reset();
     if (scene::Node* n = retopoNode())
     {
@@ -229,6 +230,7 @@ void RetopoDrawTool::refresh()
         mRetopoName = n->path();
         mRetopo = scene::modifiers::cage(g, n->id());
         mRetopoWorld = n->as<glm::dmat4>(scene::Transform::kWorldMatrix);
+        mDrawOffset = scene::drawOffset(*n);
         mSymmetry = scene::symmetrySpec(*n);
         const std::string& dots = n->as<std::string>(scene::MeshNode::kRetopoDrawDots);
         if (dots != mDotsText || mRetopoWorld != mDotsWorld)
@@ -341,8 +343,8 @@ bool RetopoDrawTool::visible(const glm::dvec3& p, const ViewInfo& view) const
         return true;
     glm::dvec3 d = p - view.eye;
     double len = glm::length(d);
-    // A little slack so points lying on the surface aren't hidden by it.
-    double slack = view.unitsPerPixel(p) * 3.0;
+    // Slack so points on the surface aren't hidden by it, plus the drawOffset that lifts the retopo mesh's draw.
+    double slack = view.unitsPerPixel(p) * 3.0 + mDrawOffset;
     return len <= slack || !mRefBvh.occluded(view.eye, d / len, len - slack);
 }
 
@@ -1065,6 +1067,9 @@ void RetopoDrawTool::removeOwnDraw(render::FrameState& s) const
     const glm::dmat4 world(mRetopoWorld);
     float tol = float(std::max(1e-4, glm::length(b.size()) * 1e-4));
     std::erase_if(s.meshes.edit(), [&](const render::MeshDraw& d) {
+        // A draw that names its node is matched by it: a reference with the same bounds and placement must stay.
+        if (d.node != 0)
+            return d.node == uint64_t(n->id());
         if (!d.mesh || d.world != world)
             return false;
         return glm::length(d.mesh->boundsMin - glm::vec3(b.min)) < tol && glm::length(d.mesh->boundsMax - glm::vec3(b.max)) < tol;
@@ -1077,6 +1082,8 @@ void RetopoDrawTool::draw(render::FrameState& s, OverlayPainter& p, const ViewIn
 
     refresh();
     removeOwnDraw(s);
+    applyReferenceDisplay(s, mReference);
+    const RetopoOverlayOffset offset(s, view, mRetopoName);
     if (mDrag == Drag::None)
         mMods = QGuiApplication::queryKeyboardModifiers();
     const bool here = view.camera == mCursorView;

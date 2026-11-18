@@ -379,6 +379,26 @@ TEST_CASE("retopo draw resumes on its retopo mesh after save and load")
     UndoStack::get().clear();
 }
 
+TEST_CASE("retopo draw: a new retopo mesh gets a draw offset sized to its reference")
+{
+    scene::Graph& g = scene::Graph::current();
+    g.clear();
+    makeMeshNode("ref", geo::makeCube({200.0, 200.0, 200.0}));
+    makeMeshNode("plain", geo::Mesh());
+    CHECK(g.find("plain")->as<double>(scene::MeshNode::kDrawOffset) == 0.0);
+
+    ops::execute("retopoDrawSetReference", {{"mesh", "ref_retopo"}, {"reference", "ref"}, {"create", true}});
+    const double offset = g.find("ref_retopo")->as<double>(scene::MeshNode::kDrawOffset);
+    CHECK(offset == doctest::Approx(std::sqrt(3.0) * 200.0 * 0.002));
+
+    // Retargeting an existing retopo mesh keeps the offset it was given.
+    ops::execute("setAttr", {{"args", {"ref_retopo.drawOffset", 1.5}}});
+    ops::execute("retopoDrawSetReference", {{"mesh", "ref_retopo"}, {"reference", "plain"}});
+    CHECK(g.find("ref_retopo")->as<double>(scene::MeshNode::kDrawOffset) == 1.5);
+    g.clear();
+    UndoStack::get().clear();
+}
+
 TEST_CASE("quad remesh: 500k triangle timing" * doctest::skip())
 {
     geo::Mesh src = sphere(500);

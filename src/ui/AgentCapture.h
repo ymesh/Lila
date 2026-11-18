@@ -43,6 +43,10 @@ struct Timing
     double aoMs = 0.0;
     double cpuMs = 0.0; // render thread recording
     double aoCpuMs = 0.0;
+    /** The optional post passes' GPU time (reflections, lens flares, depth of field, motion blur); 0 when they did not run. */
+    double reflectionMs = 0.0, flareMs = 0.0, dofMs = 0.0, motionBlurMs = 0.0;
+    int reflections = 0; // 0 environment only, 1 screen space, 2 ray traced
+    std::string reflectionNote;
 };
 
 /**

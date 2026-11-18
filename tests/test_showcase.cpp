@@ -40,6 +40,18 @@ TEST_CASE("render frame paths number the run of hashes")
     CHECK(ui::renderOutput::framePath("dir.v2/shot", 3) == "dir.v2/shot.0003");
 }
 
+TEST_CASE("render suffixes go before the frame number or the extension")
+{
+    CHECK(ui::renderOutput::withSuffix("a/shot.####.png", "_turntable") == "a/shot_turntable.####.png");
+    CHECK(ui::renderOutput::withSuffix("a/shot_####.exr", "_tt") == "a/shot_tt_####.exr");
+    CHECK(ui::renderOutput::withSuffix("a.b/shot.mp4", "_turntable") == "a.b/shot_turntable.mp4");
+    CHECK(ui::renderOutput::withSuffix("a.b/shot", "_t") == "a.b/shot_t");
+    CHECK(ui::renderOutput::withSuffix("shot.mp4", "") == "shot.mp4");
+    const std::string video = ui::renderOutput::defaultVideo();
+    CHECK(video.ends_with(".mp4"));
+    CHECK(video.find('#') == std::string::npos);
+}
+
 TEST_CASE("the first enabled post process is the active one")
 {
     showcaseRun("newScene");

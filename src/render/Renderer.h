@@ -42,6 +42,12 @@ public:
         uint64_t meshDrawCalls = 0; // shaded mesh draw calls, prepass included; each draws one batch's placements
         uint64_t meshInstances = 0; // placements those calls drew
         uint64_t meshUploads = 0;   // GPU mesh copies made so far, every view counted
+        uint32_t pathSamples = 0;   // samples behind the path-traced view's image; 0 when the view isn't path traced
+        /** The reflections the last frame drew: 0 environment only, 1 screen space, 2 ray traced; and why, when not as asked. */
+        int reflections = 0;
+        std::string reflectionNote;
+        double reflectionMs = 0.0; // GPU time of the reflection passes; 0 when they did not run
+        double flareMs = 0.0, dofMs = 0.0, motionBlurMs = 0.0; // the same for lens flares, depth of field and motion blur
     };
 
     bool start();
@@ -72,6 +78,7 @@ public:
     {
         std::vector<uint8_t> bgra; // display-encoded, top row first; alpha is coverage with a transparent background
         std::vector<float> hdr;    // with hdr: RGBA floats, the scene's exposed linear light before tonemapping
+        std::vector<float> depth;  // with hdr: the last draw's reversed-Z depth (0 where nothing was drawn), top row first
         FrameStats timing;
     };
     /**
@@ -88,6 +95,7 @@ public:
         std::string name; // empty while the renderer is not running
         bool discrete = false;
         uint64_t vramBytes = 0; // device-local heaps
+        bool rayTracing = false; // ray queries: traced shadows, AO and the path-traced view
     };
     GpuInfo gpuInfo() const;
 

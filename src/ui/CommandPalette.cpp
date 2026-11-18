@@ -56,6 +56,13 @@ CommandHistory& history()
     return h;
 }
 
+/** Text typed but not run when the palette was last dismissed; it reopens with this instead of the last history entry. */
+QString& draft()
+{
+    static QString text;
+    return text;
+}
+
 void saveHistory()
 {
     std::vector<std::string> out;
@@ -340,6 +347,7 @@ public:
         mEdit->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         mEdit->setUntitledName("Command");
         mEdit->autoPopups = false;
+        mEdit->singleLine = true;
         mEdit->setPlaceholderText("Search actions and commands, or type Python");
         QFont font = monoFont();
         // No language server or linter: the palette's own results, call hint and argument list are its only popups.
@@ -351,9 +359,17 @@ public:
         setFocusProxy(mEdit);
 
         history().resetWalk();
-        mEdit->setPlainText(history().last());
-        mEdit->selectAll();
-        mFromHistory = true;
+        if (!draft().isEmpty())
+        {
+            mEdit->setPlainText(draft());
+            mEdit->moveCursor(QTextCursor::End);
+        }
+        else
+        {
+            mEdit->setPlainText(history().last());
+            mEdit->selectAll();
+            mFromHistory = true;
+        }
         connect(mEdit, &QPlainTextEdit::textChanged, this, [this] {
             if (!mWalking)
                 mFromHistory = false;
@@ -387,6 +403,12 @@ public:
     }
 
 protected:
+    void closeEvent(QCloseEvent* e) override
+    {
+        draft() = mRan || mFromHistory ? QString() : mEdit->toPlainText();
+        QFrame::closeEvent(e);
+    }
+
     bool eventFilter(QObject* obj, QEvent* e) override
     {
         switch (e->type())
@@ -469,6 +491,7 @@ private:
             insertArgument(r.insert);
             return;
         }
+        mRan = true;
         close();
         actions::ViaScope via(actions::Via::Palette);
         if (!r.action.empty())
@@ -560,6 +583,7 @@ private:
                 return true;
             }
             QString code = mEdit->toPlainText();
+            mRan = true;
             close();
             if (!code.trimmed().isEmpty())
                 runLine(code);
@@ -576,6 +600,7 @@ private:
     int mLine = 0;
     bool mFromHistory = false;
     bool mWalking = false;
+    bool mRan = false;
     QPointer<QWidget> mOver;
     QPointer<ViewportLayout> mLayout;
 };
@@ -612,7 +637,7 @@ void registerActions(QWidget* over)
                   .doc = "Type to find any action or command and press Enter to run it, or type Python and press Enter to run "
                          "it like the script editor does. Tab on a command starts its call; inside the call the palette lists "
                          "its arguments and Tab fills one in. Shift+Enter always runs the text as Python. Opens on the last "
-                         "line; Up and Down walk the history.",
+                         "line, or on the text left unrun when it was dismissed; Up and Down walk the history.",
                   .python = "lila.ui.run_action(\"window.commandPalette\")"});
 }
 } // namespace lila::ui::commandPalette

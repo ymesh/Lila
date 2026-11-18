@@ -25,6 +25,9 @@ inline constexpr const char* kTextureSetsDock = "textureSets";
  */
 LILA_UI_API void registerTextureSetPanel();
 
+/** Opens the name box on the set picker of the visible Texture Set panel; false when none is visible. */
+LILA_UI_API bool startSetRename();
+
 namespace textureSets
 {
 /**
@@ -65,6 +68,8 @@ public:
 
     void setTextureSet(const std::string& set);
     std::string textureSet() const;
+    /** Opens a name box over the set picker; Enter renames the set shown. */
+    void startRename();
     /** Rereads the set now instead of on the next event loop turn. */
     void refresh();
 
@@ -83,6 +88,13 @@ public:
     /** Adds a library material as a fill or procedural layer placed as a drop onto target's row; empty target puts it on top. */
     void dropMaterial(const std::string& material, const std::string& target, Drop where);
     void duplicateSelected();
+    /** The selected layer to the clipboard as text (texCopyLayers), and back above the selection, in this set or another. */
+    void copySelected();
+    void paste();
+    /** Bake the selected layer into one paint layer: alone (flatten) or with the layer below (merge down). */
+    void flattenSelected(bool down);
+    /** Write what flattening the selected layer would make as images. */
+    void exportFlattened();
     void deleteSelected();
     /** Shows the Texture Graph editor on the set with the selected layer's node selected. */
     void openSelectedAsNodes();
@@ -111,6 +123,7 @@ public:
 
 protected:
     void resizeEvent(QResizeEvent* e) override;
+    void showEvent(QShowEvent* e) override;
 
 private:
     struct Impl;

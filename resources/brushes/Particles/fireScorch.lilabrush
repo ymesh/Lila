@@ -1,0 +1,25 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Fire Scorch",
+  "category": "Particles",
+  "doc": "Scorch marks spreading out from a ring round each dab, fading at their tips.",
+  "brush": {
+    "falloff": "smooth",
+    "spacing": 0.2
+  },
+  "payload": {
+    "kind": "paint",
+    "channels": {
+      "baseColor": [
+        0.04,
+        0.03,
+        0.025
+      ],
+      "roughness": 0.8
+    }
+  },
+  "particles": {
+    "kind": "scorch"
+  }
+}

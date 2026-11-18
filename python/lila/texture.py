@@ -39,18 +39,17 @@ def _set(name):
 
 
 def create(name, material=None, resolution=None, settings=None):
-    """Makes a texture set (a Material Output and the standard channels) and returns its name. material is the slot it drives."""
-    s = dict(settings or {})
+    """Makes a texture set (a Material Output and the standard channels) and returns its name. material (a name or a list) picks it as its Texture Set."""
+    flags = {"settings": dict(settings)} if settings else {}
     if material is not None:
-        s["material"] = material
-    flags = {"settings": s} if s else {}
+        flags["materials"] = [material] if isinstance(material, str) else list(material)
     if resolution:
         flags["resolution"] = resolution
     return ops.texCreateSet(name, **flags)
 
 
 def settings(set=None):
-    """The set's settings: channels, width, height, tiles, normalConvention, bakeProject, exportPreset, material."""
+    """The set's settings: channels, width, height, tiles, normalConvention, bakeProject, exportPreset."""
     return ops.texSetSettings(_set(set), {})
 
 

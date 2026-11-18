@@ -1,0 +1,90 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "hexTile",
+  "label": "Hex Tile",
+  "category": "Transform",
+  "doc": "Tiles the input with no visible repeat: hex cells each with a random offset, turn, size and hue, blended (by height too when Height Blend is up).",
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0.5,
+        0.5,
+        0.5,
+        1
+      ],
+      "taps": 3
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "scale",
+      "type": "float",
+      "default": 4.0,
+      "min": 0.1,
+      "softMax": 32,
+      "doc": "Tiles per uv unit."
+    },
+    {
+      "id": "rotation",
+      "type": "float",
+      "default": 180.0,
+      "min": 0,
+      "max": 180,
+      "doc": "How far each cell may turn, degrees."
+    },
+    {
+      "id": "sizeJitter",
+      "type": "float",
+      "default": 0.1,
+      "min": 0,
+      "max": 0.9
+    },
+    {
+      "id": "hueJitter",
+      "type": "float",
+      "default": 0.0,
+      "min": 0,
+      "max": 1
+    },
+    {
+      "id": "sharpness",
+      "type": "float",
+      "default": 4.0,
+      "min": 1,
+      "softMax": 16,
+      "doc": "How narrow the blends between cells are."
+    },
+    {
+      "id": "heightBlend",
+      "type": "float",
+      "default": 0.0,
+      "min": 0,
+      "max": 1,
+      "doc": "Blend by the input's brightness: high parts win."
+    },
+    {
+      "id": "seed",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "softMax": 1000
+    }
+  ],
+  "cost": 10,
+  "helpers": [
+    "color"
+  ],
+  "code": "/**\n * Stochastic hex tiling: the three hex cells around a point, each with its own random offset, turn, size and hue, mixed\n * by their barycentric weights sharpened by sharpness (and by height when heightBlend is on), so no repeat shows.\n */\nfloat4 hexTileSample<T : ITexColor>(T input, float2 uv, float scale, float rotation, float sizeJitter, float hueJitter, float sharpness,\n                                     float heightBlend, uint seed)\n{\n    float2 q = uv * scale * 3.4641016;\n    float2 skew = float2(q.x - 0.57735027 * q.y, 1.15470054 * q.y);\n    float2 cell = floor(skew);\n    float3 t = float3(frac(skew), 0.0);\n    t.z = 1.0 - t.x - t.y;\n    float s = t.z < 0.0 ? 1.0 : 0.0;\n    float s2 = 2.0 * s - 1.0;\n    float3 w = float3(-t.z * s2, s - t.y * s2, s - t.x * s2);\n    int is = int(s);\n    int2 v0 = int2(cell) + int2(is, is);\n    int2 v1 = int2(cell) + int2(is, 1 - is);\n    int2 v2 = int2(cell) + int2(1 - is, is);\n    float4 c[3];\n    float3 h = float3(0.0, 0.0, 0.0);\n    for (int i = 0; i < 3; ++i)\n    {\n        int2 v = i == 0 ? v0 : i == 1 ? v1 : v2;\n        uint2 key = uint2(v + int2(4096, 4096));\n        float a = (texRand(key, seed) - 0.5) * radians(rotation) * 2.0;\n        float k = 1.0 + (texRand(key, seed ^ 0x9e37u) - 0.5) * 2.0 * sizeJitter;\n        float2 off = float2(texRand(key, seed ^ 0x51edu), texRand(key, seed ^ 0x2b79u));\n        float2 r = float2(uv.x * cos(a) - uv.y * sin(a), uv.x * sin(a) + uv.y * cos(a)) * scale * k + off;\n        float4 ci = input.sample(frac(r));\n        if (hueJitter > 0.0)\n        {\n            float3 hsv = rgbToHsv(saturate(ci.rgb));\n            hsv.x = frac(hsv.x + (texRand(key, seed ^ 0x7f4au) - 0.5) * hueJitter);\n            ci.rgb = hsvToRgb(hsv);\n        }\n        c[i] = ci;\n        h[i] = dot(ci.rgb, float3(0.2126, 0.7152, 0.0722));\n    }\n    float3 wt = pow(max(w, float3(1e-5, 1e-5, 1e-5)), float3(sharpness, sharpness, sharpness));\n    if (heightBlend > 0.0)\n        wt *= exp((h - max(h.x, max(h.y, h.z))) * heightBlend * 16.0);\n    wt /= wt.x + wt.y + wt.z;\n    return c[0] * wt.x + c[1] * wt.y + c[2] * wt.z;\n}",
+  "body": {
+    "out": "return hexTileSample(input, uv, p.scale, p.rotation, p.sizeJitter, p.hueJitter, p.sharpness, p.heightBlend, uint(p.seed));"
+  }
+}

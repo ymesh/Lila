@@ -65,6 +65,7 @@
 #include "ui/TopologyToolkit.h"
 #include "ui/CurveToolkit.h"
 #include "ui/LevelToolkit.h"
+#include "ui/RenderToolkit.h"
 #include "ui/ModifierStack.h"
 #include "ui/OptionBox.h"
 #include "ui/NodeEditor.h"
@@ -104,6 +105,7 @@
 #include "ui/ViewportRenderers.h"
 #include "ui/ViewportToolbar.h"
 #include "ui/ViewportWidget.h"
+#include "ui/ViewportToast.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -119,6 +121,7 @@
 #include <QKeyEvent>
 #include <QBoxLayout>
 #include <QDir>
+#include <QFileInfo>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -135,6 +138,7 @@
 #include <QUrl>
 
 #include <algorithm>
+#include <atomic>
 #include <memory>
 #include <optional>
 
@@ -275,12 +279,68 @@ inline void acknowledgeCrashReports()
             crash::acknowledge(dir);
 }
 
+/** Counts the warnings and errors logged while it lives, from any thread. */
+class LogProblems
+{
+public:
+    LogProblems()
+        : mSink(log::addSink([this](const LogEntry& e) {
+              if (e.level == LogLevel::Warning)
+                  ++mWarnings;
+              else if (e.level == LogLevel::Error)
+                  ++mErrors;
+          }))
+    {
+    }
+    ~LogProblems() { log::removeSink(mSink); }
+    LogProblems(const LogProblems&) = delete;
+    LogProblems& operator=(const LogProblems&) = delete;
+
+    int warnings() const { return mWarnings; }
+    int errors() const { return mErrors; }
+
+    /**
+     * Toasts what went wrong with a file operation, pointing at the Script Output for the details. failed is true when
+     * the operation threw. Returns whether it toasted.
+     */
+    bool toast(const QString& what, const QString& file, bool failed = false) const
+    {
+        const int w = mWarnings, e = mErrors;
+        if (!failed && w == 0 && e == 0)
+            return false;
+        auto count = [](int n, const char* noun) { return QString("%1 %2%3").arg(n).arg(noun).arg(n == 1 ? "" : "s"); };
+        QString text;
+        if (failed)
+            text = QString("%1 %2 failed").arg(what, file);
+        else
+        {
+            QStringList parts;
+            if (e > 0)
+                parts << count(e, "error");
+            if (w > 0)
+                parts << count(w, "warning");
+            text = QString("%1 %2 with %3").arg(what, file, parts.join(", "));
+        }
+        viewportToast::showActive(text + ". See Script Output.", 8000,
+                                  failed || e > 0 ? viewportToast::Kind::Error : viewportToast::Kind::Warning);
+        return true;
+    }
+
+private:
+    int mSink = -1;
+    std::atomic<int> mWarnings{0}, mErrors{0};
+};
+
+/** Runs a translator, toasting when anything went wrong. Returns true when it ran and nothing was logged as a problem. */
 inline bool runTranslator(io::translators::Op op, const QString& file, const std::string& translator)
 {
+    const QString name = QFileInfo(file).fileName();
+    const QString what = op == io::translators::Op::Export ? "Exported" : "Imported";
+    const LogProblems problems;
     try
     {
         io::translators::run(op, std::filesystem::path(file.toStdWString()), json::object(), CallSource::UI, translator);
-        return true;
+        return !problems.toast(what, name);
     }
     catch (const CommandCancelled& e)
     {
@@ -290,6 +350,7 @@ inline bool runTranslator(io::translators::Op op, const QString& file, const std
     catch (const CommandError& e)
     {
         log::error("{}", e.what());
+        problems.toast(op == io::translators::Op::Export ? "Export of" : "Import of", name, true);
         return false;
     }
 }

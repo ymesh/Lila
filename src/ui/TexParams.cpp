@@ -592,6 +592,13 @@ void addInput(QFormLayout* form, QWidget* parent, const json& in, const SetFn& s
         return;
     }
     const json value = in.contains("value") ? in["value"] : in.value("default", json());
+    if (value.is_null() && in.value("implicit", "") == "uv")
+    {
+        auto* l = dimLabel(parent, "Mesh UV");
+        l->setToolTip(tip);
+        form->addRow(labelOf(in), l);
+        return;
+    }
     auto changed = [set, id](const json& v) { set(id, v); };
     if (type == "color")
     {

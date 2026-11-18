@@ -694,10 +694,62 @@ std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget
     return {};
 }
 
+bool Evaluator::State::settle(VulkanContext& vk, uint64_t timeoutNs)
+{
+    if (!sub.busy())
+        return true;
+    try
+    {
+        if (!sub.poll(vk, timeoutNs))
+            return false;
+    }
+    catch (...)
+    {
+        for (compute::Buffer& b : sliceTemps)
+            compute::destroy(vk, b);
+        sliceTemps.clear();
+        throw;
+    }
+    for (compute::Buffer& b : sliceTemps)
+        compute::destroy(vk, b);
+    sliceTemps.clear();
+    double ms = sub.gpuMs();
+    if (slicePredicted <= 0.0 && sliceLoaded > 0 && ms > 0.5)
+        loadRate = std::clamp(compute::adaptRate(loadRate, double(sliceLoaded) / loadRate, ms), 1.0e4, 1.0e8);
+    if (slicePredicted > 1.0)
+        rate = compute::adaptRate(rate, slicePredicted, ms);
+    if (cpuNext)
+    {
+        ms += runCpuNative(vk);
+        sliceDelta.passesRun += 1;
+        cpuNext = false;
+    }
+    {
+        std::scoped_lock lock(mutex);
+        stats.passesRun += sliceDelta.passesRun;
+        stats.dispatches += sliceDelta.dispatches;
+        stats.stores += sliceDelta.stores;
+        stats.pipelinesCreated += sliceDelta.pipelinesCreated;
+        stats.slices += 1;
+        stats.gpuMs += ms;
+        stats.texelsLoaded += sliceLoaded;
+        stats.texelsComputed += sliceComputed;
+        stats.texelsStored += sliceStored;
+    }
+    sliceDelta = {};
+    if (!anyWork() && !regionQueue.empty())
+        nextRegion();
+    return true;
+}
+
 bool Evaluator::step(VulkanContext& vk, double budgetMs)
 {
     LILA_ZONE();
     State& st = *m;
+    // A slice in flight is waited on briefly, so the render thread goes back to drawing while the GPU works on it.
+    constexpr uint64_t kPollNs = 1'000'000;
+    if (!st.settle(vk, kPollNs))
+        return false;
     st.adopt(vk.properties.limits.maxStorageBufferRange);
     {
         std::unique_ptr<std::map<std::string, GpuImageRef>> externals;
@@ -717,6 +769,8 @@ bool Evaluator::step(VulkanContext& vk, double budgetMs)
         std::scoped_lock lock(st.mutex);
         return st.pending != nullptr;
     };
+    if (st.cur && !st.anyWork() && !st.regionQueue.empty())
+        st.nextRegion();
     if (!st.cur || !st.anyWork())
     {
         st.done = !pendingNow();
@@ -732,13 +786,12 @@ bool Evaluator::step(VulkanContext& vk, double budgetMs)
     st.framesUsed = 0;
     st.cpuNext = false;
     st.sliceLoaded = st.sliceComputed = st.sliceStored = 0;
-    std::vector<compute::Buffer> temps;
-    Stats delta;
-    double predicted = 0.0, ms = 0.0;
+    st.slicePredicted = 0.0;
+    st.sliceDelta = {};
     try
     {
-        ms = st.sub.run(vk, [&](VkCommandBuffer cmd) {
-            if (!st.recordLoads(vk, cmd, temps, budgetMs))
+        st.sub.launch(vk, [&](VkCommandBuffer cmd) {
+            if (!st.recordLoads(vk, cmd, st.sliceTemps, budgetMs))
                 return;
             st.arenaFresh = false;
             if (st.uniformsDirty)
@@ -749,42 +802,20 @@ bool Evaluator::step(VulkanContext& vk, double budgetMs)
                 st.uniformsDirty = false;
             }
             compute::memoryBarrier(cmd);
-            predicted = st.recordPasses(vk, cmd, budgetMs, delta);
+            st.slicePredicted = st.recordPasses(vk, cmd, budgetMs, st.sliceDelta);
             if (st.passIndex >= st.cur->plan.passes.size())
-                st.recordStores(vk, cmd, temps, delta);
+                st.recordStores(vk, cmd, st.sliceTemps, st.sliceDelta);
         });
     }
     catch (...)
     {
-        for (compute::Buffer& b : temps)
+        for (compute::Buffer& b : st.sliceTemps)
             compute::destroy(vk, b);
+        st.sliceTemps.clear();
         throw;
     }
-    for (compute::Buffer& b : temps)
-        compute::destroy(vk, b);
-    if (predicted <= 0.0 && st.sliceLoaded > 0 && ms > 0.5)
-        st.loadRate = std::clamp(compute::adaptRate(st.loadRate, double(st.sliceLoaded) / st.loadRate, ms), 1.0e4, 1.0e8);
-    if (predicted > 1.0)
-        st.rate = compute::adaptRate(st.rate, predicted, ms);
-    if (st.cpuNext)
-    {
-        ms += st.runCpuNative(vk);
-        delta.passesRun += 1;
-    }
-    {
-        std::scoped_lock lock(st.mutex);
-        st.stats.passesRun += delta.passesRun;
-        st.stats.dispatches += delta.dispatches;
-        st.stats.stores += delta.stores;
-        st.stats.pipelinesCreated += delta.pipelinesCreated;
-        st.stats.slices += 1;
-        st.stats.gpuMs += ms;
-        st.stats.texelsLoaded += st.sliceLoaded;
-        st.stats.texelsComputed += st.sliceComputed;
-        st.stats.texelsStored += st.sliceStored;
-    }
-    st.done = !st.anyWork() && !pendingNow();
-    return st.done;
+    st.done = false;
+    return false;
 }
 
 bool Evaluator::trim(VulkanContext& vk)
@@ -855,6 +886,7 @@ std::map<std::string, image::Image> Evaluator::readOutputs()
     std::map<std::string, image::Image> out;
     std::shared_ptr<State> st = m;
     r.runTask([&out, st](VulkanContext& vk) {
+         st->settle(vk, UINT64_MAX);
          if (!st->cur || !st->arena.buffer)
              return true;
          VkDeviceSize total = 0;

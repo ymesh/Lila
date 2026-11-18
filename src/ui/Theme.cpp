@@ -105,6 +105,8 @@ public:
     {
         if (element == CE_MenuTearoff)
             return drawTearRow(painter, option->rect, option->palette, option->state & State_Selected, {});
+        if (element == CE_MenuItem && drawCheckedIconItem(option, painter, widget))
+            return;
         const auto* item = section(element == CE_MenuItem, option);
         if (!item)
             return QProxyStyle::drawControl(element, option, painter, widget);
@@ -128,6 +130,44 @@ public:
     }
 
 private:
+    /**
+     * A checked row with an icon: a toggle, a radio choice or a combo box's current item. Fusion draws no check mark when
+     * a row has an icon (and shifts a checked combo item's text under it), so the icon sits on the checked-button fill
+     * instead, as the same toggle does on a toolbar. False leaves the row to Fusion.
+     */
+    bool drawCheckedIconItem(const QStyleOption* option, QPainter* p, const QWidget* widget) const
+    {
+        const auto* item = qstyleoption_cast<const QStyleOptionMenuItem*>(option);
+        if (!item || item->icon.isNull() || item->checkType == QStyleOptionMenuItem::NotCheckable || !item->checked)
+            return false;
+        QStyleOptionMenuItem rest(*item);
+        // A blank icon rather than none: without one, Fusion drops the icon column in a combo popup and the text runs under the icon.
+        QPixmap blank(1, 1);
+        blank.fill(Qt::transparent);
+        rest.icon = QIcon(blank);
+        rest.checkType = QStyleOptionMenuItem::NotCheckable;
+        rest.checked = false;
+        QProxyStyle::drawControl(CE_MenuItem, &rest, p, widget);
+        // Fusion's icon column: 4 px in, at least the row's height * 0.79 wide.
+        const int col = std::max({int(item->rect.height() * 0.79), item->maxIconWidth, 21});
+        const QRect cell = visualRect(item->direction, item->rect, QRect(item->rect.x() + 4, item->rect.y(), col, item->rect.height()));
+        const int side = std::min(cell.width(), cell.height()) - 2;
+        QRect box(0, 0, side, side);
+        box.moveCenter(cell.center());
+        p->save();
+        p->setRenderHint(QPainter::Antialiasing);
+        p->setPen(Qt::NoPen);
+        p->setBrush(item->state & State_Selected ? themeColor("checked").lighter(140) : themeColor("checked"));
+        p->drawRoundedRect(QRectF(box), 3, 3);
+        p->restore();
+        const int iconSize = pixelMetric(PM_SmallIconSize, option, widget);
+        const QIcon::Mode mode = !(item->state & State_Enabled) ? QIcon::Disabled : QIcon::Normal;
+        QRect iconRect(0, 0, iconSize, iconSize);
+        iconRect.moveCenter(cell.center());
+        item->icon.paint(p, iconRect, Qt::AlignCenter, mode, QIcon::On);
+        return true;
+    }
+
     /** A rounded highlight for a selected or hovered cell; false leaves the cell to Fusion. */
     static bool drawRowHighlight(const QStyleOptionViewItem& item, QPainter* p)
     {
@@ -520,6 +560,7 @@ QString appStyleSheet(const themes::Theme& t)
         QToolButton[role="overflow"]::menu-indicator { image: none; width: 0; }
         QWidget[role="segmented"] { background: $chrome; border-radius: 5px; }
         QToolButton[role="segment"] { background: transparent; color: $dim; padding: 3px 10px; border-radius: 3px; font-weight: 500; }
+        QToolButton[role="segment"][iconOnly="true"] { padding: 3px 4px; }
         QToolButton[role="segment"]:hover { background: $hover; color: $text; }
         QToolButton[role="segment"]:checked { background: $sel; color: $selText; }
         QToolButton[role="segment"]:disabled { color: $disabled; }

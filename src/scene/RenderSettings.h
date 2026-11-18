@@ -56,7 +56,7 @@ struct LILA_SCENE_API RenderSettings
     std::map<std::string, CameraSettings> cameras;
     /**
      * What the render commands use when a flag is left out: camera, scale, samples, motionBlur, transparent, start, end,
-     * step, path, video, codec, quality. Written by the Render Output window.
+     * step, path, video, codec, quality. Written by the Render panel.
      */
     json output = json::object();
 

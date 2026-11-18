@@ -203,6 +203,30 @@ TEST_CASE("bridge: an end border that runs round the rest of a hole is not welde
     CHECK(isValid(g.mesh));
 }
 
+TEST_CASE("bridge: two edges across a round hole make one strip, not a fill of the hole")
+{
+    Mesh m = makeCylinder({50.0, 100.0, 16, 1, 0, false});
+    // The top rim edges farthest along +x and -x.
+    Index left = kInvalid, right = kInvalid;
+    double lo = 1e30, hi = -1e30;
+    for (Index e = 0; e < m.edgeCapacity(); ++e)
+        if (m.edgeValid(e) && m.isBoundaryEdge(e) && m.position(m.edgePoint(e, 0)).y > 0.0)
+        {
+            const double x = (m.position(m.edgePoint(e, 0)).x + m.position(m.edgePoint(e, 1)).x) * 0.5;
+            if (x < lo)
+                lo = x, left = e;
+            if (x > hi)
+                hi = x, right = e;
+        }
+    const Index sel[] = {left, right};
+    const BridgeResult r = bridge(m, sel, autoOptions());
+    CHECK(r.pairsBridged == 1);
+    CHECK(r.welded == 0);
+    CHECK(r.split == 0);
+    CHECK(r.faces.size() == size_t(r.rows));
+    CHECK(isValid(m));
+}
+
 TEST_CASE("bridge: a sliver between two curves meeting at both ends leaves no loose points")
 {
     // An upper arc of 7 points and a lower arc of 5, sharing their end points, with a row of quads beyond each.

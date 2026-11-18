@@ -7,6 +7,7 @@
 
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -42,6 +43,9 @@ enum class LayerKind : uint8_t
     Folder,
     Instance,
     Filter,
+    Decal,
+    Text,
+    Scatter,
 };
 
 enum class MaskKind : uint8_t
@@ -94,6 +98,8 @@ struct LILA_SCENE_API Mask
     /** Anchor: the anchor and the channel read. */
     std::string anchor;
     std::string channel = "height";
+    /** Generator and paint: how the mask lands on the mesh (layerProjection's values); empty or mode uv for none. */
+    json projection = json::object();
 
     json toJson() const;
     /** Throws std::invalid_argument. */
@@ -126,7 +132,7 @@ struct LILA_SCENE_API Layer
     bool enabled = true;
     /** Channel settings given explicitly; channels not listed take the kind's default (see channelOn). */
     std::map<std::string, ChannelBlend> channels;
-    /** Fill and paint: channel values ([r, g, b, a] or a number). */
+    /** Fill and paint: channel values ([r, g, b, a] or a number); for fill also an image file (any string not a #colour), read through the projection. */
     json material = json::object();
     /** Paint: an image per channel (value in rgb, coverage in alpha: unpainted texels and channels show the stack below), and optionally "mask", a painted layer mask. */
     json paint = json::object();
@@ -143,7 +149,21 @@ struct LILA_SCENE_API Layer
     HeightBlend heightBlend;
     /** Procedural: repeats the content. */
     LayerTiling tiling;
+    /**
+     * Fill and procedural: how the content lands on the mesh, layerProjection's values (mode, position, rotation, size,
+     * sharpness, follow, warp corners). Empty or mode uv keeps the uvs.
+     */
+    json projection = json::object();
     std::vector<Mask> masks;
+    /** Decal: {maps: {channel: image file}, columns, rows, cell} (an atlas cell when columns or rows > 1), placed by projection. */
+    json decal = json::object();
+    /** Text: {text, font, tracking, outline (ems), outlineColor, resolution}; the letters take the material's baseColor. */
+    json text = json::object();
+    /**
+     * Scatter: {pattern (an image whose brightness is the shape), maps {channel: image file}, countX, countY, perCell, size,
+     * sizeRandom, rotationRandom, hueRandom, seed, avoidOverlap}: copies of the pattern over the uvs, painting the material.
+     */
+    json scatter = json::object();
     /** Folder: bottom first. */
     std::vector<Layer> children;
 
@@ -161,13 +181,20 @@ struct LILA_SCENE_API LayerStack
     double heightNormal = 1.0;
     /** Bottom first. */
     std::vector<Layer> layers;
+    /**
+     * Named variants, {name: {layer id: override}}: an override is a merge patch over the layer's JSON form, where
+     * maskOverrides {mask id: patch} patches single masks. Variants hold settings, never pixels.
+     */
+    json variants = json::object();
+    /** The variant the stack compiles with; empty for the base. */
+    std::string variant;
 
     Layer* find(std::string_view id);
     const Layer* find(std::string_view id) const;
     /** The list holding the layer and its index there; null when there is no such layer. */
     std::vector<Layer>* listOf(std::string_view id, size_t* index);
-    /** "L<n>" or "M<n>", unique in the stack. */
-    std::string newId(char prefix);
+    /** A fresh id: prefix and a number, used by no layer or mask nor in taken (ids that still hold paint, say). */
+    std::string newId(char prefix, const std::set<std::string>& taken = {});
     /** Every anchor name and the layer carrying it. */
     std::map<std::string, std::string> anchors() const;
 
@@ -175,6 +202,14 @@ struct LILA_SCENE_API LayerStack
     /** Throws std::invalid_argument. */
     static LayerStack fromJson(const json& j);
 };
+
+/** The stack as its active variant has it: that variant's overrides applied, the variants themselves kept. */
+LILA_SCENE_API LayerStack withVariant(const LayerStack& stack);
+/** Merges a variant override into another, keeping nulls (which drop a value when the override is applied). */
+LILA_SCENE_API void mergeOverride(json& into, const json& patch);
+
+/** Whether a projection (layerProjection's values) moves content off the uvs: a mode other than uv. */
+LILA_SCENE_API bool hasProjection(const json& projection);
 
 /** Whether the layer writes the channel: its explicit setting, else by kind (fill: has a material value; paint: has a painted image; procedural: has the output; others: yes). */
 LILA_SCENE_API bool channelOn(const LayerStack& stack, const Layer& layer, const std::string& channel);

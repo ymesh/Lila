@@ -3,12 +3,16 @@
 #include "core/Profile.h"
 #include "gn/Routing.h"
 #include "ops/Command.h"
+#include "tex/PatchFill.h"
+#include "tex/Ptex.h"
 #include "scene/Materials.h"
 #include "scene/Node.h"
 #include "tex/Evaluate.h"
 #include "tex/Interop.h"
 #include "tex/Layers.h"
 #include "tex/PainterImport.h"
+#include "tex/ShadingChannels.h"
+#include "tex/Snapshots.h"
 #include "tex/SlangRt.h"
 
 #include <algorithm>
@@ -114,8 +118,10 @@ json portStateJson(const PortDecl& p, const GNode* n, const Graph* g, bool input
         {
             j["linked"] = !g->linksInto(n->name, p.id).empty();
             auto it = n->values.find(p.id);
-            j["value"] = it != n->values.end() ? *it : p.defaultValue;
+            j["value"] = it != n->values.end() ? *it : p.implicit.empty() ? p.defaultValue : json();
         }
+        if (!p.implicit.empty())
+            j["implicit"] = p.implicit;
         if (p.taps != 1)
             j["taps"] = p.taps;
     }
@@ -213,6 +219,9 @@ json mergeSettings(const SetSettings& base, const json& changes, const char* cmd
 {
     if (!changes.is_object())
         throw CommandError(std::string(cmd) + ": settings must be a dict");
+    if (changes.contains("material"))
+        throw CommandError(std::string(cmd) + ": a texture set has no material; a material picks the set (its Texture Set, "
+                           "texCreateSet materials=, or setMaterialTexture textureSet= for one map)");
     json merged = base.toJson();
     for (auto& [k, v] : changes.items())
         merged[k] = v;
@@ -447,15 +456,18 @@ Graph graphFromSpec(const json& spec, const std::string& setName, const SetSetti
 
 void registerCommands()
 {
+    shading::registerCommands();
+    snapshots::registerCommands();
     using T = ArgType;
     ops::registerCommand({
         .name = "texCreateSet",
         .doc = "Create a texture set: a texture graph with a Material Output, and the channels, tile sizes and export preset its maps use. "
-               "Returns its name.",
+               "materials= points those materials at it. Returns its name.",
         .positionalDoc = "name",
         .flags = {{"settings", "", T::Any, nullptr, "Settings dict: channels [{name, type, bits}], width, height, tiles [udim or {udim, width, height}], "
-                                                    "normalConvention (opengl/directx), bakeProject, exportPreset, material."},
-                  presetFlag({"resolution", "", T::Int, nullptr, "Width and height of every tile.", {}, {}, 1.0}, kTextureSizePresets)},
+                                                    "normalConvention (opengl/directx), bakeProject, exportPreset."},
+                  presetFlag({"resolution", "", T::Int, nullptr, "Width and height of every tile.", {}, {}, 1.0}, kTextureSizePresets),
+                  {"materials", "", T::List, nullptr, "Materials that use the set (their Texture Set), created when missing."}},
         .run = [](const Args& a) -> json {
             std::string name = positionalString(a, 0, "texCreateSet", "name");
             if (!gn::validIdentifier(name))
@@ -474,6 +486,19 @@ void registerCommands()
             }
             writeGraph(graph(), *n, Graph::makeMaterial(name));
             writeSettings(graph(), *n, SetSettings::fromJson(settings));
+            if (a.has("materials"))
+                try
+                {
+                    const std::vector<std::string> materials = a.flags["materials"].get<std::vector<std::string>>();
+                    for (const std::string& m : materials)
+                        if (!scene::materials::find(graph(), m))
+                            ops::execute("createMaterial", {{"args", {m}}});
+                    assignSet(graph(), name, materials);
+                }
+                catch (const std::exception& e)
+                {
+                    throw CommandError(std::string("texCreateSet: ") + e.what());
+                }
             return name;
         },
     });
@@ -488,7 +513,7 @@ void registerCommands()
     ops::registerCommand({
         .name = "texSetSettings",
         .doc = "Change a texture set's settings: the keys given replace the set's (channels, width, height, tiles, normalConvention, "
-               "bakeProject, exportPreset, material, heightDepth, uvWidth, uvHeight, normalFromHeight, normalFade, heightSource). Returns the full settings.",
+               "bakeProject, exportPreset, heightDepth, uvWidth, uvHeight, normalFromHeight, normalFade, heightSource). Returns the full settings.",
         .positionalDoc = "set settings",
         .run = [](const Args& a) -> json {
             Node& n = setNode(positionalString(a, 0, "texSetSettings", "texture set"), "texSetSettings");
@@ -929,10 +954,8 @@ void registerCommands()
             }
             if (!spec.is_object())
                 throw CommandError("texBuildGraph: the spec must be an object with material, nodes and links");
-            std::string material = spec.value("material", std::string());
-            if (material.empty() && spec.contains("settings") && spec["settings"].is_object())
-                material = spec["settings"].value("material", std::string());
-            // With no set named, the one already bound to the material is rebuilt, whatever it is called.
+            const std::string material = spec.value("material", std::string());
+            // With no set named, the one the material uses is rebuilt, whatever it is called.
             const std::string bound = material.empty() ? std::string() : setForMaterial(graph(), material);
             const std::string name = spec.contains("set") ? spec.value("set", std::string())
                                      : !bound.empty()     ? bound
@@ -950,10 +973,8 @@ void registerCommands()
             SetSettings settings = existing ? readSettings(*existing) : SetSettings::makeDefault();
             if (spec.contains("settings"))
                 settings = SetSettings::fromJson(mergeSettings(settings, spec["settings"], "texBuildGraph"));
-            if (!material.empty())
-                settings.material = material;
-            if (a.has("assign") && (settings.material.empty() || settings.material == name))
-                throw CommandError("texBuildGraph: assign needs a material name other than the set's; add \"material\" to the spec");
+            if (a.has("assign") && material.empty())
+                throw CommandError("texBuildGraph: assign needs a material; add \"material\" to the spec");
 
             std::vector<std::string> errors;
             Graph g = graphFromSpec(spec, name, settings, errors);
@@ -969,11 +990,15 @@ void registerCommands()
             writeSettings(graph(), *n, settings);
             writeGraph(graph(), *n, g);
 
-            const std::string slot = settings.material.empty() ? name : settings.material;
-            if (a.has("assign"))
+            const std::string slot = material;
+            if (!slot.empty())
             {
                 if (!scene::materials::find(graph(), slot))
                     ops::execute("createMaterial", {{"args", {slot}}});
+                assignSet(graph(), name, {slot});
+            }
+            if (a.has("assign"))
+            {
                 json call = {{"args", json::array({slot})}};
                 for (const json& m : a.flags["assign"])
                     call["args"].push_back(m);
@@ -1119,7 +1144,9 @@ void registerCommands()
                   {"backend", "", T::String, nullptr, "gpu or cpu; the GPU when left out and the renderer can run.", {"gpu", "cpu"}},
                   {"normalFromHeight", "", T::Bool, nullptr,
                    "Write the normal as detail over the height, with the height at 16 bits, for materials that rebuild normals from "
-                   "it; the set's normalFromHeight when left out."}},
+                   "it; the set's normalFromHeight when left out."},
+                  {"variants", "", T::Bool, false,
+                   "Export the base and every variant in one go, each named by the {variant} token (base for the base)."}},
         .undoable = false,
         .run = [](const Args& a) -> json {
             Node& n = setNode(positionalString(a, 0, "texExport", "texture set"), "texExport");
@@ -1132,9 +1159,40 @@ void registerCommands()
             o.backend = a.get<std::string>("backend", "");
             if (a.has("normalFromHeight"))
                 o.normalFromHeight = a.get<bool>("normalFromHeight", false);
+            StackState st = readStack(readGraph(n), readSettings(n));
+            o.variant = st.stack.variant;
             try
             {
-                return exportSet(n, o);
+                if (!a.get<bool>("variants", false))
+                    return exportSet(n, o);
+                // Each variant in turn is compiled into the set, exported, and the one shown is put back.
+                std::vector<std::string> names = {""};
+                for (const auto& [name, v] : st.stack.variants.items())
+                    names.push_back(name);
+                const std::string shown = st.stack.variant;
+                auto show = [&](const std::string& v) {
+                    StackState now = readStack(readGraph(n), readSettings(n));
+                    now.stack.variant = v;
+                    writeGraph(graph(), n, compileStack(now.stack, readSettings(n), readGraph(n)).graph);
+                };
+                json out = {{"variants", json::object()}};
+                o.needVariantToken = true;
+                try
+                {
+                    for (const std::string& v : names)
+                    {
+                        show(v);
+                        o.variant = v;
+                        out["variants"][v.empty() ? "base" : v] = exportSet(n, o);
+                    }
+                }
+                catch (...)
+                {
+                    show(shown);
+                    throw;
+                }
+                show(shown);
+                return out;
             }
             catch (const std::exception& e)
             {
@@ -1159,5 +1217,7 @@ void registerCommands()
     registerLayerCommands();
     registerInteropCommands();
     painter::registerPainterCommands();
+    registerPtexCommands();
+    registerPatchFillCommands();
 }
 } // namespace lila::tex

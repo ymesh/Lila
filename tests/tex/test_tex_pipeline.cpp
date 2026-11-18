@@ -124,7 +124,7 @@ TEST_CASE("tex pipeline: MCP texture tools")
     CHECK_FALSE(d.value("isError", false));
     const json desc = json::parse(toolText(d));
     CHECK(desc["set"] == "Crate");
-    CHECK(desc["slot"] == "Crate");
+    CHECK(desc["materials"].empty());
     CHECK(desc["mode"] == "layers");
     CHECK(desc["layers"].size() == 2);
     CHECK(desc["channels"].is_array());

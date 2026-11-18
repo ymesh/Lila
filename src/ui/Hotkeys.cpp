@@ -15,6 +15,7 @@
 #include <QComboBox>
 #include <QCursor>
 #include <QApplication>
+#include <QDockWidget>
 #include <QMenu>
 #include <QKeyEvent>
 #include <QKeySequence>
@@ -393,7 +394,36 @@ bool Hotkeys::textInputFocused(QWidget* w)
                  (qobject_cast<QComboBox*>(w) && static_cast<QComboBox*>(w)->isEditable()));
 }
 
-std::optional<Hotkeys::Binding> Hotkeys::lookup(QKeyEvent* e, QWidget* focus) const
+namespace
+{
+QWidget* hoverContextUnderCursor()
+{
+    for (QWidget* w = QApplication::widgetAt(QCursor::pos()); w; w = w->parentWidget())
+        if (w->property("hotkeyHover").toBool() && !w->property("hotkeyContext").toString().isEmpty())
+            return w;
+    return nullptr;
+}
+
+QWidget* enclosingDock(QWidget* w)
+{
+    for (; w; w = w->parentWidget())
+        if (qobject_cast<QDockWidget*>(w))
+            return w;
+    return nullptr;
+}
+} // namespace
+
+bool Hotkeys::hoverTakesKey(QWidget* focus, int mods, const QKeyEvent* k) const
+{
+    if (!textInputFocused(focus) || mHoverEnteredAt <= mTextInputAt || (mods & ~Qt::ShiftModifier) != 0 ||
+        k->text().isEmpty() || !k->text().front().isPrint() || k->key() == Qt::Key_Space)
+        return false;
+    QWidget* panel = hoverContextUnderCursor();
+    // The panel's own fields (the outliner's filter) keep typing.
+    return panel && !panel->isAncestorOf(focus) && (!enclosingDock(panel) || enclosingDock(panel) != enclosingDock(focus));
+}
+
+std::optional<Hotkeys::Binding> Hotkeys::lookup(QKeyEvent* e, QWidget* focus, bool hoverOnly) const
 {
     std::vector<std::string> chain;
     QWidget* hovered = QApplication::widgetAt(QCursor::pos());
@@ -401,6 +431,8 @@ std::optional<Hotkeys::Binding> Hotkeys::lookup(QKeyEvent* e, QWidget* focus) co
         if (w->property("hotkeyHover").toBool())
             if (QString ctx = w->property("hotkeyContext").toString(); !ctx.isEmpty())
                 chain.push_back(ctx.toStdString());
+    if (hoverOnly)
+        focus = nullptr;
     for (QWidget* w = focus; w; w = w->parentWidget())
     {
         QString ctx = w->property("hotkeyContext").toString();
@@ -414,12 +446,13 @@ std::optional<Hotkeys::Binding> Hotkeys::lookup(QKeyEvent* e, QWidget* focus) co
             chain.push_back(ctx.toStdString());
     // The panel under the cursor answers keys the focused one leaves unbound, so Space over the viewport opens the
     // hotbox after a click in the channel box or a torn-off menu.
-    if (!textInputFocused(focus))
+    if (!hoverOnly && !textInputFocused(focus))
         for (QWidget* w = hovered; w; w = w->parentWidget())
             if (QString ctx = w->property("hotkeyContext").toString(); !ctx.isEmpty() && !w->property("hotkeyHover").toBool())
                 if (std::find(chain.begin(), chain.end(), ctx.toStdString()) == chain.end())
                     chain.push_back(ctx.toStdString());
-    chain.push_back("global");
+    if (!hoverOnly)
+        chain.push_back("global");
 
     auto matches = [&](const Chord& chord) { return chordMatches(chord, e); };
     for (const std::string& ctx : chain)
@@ -462,6 +495,10 @@ bool Hotkeys::eventFilter(QObject* obj, QEvent* e)
     // Key-ups are lost when the app loses focus mid-hold, so release everything then.
     if (e->type() == QEvent::ApplicationDeactivate)
         releaseAll();
+    if (e->type() == QEvent::Enter && obj->property("hotkeyHover").toBool())
+        mHoverEnteredAt = ++mInputSeq;
+    if (e->type() == QEvent::FocusIn && obj->isWidgetType() && textInputFocused(static_cast<QWidget*>(obj)))
+        mTextInputAt = ++mInputSeq;
     if (e->type() == QEvent::MouseButtonPress || e->type() == QEvent::MouseButtonDblClick)
         return onMousePress(obj, static_cast<QMouseEvent*>(e));
     if (e->type() == QEvent::MouseButtonRelease && obj->isWidgetType())
@@ -555,7 +592,10 @@ bool Hotkeys::eventFilter(QObject* obj, QEvent* e)
     if (MarkingMenu::active() || qobject_cast<QMenu*>(QApplication::activePopupWidget()))
         return false;
     int mods = int(k->modifiers()) & kModMask;
-    if (textInputFocused(focus) && isStandardTextEdit(mods, k->key()))
+    std::optional<Binding> hoverFound = hoverTakesKey(focus, mods, k) ? lookup(k, focus, true) : std::nullopt;
+    if (!hoverFound && textInputFocused(focus))
+        mTextInputAt = ++mInputSeq;
+    if (!hoverFound && textInputFocused(focus) && isStandardTextEdit(mods, k->key()))
         return false;
     // Code and text editors keep Ctrl+F for their own find bar.
     if ((qobject_cast<QPlainTextEdit*>(focus) || qobject_cast<QTextEdit*>(focus)) && mods == Qt::ControlModifier && k->key() == Qt::Key_F)
@@ -567,7 +607,7 @@ bool Hotkeys::eventFilter(QObject* obj, QEvent* e)
     if (mods == 0 && startsNumber(k->text()) && focus && focus->property("numericEntry").toBool())
         return false;
 
-    std::optional<Binding> found = lookup(k, focus);
+    std::optional<Binding> found = hoverFound ? hoverFound : lookup(k, focus);
     const Binding* b = found ? &*found : nullptr;
     if (!b)
     {

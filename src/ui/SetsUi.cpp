@@ -89,6 +89,11 @@ QuickSelectSetsPanel::QuickSelectSetsPanel(QWidget* parent) : QWidget(parent)
             }
     });
     bar->addSpacing(10);
+    mSelect = add("pointer", "<b>Select Members</b><br>Select the members of the current set.", [this] {
+        if (std::string set = currentSet(); !set.empty())
+            sets::run("selectSetMembers", {{"args", {set}}});
+    }, "Select");
+    mSelect->setEnabled(false);
     add("square-plus", "<b>Add Selected</b><br>Add the selection to the current set.", [this] {
         if (std::string set = currentSet(); !set.empty())
             sets::run("addToSet", {{"args", {set}}});
@@ -141,6 +146,7 @@ QuickSelectSetsPanel::QuickSelectSetsPanel(QWidget* parent) : QWidget(parent)
         const bool add = QApplication::keyboardModifiers() & (Qt::ControlModifier | Qt::ShiftModifier);
         sets::run("selectSetMembers", {{"args", {set}}, {"add", add}});
     });
+    connect(mTree, &QTreeWidget::currentItemChanged, this, [this] { mSelect->setEnabled(!currentSet().empty()); });
     connect(mTree, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem* item, int) { rename(item); });
     connect(mTree, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem* item, int column) {
         if (mFilling || column != 0)

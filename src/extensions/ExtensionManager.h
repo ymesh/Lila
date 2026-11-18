@@ -110,7 +110,10 @@ public:
 
     /** general.json /extensions/autoload: extensions the user turned on. */
     std::vector<std::string> autoloadList() const;
-    /** Whether the extension loads at startup: turned on by the user, or enabledByDefault and not turned off. */
+    /**
+     * Whether the extension loads at startup: turned on by the user, or enabledByDefault and not turned off. One the
+     * roadmap marks not ready for use (core/Features.h) loads only once the user turns it on.
+     */
     bool autoloads(const ExtensionInfo& info) const;
     void setAutoload(const std::string& name, bool on);
     /** Loads every extension that autoloads, dependencies first, logging failures. */
@@ -144,11 +147,16 @@ private:
     void watchLoop();
     void packageChanged(const std::string& name, std::vector<fs::path> paths);
     void saveWatches() const;
+    /** Rebuilds lila.ops after native registrations change, or marks it pending while a batch of loads or unloads runs. */
+    void commandsChanged();
+    void flushCommands();
 
     std::map<std::string, std::unique_ptr<Loaded>> mLoaded;
     std::vector<std::string> mOrder; // load order
     std::map<std::string, std::string> mErrors;
     std::vector<fs::path> mExtraPaths;
+    int mBatchDepth = 0;
+    bool mCommandsPending = false;
 
     mutable std::mutex mWatchMutex;
     std::map<std::string, std::unique_ptr<Watch>> mWatches;

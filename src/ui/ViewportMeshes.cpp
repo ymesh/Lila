@@ -16,6 +16,7 @@ struct MeshSettings
     bool render = false; // a render view: shaded, no wire, highlight, isolation or preselection
     heightfieldDisplay::Settings terrain; // terrains drawn from their heights, and how
     bool wireframe = false, wireOnShaded = false, showMaterials = false, smoothSubdivisions = false, inherit = false, maskShown = true;
+    bool modifierEdges = false; // component editing draws the modifiers' added edges, faintly
     render::VertexColorMode vertexColors = render::VertexColorMode::Off;
     render::ColorChannel colorChannel = render::ColorChannel::Rgb;
     glm::vec4 componentWire{0.0f};
@@ -34,6 +35,8 @@ struct MeshEntry
     uint64_t settings = 0;
     bool hilite = false;
     std::vector<render::MeshDraw> draws; // empty when the node draws nothing
+    /** Per draw: the edges a modifier added, drawn darker and without selection highlights. */
+    std::vector<uint8_t> modifierWire;
     scene::MeshPtr shown;
     glm::dmat4 world{1.0};
     scene::NodeId arrayed = scene::kNoNode;
@@ -41,6 +44,9 @@ struct MeshEntry
     std::optional<render::HeightfieldDraw> heightfield;
     std::string layers;
 };
+
+/** Modifier-added edges are drawn at this fraction of the wire colour the mesh would otherwise get. */
+constexpr float kModifierWireShade = 0.5f;
 
 /** The node's draws under these settings, or none when it is hidden. */
 void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const scene::sceneIndex::Hierarchy& hierarchy,
@@ -51,6 +57,7 @@ void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const sc
     e.pass = n.evaluatedPass();
     e.hilite = hilite;
     e.draws.clear();
+    e.modifierWire.clear();
     e.shown.reset();
     e.heightfield.reset();
     if (!hierarchy.visible(id) || (iso && !iso->shows(id)) || !set.maskShown)
@@ -78,9 +85,12 @@ void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const sc
     const bool tangents = textured && (previewed || needsTangents(*shown));
     // Geometry nodes instances draw each referenced mesh once, instanced, unless something needs the flat mesh's own draw.
     const auto cageWire = set.smoothSubdivisions ? nullptr : smoothCageFor(outMesh, smooth);
+    // Modifiers that add edges (a bevel) get their added edges drawn apart from the mesh's real ones.
+    const scene::MeshPtr cage = set.render || n.type().isA("lattice") ? nullptr : scene::modifiers::cage(g, id);
+    const bool modified = modifiersAddEdges(cage, outMesh);
     auto part = isolate::masked(iso, id, shown, smooth, tangents, cageWire.get());
     gn::InstanceViewPtr instanced;
-    if (smooth == 0 && !previewed && !hilite && !part && !cageWire)
+    if (smooth == 0 && !previewed && !hilite && !part && !cageWire && !modified)
         instanced = gn::instanceViewFor(g, id);
     auto rm = instanced ? nullptr : renderMeshFor(shown, tangents, id);
     if (!rm && !instanced)
@@ -93,6 +103,8 @@ void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const sc
     render::MeshDraw d;
     if (part)
         d.mesh = part->mesh;
+    else if (auto wireless = modified ? wirelessMeshFor(shown, tangents) : nullptr)
+        d.mesh = std::move(wireless);
     else if (cageWire)
         d.mesh = cageWireMeshFor(*cageWire, tangents);
     else
@@ -106,6 +118,8 @@ void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const sc
     d.world = e.world;
     d.node = uint64_t(id);
     d.lightingChannels = scene::lightingChannels::mask(n);
+    if (!set.render)
+        d.drawOffset = scene::drawOffset(n);
     if (set.vertexColors != render::VertexColorMode::Off && shown && !geo::colors::current(*shown).empty())
     {
         d.vertexColors = set.vertexColors;
@@ -118,7 +132,8 @@ void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const sc
     const bool templated = layer.type == scene::displayLayers::DisplayType::Template;
     if (!set.wireframe && !wireOnly && !templated)
         d.flags |= render::DrawShaded;
-    if (set.wireframe || set.wireOnShaded || wireOnly || templated || hilite)
+    const bool showsWire = set.wireframe || set.wireOnShaded || wireOnly || templated;
+    if (showsWire || hilite)
         d.flags |= render::DrawWire;
     if (templated && !set.wireframe)
         d.flags |= render::DrawWireDepth;
@@ -141,8 +156,36 @@ void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const sc
         pushInstanceDraws(parts, d, *instanced, textured);
         e.draws = parts.meshes.list();
     }
-    else
+    else if (!modified)
         e.draws.push_back(std::move(d));
+    else
+    {
+        // The cage's edges laid onto the result carry the mesh's wire (component editing draws the cage itself); the
+        // edges the modifiers added show only when asked for, darker.
+        const ModifierWire wire = modifierWireFor(cage, shown);
+        const render::MeshDraw surface = d;
+        e.draws.push_back(std::move(d));
+        e.modifierWire.push_back(0);
+        auto lines = [&](std::shared_ptr<const render::RenderMesh> mesh, uint32_t flags, uint8_t modifierEdges) {
+            render::MeshDraw w;
+            w.mesh = std::move(mesh);
+            w.world = surface.world;
+            w.node = surface.node;
+            w.instances = surface.instances;
+            w.wireColor = surface.wireColor;
+            w.wireWidth = surface.wireWidth;
+            w.drawOffset = surface.drawOffset;
+            // Depth tested against the surface, so the far side's edges stay hidden.
+            w.flags = flags | (set.wireframe ? 0u : render::DrawWireDepth);
+            e.draws.push_back(std::move(w));
+            e.modifierWire.push_back(modifierEdges);
+        };
+        // The added edges go first so the real ones draw over them where they meet.
+        if (set.modifierEdges && wire.added)
+            lines(wire.added, render::DrawWire, 1);
+        if (!hilite && wire.real)
+            lines(wire.real, showsWire || set.modifierEdges ? render::DrawWire : 0u, 0);
+    }
 }
 
 MeshSettings meshSettings(scene::Graph& g, const ViewportWidget::RenderView* rv, const scene::isolation::Set& iso, uint64_t epoch, double dpr)
@@ -155,6 +198,7 @@ MeshSettings meshSettings(scene::Graph& g, const ViewportWidget::RenderView* rv,
     set.wireOnShaded = !rv && p.value<bool>("general", "/viewport/wireOnShaded", false);
     set.showMaterials = materialsShown() && !viewportDisplay::defaultMaterial();
     set.smoothSubdivisions = p.value<bool>("general", viewportDisplay::kSmoothSubdivisions, false);
+    set.modifierEdges = p.value<bool>("general", viewportDisplay::kModifierEdges, false);
     set.inherit = scene::inheritVisibility();
     set.maskShown = scene::selectionMask::shown(scene::selectionMask::Kind::Mesh);
     set.vertexColors = viewportDisplay::vertexColorMode();
@@ -283,6 +327,8 @@ void ViewportWidget::drawMeshNodes(render::FrameState& s, const RenderView* rv, 
             flags = render::DrawPreselect;
         else if (selected.contains(id) && (!tool || tool->showsSelection(id)))
             flags = order.other(id) ? render::DrawSelected | render::DrawSelectedOther : render::DrawSelected;
+        else if (selected.contains(id) && tool && tool->dimsSelection(id))
+            flags = render::DrawUnderSelected;
         else if (preselecting && (mPreselect.node == id || (e.arrayed != scene::kNoNode && preselectedArray(g, id, mPreselect.node))))
             flags = render::DrawPreselect;
         else if (!componentMode && underSelection.contains(id))
@@ -310,6 +356,18 @@ void ViewportWidget::drawMeshNodes(render::FrameState& s, const RenderView* rv, 
     {
         const MeshEntry& e = cache.entries[f.entry];
         render::MeshDraw& d = out.emplace_back(e.draws[f.draw]);
+        if (f.draw < e.modifierWire.size() && e.modifierWire[f.draw])
+        {
+            // A mesh being edited is selected, so its modifier edges look as they do on the selected object.
+            const glm::vec4 base = e.hilite                        ? s.wireSelected
+                                   : (f.flags & render::DrawSelected) ? ((f.flags & render::DrawSelectedOther) ? s.wireSelectedOther : s.wireSelected)
+                                   : (f.flags & render::DrawPreselect)     ? s.wirePreselect
+                                   : (f.flags & render::DrawUnderSelected) ? s.wireUnderSelected
+                                   : d.wireColor.a > 0.0f                  ? d.wireColor
+                                                                           : s.wireDefault;
+            d.wireColor = glm::vec4(glm::vec3(base) * kModifierWireShade, 1.0f);
+            continue;
+        }
         d.flags |= f.flags;
         if (f.snap)
         {

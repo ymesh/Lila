@@ -82,7 +82,8 @@ private:
     geo::KnifeOptions options(const Target& t, const ViewInfo& view) const;
     void finish(bool closed);
     void insertLoop(const Spot& spot);
-    void deleteEdge(const Spot& spot);
+    /** loop: the whole edge loop through the edge. */
+    void deleteEdge(const Spot& spot, bool loop);
     /** Ctrl+Alt with no cut under way: a click deletes the hovered edge. */
     bool deleting() const;
     void cancel();

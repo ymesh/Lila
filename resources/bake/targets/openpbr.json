@@ -1,0 +1,53 @@
+{
+  "name": "openpbr",
+  "label": "OpenPBR",
+  "version": 1,
+  "doc": "OpenPBR Surface's parameter names, one map per parameter: base_color, base_metalness, specular_roughness, geometry_normal (OpenGL), emission_color and displacement, named {material}_{suffix}, 16 bit for data.",
+  "output": {
+    "name": "{material}_{map}",
+    "format": "png",
+    "bits": 8
+  },
+  "pipeline": {
+    "autoAssign": true
+  },
+  "maps": [
+    {
+      "map": "baseColor",
+      "suffix": "base_color",
+      "slot": "base_color"
+    },
+    {
+      "map": "metallic",
+      "suffix": "base_metalness",
+      "slot": "base_metalness"
+    },
+    {
+      "map": "roughness",
+      "suffix": "specular_roughness",
+      "slot": "specular_roughness"
+    },
+    {
+      "map": "normal",
+      "suffix": "geometry_normal",
+      "slot": "geometry_normal",
+      "bits": 16,
+      "options": {
+        "greenUp": true
+      }
+    },
+    {
+      "map": "emissive",
+      "suffix": "emission_color",
+      "slot": "emission_color",
+      "optional": true
+    },
+    {
+      "map": "height",
+      "suffix": "displacement",
+      "slot": "displacement",
+      "bits": 16,
+      "optional": true
+    }
+  ]
+}

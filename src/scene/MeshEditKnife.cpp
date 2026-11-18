@@ -4,6 +4,7 @@
 #include "geo/Mesh.h"
 #include "geo/Ops.h"
 #include "geo/Symmetry.h"
+#include "geo/Topology.h"
 #include "scene/Components.h"
 #include "scene/Graph.h"
 #include "scene/MeshEditInternal.h"
@@ -96,6 +97,7 @@ void registerMeshEditKnifeCommands()
                   {"loopEdge", "", T::Int, -1, "Insert an edge loop across this edge's ring instead of cutting a path.", {}, {}, -1.0},
                   {"fraction", "", T::Float, 0.5, "Where along loopEdge the loop crosses it, from its first point.", {}, {}, 0.0, 1.0},
                   {"deleteEdge", "", T::Int, -1, "Dissolve this edge, joining its two faces, instead of cutting.", {}, {}, -1.0},
+                  {"deleteLoop", "", T::Bool, false, "With deleteEdge, dissolve the whole edge loop through it."},
                   {"select", "", T::Bool, true, "Select the new edges."}},
         .run = [](const Args& a) -> json {
             Graph& g = graph();
@@ -112,15 +114,17 @@ void registerMeshEditKnifeCommands()
             {
                 if (!mesh.edgeValid(Index(deleteEdge)))
                     throw CommandError("polyKnife: " + name + " has no edge " + std::to_string(deleteEdge));
-                UndoChunk chunk("Delete Edge");
+                const bool loop = a.get<bool>("deleteLoop");
+                UndoChunk chunk(loop ? "Delete Edge Loop" : "Delete Edge");
+                const std::vector<Index> picked = loop ? geo::edgeLoop(mesh, Index(deleteEdge)) : std::vector<Index>{Index(deleteEdge)};
                 std::vector<glm::dvec3> before;
                 int drive = 0;
                 if (sym)
                 {
                     before.assign(mesh.positions().begin(), mesh.positions().end());
-                    drive = sym->majorityWedge(components::convert(mesh, K::Edge, {Index(deleteEdge)}, K::Vertex));
+                    drive = sym->majorityWedge(components::convert(mesh, K::Edge, picked, K::Vertex));
                 }
-                geo::dissolveEdges(mesh, withMirror(mesh, sym ? &*sym : nullptr, {Index(deleteEdge)}, K::Edge), true);
+                geo::dissolveEdges(mesh, withMirror(mesh, sym ? &*sym : nullptr, picked, K::Edge), true);
                 if (sym)
                     maintainSymmetry(n, mesh, before, drive);
                 geo::MeshRemap remap;

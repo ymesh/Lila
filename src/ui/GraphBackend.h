@@ -99,12 +99,25 @@ public:
     virtual bool rebuildsOn(scene::Change /*change*/, const scene::Node* /*n*/) const { return false; }
     /** Whether undo and redo rebuild the canvas, for a backend keeping view state (positions, flags) outside its group nodes. */
     virtual bool rebuildsOnUndo() const { return false; }
+    /**
+     * A cheap fingerprint of everything the group's canvas and panel show, or nullopt when the backend has none. A refresh
+     * whose stamp matches the last one skips the rebuild, so commands that leave the group alone cost nothing here.
+     */
+    virtual std::optional<size_t> groupStamp(scene::Graph& /*g*/, const std::string& /*group*/) const { return std::nullopt; }
     /** The group the node at path runs, empty when it isn't an owner. */
     virtual std::string groupOfOwner(scene::Graph& g, const std::string& path) const;
     /** "modifier": what an owner is called in the side panel. */
     virtual QString ownerNoun() const { return "owner"; }
     /** What the toolbar's group picker is labelled. */
     virtual QString groupNoun() const { return "Group"; }
+    /** Whether the editor offers Rename for its groups. */
+    virtual bool canRenameGroup() const { return false; }
+    /** Renames a group as an undoable UI command; returns the name it ended up with, empty when it failed (already logged). */
+    virtual std::string renameGroup(const std::string& /*group*/, const std::string& /*to*/) const { return {}; }
+    /** Whether the editor offers Delete for its groups. */
+    virtual bool canDeleteGroup() const { return false; }
+    /** Deletes a group as an undoable UI command; false when it failed (already logged). */
+    virtual bool deleteGroup(const std::string& /*group*/) const { return false; }
 
     /** The node type that previews in the viewport (an eye on its header toggles it); empty for none. */
     virtual std::string viewerType() const { return {}; }

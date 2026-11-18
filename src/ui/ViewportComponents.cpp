@@ -354,7 +354,8 @@ void ViewportWidget::drawObjectSymmetryEdges(render::FrameState& s)
         scene::MeshPtr mesh = scene::modifiers::cage(g, id);
         if (!mesh)
             continue;
-        const ComponentShape shape(*n, *mesh, mesh, shownWorld(*n));
+        ComponentShape shape(*n, *mesh, mesh, shownWorld(*n));
+        shape.offsetFor(*n, viewInfo());
         const auto vis = isolate::visibility(&mIsolation, id, mesh);
         for (uint32_t e : symmetryPlaneEdges(*n, mesh))
             if (vis->edge(e))
@@ -383,12 +384,16 @@ static std::shared_ptr<const render::PointCloud> vertexDots(scene::NodeId id, co
         const geo::SymmetryMap* sym = nullptr;
         uint64_t serial = 0;
         std::shared_ptr<const render::PointCloud> cloud;
+        double offset = 0.0;
+        glm::dvec3 eye{0.0};
     };
     // Never destroyed: at exit the meshes' owners (extension DLLs among them) may already be unloaded.
     static auto& cache = *new std::unordered_map<scene::NodeId, Entry>();
     Entry& e = cache[id];
     const uint64_t serial = scene::components::serial();
-    if (e.cloud && e.mesh.lock() == mesh && e.smooth == shape.smooth && e.vis == vis && e.world == shape.world && e.sym == sym && e.serial == serial)
+    // An offset mesh's dots move with the camera.
+    const bool sameView = e.offset == shape.offset && (shape.offset <= 0.0 || e.eye == shape.eye);
+    if (e.cloud && e.mesh.lock() == mesh && e.smooth == shape.smooth && e.vis == vis && e.world == shape.world && e.sym == sym && e.serial == serial && sameView)
         return e.cloud;
     LILA_ZONE_N("vertexDots");
 
@@ -417,7 +422,7 @@ static std::shared_ptr<const render::PointCloud> vertexDots(scene::NodeId id, co
     if (cache.size() > 64)
         std::erase_if(cache, [&](const auto& kv) { return kv.first != id; });
     Entry& slot = cache[id];
-    slot = {mesh, shape.smooth, vis, shape.world, sym, serial, std::move(cloud)};
+    slot = {mesh, shape.smooth, vis, shape.world, sym, serial, std::move(cloud), shape.offset, shape.eye};
     return slot.cloud;
 }
 
@@ -464,9 +469,11 @@ void ViewportWidget::drawComponents(render::FrameState& s)
                 cageDraw.flags = render::DrawWire | render::DrawWireDepth;
                 cageDraw.wireColor = palette.wire;
                 cageDraw.wireWidth = wireWidth;
+                cageDraw.drawOffset = scene::drawOffset(*n);
                 s.meshes.push_back(std::move(cageDraw));
             }
-        const ComponentShape shape(*n, m, mesh, world);
+        ComponentShape shape(*n, m, mesh, world);
+        shape.offsetFor(*n, viewInfo());
         auto wp = [&](uint32_t p) { return glm::dvec3(shape.point(p)); };
         auto edgeLines = [&](uint32_t e, std::vector<render::LineVertex>& out, const glm::vec4& col) {
             shape.forEachSegment(e, [&](const glm::dvec3& a, const glm::dvec3& b) {
@@ -827,9 +834,10 @@ void ViewportWidget::drawPreselect(render::FrameState& s)
     if ((mode == ComponentMode::Vertex && !m.pointValid(id)) || (mode == ComponentMode::Edge && !m.edgeValid(id)) ||
         (mode == ComponentMode::Face && !m.faceValid(id)))
         return;
-    const ComponentShape shape(*n, m, mesh, shownWorld(*n));
-    auto wp = [&](uint32_t p) { return shape.point(p); };
     ViewInfo view = viewInfo();
+    ComponentShape shape(*n, m, mesh, shownWorld(*n));
+    shape.offsetFor(*n, view);
+    auto wp = [&](uint32_t p) { return shape.point(p); };
     glm::dvec3 right(view.view[0][0], view.view[1][0], view.view[2][0]), up(view.view[0][1], view.view[1][1], view.view[2][1]);
     glm::dvec3 fwd = -glm::dvec3(view.view[0][2], view.view[1][2], view.view[2][2]);
     // Thicker than the selection, so hovered and selected read apart.

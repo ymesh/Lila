@@ -4,6 +4,7 @@
 #include "core/Profile.h"
 #include "geo/Mesh.h"
 #include "scene/Graph.h"
+#include "scene/ColorManagement.h"
 #include "scene/Materials.h"
 #include "ui/TexLive.h"
 #include "ui/TextureCache.h"
@@ -164,7 +165,15 @@ render::Material convert(const scene::Node& n)
     m.flags = 0;
     m.sampling = samplingOf(n);
 
-    if ((m.baseColorMap = textures::get(file(n, kBaseColorMap), scene::materials::srgb(n, kBaseColorMap), true)))
+    // With OCIO on, a colour map may name the config colour space it is in.
+    namespace cm = scene::colorManagement;
+    const cm::Settings colour = cm::settings(scene::Graph::current(), PrefStore::get().value<std::string>("general", cm::kConfigPref, ""));
+    auto colourMap = [&](int map, int space) {
+        const std::string ocio = colour.ocio ? n.as<std::string>(space) : std::string();
+        return ocio.empty() ? textures::get(file(n, map), scene::materials::srgb(n, map), true)
+                            : textures::getOcio(file(n, map), colour.config, ocio, scene::materials::srgb(n, map));
+    };
+    if ((m.baseColorMap = colourMap(kBaseColorMap, kBaseColorOcioSpace)))
         m.flags |= render::MatBaseColorMap;
     const bool greenUp = NormalFormat(n.as<int64_t>(kNormalFormat)) == NormalFormat::OpenGL;
     const std::string height = n.as<bool>(kNormalFromHeight) ? file(n, kHeightMap) : std::string();
@@ -196,7 +205,7 @@ render::Material convert(const scene::Node& n)
     }
 
     float intensity = floatAttr(n, kEmissiveIntensity);
-    if ((m.emissiveMap = textures::get(file(n, kEmissiveMap), scene::materials::srgb(n, kEmissiveMap), true)))
+    if ((m.emissiveMap = colourMap(kEmissiveMap, kEmissiveOcioSpace)))
     {
         m.flags |= render::MatEmissiveMap;
         m.emissive = glm::vec3(intensity);

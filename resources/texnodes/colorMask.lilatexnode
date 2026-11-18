@@ -1,0 +1,57 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "colorMask",
+  "label": "Color Mask",
+  "category": "Filter",
+  "doc": "White where the input is near a colour, fading to black by softness past the tolerance: picks out an ID or a hue.",
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0,
+        0,
+        0,
+        1
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "color",
+      "type": "color",
+      "default": [
+        1,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "id": "tolerance",
+      "type": "float",
+      "default": 0.1,
+      "min": 0,
+      "max": 1.8,
+      "doc": "Distance in rgb that still counts."
+    },
+    {
+      "id": "softness",
+      "type": "float",
+      "default": 0.05,
+      "min": 0,
+      "max": 1
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float d = length(input.sample(uv).rgb - p.color.rgb);\nreturn 1.0 - smoothstep(p.tolerance, p.tolerance + max(p.softness, 1e-5), d);"
+  }
+}

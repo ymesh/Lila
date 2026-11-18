@@ -12,6 +12,7 @@
 #include "scene/MeshNodes.h"
 #include "scene/Node.h"
 #include "tex/BrushPresets.h"
+#include "tex/Generators.h"
 #include "tex/Layers.h"
 #include "tex/PaintBuffer.h"
 #include "tex/PaintParticles.h"
@@ -21,6 +22,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <set>
 #include <cmath>
 
 namespace lila::render::paint
@@ -211,20 +213,19 @@ std::string meshForSet(const Node& set)
 {
     scene::Graph& g = graph();
     g.evaluate();
-    const std::string material = setMaterial(set);
     std::string any;
     for (scene::NodeId id : g.nodes())
     {
         Node* n = g.node(id);
         if (!n || !n->type().isA("mesh"))
             continue;
-        scene::MeshPtr m = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+        scene::MeshPtr m = paintSurface(*n);
         if (!m || !m->numFaces())
             continue;
         if (any.empty())
             any = n->path();
         const auto& names = m->materialNames();
-        if (std::find(names.begin(), names.end(), material) != names.end())
+        if (usesSet(names, set))
             return n->path();
     }
     return any;
@@ -420,7 +421,7 @@ uint32_t triangleAt(const PaintMesh& mesh, const json& at, float* u = nullptr, f
 }
 
 /** A fill's triangles from fillBy (mesh, island, material, polygon, triangle, selection) and at / triangle / faces / material. */
-std::vector<uint32_t> fillTriangles(const json& pay, const PaintMesh& pm, const Node& meshNode)
+std::vector<uint32_t> fillTriangles(const json& pay, const PaintMesh& pm, const Node& meshNode, const Node* setOf)
 {
     const std::string by = pay.value("fillBy", std::string("mesh"));
     auto seed = [&]() -> uint32_t {
@@ -448,7 +449,7 @@ std::vector<uint32_t> fillTriangles(const json& pay, const PaintMesh& pm, const 
     {
         if (pay.contains("material"))
         {
-            scene::MeshPtr m = meshNode.as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+            scene::MeshPtr m = paintSurface(meshNode);
             const auto& names = m->materialNames();
             const auto it = std::find(names.begin(), names.end(), pay["material"].get<std::string>());
             if (it == names.end())
@@ -462,6 +463,14 @@ std::vector<uint32_t> fillTriangles(const json& pay, const PaintMesh& pm, const 
         }
         return pm.materialOf(seed());
     }
+    if (by == "group")
+    {
+        const std::string name = pay.value("group", std::string());
+        const json g = setOf ? tex::readSettings(*setOf).faceGroups.value(name, json()) : json();
+        if (!g.is_object())
+            throw CommandError("texPaintStroke: no face group '" + name + "'");
+        return pm.ofFaces(g.value("faces", std::vector<uint32_t>()));
+    }
     if (by == "selection" || by == "faces")
     {
         std::vector<uint32_t> faces;
@@ -473,13 +482,235 @@ std::vector<uint32_t> fillTriangles(const json& pay, const PaintMesh& pm, const 
             throw CommandError("texPaintStroke: fillBy selection needs selected faces (or faces [...])");
         return pm.ofFaces(faces);
     }
-    throw CommandError("texPaintStroke: fillBy is mesh, island, material, polygon, triangle or selection, not " + by);
+    throw CommandError("texPaintStroke: fillBy is mesh, island, material, polygon, triangle, selection or group, not " + by);
 }
 
 /**
  * A projection's picture: a PaintImage document ({width, height, data}), the key of one the set already has, or an image
  * file ({path, rect [x, y, w, h], opacity, linear} or the path alone) laid onto a buffer the view's size.
  */
+/**
+ * Brush limits as one uv mask over the set's first tile: each map range (a mesh map of the set's bake project, or the
+ * set's own height) passes 1 inside [lo, hi], fading out over 0.02; an ID colour passes within its tolerance. Multiplied
+ * into prior (a quick mask) when given. Limits whose map is missing are skipped with a warning. Null when nothing applies.
+ */
+std::shared_ptr<const PaintImage> limitImage(Node& set, const json& limits, std::shared_ptr<const PaintImage> prior)
+{
+    const tex::SetSettings s = tex::readSettings(set);
+    const tex::Tile& tile = s.tiles.front();
+    std::vector<std::pair<image::Image, std::function<float(const float*)>>> tests;
+    auto mapImage = [&](const std::string& map) -> image::Image {
+        if (map == "height")
+        {
+            for (const tex::OutputRequest& r : tex::channelRequests(tex::readGraph(set), s))
+                if (r.name == "height")
+                    return tex::evaluateOutputs(set, {r}, tile.udim, 0, 0).at("height");
+            return {};
+        }
+        if (s.bakeProject.empty())
+            return {};
+        image::Image img = tex::readLiveMeshMap(s.bakeProject, map, tile.udim);
+        if (img.width <= 0)
+        {
+            const std::filesystem::path f = tex::bakedMapFile(graph(), s.bakeProject, map, tile.udim);
+            std::string err;
+            if (!f.empty())
+                img = image::read(f, &err);
+        }
+        return img;
+    };
+    for (const char* key : {"cavity", "convexity", "curvature", "ao", "thickness", "height"})
+        if (limits.contains(key) && limits[key].is_array() && limits[key].size() == 2)
+        {
+            const float lo = limits[key][0].get<float>(), hi = limits[key][1].get<float>();
+            image::Image img = mapImage(key);
+            if (img.width <= 0)
+            {
+                log::warn("texPaintStroke: brush limit {} needs the set's {} map, which it doesn't have; the limit is ignored", key, key);
+                continue;
+            }
+            tests.push_back({std::move(img), [lo, hi](const float* t) {
+                                 const float v = t[0];
+                                 return std::clamp((v - lo) / 0.02f + 1.0f, 0.0f, 1.0f) * std::clamp((hi - v) / 0.02f + 1.0f, 0.0f, 1.0f);
+                             }});
+        }
+    if (limits.contains("id") && limits["id"].is_object())
+    {
+        const json c = limits["id"].value("color", json::array({1.0, 1.0, 1.0}));
+        const glm::vec3 want(c[0].get<float>(), c[1].get<float>(), c[2].get<float>());
+        const float tol = limits["id"].value("tolerance", 0.05f);
+        image::Image img = mapImage("id");
+        if (img.width <= 0)
+            log::warn("texPaintStroke: the ID brush limit needs the set's id map, which it doesn't have; the limit is ignored");
+        else
+            tests.push_back({std::move(img), [want, tol](const float* t) { return glm::length(glm::vec3(t[0], t[1], t[2]) - want) <= tol ? 1.0f : 0.0f; }});
+    }
+    if (tests.empty() && !prior)
+        return nullptr;
+    int w = prior ? prior->width : 0, h = prior ? prior->height : 0;
+    for (const auto& [img, fn] : tests)
+        if (img.width > w)
+            w = img.width, h = img.height;
+    std::vector<float> rgba(size_t(w) * size_t(h) * 4, 1.0f);
+    const std::vector<float> priorTexels = prior ? prior->rgba() : std::vector<float>();
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+        {
+            float a = 1.0f;
+            auto texelOf = [&](int iw, int ih) { return (size_t(std::min(y * ih / h, ih - 1)) * size_t(iw) + size_t(std::min(x * iw / w, iw - 1))) * 4; };
+            if (prior)
+                a *= priorTexels[texelOf(prior->width, prior->height) + 3];
+            for (const auto& [img, fn] : tests)
+                a *= fn(&img.rgba[texelOf(img.width, img.height)]);
+            rgba[(size_t(y) * size_t(w) + size_t(x)) * 4 + 3] = a;
+        }
+    return PaintImage::fromRgba(w, h, rgba);
+}
+
+/** A saved projection view's JSON from the set's settings, or the view itself when it is one. */
+json namedView(const Node& set, const json& v, const char* cmd)
+{
+    if (!v.is_string())
+        return v;
+    const json views = tex::readSettings(set).projectionViews;
+    if (!views.contains(v.get<std::string>()))
+        throw CommandError(std::string(cmd) + ": no projection view named '" + v.get<std::string>() + "'");
+    return views[v.get<std::string>()];
+}
+
+json captureView(const Args& a)
+{
+    Node& set = setArg(a, "texCaptureView");
+    if (!a.has("view"))
+        throw CommandError("texCaptureView: give view {width, height, camera | viewProj + eye | ...} or a saved view's name");
+    const ScreenView v = screenView(namedView(set, a.flags["view"], "texCaptureView"));
+    std::string mesh = a.get<std::string>("mesh", "");
+    if (mesh.empty())
+        mesh = meshForSet(set);
+    Node* meshNode = mesh.empty() ? nullptr : graph().find(mesh);
+    std::shared_ptr<const PaintMesh> pm = meshNode ? paintMesh(graph(), meshNode->path(), setMaterial(set)) : nullptr;
+    if (!pm)
+        throw CommandError("texCaptureView: no mesh uses " + set.name() + "'s material; pass mesh=");
+    const std::string channel = a.get<std::string>("channel", "baseColor");
+    const tex::SetSettings s = tex::readSettings(set);
+    const tex::Channel* ch = s.channel(channel);
+    if (!ch)
+        throw CommandError("texCaptureView: the set has no channel " + channel);
+    image::Image src;
+    if (a.has("layer"))
+    {
+        syncBuffer(graph(), set, a.get<std::string>("layer"));
+        src = readChannel(set.id(), a.get<std::string>("layer"), channel, s.tiles.front().udim);
+    }
+    else
+    {
+        tex::OutputRequest req;
+        for (const tex::OutputRequest& r : tex::channelRequests(tex::readGraph(set), s))
+            if (r.name == channel)
+                req = r;
+        try
+        {
+            src = tex::evaluateOutputs(set, {req}, s.tiles.front().udim, 0, 0).at(channel);
+        }
+        catch (const std::exception& e)
+        {
+            throw CommandError(std::string("texCaptureView: ") + e.what());
+        }
+    }
+    if (src.width <= 0)
+        throw CommandError("texCaptureView: nothing to capture in " + channel);
+    const double scale = std::clamp(a.get<double>("scale", 1.0), 0.1, 4.0);
+    const int w = std::max(1, int(v.width * scale)), h = std::max(1, int(v.height * scale));
+    const glm::dmat4 toObject = glm::inverse(worldOf(*meshNode));
+    const bool color = ch->type == tex::PortType::Color;
+    std::vector<float> rgba(size_t(w) * size_t(h) * 4, 0.0f);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+        {
+            glm::dvec3 o, d;
+            pixelRay(v, toObject, {(x + 0.5) / scale, (y + 0.5) / scale}, o, d);
+            geo::BvhHit hit;
+            if (!pm->bvh->raycast(o, d, hit, std::numeric_limits<double>::max(), false) || hit.triangle >= pm->triangleCount() ||
+                !pm->paintable[hit.triangle])
+                continue;
+            const glm::vec2 uv = pm->uv(uint32_t(hit.triangle), float(hit.bary.y), float(hit.bary.z));
+            // Nearest texel: an unedited round trip then gives back the values it read.
+            const int tx = std::clamp(int((uv.x - std::floor(uv.x)) * src.width), 0, src.width - 1);
+            const int ty = std::clamp(int((1.0f - (uv.y - std::floor(uv.y))) * src.height), 0, src.height - 1);
+            const float* t = &src.rgba[(size_t(ty) * size_t(src.width) + size_t(tx)) * 4];
+            float* out = &rgba[(size_t(y) * size_t(w) + size_t(x)) * 4];
+            for (int c = 0; c < 3; ++c)
+            {
+                const float lin = std::clamp(color || ch->type == tex::PortType::Gray ? t[color ? c : 0] : t[c], 0.0f, 1.0f);
+                // Image editors work in sRGB; texPaintStroke's projection reads 8 and 16-bit files back as sRGB.
+                out[c] = color ? (lin <= 0.0031308f ? lin * 12.92f : 1.055f * std::pow(lin, 1.0f / 2.4f) - 0.055f) : lin;
+            }
+            out[3] = 1.0f;
+        }
+    const std::filesystem::path file = paths::fromUtf8(a.get<std::string>("file", ""));
+    if (file.empty())
+        throw CommandError("texCaptureView: give file (a .png)");
+    std::error_code ec;
+    std::filesystem::create_directories(file.parent_path(), ec);
+    image::writePng(file, w, h, rgba, 16);
+    return {{"file", paths::toUtf8(file)}, {"width", w}, {"height", h}, {"channel", channel}};
+}
+
+json projectionView(const Args& a)
+{
+    Node& set = setArg(a, "texProjectionView");
+    if (a.positional.size() < 2 || !a.positional[1].is_string())
+        throw CommandError("texProjectionView: give the view's name");
+    const std::string name = a.positional[1].get<std::string>();
+    tex::SetSettings s = tex::readSettings(set);
+    if (a.get<bool>("remove", false))
+        s.projectionViews.erase(name);
+    else if (a.has("view"))
+        s.projectionViews[name] = a.flags["view"];
+    else
+    {
+        if (!s.projectionViews.contains(name))
+            throw CommandError("texProjectionView: no projection view named '" + name + "'");
+        return s.projectionViews[name];
+    }
+    tex::writeSettings(graph(), set, s);
+    return s.projectionViews;
+}
+
+/** A stencil's picture: texels, a key the set or the paint tool holds, or a file (decoded to linear for colour stencils). */
+std::shared_ptr<const PaintImage> stencilPicture(const json& img, const Node& set, bool color)
+{
+    if (img.is_object() && img.contains("data"))
+    {
+        auto p = PaintImage::fromJson(img);
+        if (!p)
+            throw CommandError("texPaintStroke: the stencil image needs width, height and data");
+        return p;
+    }
+    if (!img.is_string())
+        throw CommandError("texPaintStroke: stencil image is a file path, an image key or {width, height, data}");
+    const std::string s = img.get<std::string>();
+    PaintPtr data = readPaint(set);
+    if (auto it = data->images.find(s); it != data->images.end())
+        return it->second;
+    if (auto held = heldImage(s))
+        return held;
+    std::string err;
+    image::Image pic = image::read(paths::fromUtf8(s), &err);
+    if (pic.width <= 0)
+        throw CommandError("texPaintStroke: can't read stencil " + s + ": " + err);
+    std::string ext = paths::fromUtf8(s).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](char c) { return char(std::tolower(static_cast<unsigned char>(c))); });
+    if (color && ext != ".exr" && ext != ".hdr")
+        for (size_t i = 0; i < pic.rgba.size(); ++i)
+            if (i % 4 != 3)
+            {
+                const float c = std::clamp(pic.rgba[i], 0.0f, 1.0f);
+                pic.rgba[i] = c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+            }
+    return PaintImage::fromRgba(pic.width, pic.height, pic.rgba);
+}
+
 std::shared_ptr<const PaintImage> projectionImage(const json& img, const Node& set, const StrokeView& view)
 {
     if (img.is_object() && img.contains("data"))
@@ -533,11 +764,11 @@ std::shared_ptr<const PaintImage> projectionImage(const json& img, const Node& s
  * The symmetry a call asks for: symmetry {mirror: true | "x" | "y" | "z" | [nx, ny, nz, offset], radial {count, axis}}
  * when given, else the brush's mirror (across the mesh's symmetry plane, through its point pairs) and radial copies.
  */
-tex::paint::PaintSymmetry symmetryOf(const json& j, const brush::BrushSettings& bs, const Node& meshNode)
+tex::paint::PaintSymmetry spatialSymmetryOf(const json& j, const brush::BrushSettings& bs, const Node& meshNode)
 {
     const int64_t attr = meshNode.as<int64_t>(scene::MeshNode::kSymmetry);
     int axis = attr >= 1 && attr <= 3 ? int(attr - 1) : 0;
-    scene::MeshPtr mesh = meshNode.as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+    scene::MeshPtr mesh = paintSurface(meshNode);
     brush::BrushSettings b = bs;
     if (!j.contains("symmetry") || !j["symmetry"].is_object())
         return tex::paint::brushSymmetry(b, mesh.get(), scene::paintSymmetrySpec(meshNode));
@@ -559,6 +790,16 @@ tex::paint::PaintSymmetry symmetryOf(const json& j, const brush::BrushSettings& 
         }
     }
     return tex::paint::brushSymmetry(b, mesh.get(), axis, scene::symmetryOffset(meshNode, axis));
+}
+
+/** The stroke's symmetry: its spatial copies, each mirrored in uv too when the stroke asks (uvMirror, or symmetry.uvMirror). */
+tex::paint::PaintSymmetry symmetryOf(const json& j, const brush::BrushSettings& bs, const Node& meshNode)
+{
+    tex::paint::PaintSymmetry s = spatialSymmetryOf(j, bs, meshNode);
+    const json uv = j.contains("uvMirror") ? j["uvMirror"] : j.contains("symmetry") && j["symmetry"].is_object() ? j["symmetry"].value("uvMirror", json()) : json();
+    if (uv.is_object())
+        s.uvMirror = tex::paint::PaintSymmetry::fromJson({{"uvMirror", uv}}).uvMirror;
+    return s;
 }
 
 /** The fill's triangles with every symmetry copy's: islands and materials of the copies are filled whole. */
@@ -595,9 +836,18 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
         j = json::parse(j.get<std::string>());
     if (!j.is_object())
         throw CommandError("texPaintStroke: stroke must be an object");
-    for (const char* k : {"payload", "brush", "points", "view", "space", "mesh", "particles"})
+    for (const char* k : {"payload", "brush", "points", "view", "space", "mesh", "particles", "stencil"})
         if (a.has(k) && !j.contains(k))
             j[k] = a.flags[k];
+    // The stencil's picture comes as a key, a file or texels; the record keeps only its key.
+    json stencilImage;
+    if (j.contains("stencil") && j["stencil"].is_object())
+    {
+        stencilImage = j["stencil"].value("image", json());
+        if (stencilImage.is_null())
+            throw CommandError("texPaintStroke: stencil needs image: a file path, an image key or {width, height, data}");
+        j["stencil"]["image"] = "pending";
+    }
     if (!j.contains("payload"))
         j["payload"] = {{"channels", {{"baseColor", {1.0, 1.0, 1.0}}}}};
     json& pay = j["payload"];
@@ -613,6 +863,17 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
             ch[c.name] = 0.0;
         pay["channels"] = ch;
     }
+    // The limit mask (quick mask) comes as texels or a key; the record keeps its key.
+    if (pay.contains("limit") && pay["limit"].is_object())
+    {
+        auto img = PaintImage::fromJson(pay["limit"]);
+        if (!img)
+            throw CommandError("texPaintStroke: payload limit needs width, height and data");
+        holdImage(img);
+        pay["limit"] = img->key();
+    }
+    json lockedFaces = pay.contains("lockedFaces") ? pay["lockedFaces"] : json();
+    pay.erase("lockedFaces");
     json projection;
     if (kind == "project")
     {
@@ -647,7 +908,9 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
     bool generated = false;
     auto header = [&](json h) {
         h.erase("points");
-        h.erase("view");
+        // A record's own view (objectToClip) stays; a screen view is the command's input, read below.
+        if (!h.contains("view") || !h["view"].is_object() || !h["view"].contains("objectToClip"))
+            h.erase("view");
         h.erase("particles");
         try
         {
@@ -669,14 +932,21 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
             if (s.payload.fillBy.empty())
                 s.payload.fillBy = pay.value("fillBy", std::string("mesh"));
             if (s.payload.triangles.empty())
-                s.payload.triangles = symmetricFill(fillTriangles(pay, *pm, *meshNode), s.payload.fillBy, *pm, sym);
+                s.payload.triangles = symmetricFill(fillTriangles(pay, *pm, *meshNode, &set), s.payload.fillBy, *pm, sym);
             s.view.reset();
+            // A screen-space gradient keeps the view its ends were dragged in.
+            if (s.payload.gradient.is_object() && s.payload.gradient.value("space", std::string("uv")) == "screen")
+            {
+                if (!j.contains("view"))
+                    throw CommandError("texPaintStroke: a screen gradient needs view {width, height, camera | ...}");
+                s.view = strokeViewOf(screenView(j["view"]), *meshNode);
+            }
         }
         else
         {
             if (!j.contains("view"))
                 throw CommandError("texPaintStroke: a projection needs view {width, height, camera | view + proj | eye + lookAt}");
-            s.view = strokeViewOf(screenView(j["view"]), *meshNode);
+            s.view = strokeViewOf(screenView(namedView(set, j["view"], "texPaintStroke")), *meshNode);
             std::shared_ptr<const PaintImage> img = projectionImage(projection, set, *s.view);
             s.payload.image = img->key();
             if (image)
@@ -717,7 +987,7 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
         {
             const tex::paint::ParticleSpec spec = tex::paint::ParticleSpec::fromJson(j["particles"]);
             if (!j["particles"].value("expanded", false))
-                s.dabs = tex::paint::withParticles(*pm, s.dabs, 0, spec);
+                s.dabs = withParticles(pm, s.dabs, 0, spec);
             s.particles = spec.toJson();
             s.particles["expanded"] = true;
         }
@@ -758,9 +1028,81 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
             s.payload.sourceOffsets.push_back(off);
         }
     }
+    if (s.payload.limits.is_object() && !s.payload.limits.empty())
+    {
+        std::shared_ptr<const PaintImage> prior = s.payload.limit.empty() ? nullptr : heldImage(s.payload.limit);
+        if (!prior && !s.payload.limit.empty())
+            if (auto it = readPaint(set)->images.find(s.payload.limit); it != readPaint(set)->images.end())
+                prior = it->second;
+        try
+        {
+            if (std::shared_ptr<const PaintImage> img = limitImage(set, s.payload.limits, prior))
+            {
+                holdImage(img);
+                s.payload.limit = img->key();
+            }
+        }
+        catch (const std::exception& e)
+        {
+            throw CommandError(std::string("texPaintStroke: brush limits: ") + e.what());
+        }
+        if (s.payload.limits.contains("group"))
+        {
+            const json grp = tex::readSettings(set).faceGroups.value(s.payload.limits["group"].get<std::string>(), json());
+            if (!grp.is_object())
+                throw CommandError("texPaintStroke: no face group '" + s.payload.limits["group"].get<std::string>() + "'");
+            const std::vector<uint32_t> inside = pm->ofFaces(grp.value("faces", std::vector<uint32_t>()));
+            const std::set<uint32_t> keep(inside.begin(), inside.end());
+            for (uint32_t t = 0; t < pm->triangleCount(); ++t)
+                if (!keep.contains(t))
+                    s.payload.locked.push_back(t);
+            std::sort(s.payload.locked.begin(), s.payload.locked.end());
+            s.payload.locked.erase(std::unique(s.payload.locked.begin(), s.payload.locked.end()), s.payload.locked.end());
+        }
+        if (s.payload.limits.contains("facing"))
+            s.payload.facingFade = std::clamp(s.payload.limits["facing"].get<float>(), 0.0f, 1.0f);
+    }
+    if (lockedFaces.is_array())
+    {
+        std::vector<uint32_t> faces;
+        for (const json& f : lockedFaces)
+            faces.push_back(f.get<uint32_t>());
+        std::vector<uint32_t> tris = pm->ofFaces(faces);
+        s.payload.locked.insert(s.payload.locked.end(), tris.begin(), tris.end());
+        std::sort(s.payload.locked.begin(), s.payload.locked.end());
+        s.payload.locked.erase(std::unique(s.payload.locked.begin(), s.payload.locked.end()), s.payload.locked.end());
+    }
+    if (s.stencil)
+    {
+        if (!s.view)
+            throw CommandError("texPaintStroke: a stencil is pinned to the view; the stroke needs view (screen points or a recorded view)");
+        std::shared_ptr<const PaintImage> img = stencilPicture(stencilImage, set, s.stencil->mode == "color");
+        s.stencil->image = img->key();
+        holdImage(img);
+        if (s.stencil->mode == "color" && !s.payload.channels.contains(s.stencil->colorChannel))
+            s.payload.channels[s.stencil->colorChannel] = glm::vec3(1.0f);
+    }
+    // A tileable set: generated dabs wrap round the uv square's edges; a record's dabs already did.
+    if (generated && tex::readSettings(set).tileable)
+    {
+        std::vector<Dab> all;
+        for (const Dab& d : s.dabs)
+        {
+            all.push_back(d);
+            std::vector<Dab> w = tex::paint::tileWrapped(*pm, d);
+            all.insert(all.end(), w.begin(), w.end());
+        }
+        s.dabs = std::move(all);
+    }
+    // Anchors let the stroke follow the surface when the mesh's triangles or uvs change later.
+    s.anchors.clear();
+    for (const Dab& d : s.dabs)
+        s.anchors.push_back(pm->point(d));
+    s.meshSignature = pm->signature;
     s.brush = bs.toJson();
-    if (s.payload.channels.size() > 7)
-        throw CommandError("texPaintStroke: a stroke paints at most 7 channels and the mask");
+    // The dab kernel takes 24 channels a stroke, the mask among them.
+    if (s.payload.channels.size() > 23)
+        throw CommandError("texPaintStroke: a stroke paints at most 23 channels and the mask");
     if (s.dabs.empty() && kind != "fill" && kind != "project")
         throw CommandError("texPaintStroke: the stroke has no dabs on the surface");
     return s;
@@ -837,12 +1179,27 @@ json paintStroke(const Args& a)
     {
         throw CommandError(std::string("texPaintStroke: ") + e.what());
     }
+    std::shared_ptr<const PaintImage> stencil = s.stencil ? heldImage(s.stencil->image) : nullptr;
+    std::shared_ptr<const PaintImage> limit = s.payload.limit.empty() ? nullptr : heldImage(s.payload.limit);
     buf.strokes.push_back(std::make_shared<const Stroke>(std::move(s)));
     const uint64_t id = buf.strokes.back()->id;
-    writePaint(graph(), set, withBuffer(*readPaint(set), layer, std::move(buf), true, image));
+    PaintPtr next = withBuffer(*readPaint(set), layer, std::move(buf), true, image);
+    for (const auto& img : {stencil, limit})
+        if (img && !next->images.contains(img->key()))
+        {
+            auto withImage = std::make_shared<PaintData>(*next);
+            withImage->images[img->key()] = img;
+            next = withImage;
+        }
+    writePaint(graph(), set, next);
     return {{"layer", layer}, {"stroke", id}, {"dabs", r.dabs}, {"pages", r.pages}};
 }
 } // namespace
+
+void registerPathCommands();
+void registerPickCommands();
+void registerStrokeEditCommands();
+void registerTransferCommands();
 
 void registerCommands()
 {
@@ -850,6 +1207,10 @@ void registerCommands()
     if (done)
         return;
     done = true;
+    registerPathCommands();
+    registerPickCommands();
+    registerStrokeEditCommands();
+    registerTransferCommands();
     installSync();
     // Texture exports and texEvaluate read paint layers from the pages, brought up to date first.
     tex::setExternalSource([](Node& set, const std::string& name, int udim) -> image::Image {
@@ -876,9 +1237,11 @@ void registerCommands()
                "amount), clone and heal (sourceOffset [du, dv] or cloneFrom [x, y, z]); fill (fillBy mesh|island|material|polygon|triangle|selection with at "
                "[x, y, z], triangle, material or faces; no dabs); project (image: a file path, {path, rect [x, y, w, h], opacity}, or "
                "{width, height, data}, through view; facingFade, colorChannel; no dabs); normal (normalMode bump|stamp, stampImage, intensity, "
-               "channel). paint and fill take source {library id | graph | node type, values, resolution, scale} to paint a material's "
-               "channels, and any kind tip {node | graph, values, resolution} for a texture graph brush tip. particles {kind drips|rain|sparks, "
-               "count, length, size, spread, rate, seed} adds particle dabs. Each stroke is one undo step and is kept, so texRasterize can "
+               "channel). paint and fill take source {library id (scene/<set> for a texture set) | graph | node type, values, resolution, "
+               "scale, tiling {rotate 0-1, contrast 0-1, jitter 0-1} for hex-tiled variation} to paint a material's channels, and any kind tip {node | graph, values, resolution} for a texture graph brush tip. particles {kind drips|rain|sparks, "
+               "count, length, size, spread, rate, seed} adds particle dabs. stencil {image (file, image key or {width, height, data}), "
+               "offset [x, y] view pixels, scale, rotation radians, invert, tile, mode mask|color, colorChannel} paints through a picture "
+               "pinned to the stroke's view: mask scales the amount by its luminance, color paints its rgb into colorChannel. Each stroke is one undo step and is kept, so texRasterize can "
                "replay it. Returns {layer, stroke, dabs, pages}.",
         .positionalDoc = "set [layer]",
         .flags = {{"stroke", "", T::Any, nullptr, "The stroke record (an object, or its JSON text)."},
@@ -890,10 +1253,57 @@ void registerCommands()
                   {"view", "", T::Any, nullptr, "Screen view, when stroke has none."},
                   {"space", "", T::String, nullptr, "surface or screen (default: screen when there are points).", {"surface", "screen"}},
                   {"particles", "", T::Any, nullptr, "Particle brush {kind, count, length, size, spread, rate, seed}, when stroke has none."},
+                  {"stencil", "", T::Any, nullptr, "Stencil {image, offset, scale, rotation, invert, tile, mode, colorChannel}, when stroke has none."},
                   {"id", "", T::Int, nullptr, "The stroke id the paint tool painted live under.", {}, {}, 0.0}},
         .run = paintStroke,
     });
 
+    ops::registerCommand({
+        .name = "texPaintStrokes",
+        .doc = "Paint one stroke that crosses several meshes or texture sets: strokes [{set, layer, stroke}], each as texPaintStroke takes "
+               "it, all in one undo step. The paint tool commits a stroke dragged over several meshes this way. Returns each one's result.",
+        .flags = {{"strokes", "", T::List, nullptr, "[{set, layer, stroke}, ...]."}},
+        .run = [](const Args& a) -> json {
+            if (!a.has("strokes") || !a.flags["strokes"].is_array())
+                throw CommandError("texPaintStrokes: give strokes [{set, layer, stroke}, ...]");
+            json out = json::array();
+            for (const json& e : a.flags["strokes"])
+            {
+                if (!e.is_object() || !e.contains("set") || !e.contains("stroke"))
+                    throw CommandError("texPaintStrokes: each entry needs set and stroke");
+                json call = {{"args", {e["set"]}}, {"stroke", e["stroke"]}};
+                if (e.contains("layer"))
+                    call["layer"] = e["layer"];
+                out.push_back(ops::execute("texPaintStroke", call, CallSource::Script));
+            }
+            return out;
+        },
+    });
+    ops::registerCommand({
+        .name = "texCaptureView",
+        .doc = "Write what a view sees of a texture set's channel (the stack's, or one paint layer's with layer=) as a 16-bit PNG, unlit: "
+               "colour in sRGB, data as it is, transparent where the mesh isn't. Edit it in an image editor and project it back with "
+               "texPaintStroke (kind project, image the file, the same view). view is a screen view or a saved view's name. Returns "
+               "{file, width, height, channel}.",
+        .positionalDoc = "set",
+        .flags = {{"view", "", T::Any, nullptr, "The screen view, or a texProjectionView name."},
+                  {"file", "", T::String, nullptr, "The PNG to write."},
+                  {"channel", "", T::String, "baseColor", "The channel."},
+                  {"layer", "", T::String, nullptr, "A paint layer's own paint instead of the stack."},
+                  {"mesh", "", T::String, nullptr, "The mesh; default the first using the set's material."},
+                  {"scale", "", T::Float, 1.0, "Pixels per view pixel."}},
+        .undoable = false,
+        .run = captureView,
+    });
+    ops::registerCommand({
+        .name = "texProjectionView",
+        .doc = "Save a projection view on a texture set by name (view=, a screen view as texPaintStroke takes it), remove it (remove=True), "
+               "or recall it (neither): projecting from a saved view lands the same every time. texPaintStroke and texCaptureView "
+               "take the name as view. Returns the view, or every saved view after a change.",
+        .positionalDoc = "set name",
+        .flags = {{"view", "", T::Any, nullptr, "The view to save."}, {"remove", "", T::Bool, false, "Remove it."}},
+        .run = projectionView,
+    });
     ops::registerCommand({
         .name = "texRasterize",
         .doc = "Re-rasterise a paint layer from its stroke records (and flattened pixels), at resolution= texels per side (0 follows the "

@@ -122,6 +122,16 @@ scene::Node* hdrLeadMesh()
     return nullptr;
 }
 
+/** On or off for a toggle action, from this view's state or the action's own check; nullopt for one-shot actions. */
+std::optional<bool> hdrActionState(const std::string& id, const ViewportWidget* view)
+{
+    if (std::optional<bool> on = viewportActionState(id, view))
+        return on;
+    if (const Action* a = actions::find(id); a && a->checked)
+        return a->checked();
+    return std::nullopt;
+}
+
 /** True when the scene can use something needing one of `needs` (viewportContext), or the toggle `id` is on. */
 bool hdrRelevant(uint32_t needs, const std::string& id, const ViewportWidget* view)
 {
@@ -159,7 +169,7 @@ public:
     {
         for (QAction* a : actions())
             if (QString id = a->property(kStateProp).toString(); !id.isEmpty())
-                if (std::optional<bool> on = viewportActionState(id.toStdString(), mView))
+                if (std::optional<bool> on = hdrActionState(id.toStdString(), mView))
                 {
                     QSignalBlocker block(a);
                     a->setChecked(*on);
@@ -884,6 +894,12 @@ QToolButton* ViewportHeader::actionButton(const char* id, const char* iconName, 
     add(b, true, keep, [this, action, overflowIcon](QMenu* m) {
         QAction* a = m->addAction(icon(overflowIcon), hdrLabel(action));
         a->setToolTip(hdrTip(action));
+        if (std::optional<bool> on = hdrActionState(action, mView))
+        {
+            a->setCheckable(true);
+            a->setChecked(*on);
+            a->setProperty(kStateProp, QString::fromStdString(action));
+        }
         connect(a, &QAction::triggered, this, [this, action] {
             activateView();
             actions::run(action);
@@ -1268,6 +1284,7 @@ void ViewportHeader::fillOverlaysMenu(QMenu* m)
 
     m->addSection("Shading");
     row("viewport.wireOnShaded");
+    row("viewport.modifierEdges");
     for (const char* id : {"viewport.defaultMaterial", "viewport.greyBaseColor"})
         if (hdrRelevant(vc::Materials, id, mView))
             row(id);
@@ -1290,6 +1307,7 @@ void ViewportHeader::fillOverlaysMenu(QMenu* m)
 
     m->addSection("Renderer");
     hdrSubmenu(m, "Renderer", [this](QMenu* s) { fillRendererMenu(s); });
+    row("viewport.pathTraced", lilaDraws);
     row("viewport.toggleAA", lilaDraws);
     QMenu* samples = hdrSubmenu(m, "Antialiasing Samples", [this](QMenu* s) {
         hdrRadioRows(s, {"viewport.aaSamples2", "viewport.aaSamples4", "viewport.aaSamples8", "viewport.aaTemporal"}, mView, {});
@@ -1403,9 +1421,28 @@ void ViewportHeader::fillLightingMenu(QMenu* m)
     hdrSubmenu(m, "HDRI", [](QMenu* s) { fillEnvironmentMenu(s); });
     actionRow(m, "viewport.toggleEnvBackground");
 
-    m->addSection("Shadows");
+    m->addSection("Shadows and Reflections");
     actionRow(m, "viewport.toggleShadows", lilaDraws);
+    actionRow(m, "viewport.toggleRtShadows", lilaDraws);
     actionRow(m, "viewport.toggleAO", lilaDraws);
+    QHBoxLayout* reflRow = hdrRow(m, "Reflections", &holder);
+    auto* reflections = new controls::Segmented(holder);
+    static constexpr const char* kReflections[] = {"off", "screenSpace", "rayTraced"};
+    static constexpr const char* kReflectionLabels[] = {"Off", "Screen", "Traced"};
+    const std::string reflection = PrefStore::get().value<std::string>("general", vd::kReflections, "off");
+    for (int i = 0; i < 3; ++i)
+    {
+        const std::string id = std::string("viewport.reflections.") + kReflections[i];
+        reflections->add(kReflectionLabels[i], {}, hdrTip(id), i);
+        if (reflection == kReflections[i])
+            reflections->setCurrent(i);
+    }
+    reflections->setEnabled(lilaDraws);
+    reflRow->addWidget(reflections, 1);
+    connect(reflections, &controls::Segmented::picked, this, [this](int i) {
+        activateView();
+        actions::run(std::string("viewport.reflections.") + kReflections[i]);
+    });
 
     m->addSection("Exposure");
     QHBoxLayout* r = hdrRow(m, "Exposure", &holder);
@@ -1501,11 +1538,7 @@ void ViewportHeader::refresh()
     }
     for (auto& [b, id] : mActionButtons)
     {
-        std::optional<bool> on = viewportActionState(id, mView);
-        if (!on)
-            if (const Action* a = actions::find(id); a && a->checked)
-                on = a->checked();
-        if (on)
+        if (std::optional<bool> on = hdrActionState(id, mView))
         {
             QSignalBlocker block(b);
             b->setCheckable(true);

@@ -20,7 +20,8 @@ def strip_links(value):
 
 def main():
     url = sys.argv[1] if len(sys.argv) > 1 else URL
-    with urllib.request.urlopen(url, timeout=30) as r:
+    # Cloudflare refuses Python's default User-Agent.
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "lila-release"}), timeout=30) as r:
         credits = json.load(r)
     if not isinstance(credits, dict) or credits.get("version") != 1:
         sys.exit(f"unexpected credits file from {url}")

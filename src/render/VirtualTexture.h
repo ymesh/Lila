@@ -6,6 +6,7 @@
 #include "render/RenderMesh.h"
 #include "render/TextureFormat.h"
 
+#include <atomic>
 #include <nlohmann/json.hpp>
 
 #include <array>
@@ -166,6 +167,8 @@ public:
     void invalidate(int udim, const std::array<int, 4>& rect, bool pin = false);
     /** Every page is stale (the graph changed). */
     void invalidateAll();
+    /** Bumped by every invalidate: what the pages show changed. */
+    uint64_t contentVersion() const { return mContentVersion.load(); }
     void unpin();
     /** Samples outside UDIM 1001 wrap into it (a plain image), instead of reading as black. */
     void setRepeat(bool on) { mRepeat = on; }
@@ -183,6 +186,7 @@ public:
 private:
     Texture(std::string name, std::vector<LayerFormat> layers, std::vector<TileDesc> tiles, std::shared_ptr<Producer> producer);
     std::string mName;
+    std::atomic<uint64_t> mContentVersion{0};
     std::vector<LayerFormat> mLayers;
     std::vector<TileDesc> mTiles;
     uint32_t mId = 0;

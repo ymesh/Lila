@@ -1,5 +1,6 @@
 #include "ui/ViewportWidgetDetail.h"
 #include "ui/ViewportToast.h"
+#include "ui/FeatureStatus.h"
 #include "ui/Hotkeys.h"
 #include "ui/ViewportHud.h"
 #include "ui/ViewportToolbar.h"
@@ -586,6 +587,14 @@ void ViewportWidget::drawHud(OverlayPainter& p)
     ctx.framesPerSecond = span > 100.0 ? double(mFrameSamples.back().second - mFrameSamples.front().second) * 1000.0 / span : 0.0;
     ctx.gpuMs = stats.gpuMs;
     ctx.aoMs = stats.aoMs;
+    ctx.reflectionMs = stats.reflectionMs;
+    ctx.flareMs = stats.flareMs;
+    ctx.dofMs = stats.dofMs;
+    ctx.motionBlurMs = stats.motionBlurMs;
+    if (!stats.reflectionNote.empty())
+        ctx.fallbacks.emplace_back("Reflections:", QString::fromStdString(stats.reflectionNote));
+    if (const std::string note = viewportDisplay::colorNote(); !note.empty())
+        ctx.fallbacks.emplace_back("Colour:", QString::fromStdString(note));
     std::vector<QRectF> drawn;
     ctx.drawn = &drawn;
     // A provisional uv count settles on the next frame once the mesh stops changing, which needs a frame to happen.
@@ -599,6 +608,7 @@ void ViewportWidget::drawHud(OverlayPainter& p)
     }
     // The drone's key list takes the corner before the tool messages fill it with the layout's.
     drone::draw(p, this);
+    featureStatus::draw(p, this, width());
     flushToolMessages(p, ctx.view, drawn);
     viewportToast::draw(p, ctx.view, this, drawn);
 }

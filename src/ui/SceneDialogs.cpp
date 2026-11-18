@@ -14,6 +14,7 @@
 #include "ui/Credits.h"
 #include "ui/CreditsDialog.h"
 #include "ui/DocsUi.h"
+#include "ui/FeatureStatus.h"
 #include "ui/FileDialog.h"
 #include "ui/Icons.h"
 #include "ui/IssueReport.h"
@@ -322,6 +323,25 @@ private:
     QVariantAnimation mGlide;
     int mTarget = 0;
     int mNotches = 0;
+};
+
+/** Holds the examples list at a whole number of rows, so a card is never cut off at the bottom edge. */
+class WholeRows : public QWidget
+{
+public:
+    WholeRows(QListWidget* list, QWidget* parent) : QWidget(parent), mList(list) { mList->setParent(this); }
+
+protected:
+    void resizeEvent(QResizeEvent*) override
+    {
+        const int row = std::max(1, mList->gridSize().height());
+        const int frame = 2 * mList->frameWidth();
+        const int rows = std::max(1, (height() - frame) / row);
+        mList->setGeometry(0, 0, width(), std::min(height(), rows * row + frame));
+    }
+
+private:
+    QListWidget* mList;
 };
 
 QString qpath(const fs::path& p)
@@ -686,6 +706,15 @@ QWidget* makeWelcomeHeader(QWidget* parent, QPushButton*& essentials)
     auto* title = new QLabel("Welcome to Lila", header);
     title->setObjectName("startupWelcome");
     row->addWidget(title);
+    auto* stage = new QLabel("Alpha", header);
+    stage->setObjectName("welcomeStage");
+    row->addWidget(stage, 0, Qt::AlignVCenter);
+    auto* ready = new QPushButton(QString::fromUtf8("What's ready  →"), header);
+    ready->setObjectName("welcomeRoadmap");
+    ready->setCursor(Qt::PointingHandCursor);
+    ready->setToolTip("Opens the roadmap: what is ready for feedback, what is in development and what is planned.");
+    QObject::connect(ready, &QPushButton::clicked, ready, [] { featureStatus::openRoadmap(); });
+    row->addWidget(ready, 0, Qt::AlignVCenter);
     row->addStretch(1);
     essentials = new EssentialsButton(header);
     if (QFrame* support = makeSupportCard(header))
@@ -1063,6 +1092,9 @@ StartupDialog::StartupDialog(Hooks hooks, bool welcome, QWidget* parent) : QDial
                           "QLabel#newsTitle { color: %4; font-size: 11pt; font-weight: 600; }"
                           "QLabel#newsFresh { color: %8; font-weight: 600; }"
                           "QLabel#changelogLink { color: %4; font-weight: 600; }"
+                          "QLabel#welcomeStage { color: %5; border: 1px solid %2; border-radius: 3px; padding: 1px 6px; font-weight: 600; }"
+                          "QPushButton#welcomeRoadmap { color: %4; font-weight: 600; border: none; background: transparent; padding: 2px 4px; }"
+                          "QPushButton#welcomeRoadmap:hover { text-decoration: underline; }"
                           "QFrame#supportCard { background: %6; border: 1px solid %2; border-radius: 6px; }"
                           "QLabel#supportLead { color: %5; font-size: 10pt; }"
                           "QTreeWidget#startupRecent, QListWidget#welcomeExamples { activate-on-singleclick: 1; }")
@@ -1207,8 +1239,9 @@ StartupDialog::StartupDialog(Hooks hooks, bool welcome, QWidget* parent) : QDial
                 item->setData(Qt::DecorationRole, QPixmap(qpath(x.thumbnail)));
             mExampleList.push_back(x);
         }
-        mExamples->setFixedWidth(examplesWidth(1));
-        right->addWidget(mExamples, 1);
+        auto* examplesArea = new WholeRows(mExamples, this);
+        examplesArea->setFixedWidth(examplesWidth(1));
+        right->addWidget(examplesArea, 1);
 
         showNews(news::cached());
         QPointer<StartupDialog> self = this;

@@ -1,6 +1,7 @@
 #include "ui/MainWindowDetail.h"
 
 #include "ui/MenuContext.h"
+#include "ui/Updater.h"
 
 namespace lila::ui
 {
@@ -272,7 +273,7 @@ void MainWindow::moveEvent(QMoveEvent* e)
 
 void MainWindow::closeEvent(QCloseEvent* e)
 {
-    if (!confirmDiscard())
+    if (!updater::confirmQuit(this) || !confirmDiscard())
     {
         e->ignore();
         return;

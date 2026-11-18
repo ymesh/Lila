@@ -107,6 +107,66 @@ TEST_CASE("create, assign and undo")
     CHECK(slots(cube) == std::map<std::string, int>{{"M_Red_Old", 6}});
 }
 
+TEST_CASE("reorderMaterialSlots moves slots and keeps each face's material")
+{
+    run("newScene");
+    std::string cube = run("polyCube")[0];
+    run("createMaterial", {{"args", {"M_A"}}});
+    run("createMaterial", {{"args", {"M_B"}}});
+    run("createMaterial", {{"args", {"M_C"}}});
+    run("assignMaterial", {{"args", {"M_A", cube}}});
+    run("assignMaterial", {{"args", {"M_B", cube}}, {"faces", {1, 2}}});
+    run("assignMaterial", {{"args", {"M_C", cube}}, {"faces", {5}}});
+    auto order = [&] {
+        json out = json::array();
+        const json listed = run("listMaterials", {{"args", {cube}}});
+        for (const json& s : listed[0]["slots"])
+            out.push_back(s["slot"]);
+        return out;
+    };
+    REQUIRE(order() == json::array({"M_A", "M_B", "M_C"}));
+    const auto before = slots(cube);
+
+    CHECK(run("reorderMaterialSlots", {{"args", {cube, "M_C", "M_A"}}}) == json::array({"M_C", "M_A", "M_B"}));
+    CHECK(order() == json::array({"M_C", "M_A", "M_B"}));
+    CHECK(slots(cube) == before);
+    run("undo");
+    CHECK(order() == json::array({"M_A", "M_B", "M_C"}));
+    run("redo");
+    CHECK(order() == json::array({"M_C", "M_A", "M_B"}));
+    CHECK(run("reorderMaterialSlots", {{"args", {cube, "M_Nope", "M_C"}}}) == json::array({"M_C", "M_A", "M_B"}));
+    CHECK_THROWS_AS(run("reorderMaterialSlots", {{"args", {cube}}}), CommandError);
+}
+
+TEST_CASE("reorderMaterials sets the Material Editor order, survives scene files and undoes")
+{
+    run("newScene");
+    for (const char* m : {"M_C", "M_A", "M_B"})
+        run("createMaterial", {{"args", {m}}});
+    auto order = [] {
+        std::vector<std::string> out;
+        for (scene::Node* n : scene::materials::ordered(scene::Graph::current()))
+            out.push_back(n->name());
+        return out;
+    };
+    CHECK(order() == std::vector<std::string>{"M_A", "M_B", "M_C"});
+    run("reorderMaterials", {{"args", {"M_C", "M_A"}}});
+    CHECK(order() == std::vector<std::string>{"M_C", "M_A", "M_B"});
+    run("createMaterial", {{"args", {"M_0"}}});
+    CHECK(order() == std::vector<std::string>{"M_C", "M_A", "M_B", "M_0"});
+
+    const std::string file = tempFile("order.lila").string();
+    run("saveScene", {{"args", {file}}});
+    run("newScene");
+    run("openScene", {{"args", {file}}});
+    CHECK(order() == std::vector<std::string>{"M_C", "M_A", "M_B", "M_0"});
+    run("reorderMaterials", {{"args", {"M_B"}}});
+    CHECK(order() == std::vector<std::string>{"M_B", "M_C", "M_A", "M_0"});
+    run("undo");
+    CHECK(order() == std::vector<std::string>{"M_C", "M_A", "M_B", "M_0"});
+    CHECK_THROWS_AS(run("reorderMaterials", {{"args", {"M_Nope"}}}), CommandError);
+}
+
 TEST_CASE("slots survive modeling ops")
 {
     run("newScene");
@@ -300,6 +360,11 @@ TEST_CASE("selectByMaterial selects the objects or faces a material is assigned 
 
     run("assignMaterial", {{"args", {"M_Blue", b}}});
     run("selectByMaterial", {{"args", {"M_Blue"}}});
+    CHECK(comps::mode() == scene::ComponentMode::Object);
+
+    run("createMaterial", {{"args", {"M_Red"}}});
+    run("assignMaterial", {{"args", {"M_Red", c}}});
+    CHECK(run("selectByMaterial", {{"args", {"M_Blue", "M_Red"}}}) == json::array({a, b, c}));
     CHECK(comps::mode() == scene::ComponentMode::Object);
 }
 

@@ -74,6 +74,7 @@ add_executable(lila_tests
     test_backdrop.cpp
     test_tearoff.cpp
     test_user_menus.cpp
+    test_features.cpp
     test_visibility.cpp
     test_display_layers.cpp
     test_object_sets.cpp
@@ -88,6 +89,7 @@ add_executable(lila_tests
     test_ifc.cpp
     test_light.cpp
     test_showcase.cpp
+    test_post2.cpp
     test_locks.cpp
     test_paths.cpp
     test_project_textures.cpp

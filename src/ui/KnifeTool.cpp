@@ -4,6 +4,7 @@
 #include "core/Log.h"
 #include "core/PrefStore.h"
 #include "core/Profile.h"
+#include "geo/Topology.h"
 #include "scene/Components.h"
 #include "scene/Graph.h"
 #include "scene/MeshNodes.h"
@@ -138,7 +139,7 @@ void KnifeTool::activate()
     mFilter = std::make_unique<KnifeKeyFilter>(this);
     qApp->installEventFilter(mFilter.get());
     refresh();
-    log::info("Knife: click points to cut, Enter or RMB finishes, Ctrl+click an edge inserts a loop, Ctrl+Alt+click an edge deletes it, "
+    log::info("Knife: click points to cut, Enter or RMB finishes, Ctrl+click an edge inserts a loop, Ctrl+Shift+click an edge deletes it, Ctrl+Alt+click deletes its loop, "
               "Shift snaps, A angle, X cut through, Backspace or Z removes a point, Shift+Z puts it back, Esc cancels or exits");
 }
 
@@ -152,7 +153,7 @@ void KnifeTool::deactivate()
 bool KnifeTool::deleting() const
 {
     const Qt::KeyboardModifiers m = QGuiApplication::queryKeyboardModifiers();
-    return mPoints.empty() && (m & Qt::AltModifier) && (m & Qt::ControlModifier);
+    return mPoints.empty() && (m & Qt::ControlModifier) && (m & (Qt::ShiftModifier | Qt::AltModifier));
 }
 
 std::optional<QCursor> KnifeTool::cursor() const { return deleting() ? deleteCursor() : QCursor(Qt::CrossCursor); }
@@ -390,7 +391,7 @@ void KnifeTool::finish(bool closed)
     refresh();
 }
 
-void KnifeTool::deleteEdge(const Spot& spot)
+void KnifeTool::deleteEdge(const Spot& spot, bool loop)
 {
     mHistory.clear();
     if (spot.point.kind != PointKind::Edge)
@@ -400,7 +401,7 @@ void KnifeTool::deleteEdge(const Spot& spot)
         return;
     try
     {
-        ops::execute("polyKnife", {{"mesh", n->path()}, {"deleteEdge", spot.point.id}}, CallSource::UI);
+        ops::execute("polyKnife", {{"mesh", n->path()}, {"deleteEdge", spot.point.id}, {"deleteLoop", loop}}, CallSource::UI);
     }
     catch (const CommandError& e)
     {
@@ -448,12 +449,15 @@ bool KnifeTool::mousePress(QMouseEvent* e, const ViewInfo& view)
         return false;
     if (mods & Qt::ControlModifier)
     {
-        const bool del = mods & Qt::AltModifier;
+        const bool delEdge = mods & Qt::ShiftModifier, delLoop = !delEdge && (mods & Qt::AltModifier);
         if (mPoints.empty())
-            if (auto h = pick(e->position(), view, false, del); h && h->second.point.kind == PointKind::Edge)
+            if (auto h = pick(e->position(), view, false, delEdge || delLoop); h && h->second.point.kind == PointKind::Edge)
             {
                 mHover = h;
-                del ? deleteEdge(h->second) : insertLoop(h->second);
+                if (delEdge || delLoop)
+                    deleteEdge(h->second, delLoop);
+                else
+                    insertLoop(h->second);
             }
         return true;
     }
@@ -524,10 +528,19 @@ bool KnifeTool::keyPress(QKeyEvent* e, const ViewInfo& view)
 
 bool KnifeTool::hotkey(const QKeyEvent& e, std::string_view action)
 {
+    // Cuts, loops and deletes are already in the scene's history, so with no points pending undo and redo reach it.
     switch (mHistory.route(e.key(), action))
     {
-    case StepKey::Undo: stepBack(); return true;
-    case StepKey::Redo: stepForward(); return true;
+    case StepKey::Undo:
+        if (mPoints.empty())
+            return e.key() == Qt::Key_Backspace;
+        stepBack();
+        return true;
+    case StepKey::Redo:
+        if (!mHistory.canRedo())
+            return false;
+        stepForward();
+        return true;
     case StepKey::None: return false;
     }
     return false;
@@ -641,14 +654,19 @@ void KnifeTool::draw(render::FrameState&, OverlayPainter& p, const ViewInfo& vie
             const KnifePoint& k = mHover->second.point;
             if (k.kind == PointKind::Edge && m.edgeValid(k.id))
             {
-                auto a = view.project(toWorld(m.position(m.edgePoint(k.id, 0)))), b = view.project(toWorld(m.position(m.edgePoint(k.id, 1))));
-                if (a && b && del)
+                const bool wholeLoop = del && !(mods & Qt::ShiftModifier);
+                const std::vector<geo::Index> marked = wholeLoop ? geo::edgeLoop(m, k.id) : std::vector<geo::Index>{k.id};
+                for (geo::Index e : marked)
                 {
-                    p.line(*a, *b, 6.0f, kHandleRim);
-                    p.line(*a, *b, 3.5f, kHotColor);
+                    auto a = view.project(toWorld(m.position(m.edgePoint(e, 0)))), b = view.project(toWorld(m.position(m.edgePoint(e, 1))));
+                    if (a && b && del)
+                    {
+                        p.line(*a, *b, 6.0f, kHandleRim);
+                        p.line(*a, *b, 3.5f, kHotColor);
+                    }
+                    else if (a && b)
+                        p.line(*a, *b, 2.5f, kHotColor);
                 }
-                else if (a && b)
-                    p.line(*a, *b, 2.5f, kHotColor);
             }
             if (auto s = view.project(mHover->second.world); s && !del)
             {
@@ -673,7 +691,7 @@ void KnifeTool::draw(render::FrameState&, OverlayPainter& p, const ViewInfo& vie
                     .fields = {{"snap", QString("%1%").arg(snapStepFraction() * 100.0, 0, 'g', 3)}},
                     .flags = {{"angle", mAngle}, {"through", mThrough}},
                     .prompt = "click to cut",
-                    .keys = {{"Enter", "finish"}, {"Ctrl+click edge", "loop"}, {"Ctrl+Alt+click edge", "delete"}, {"Shift", "snap"},
+                    .keys = {{"Enter", "finish"}, {"Ctrl+click edge", "loop"}, {"Ctrl+Shift+click edge", "delete"}, {"Ctrl+Alt+click edge", "delete loop"}, {"Shift", "snap"},
                              {"Z", "remove point"}, {"Shift+Z", "restore point"}, {"A", "angle"}, {"X", "through"}, {"Esc", "cancel"}}});
 }
 
@@ -685,7 +703,7 @@ void registerKnifeActions()
         .category = "Mesh",
         .run = [] { viewportTools::set(std::make_unique<KnifeTool>()); },
         .doc = "Multi-cut knife: click points across a mesh to cut it, snapping to vertices and edges (Shift: snap step), Ctrl+click an "
-               "edge for an edge loop, Ctrl+Alt+click an edge to delete it, Enter or RMB finishes, A angle constraint, X cut through, Esc exits.",
+               "edge for an edge loop, Ctrl+Shift+click an edge to delete it, Ctrl+Alt+click to delete its loop, Enter or RMB finishes, A angle constraint, X cut through, Esc exits.",
         .python = "lila.ui.run_action(\"mesh.knife\")",
     });
 }

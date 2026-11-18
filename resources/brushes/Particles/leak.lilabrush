@@ -1,0 +1,25 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Leak",
+  "category": "Particles",
+  "doc": "A wet run down the surface from each dab, pooling where it stops.",
+  "brush": {
+    "falloff": "smooth",
+    "spacing": 0.2
+  },
+  "payload": {
+    "kind": "paint",
+    "channels": {
+      "baseColor": [
+        0.05,
+        0.04,
+        0.03
+      ],
+      "roughness": 0.15
+    }
+  },
+  "particles": {
+    "kind": "leak"
+  }
+}

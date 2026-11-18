@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Export.h"
+#include "ui/TexturePicker.h"
 
 #include <QIcon>
 #include <QImage>
@@ -102,6 +103,8 @@ public:
     void setResolver(std::function<std::filesystem::path(const std::string&)> fn);
     /** What is wrong with a resolved file, shown on the thumbnail; empty when fine. */
     void setProblem(std::function<std::string(const std::filesystem::path&)> fn);
+    /** More rows listed first in the picker popup, asked each time it opens (a material map's texture sets). */
+    void setExtraItems(std::function<std::vector<texturePicker::Item>()> fn);
 
 Q_SIGNALS:
     void chosen(const QString& value);
@@ -135,6 +138,7 @@ private:
     std::function<void(const std::vector<std::string>&)> mDropMany;
     std::function<std::filesystem::path(const std::string&)> mResolve;
     std::function<std::string(const std::filesystem::path&)> mProblem;
+    std::function<std::vector<texturePicker::Item>()> mExtraItems;
 };
 
 /** The image files among dropped data (local files with an image extension), absolute paths. */

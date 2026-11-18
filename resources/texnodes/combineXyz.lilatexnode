@@ -1,0 +1,36 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "combineXyz",
+  "label": "Combine XYZ",
+  "category": "Utility",
+  "doc": "Builds a vector from x, y and z values, for example a UV for an Image's UV input.",
+  "inputs": [
+    {
+      "id": "x",
+      "type": "float",
+      "default": 0.0
+    },
+    {
+      "id": "y",
+      "type": "float",
+      "default": 0.0
+    },
+    {
+      "id": "z",
+      "type": "float",
+      "default": 0.0
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "vector"
+    }
+  ],
+  "params": [],
+  "cost": 1,
+  "body": {
+    "out": "return float3(x.sample(uv), y.sample(uv), z.sample(uv));"
+  }
+}

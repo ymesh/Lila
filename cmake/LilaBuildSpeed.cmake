@@ -32,7 +32,9 @@ endif()
 if(MSVC)
     # Debug info in the objects (/Z7), not a shared PDB: sccache can only cache those, and parallel compiles stop
     # queueing on mspdbsrv.
-    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
+    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo,Release>:Embedded>")
+    # Release links a PDB too, so crash reports carry its id and can be symbolicated; the PDBs are not shipped.
+    add_link_options($<$<CONFIG:Release>:/DEBUG> $<$<CONFIG:Release>:/OPT:REF> $<$<CONFIG:Release>:/OPT:ICF>)
 
     find_program(LILA_LLD_LINK lld-link HINTS C:/Tools/llvm/bin "$ENV{ProgramFiles}/LLVM/bin")
     option(LILA_LLD "Link with lld-link when it is installed" ON)

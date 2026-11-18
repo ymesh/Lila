@@ -1,6 +1,7 @@
 # Stages a self-contained Lila install into build-steam\content for SteamPipe, or -Destination for the installer.
 param(
     [string]$Config = "Release",
+    [string]$BuildDir = "build",
     [string]$PythonDir = $(if ($env:LILA_PYTHON_DIR) { $env:LILA_PYTHON_DIR } else { "C:\Python314" }),
     [string]$Destination = "",
     # Steam installs the VC++ runtime itself; a per-user installer can't, so it ships the DLLs beside lila.exe.
@@ -9,7 +10,7 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $repo = Resolve-Path "$PSScriptRoot\..\.."
-$bin = Join-Path $repo "build\bin\$Config"
+$bin = Join-Path $repo "$BuildDir\bin\$Config"
 $out = if ($Destination) { $Destination } else { Join-Path $repo "build-steam\content" }
 if (-not (Test-Path "$bin\lila.exe")) { throw "No lila.exe in $bin. Build $Config first." }
 # python-site holds the PySide6 lila.ui needs, bound to the Qt beside lila.exe; the bin copy below carries it.

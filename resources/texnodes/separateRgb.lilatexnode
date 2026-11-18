@@ -1,0 +1,46 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "separateRgb",
+  "label": "Separate RGB",
+  "category": "Utility",
+  "doc": "Splits a colour into its red, green, blue and alpha values.",
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0,
+        0,
+        0,
+        1
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "r",
+      "type": "float"
+    },
+    {
+      "id": "g",
+      "type": "float"
+    },
+    {
+      "id": "b",
+      "type": "float"
+    },
+    {
+      "id": "a",
+      "type": "float"
+    }
+  ],
+  "params": [],
+  "cost": 1,
+  "body": {
+    "r": "return input.sample(uv).r;",
+    "g": "return input.sample(uv).g;",
+    "b": "return input.sample(uv).b;",
+    "a": "return input.sample(uv).a;"
+  }
+}

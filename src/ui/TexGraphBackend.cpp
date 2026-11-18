@@ -13,6 +13,8 @@
 #include "tex/Evaluate.h"
 #include "tex/NodeDef.h"
 #include "tex/TextureSet.h"
+#include "tex/PaintStrokes.h"
+#include "render/PaintGpu.h"
 #pragma pop_macro("slots")
 #include "ui/Actions.h"
 #include "ui/Menus.h"
@@ -21,6 +23,8 @@
 #include "ui/TexParams.h"
 #include "ui/TexPreview.h"
 #include "ui/TextureGraphUi.h"
+#include "ui/TextureSetPanel.h"
+#include "ui/TexturePaintTool.h"
 #include "ui/Theme.h"
 #include "ui/FileDialog.h"
 #include "ui/UiCommands.h"
@@ -153,13 +157,26 @@ public:
     std::vector<std::string> groupNames(scene::Graph& g) const override { return tex::setNames(g); }
     bool hasGroup(scene::Graph& g, const std::string& group) const override { return tex::findSet(g, group) != nullptr; }
     bool isGroupNode(const scene::Node& n) const override { return n.type().name == tex::kTextureSetType; }
+    std::optional<size_t> groupStamp(scene::Graph& g, const std::string& group) const override
+    {
+        if (scene::Node* n = tex::findSet(g, group))
+            return tex::setStamp(*n);
+        return std::nullopt;
+    }
     std::string newGroupAction() const override { return "texture.newSet"; }
     std::vector<std::string> fileSuffixes() const override { return {"lilamat", "lilatexnodes", "lilatexnode"}; }
 
-    /** A selected texture set, else the set bound to a material slot of a selected mesh. */
+    /** A selected texture set, else the set bound to a material slot of a selected mesh or a mesh under a selected group. */
     Owner followSelection(scene::Graph& g) const override
     {
+        std::vector<scene::NodeId> ids;
         for (scene::NodeId id : g.selection())
+        {
+            ids.push_back(id);
+            for (scene::NodeId d : g.descendants(id))
+                ids.push_back(d);
+        }
+        for (scene::NodeId id : ids)
         {
             scene::Node* n = g.node(id);
             if (!n)
@@ -188,6 +205,11 @@ public:
 
     QString ownerNoun() const override { return "texture set"; }
     QString groupNoun() const override { return "Texture Set"; }
+    bool canRenameGroup() const override { return true; }
+
+    std::string renameGroup(const std::string& group, const std::string& to) const override { return renameTextureSet(group, to); }
+    bool canDeleteGroup() const override { return true; }
+    bool deleteGroup(const std::string& group) const override { return deleteTextureSet(group); }
 
     bool canViewNodes() const override { return true; }
 
@@ -320,27 +342,6 @@ NodeEditor* texEditor()
     return texEditors().empty() ? nullptr : texEditors().front();
 }
 
-/** "<slot>Tex" for the selected mesh's first material slot, so the new set drives it. Empty when no mesh is selected. */
-/** The first selected mesh's first material slot, or a new material assigned to the selection when that slot is Default. */
-std::string slotForNewSet()
-{
-    scene::Graph& g = scene::Graph::current();
-    for (scene::NodeId id : g.selection())
-        if (scene::Node* n = g.node(id); n && n->type().isA("mesh"))
-            if (scene::MeshPtr mesh = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh))
-            {
-                std::string slot = scene::materials::slotName(*mesh, 0);
-                if (slot != scene::materials::kDefaultSlot)
-                    return slot;
-                json made = runUi("createMaterial", argsCall({"M_" + n->name()}));
-                if (!made.is_string())
-                    return {};
-                runUi("assignMaterial", argsCall({made}));
-                return made.get<std::string>();
-            }
-    return {};
-}
-
 std::string uniqueName(std::string base)
 {
     std::string clean;
@@ -385,24 +386,148 @@ QSize sizeFromMaps(const std::string& slot)
     return {snap(least.width()), snap(least.height())};
 }
 
-void newSet()
+std::string joinNames(const std::vector<std::string>& names)
 {
-    UndoChunk chunk("New Texture Set");
-    std::string slot = slotForNewSet();
-    json call = argsCall({uniqueName(slot.empty() ? "TextureSet" : tex::defaultSetName(slot))});
-    if (!slot.empty())
+    std::string out;
+    for (const std::string& n : names)
+        out += (out.empty() ? "" : ", ") + n;
+    return out;
+}
+
+/** A paint layer in a new set, wired to every channel and the mask and made active, so painting starts at once. */
+void addFirstPaintLayer(const std::string& set)
+{
+    const std::string id = ops::execute("texAddLayer", {{"args", {set, "paint"}}}).value("id", std::string());
+    scene::Node* n = tex::findSet(scene::Graph::current(), set);
+    if (id.empty() || !n)
+        return;
+    std::vector<std::string> channels;
+    for (const tex::Channel& c : tex::readSettings(*n).channels)
+        channels.push_back(c.name);
+    channels.push_back(tex::paint::kMaskChannel);
+    render::paint::wireLayer(*n, id, channels);
+    textureSets::setActiveLayer(set, id);
+}
+
+/** A new texture set the materials pick, sized to the smallest map of the first. Returns its name. */
+std::string createSetFor(const std::vector<std::string>& materials)
+{
+    const std::string first = materials.empty() ? std::string() : materials.front();
+    json call = argsCall({uniqueName(first.empty() ? "TextureSet" : tex::defaultSetName(first))});
+    if (!materials.empty())
+        call["materials"] = materials;
+    if (const QSize size = first.empty() ? QSize() : sizeFromMaps(first); size.isValid())
     {
-        call["settings"] = {{"material", slot}};
-        if (const QSize size = sizeFromMaps(slot); size.isValid())
+        call["settings"] = {{"width", size.width()}, {"height", size.height()}};
+        log::info("{}: {} x {}, the size of {}'s smallest map", call["args"][0].get<std::string>(), size.width(), size.height(), first);
+    }
+    const std::string made = ops::execute("texCreateSet", call).get<std::string>();
+    addFirstPaintLayer(made);
+    return made;
+}
+
+/** M_<mesh name>, made unused. */
+std::string newMaterialName(const scene::Node& mesh)
+{
+    const std::string base = "M_" + mesh.name();
+    std::string name = base;
+    for (int i = 1; !scene::Graph::current().findAll(name).empty(); ++i)
+        name = base + std::to_string(i);
+    return name;
+}
+
+/** Creates a material and assigns it to the meshes at paths. Returns its name. */
+std::string assignNewMaterial(const scene::Node& namedAfter, const std::vector<std::string>& paths)
+{
+    const std::string material = ops::execute("createMaterial", argsCall({newMaterialName(namedAfter)})).get<std::string>();
+    json call = argsCall({material});
+    for (const std::string& p : paths)
+        call["args"].push_back(p);
+    ops::execute("assignMaterial", call);
+    return material;
+}
+
+/**
+ * The materials of the meshes (the selected ones, else with everyMesh every mesh) that use no texture set, in scene
+ * order. Meshes only on Default first share a new material.
+ */
+std::vector<std::string> materialsWithoutSet(bool everyMesh)
+{
+    scene::Graph& g = scene::Graph::current();
+    g.evaluate();
+    std::vector<scene::Node*> meshes;
+    for (scene::NodeId id : g.selection().empty() && !everyMesh ? std::vector<uint64_t>() : texturePaintTargets())
+        if (scene::Node* n = g.node(id))
+            meshes.push_back(n);
+
+    std::vector<std::string> materials, unassigned, kept;
+    scene::Node* firstUnassigned = nullptr;
+    for (scene::Node* n : meshes)
+    {
+        scene::MeshPtr mesh = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+        std::vector<std::string> names = mesh ? mesh->materialNames() : std::vector<std::string>{};
+        // A mesh only on Default gets a material; a Default slot beside real ones is left alone.
+        if (names.empty() || (names.size() == 1 && names[0] == scene::materials::kDefaultSlot))
         {
-            call["settings"]["width"] = size.width();
-            call["settings"]["height"] = size.height();
-            log::info("{}: {} x {}, the size of the material's smallest map", slot, size.width(), size.height());
+            unassigned.push_back(n->path());
+            firstUnassigned = firstUnassigned ? firstUnassigned : n;
+            continue;
+        }
+        for (const std::string& m : names)
+        {
+            if (m == scene::materials::kDefaultSlot || std::ranges::find(materials, m) != materials.end() || std::ranges::find(kept, m) != kept.end())
+                continue;
+            // A material that already uses a set keeps it.
+            (tex::setForMaterial(g, m).empty() ? materials : kept).push_back(m);
         }
     }
-    json r = runUi("texCreateSet", call);
-    if (r.is_string())
-        openSet(r.get<std::string>());
+    if (!unassigned.empty())
+        materials.push_back(assignNewMaterial(*firstUnassigned, unassigned));
+    if (!kept.empty())
+        log::info("New Texture Set: {} keep the texture sets they use", joinNames(kept));
+    return materials;
+}
+
+/** See the texCreateSetForSelection doc. */
+std::string createSetForSelection() { return createSetFor(materialsWithoutSet(false)); }
+
+/** See the texCreateSetPerMaterial doc. */
+json createSetPerMaterial()
+{
+    json out = json::array();
+    for (const std::string& m : materialsWithoutSet(true))
+        out.push_back(createSetFor({m}));
+    if (out.empty())
+        log::info("New Texture Set per Material: every material already uses a texture set");
+    return out;
+}
+
+void newSetPerMaterial()
+{
+    try
+    {
+        json r = ops::execute("texCreateSetPerMaterial", json::object(), CallSource::UI);
+        if (r.is_array() && !r.empty())
+            openSet(r.front().get<std::string>());
+    }
+    catch (const std::exception& e)
+    {
+        log::error("{}", e.what());
+    }
+}
+
+void newSet()
+{
+    try
+    {
+        json r = ops::execute("texCreateSetForSelection", json::object(), CallSource::UI);
+        if (r.is_string())
+            openSet(r.get<std::string>());
+    }
+    catch (const std::exception& e)
+    {
+        log::error("{}", e.what());
+    }
 }
 
 QString fileFilter()
@@ -462,6 +587,23 @@ std::string currentTextureSet()
     return names.empty() ? std::string() : names.front();
 }
 
+std::string renameTextureSet(const std::string& set, const std::string& to)
+{
+    scene::Graph& g = scene::Graph::current();
+    scene::Node* n = tex::findSet(g, set);
+    if (!n)
+        return {};
+    json path = runUi("rename", {{"args", {n->path(), to}}});
+    scene::Node* renamed = path.is_string() ? g.find(path.get<std::string>()) : nullptr;
+    return renamed ? renamed->name() : std::string();
+}
+
+bool deleteTextureSet(const std::string& set)
+{
+    scene::Node* n = tex::findSet(scene::Graph::current(), set);
+    return n && tryRunUi("delete", {{"args", {n->path()}}});
+}
+
 void registerTextureGraphUi()
 {
     static bool done = false;
@@ -491,14 +633,59 @@ void registerTextureGraphUi()
                  .open = false,
                  .toggleAction = "window.texture2d"});
 
+    ops::registerCommand({
+        .name = "texCreateSetPerMaterial",
+        .doc = "Make a texture set, with a paint layer, for each material of the selected meshes (every mesh when nothing is "
+               "selected) that uses no set yet, and pick it in that material. Meshes only on Default first share a new "
+               "material. Returns the sets made.",
+        .run = [](const Args&) -> json { return createSetPerMaterial(); },
+    });
+    actions::add({.id = "texture.newSetPerMaterial",
+                  .label = "New Texture Set per Material",
+                  .category = "Texture",
+                  .run = [] { newSetPerMaterial(); },
+                  .doc = "Make a texture set with a paint layer for each material of the selected meshes (every mesh when nothing "
+                         "is selected) that has none.",
+                  .python = "texCreateSetPerMaterial()",
+                  .keywords = {"texture sets", "all materials", "batch"}});
+    ops::registerCommand({
+        .name = "texCreateSetForSelection",
+        .doc = "Make a texture set with a paint layer and pick it in the materials of the selected meshes (and the meshes under "
+               "selected groups) that use no set yet. Meshes only on Default first share a new material. Returns the set.",
+        .run = [](const Args&) -> json { return createSetForSelection(); },
+    });
     actions::add({.id = "texture.newSet",
                   .label = "New Texture Set",
                   .category = "Texture",
                   .run = [] { newSet(); },
-                  .doc = "Make a texture set (a texture graph with a Material Output and the standard channels) and open it in the "
-                         "Texture Graph. With a mesh selected, it drives the mesh's first material, assigning a new one if the mesh only has "
-                         "Default.",
-                  .python = "lila.ops.texCreateSet(\"RockTex\", settings={\"material\": \"Rock\"})"});
+                  .doc = "Make a texture set with a paint layer, picked by the selected meshes' materials that have none, and open it "
+                         "in the Texture Graph.",
+                  .python = "texCreateSet(\"HullTex\", materials=[\"M_Hull\", \"M_Canopy\"])"});
+    actions::add({.id = "texture.renameSet",
+                  .label = "Rename Texture Set",
+                  .category = "Texture",
+                  .run =
+                      [] {
+                          NodeEditor* e = texEditor();
+                          if (e && e->isVisible())
+                              e->startGroupRename();
+                          else if (!startSetRename())
+                              log::warn("Rename Texture Set: open the Texture Set panel or the Texture Graph");
+                      },
+                  .doc = "Rename the texture set shown, in place in its picker.",
+                  .python = "lila.ops.rename(\"RockTex\", \"BoulderTex\")"});
+    actions::add({.id = "texture.deleteSet",
+                  .label = "Delete Texture Set",
+                  .category = "Texture",
+                  .run =
+                      [] {
+                          if (std::string set = currentTextureSet(); set.empty())
+                              log::warn("Delete Texture Set: no texture set");
+                          else
+                              deleteTextureSet(set);
+                      },
+                  .doc = "Delete the texture set shown in the Texture Graph, with its graph and layers. Undo brings it back.",
+                  .python = "lila.ops.delete(\"RockTex\")"});
     actions::add({.id = "texture.import",
                   .label = "Import Texture Graph...",
                   .category = "Texture",
@@ -536,6 +723,23 @@ void registerTextureGraphUi()
                       },
                   .doc = "Evaluate the current texture set and write its maps through its export preset (Unreal by default).",
                   .python = "lila.ops.texExport(\"RockTex\")"});
+    actions::add({.id = "texture.exportVariants",
+                  .label = "Export All Variants",
+                  .category = "Texture",
+                  .run =
+                      [] {
+                          if (std::string set = currentTextureSet(); !set.empty())
+                          {
+                              json call = argsCall({set});
+                              call["variants"] = true;
+                              if (json r = runUi("texExport", call); r.is_object())
+                                  log::info("exported {} variants", r.value("variants", json::object()).size());
+                          }
+                      },
+                  .doc = "Write the current texture set's maps once for the base and once for each variant, told apart by the {variant} "
+                         "token in the export preset's names (added when the preset has none).",
+                  .python = "lila.ops.texExport(\"RockTex\", variants=True)",
+                  .keywords = {"variants", "export", "colourways", "skins"}});
     actions::add({.id = "texture.clearPreview",
                   .label = "Clear Mesh Preview",
                   .category = "Texture",
@@ -544,8 +748,8 @@ void registerTextureGraphUi()
                   .python = "lila.ui.run_action(\"texture.clearPreview\")"});
 
     menus::addMenu({.id = "Texture", .title = "Texture", .before = "Rig", .sets = {"Texture"}});
-    menus::addActions("Texture", {"texture.newSet", "tex.paint", "", "window.textureGraph", "window.texture2d", "", "texture.import", "texture.importPainterSmart", "texture.exportMaterial",
-                                  "texture.exportNodes", "texture.exportMaps", "", "texture.clearPreview", "#View", "viewport.textureView3d",
+    menus::addActions("Texture", {"texture.newSet", "texture.newSetPerMaterial", "texture.renameSet", "texture.deleteSet", "tex.paint", "tex.stencil", "tex.quickMaskOverlay", "tex.paintAlongCurve", "tex.patchFill", "tex.transferSet", "", "window.textureGraph", "window.texture2d", "", "texture.import", "tex.materialFromMaps", "tex.materialsFromFolder", "texture.importPainterSmart", "tex.importPtex", "tex.exportPtex", "texture.exportMaterial",
+                                  "texture.exportNodes", "texture.exportMaps", "texture.exportVariants", "", "texture.clearPreview", "#View", "viewport.textureView3d",
                                   "viewport.textureViewSplit", "viewport.textureView2d"});
 }
 } // namespace lila::ui

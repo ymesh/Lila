@@ -1,0 +1,220 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "layerDecal",
+  "label": "Layer Decal",
+  "category": "Layer",
+  "doc": "Places one picture (or one cell of an atlas) on the mesh from a box in object space: out is the picture there, mask its alpha inside the box and 0 outside.",
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    },
+    {
+      "id": "mask",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "mode",
+      "type": "enum",
+      "default": "planar",
+      "options": [
+        "planar",
+        "triplanar",
+        "spherical",
+        "cylindrical",
+        "warp"
+      ],
+      "doc": "How the content lands on the mesh."
+    },
+    {
+      "id": "positionX",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -100,
+      "softMax": 100,
+      "doc": "Projector centre, object units."
+    },
+    {
+      "id": "positionY",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -100,
+      "softMax": 100
+    },
+    {
+      "id": "positionZ",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -100,
+      "softMax": 100
+    },
+    {
+      "id": "rotationX",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -180,
+      "softMax": 180,
+      "doc": "Projector turn, degrees."
+    },
+    {
+      "id": "rotationY",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -180,
+      "softMax": 180
+    },
+    {
+      "id": "rotationZ",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -180,
+      "softMax": 180
+    },
+    {
+      "id": "sizeX",
+      "type": "float",
+      "default": 20.0,
+      "min": 0.001,
+      "softMax": 500,
+      "doc": "Projector box, object units: one repeat of the content."
+    },
+    {
+      "id": "sizeY",
+      "type": "float",
+      "default": 20.0,
+      "min": 0.001,
+      "softMax": 500
+    },
+    {
+      "id": "sizeZ",
+      "type": "float",
+      "default": 20.0,
+      "min": 0.001,
+      "softMax": 500
+    },
+    {
+      "id": "sharpness",
+      "type": "float",
+      "default": 4.0,
+      "min": 1,
+      "softMax": 32,
+      "doc": "Triplanar: how quickly the three projections hand over."
+    },
+    {
+      "id": "follow",
+      "type": "float",
+      "default": 1.0,
+      "min": 0,
+      "max": 1,
+      "doc": "Planar and warp: carry the content over edges that turn away from the projector."
+    },
+    {
+      "id": "warp00X",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -0.5,
+      "softMax": 0.5,
+      "doc": "Warp: corner offsets, in repeats."
+    },
+    {
+      "id": "warp00Y",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -0.5,
+      "softMax": 0.5
+    },
+    {
+      "id": "warp10X",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -0.5,
+      "softMax": 0.5
+    },
+    {
+      "id": "warp10Y",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -0.5,
+      "softMax": 0.5
+    },
+    {
+      "id": "warp01X",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -0.5,
+      "softMax": 0.5
+    },
+    {
+      "id": "warp01Y",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -0.5,
+      "softMax": 0.5
+    },
+    {
+      "id": "warp11X",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -0.5,
+      "softMax": 0.5
+    },
+    {
+      "id": "warp11Y",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -0.5,
+      "softMax": 0.5
+    },
+    {
+      "id": "columns",
+      "type": "int",
+      "default": 1,
+      "min": 1,
+      "softMax": 16,
+      "doc": "Atlas: cells across."
+    },
+    {
+      "id": "rows",
+      "type": "int",
+      "default": 1,
+      "min": 1,
+      "softMax": 16,
+      "doc": "Atlas: cells down."
+    },
+    {
+      "id": "cell",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "softMax": 63,
+      "doc": "Atlas: the cell shown, left to right, top to bottom."
+    }
+  ],
+  "cost": 12,
+  "externals": [
+    "position",
+    "normal"
+  ],
+  "helpers": [
+    "projection"
+  ],
+  "body": {
+    "out": "float3 f = projFrame(position.sample(uv).xyz, float3(p.positionX, p.positionY, p.positionZ), float3(p.rotationX, p.rotationY, p.rotationZ));\nfloat3 fn = projFrame(normal.sample(uv).xyz, float3(0.0, 0.0, 0.0), float3(p.rotationX, p.rotationY, p.rotationZ));\nfloat3 size = float3(p.sizeX, p.sizeY, p.sizeZ);\nfloat4 w0 = float4(p.warp00X, p.warp00Y, p.warp10X, p.warp10Y);\nfloat4 w1 = float4(p.warp01X, p.warp01Y, p.warp11X, p.warp11Y);\nfloat2 c = projCoord(p.mode + 1, uv, f, fn, size, p.follow, w0, w1);\nbool inside = all(c >= 0.0) && all(c <= 1.0) && f.z <= size.z * 0.5 && f.z >= -size.z * 0.5;\nint cols = max(p.columns, 1), rows = max(p.rows, 1);\nint k = clamp(p.cell, 0, cols * rows - 1);\nfloat2 cellUv = (float2(float(k % cols), float(rows - 1 - k / cols)) + saturate(c)) / float2(float(cols), float(rows));\nreturn inside ? input.sample(cellUv) : float4(0.0, 0.0, 0.0, 0.0);",
+    "mask": "float3 f = projFrame(position.sample(uv).xyz, float3(p.positionX, p.positionY, p.positionZ), float3(p.rotationX, p.rotationY, p.rotationZ));\nfloat3 fn = projFrame(normal.sample(uv).xyz, float3(0.0, 0.0, 0.0), float3(p.rotationX, p.rotationY, p.rotationZ));\nfloat3 size = float3(p.sizeX, p.sizeY, p.sizeZ);\nfloat4 w0 = float4(p.warp00X, p.warp00Y, p.warp10X, p.warp10Y);\nfloat4 w1 = float4(p.warp01X, p.warp01Y, p.warp11X, p.warp11Y);\nfloat2 c = projCoord(p.mode + 1, uv, f, fn, size, p.follow, w0, w1);\nbool inside = all(c >= 0.0) && all(c <= 1.0) && f.z <= size.z * 0.5 && f.z >= -size.z * 0.5;\nint cols = max(p.columns, 1), rows = max(p.rows, 1);\nint k = clamp(p.cell, 0, cols * rows - 1);\nfloat2 cellUv = (float2(float(k % cols), float(rows - 1 - k / cols)) + saturate(c)) / float2(float(cols), float(rows));\nreturn inside ? input.sample(cellUv).a : 0.0;"
+  }
+}

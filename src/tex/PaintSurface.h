@@ -55,6 +55,8 @@ struct LILA_SCENE_API PaintMesh
     /** Per corner (three per triangle), the mesh point it is: what a topological symmetry map pairs. */
     std::vector<uint32_t> points;
     std::shared_ptr<const geo::MeshBvh> bvh;
+    /** Hash of the triangulation, its uvs and what is paintable: equal signatures, the same dab triangles and barycentrics. */
+    uint64_t signature = 0;
 
     size_t triangleCount() const { return paintable.size(); }
     glm::vec3 point(uint32_t tri, float u, float v) const;
@@ -73,11 +75,15 @@ struct LILA_SCENE_API PaintMesh
     bool atUv(const glm::vec2& uv, uint32_t& tri, float& u, float& v, float maxDistance = 0.0f) const;
 
     /**
-     * The painted part of a mesh: faces whose material slot is `material`, or every face when none uses it (or
-     * material is empty). Uses uv0. bvh must be built from mesh.
+     * The painted part of a mesh: faces whose material slot is `material` (or one of several joined by
+     * kMaterialSeparator, a set driving more than one), or every face when none uses it (or material is empty). Uses
+     * uv0. bvh must be built from mesh.
      */
     static std::shared_ptr<const PaintMesh> build(const geo::Mesh& mesh, std::shared_ptr<const geo::MeshBvh> bvh, std::string_view material);
 };
+
+/** Joins the materials of a set that drives several, in PaintMesh::build's material key. */
+inline constexpr char kMaterialSeparator = ';';
 
 /** A dab's centre and the distance its tip can reach. */
 struct DabReach
@@ -91,6 +97,12 @@ struct DabReach
  * surface), its tip angle measured from tipFrame there. False when no paintable surface is that close.
  */
 LILA_SCENE_API bool recordDab(const PaintMesh& mesh, const brush::Dab& d, Dab& out);
+
+/**
+ * For a tileable texture: the dab's copies one uv square over (across u, v or both) where it reaches past an edge, on
+ * the surface that holds the uv it wraps to. Empty when it reaches no edge.
+ */
+LILA_SCENE_API std::vector<Dab> tileWrapped(const PaintMesh& mesh, const Dab& d);
 
 class LILA_SCENE_API SurfaceAtlas
 {
@@ -108,13 +120,16 @@ public:
     bool pageUsed(uint32_t page) const { return page < mPageTris.size() && !mPageTris[page].empty(); }
     /** The page's texels, row 0 at the top (v = 1), rasterised on first use. Not thread safe. */
     const std::vector<GeoTexel>& page(uint32_t page);
+    /** Rasterises the pages not yet rasterised, in parallel, so the page() calls after it are lookups. Not thread safe. */
+    void preparePages(std::span<const uint32_t> pages);
     size_t pagesRasterised() const { return mPages.size(); }
 
     /**
      * For every page the dabs reach, the indices of the dabs reaching it (offset by first), in order. A dab reaches a
-     * page when a triangle near its centre (within reach) has texels or padding there.
+     * page when a triangle near its centre (within reach) has texels or padding there. Triangles skip marks (non-zero)
+     * reach nothing.
      */
-    std::map<uint32_t, std::vector<uint32_t>> pagesFor(std::span<const DabReach> dabs, uint32_t first = 0) const;
+    std::map<uint32_t, std::vector<uint32_t>> pagesFor(std::span<const DabReach> dabs, uint32_t first = 0, std::span<const uint8_t> skip = {}) const;
     /** Pages holding texels (or padding) of a triangle that keep says yes to, ascending. */
     std::vector<uint32_t> pagesWhere(const std::function<bool(uint32_t tri)>& keep) const;
 
@@ -142,5 +157,7 @@ private:
     std::vector<uint32_t> mTriPages;
     std::vector<Box> mTriPageBoxes;
     std::map<uint32_t, std::vector<GeoTexel>> mPages;
+
+    std::vector<GeoTexel> rasterise(uint32_t page) const;
 };
 } // namespace lila::tex::paint

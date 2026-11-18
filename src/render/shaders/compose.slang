@@ -2,10 +2,12 @@
 // tonemaps into the frame before lines and overlays draw over it.
 
 #include "scene_color.slang"
+#include "tonemap.slang"
 
-struct ComposePush
+/** The compose pass's settings, read through the push constant's address; matches render::ComposeParams. */
+struct ComposeParams
 {
-    float4 params; // x: display gamma, y: 1 to dither, z: exposure, w: tonemapper (0 neutral, 1 AgX, 2 ACES, 3 linear)
+    float4 params; // x: display gamma, y: 1 to dither, z: exposure, w: tonemapper (0 neutral, 1 AgX, 2 ACES, 3 linear, 4 OCIO view)
     float4 grade;  // x: contrast, y: saturation, z: 1 for the post stack, w: AgX look (0 none, 1 punchy, 2 golden)
     float4 white;  // rgb: white balance gains, w: LUT intensity (0 skips it)
     float4 lift;   // rgb, w: vignette
@@ -13,14 +15,35 @@ struct ComposePush
     float4 gain;   // rgb, w: grain seed
     float4 lens;   // x: chromatic aberration (pixels at the corner), y: lens distortion, z: sharpen, w: bloom intensity
     float4 size;   // extent, then its inverse
-    float4 misc;   // x: 1 to apply the auto exposure, y: bloom scale (one over its levels)
+    float4 misc;   // x: 1 to apply the auto exposure, y: bloom scale (one over its levels), zw: the view LUT's log2 shaper range
+    float4 offset;     // rgb, w: offset master
+    float4 masters;    // lift, gamma, gain masters, w: 1 when curvesTex holds curves
+    float4 shadows;    // rgb gains, w: the shadows' upper luminance
+    float4 midtones;   // rgb gains
+    float4 highlights; // rgb gains, w: the highlights' lower luminance
+    float4 flare;      // x 1 to add flareTex, y lens dirt intensity, z 1 when dirtTex holds dirt
+    float4 halation;   // intensity, threshold, radius, 0
+    float4 grain;      // size (pixels), colour amount, luminance response, 0
+    float4 letterbox;  // aspect (0 none), opacity
+    float4 halationTint; // rgb
 };
 
-[[vk::push_constant]] ComposePush cp;
+struct ComposePush
+{
+    ComposeParams* params;
+    uint pad[2];
+};
+
+[[vk::push_constant]] ComposePush cpc;
+#define cp (*cpc.params)
 [[vk::binding(0, 0)]] Sampler2D composeTex; // compressed scene, linear filtering
 [[vk::binding(1, 0)]] Sampler2D bloomTex;   // half resolution, expanded radiance
 [[vk::binding(2, 0)]] Sampler3D lutTex;     // display-encoded in and out
 [[vk::binding(3, 0)]] Sampler2D exposureTex; // exposure.slang's state: texel 0 is the multiplier
+[[vk::binding(4, 0)]] Sampler3D viewLutTex;  // tonemapper 4: an OCIO view over a log2 shaper, display code values out
+[[vk::binding(5, 0)]] Sampler2D curvesTex;   // grading curves, a row each (render::grade::Curve order)
+[[vk::binding(6, 0)]] Sampler2D flareTex;    // flare.slang's lens flare, quarter resolution, exposed light
+[[vk::binding(7, 0)]] Sampler2D dirtTex;     // lens dirt lit by bloom and flare
 
 struct ComposeOut
 {
@@ -54,71 +77,64 @@ float3 dither(float3 linear, float2 pixel)
     return fromSrgb(srgb);
 }
 
-// AgX (Sobotka), the analytic fit by Benjamin Wrensch: Rec.709 in, display-linear Rec.709 out.
-float3 agxContrast(float3 x)
-{
-    float3 x2 = x * x, x4 = x2 * x2;
-    return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232;
-}
-
-float3 agx(float3 c, uint look)
-{
-    const float3x3 inset = float3x3(0.842479062253094, 0.0423282422610123, 0.0423756549057051, 0.0784335999999992, 0.878468636469772,
-                                    0.0784336, 0.0792237451477643, 0.0791661274605434, 0.879142973793104);
-    const float3x3 outset = float3x3(1.19687900512017, -0.0528968517574562, -0.0529716355144438, -0.0980208811401368, 1.15190312990417,
-                                     -0.0980434501171241, -0.0990297440797205, -0.0989611768448433, 1.15107367264116);
-    const float minEv = -12.47393, maxEv = 4.026069;
-    float3 v = mul(max(c, 1e-10), inset);
-    v = saturate((log2(v) - minEv) / (maxEv - minEv));
-    v = agxContrast(v);
-    if (look != 0)
-    {
-        float3 slope = 1.0, power = 1.0;
-        float sat = 1.0;
-        if (look == 1)
-        {
-            power = 1.35;
-            sat = 1.4;
-        }
-        else
-        {
-            slope = float3(1.0, 0.9, 0.5);
-            power = 0.8;
-            sat = 0.8;
-        }
-        float luma = dot(v, float3(0.2126, 0.7152, 0.0722));
-        v = pow(max(v * slope, 0.0), power);
-        v = luma + sat * (v - luma);
-    }
-    v = mul(v, outset);
-    return pow(max(v, 0.0), 2.2);
-}
-
-// ACES filmic fit (Stephen Hill): sRGB to ACES AP1 through the RRT and ODT fit, back to display-linear sRGB.
-float3 aces(float3 c)
-{
-    const float3x3 inputM = float3x3(0.59719, 0.35458, 0.04823, 0.07600, 0.90834, 0.01566, 0.02840, 0.13383, 0.83777);
-    const float3x3 outputM = float3x3(1.60475, -0.53108, -0.07367, -0.10208, 1.10813, -0.00605, -0.00327, -0.07276, 1.07602);
-    float3 v = mul(inputM, c);
-    float3 a = v * (v + 0.0245786) - 0.000090537;
-    float3 b = v * (0.983729 * v + 0.4329510) + 0.238081;
-    return saturate(mul(outputM, a / b));
-}
-
-float3 tonemap(float3 c, uint mode, uint look)
-{
-    if (mode == 1)
-        return agx(c, look);
-    if (mode == 2)
-        return aces(c);
-    if (mode == 3)
-        return saturate(c);
-    return neutralTonemap(c);
-}
-
 float3 sceneAt(float2 uv)
 {
     return sceneExpand(composeTex.SampleLevel(uv, 0).rgb);
+}
+
+/** A curve row at x (0..1), between texel centres; hue rows wrap. */
+float curveAt(int row, float x, bool wrap)
+{
+    float2 dims;
+    curvesTex.GetDimensions(dims.x, dims.y);
+    x = wrap ? frac(x) : saturate(x);
+    return curvesTex.SampleLevel(float2((x * (dims.x - 1.0) + 0.5) / dims.x, (float(row) + 0.5) / dims.y), 0).r;
+}
+
+float3 rgbToHsv(float3 c)
+{
+    float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b));
+    float d = mx - mn;
+    float h = 0.0;
+    if (d > 1e-6)
+    {
+        if (mx == c.r)
+            h = fmod((c.g - c.b) / d + 6.0, 6.0);
+        else if (mx == c.g)
+            h = (c.b - c.r) / d + 2.0;
+        else
+            h = (c.r - c.g) / d + 4.0;
+        h /= 6.0;
+    }
+    return float3(h, mx > 1e-6 ? d / mx : 0.0, mx);
+}
+
+float3 hsvToRgb(float3 hsv)
+{
+    float3 p = abs(frac(hsv.xxx + float3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+    return hsv.z * lerp(float3(1, 1, 1), saturate(p - 1.0), hsv.y);
+}
+
+/** Wheels, tonal balance and curves on the display-encoded picture; matches render::grade::applyDisplay. */
+float3 gradeDisplay(float3 s)
+{
+    s += cp.offset.rgb + cp.offset.w;
+    s = saturate(s * cp.gain.rgb * cp.masters.z + (cp.lift.rgb + cp.masters.x) * (1.0 - s));
+    s = pow(s, 1.0 / max(cp.gammaC.rgb * cp.masters.y, 0.01));
+    float luma = dot(s, float3(0.2126, 0.7152, 0.0722));
+    float ws = 1.0 - smoothstep(0.0, max(cp.shadows.w, 1e-3), luma), wh = smoothstep(min(cp.highlights.w, 0.999), 1.0, luma);
+    float wm = saturate(1.0 - ws - wh);
+    s = saturate(s * (ws * cp.shadows.rgb + wm * cp.midtones.rgb + wh * cp.highlights.rgb));
+    if (cp.masters.w > 0.5)
+    {
+        s = float3(curveAt(1, curveAt(0, s.r, false), false), curveAt(2, curveAt(0, s.g, false), false), curveAt(3, curveAt(0, s.b, false), false));
+        float3 hsv = rgbToHsv(s);
+        luma = dot(s, float3(0.2126, 0.7152, 0.0722));
+        hsv.y = saturate(hsv.y * 2.0 * curveAt(4, hsv.x, true) * 2.0 * curveAt(6, luma, false));
+        hsv.x = frac(hsv.x + curveAt(5, hsv.x, true) - 0.5);
+        s = hsvToRgb(hsv);
+    }
+    return s;
 }
 
 float hash(float2 p)
@@ -126,6 +142,15 @@ float hash(float2 p)
     float3 p3 = frac(float3(p.xyx) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return frac((p3.x + p3.y) * p3.z);
+}
+
+/** Smooth value noise in -1..1 at grain scale: a lattice of hashes, blended. */
+float grainNoise(float2 p)
+{
+    float2 i = floor(p), f = frac(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash(i), b = hash(i + float2(1, 0)), c = hash(i + float2(0, 1)), d = hash(i + float2(1, 1));
+    return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y) * 2.0 - 1.0;
 }
 
 [shader("fragment")]
@@ -160,8 +185,22 @@ float4 composePS(ComposeOut i) : SV_Target
                        sceneAt(base - float2(0, cp.size.w));
             c = max(c + cp.lens.z * (c - 0.25 * n), 0.0);
         }
+        // Lens dirt catches the light bloom and flare spread over the lens.
+        const float dirt = cp.flare.z > 0.5 ? dot(dirtTex.SampleLevel(base, 0).rgb, float3(0.3333, 0.3333, 0.3333)) * cp.flare.y : 0.0;
         if (cp.lens.w > 0.0)
-            c = lerp(c, bloomTex.SampleLevel(base, 0).rgb * cp.misc.y, cp.lens.w);
+        {
+            float3 glow = bloomTex.SampleLevel(base, 0).rgb * cp.misc.y;
+            c = lerp(c, glow, cp.lens.w) + glow * cp.lens.w * dirt;
+        }
+        if (cp.flare.x > 0.5)
+            c += flareTex.SampleLevel(base, 0).rgb * (1.0 + dirt);
+        if (cp.halation.x > 0.0)
+        {
+            // Halation: light scattered back through the film base, a tinted glow round what is brighter than the threshold.
+            float3 glow = bloomTex.SampleLevel(base, 0).rgb * cp.misc.y;
+            float over = max(dot(glow, float3(0.2126, 0.7152, 0.0722)) - cp.halation.y, 0.0);
+            c += cp.halationTint.rgb * over * cp.halation.x;
+        }
         uv = base;
     }
 
@@ -180,15 +219,24 @@ float4 composePS(ComposeOut i) : SV_Target
         c = max(luma + cp.grade.y * (c - luma), 0.0);
     }
 
-    c = tonemap(c, uint(cp.params.w + 0.5), uint(cp.grade.w + 0.5));
-    c = pow(max(c, 0.0), 1.0 / max(cp.params.x, 0.01));
+    if (uint(cp.params.w + 0.5) == 4)
+    {
+        // The view's display code values, made linear so the sRGB target writes them back out unchanged.
+        float3 dims;
+        viewLutTex.GetDimensions(dims.x, dims.y, dims.z);
+        float3 shaped = saturate((log2(max(c, exp2(cp.misc.z))) - cp.misc.z) / (cp.misc.w - cp.misc.z));
+        c = fromSrgb(saturate(viewLutTex.SampleLevel(shaped * ((dims - 1.0) / dims) + 0.5 / dims, 0).rgb));
+    }
+    else
+    {
+        c = tonemap(c, uint(cp.params.w + 0.5), uint(cp.grade.w + 0.5));
+        c = pow(max(c, 0.0), 1.0 / max(cp.params.x, 0.01));
+    }
 
     if (stack)
     {
         // Lift, gamma, gain on the display-encoded picture, as in a grading suite.
-        float3 s = toSrgb(saturate(c));
-        s = saturate(s * cp.gain.rgb + cp.lift.rgb * (1.0 - s));
-        s = pow(s, 1.0 / max(cp.gammaC.rgb, 0.01));
+        float3 s = gradeDisplay(toSrgb(saturate(c)));
         if (cp.white.w > 0.0)
         {
             float3 dims;
@@ -203,10 +251,21 @@ float4 composePS(ComposeOut i) : SV_Target
         }
         if (cp.gammaC.w > 0.0)
         {
-            // Grain strongest in the mid-tones, as on film.
-            float n = hash(i.pos.xy + cp.gain.w * 97.0) + hash(i.pos.xy * 1.37 + cp.gain.w * 61.0) - 1.0;
+            // Grain of a size, mono or per channel, strongest in the mid-tones as on film by its response.
+            float2 g = i.pos.xy / max(cp.grain.x, 0.5) + cp.gain.w * float2(17.3, 31.7);
+            float mono = grainNoise(g);
+            float3 coloured = float3(mono, grainNoise(g + 51.3), grainNoise(g + 97.1));
+            float3 n = lerp(mono.xxx, coloured, cp.grain.y);
             float luma = dot(s, float3(0.2126, 0.7152, 0.0722));
-            s = saturate(s + n * cp.gammaC.w * 0.12 * (1.0 - abs(luma * 2.0 - 1.0) * 0.6));
+            float weight = lerp(1.0, 4.0 * luma * (1.0 - luma), cp.grain.z);
+            s = saturate(s + n * cp.gammaC.w * 0.15 * weight);
+        }
+        if (cp.letterbox.x > 0.0)
+        {
+            float pic = cp.size.x * cp.size.w;
+            float2 bar = cp.letterbox.x > pic ? float2(0.0, 0.5 * (1.0 - pic / cp.letterbox.x)) : float2(0.5 * (1.0 - cp.letterbox.x / pic), 0.0);
+            if (any(uv < bar) || any(uv > 1.0 - bar))
+                s *= 1.0 - cp.letterbox.y;
         }
         c = fromSrgb(s);
     }

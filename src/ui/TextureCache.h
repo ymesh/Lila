@@ -24,6 +24,12 @@ namespace lila::ui::textures
 LILA_UI_API render::TexturePtr get(const std::string& path, bool srgb, bool udimTiles = false);
 
 /**
+ * A colour texture in an OCIO colour space (ocioSpace, of config; "" for the built-in config), converted to Lila's
+ * scene-linear Rec.709 on load and kept linear. Falls back to get(path, srgb) with an error() when the conversion fails.
+ */
+LILA_UI_API render::TexturePtr getOcio(const std::string& path, const std::string& config, const std::string& ocioSpace, bool srgb);
+
+/**
  * One linear image with occlusion in R, roughness in G and metallic in B: the packed map when given, its channels
  * picked by `channels` (the source channel of occlusion, roughness and metallic), else the red channels of the
  * separate maps, white where one is missing. Bits 0 to 3 of srgbMask mark orm, occlusion, roughness and metallic as

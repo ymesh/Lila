@@ -1,6 +1,7 @@
 #include "ui/UvEditorInternal.h"
 
 #include "ops/CommandOptions.h"
+#include "core/ExtensionContext.h"
 #include "ui/Menus.h"
 #include "ui/OptionBox.h"
 #include "ui/PanelDefaults.h"
@@ -9,6 +10,7 @@
 #include "ui/SpinScrub.h"
 #include "ui/ToolkitLayout.h"
 #include "ui/UvSeamOverride.h"
+#include "ui/UvToolkit.h"
 
 #include <QApplication>
 #include <QGridLayout>
@@ -622,6 +624,15 @@ UvEditor::UvEditor(QWidget* parent) : QWidget(parent)
     xform->setColumnStretch(1, 1);
     xform->setColumnStretch(2, 1);
     addSection(collapsibleSection("Transform", xformBox, body, kUvCollapsed, false));
+    mExtensionSections = new QWidget(body);
+    auto* extensionColumn = new QVBoxLayout(mExtensionSections);
+    extensionColumn->setContentsMargins(0, 0, 0, 0);
+    extensionColumn->setSpacing(0);
+    addSection(mExtensionSections);
+    rebuildExtensionSections();
+    mExtensionListener = uvToolkit::registry().addListener([this](RegistryChange, const std::string&, const std::string&) {
+        QTimer::singleShot(0, this, [this] { rebuildExtensionSections(); });
+    });
     for (size_t i = 0; i < mSections.size(); ++i)
         mSectionColumn[0]->insertWidget(int(i), mSections[i]);
     mSectionRow->setStretch(0, 1);
@@ -754,6 +765,65 @@ UvEditor::~UvEditor()
     scene::Graph::current().removeListener(mGraphListener);
     scene::components::removeListener(mComponentListener);
     uvLive::removeListener(mLiveListener);
+    uvToolkit::registry().removeListener(mExtensionListener);
+}
+
+void UvEditor::rebuildExtensionSections()
+{
+    QLayout* column = mExtensionSections->layout();
+    while (QLayoutItem* item = column->takeAt(0))
+    {
+        delete item->widget();
+        delete item;
+    }
+    std::vector<uvToolkit::Section*> sections = uvToolkit::registry().allInOrder();
+    std::stable_sort(sections.begin(), sections.end(), [](const auto* a, const auto* b) { return a->order < b->order; });
+    for (const uvToolkit::Section* s : sections)
+    {
+        std::vector<QWidget*> buttons;
+        for (const uvToolkit::Item& item : s->items)
+            if (actions::find(item.action))
+                buttons.push_back(controls::row(item.action, item.icon.empty() ? nullptr : item.icon.c_str(), mExtensionSections,
+                                                QString::fromStdString(item.text)));
+        std::vector<std::string> rare;
+        for (const std::string& id : s->rare)
+            if (actions::find(id))
+                rare.push_back(id);
+        if (!rare.empty())
+            buttons.push_back(controls::overflow(rare, mExtensionSections));
+        if (buttons.empty())
+            continue;
+        column->addWidget(collapsibleSection(QString::fromStdString(s->title), controls::grid(buttons, 2, mExtensionSections), mExtensionSections,
+                                             kUvCollapsed, false));
+    }
+    mExtensionSections->setVisible(column->count() > 0);
+}
+
+Registry<uvToolkit::Section>& uvToolkit::registry()
+{
+    static Registry<Section> r;
+    return r;
+}
+
+void uvToolkit::add(Section s, std::string owner)
+{
+    std::string id = s.id;
+    registry().put(std::move(id), std::move(s), std::move(owner));
+}
+
+uint64_t uvToolkit::add(ext::Context& ctx, Section s)
+{
+    if (const std::string* owner = registry().ownerOf(s.id); owner && *owner != ctx.owner())
+    {
+        ctx.log(LogLevel::Error, "UV toolkit section '" + s.id + "' already belongs to " + *owner);
+        return 0;
+    }
+    std::string id = s.id;
+    add(std::move(s), ctx.owner());
+    return ctx.track("uvToolkit:" + id, [id, own = ctx.owner()] {
+        if (const std::string* o = registry().ownerOf(id); o && *o == own)
+            registry().remove(id);
+    });
 }
 
 void UvEditor::showEvent(QShowEvent* e)

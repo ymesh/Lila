@@ -867,6 +867,42 @@ Sheet fromIdMap(const lila::image::Image& img, double tolerance, int minPx)
     return s;
 }
 
+Sheet fromZenUv(std::string_view text, int width, int height)
+{
+    Sheet s;
+    s.width = width;
+    s.height = height;
+    std::vector<std::pair<std::string, std::array<double, 4>>> found;
+    // Ordered: the trims keep the order ZenUV lists them in.
+    const nlohmann::ordered_json j = nlohmann::ordered_json::parse(text, nullptr, false);
+    if (j.is_object() && j.contains("trimsheet") && j["trimsheet"].is_object())
+    {
+        for (const auto& [name, t] : j["trimsheet"].items())
+            if (t.is_object() && t.value("rect", json()).is_array() && t["rect"].size() == 4 && !t.value("hide", false))
+                found.push_back({name, {t["rect"][0].get<double>(), t["rect"][1].get<double>(), t["rect"][2].get<double>(), t["rect"][3].get<double>()}});
+    }
+    else
+    {
+        // A preset script sets name, then rect, on each item it adds.
+        const std::string src(text);
+        const std::regex item(R"re(\.name\s*=\s*['"]([^'"]*)['"][\s\S]*?\.rect\s*=\s*\(\s*([-0-9.eE+]+)\s*,\s*([-0-9.eE+]+)\s*,\s*([-0-9.eE+]+)\s*,\s*([-0-9.eE+]+)\s*\))re");
+        for (auto it = std::sregex_iterator(src.begin(), src.end(), item); it != std::sregex_iterator(); ++it)
+            found.push_back({(*it)[1], {std::stod((*it)[2]), std::stod((*it)[3]), std::stod((*it)[4]), std::stod((*it)[5])}});
+    }
+    for (const auto& [name, r] : found)
+    {
+        const double left = std::min(r[0], r[2]), right = std::max(r[0], r[2]);
+        const double top = std::max(r[1], r[3]), bottom = std::min(r[1], r[3]);
+        const glm::ivec2 lo(int(std::lround(left * width)), int(std::lround((1.0 - top) * height)));
+        const glm::ivec2 hi(int(std::lround(right * width)), int(std::lround((1.0 - bottom) * height)));
+        if (hi.x <= lo.x || hi.y <= lo.y)
+            continue;
+        const bool full = lo.x == 0 && hi.x == width;
+        s.trims.push_back(full ? strip(name, lo.y, hi.y, width, Style::Raised) : rect(name, lo, hi, Style::Raised));
+    }
+    return s;
+}
+
 Sheet fromUvs(const geo::Mesh& mesh, std::string_view uvSet, int width, int height)
 {
     Sheet s;

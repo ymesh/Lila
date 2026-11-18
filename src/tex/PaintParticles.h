@@ -18,7 +18,11 @@ namespace lila::tex::paint
 {
 struct LILA_SCENE_API ParticleSpec
 {
-    /** drips, rain or sparks. */
+    /**
+     * drips, rain or sparks; or flow, a small simulation on the surface: particles fall with gravity in world space, crawl
+     * along the surface (their velocity kept in its tangent plane), stick on slopes flatter than friction, and pool where
+     * they stop. Presets of flow: rustRun, leak, rainStreaks, dustSettle, burn, scorch.
+     */
     std::string kind = "drips";
     /** Particles per brush dab. */
     int count = 3;
@@ -31,8 +35,18 @@ struct LILA_SCENE_API ParticleSpec
     /** Fraction of the brush dabs that emit at all (the rest only paint themselves). */
     float rate = 0.35f;
     uint32_t seed = 0;
-    /** Object-space down, for drips and rain. */
+    /** Object-space down, for drips, rain and flow. */
     glm::vec3 down{0.0f, -1.0f, 0.0f};
+    /** flow: how strongly gravity pulls (0 none, 1 full), the slope below which particles stick (0 to 1, as the pull along
+     *  the surface over gravity), how much they wander, how big the pool they leave where they stop (in particle sizes),
+     *  and where they start: dab (at the brush dab), area (over the spread) or ring (on its edge). */
+    float gravity = 1.0f;
+    float friction = 0.15f;
+    float wander = 0.1f;
+    float pool = 1.5f;
+    std::string emitter = "area";
+    /** flow: the opacity left at the end of the run (1 keeps it, 0 fades it out). */
+    float fade = 1.0f;
 
     nlohmann::json toJson() const;
     /** Throws std::invalid_argument on an unknown kind. */

@@ -10,7 +10,7 @@
   "outer": {
     "NE": [{ "label": "Split Rings", "action": "mesh.splitRings" }, { "label": "Subdivide", "action": "mesh.subdivide" }],
     "N": [{ "label": "Merge to Center", "action": "mesh.mergeCenter" }, { "label": "Target Weld", "action": "mesh.targetWeld" }],
-    "E": [{ "label": "Inset", "action": "mesh.inset" }],
+    "E": [{ "label": "Inset", "action": "mesh.inset" }, { "label": "Auto Bevel", "action": "modifier.autoBevel" }],
     "S": [{ "label": "Connect", "action": "mesh.connect" }],
     "SE": [{ "label": "Harden Normals", "action": "mesh.hardenEdges" }, { "label": "Soften by Angle", "action": "mesh.setNormalAngle" }],
     "SW": [{ "label": "Poke", "action": "mesh.poke" }, { "label": "Collapse", "action": "mesh.collapse" }],

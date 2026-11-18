@@ -1166,7 +1166,7 @@ json createTreeTextureSets(Graph& g, NodeId tree, const Args& a)
             if (old && old->type().name == "textureSet")
                 g.deleteNode(old->id());
         }
-        return ops::execute("texCreateSet", {{"args", {name}}, {"settings", {{"material", material}, {"bakeProject", project}, {"exportPreset", target}}}})
+        return ops::execute("texCreateSet", {{"args", {name}}, {"materials", {material}}, {"settings", {{"bakeProject", project}, {"exportPreset", target}}}})
             .get<std::string>();
     };
     auto fill = [](const std::string& set, const std::string& name, const json& material, const json& extra) {

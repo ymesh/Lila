@@ -11,6 +11,7 @@
 #include "scene/Graph.h"
 #include "scene/Modifiers.h"
 #include "scene/MeshNodes.h"
+#include "ui/MeshCache.h"
 #include "uv/FinalMesh.h"
 #include "uv/UvEdit.h"
 
@@ -515,4 +516,23 @@ TEST_CASE("polyBevelWeight feeds weight mode and polyCrease keeps subdivided edg
     for (const json& p : data["points"])
         most = std::max(most, p[0].get<double>());
     CHECK(most == doctest::Approx(50.0));
+}
+
+TEST_CASE("the viewport tells a bevel's added edges from a deformer's moved points")
+{
+    ops::execute("newScene", json::object());
+    const std::string cube = ops::execute("polyCube", {{"width", 40}, {"height", 40}, {"depth", 40}})[0];
+    scene::Graph& g = scene::Graph::current();
+    scene::Node* n = g.find(cube);
+    REQUIRE(n);
+    g.evaluate();
+    const scene::MeshPtr plain = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+    CHECK_FALSE(ui::modifiersAddEdges(scene::modifiers::cage(g, n->id()), plain));
+    geo::Mesh moved = *plain;
+    moved.setPosition(0, moved.position(0) + glm::dvec3(5.0));
+    CHECK_FALSE(ui::modifiersAddEdges(plain, std::make_shared<const geo::Mesh>(std::move(moved))));
+
+    ops::execute("autoBevel", {{"args", {cube}}});
+    g.evaluate();
+    CHECK(ui::modifiersAddEdges(scene::modifiers::cage(g, n->id()), n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh)));
 }

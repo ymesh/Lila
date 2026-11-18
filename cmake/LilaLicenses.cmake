@@ -15,6 +15,7 @@ endif()
 foreach(_pair
         "cgltf|third_party/cgltf/LICENSE"
         "dem-bones|third_party/dem-bones/LICENSE.md"
+        "autoremesher|third_party/autoremesher/LICENSE"
         "archivo|resources/fonts/Archivo-LICENSE.txt"
         "inter|resources/fonts/Inter-LICENSE.txt"
         "jetbrains-mono|resources/fonts/JetBrainsMono-LICENSE.txt"

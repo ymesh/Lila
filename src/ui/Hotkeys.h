@@ -104,7 +104,11 @@ private:
 
     Hotkeys();
     void reload();
-    std::optional<Binding> lookup(QKeyEvent* e, QWidget* focus) const;
+    /** hoverOnly: just the hover contexts under the cursor (the outliner), for a key taken from a text field. */
+    std::optional<Binding> lookup(QKeyEvent* e, QWidget* focus, bool hoverOnly = false) const;
+    /** The pointer moved onto a hover-context panel after the focused text field last had input, and the key is
+     * plain typing, so a key that panel binds goes to it rather than into the field. */
+    bool hoverTakesKey(QWidget* focus, int mods, const QKeyEvent* k) const;
     /** By physical key when both sides know it, else by Qt key with shifted symbols normalized. */
     static bool chordMatches(const Chord& chord, QKeyEvent* e);
     static bool textInputFocused(QWidget* w);
@@ -140,5 +144,8 @@ private:
     QTimer mRepeatTimer;
     int mSwallowRelease = 0; // Qt::MouseButtons whose release follows a press this filter ate
     int mHoldDelay = 180;
+    uint64_t mInputSeq = 0;      // orders the two stamps below
+    uint64_t mHoverEnteredAt = 0; // pointer entered a hover-context panel
+    uint64_t mTextInputAt = 0;    // a text field took focus or a key
 };
 } // namespace lila::ui

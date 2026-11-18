@@ -1,6 +1,6 @@
 # Materials in Lila, for agents
 
-A material's textures come from a texture set: a node graph (like Substance Designer's) whose Material Output channels are the maps. The set drives the material of the same slot: every mesh with that material shows the graph live in the viewport, with no evaluate step. Maps are exported or sent to Unreal from the set.
+A material's textures can come from a texture set: a node graph (like Substance Designer's) whose Material Output channels are the maps. A material picks a set in its `textureSet` attr (any number of materials can pick one), or takes single maps from sets with `setMaterialTexture(material, channel=..., textureSet=...)`; every mesh with that material shows the graph live in the viewport, with no evaluate step. Maps are exported or sent to Unreal from the set.
 
 ## Recipes
 
@@ -16,7 +16,7 @@ A material's textures come from a texture set: a node graph (like Substance Desi
 
 ```python
 spec = {
-    "material": "MossyStone",                  # the material slot; the set is MossyStoneTex
+    "material": "MossyStone",                  # the material that picks the set; the set is MossyStoneTex
     "settings": {"width": 1024, "height": 1024},
     "nodes": [
         {"name": "Cells", "type": "voronoi", "params": {"scale": 6}},
@@ -38,7 +38,7 @@ r = texBuildGraph(spec, assign=["Rock"])   # {set, material, channels, nodes, li
 
 Spec rules:
 
-- `material` names the material slot; `set` defaults to the set already bound to the material, else `<material>Tex` without the material's `M_` prefix (`M_Rock` gets `RockTex`; a set and its material can't share a name). Rebuilding with the same material replaces the graph and keeps the set's settings unless `settings` changes them.
+- `material` is the material that picks the set (created when missing); `set` defaults to the set the material already uses, else `<material>Tex` without the material's `M_` prefix (`M_Rock` gets `RockTex`; a set and its material can't share a name). Rebuilding with the same material replaces the graph and keeps the set's settings unless `settings` changes them.
 - `nodes[].type` is a type from the catalogue below. `params` are the node's settings; `values` are unlinked input values. A node named `Output` of type `materialOutput` is added when missing.
 - Material Output inputs: `baseColor`, `roughness`, `metallic`, `normal`, `height`, `ao`, `emissive`, `opacity`, and `material` (a whole material; channels linked directly win over it). Unlinked channels take their `values` on Output.
 - Links are `"Node.output -> Node.input"`, `[from, to]` or `[fromNode, fromSocket, toNode, toSocket]`. An input takes one link.

@@ -6,6 +6,7 @@
 #include "rig/Rig.h"
 
 #include <lila/Events.h>
+#include <lila/ExtensionScope.h>
 #include <lila/Poses.h>
 #include <lila/Undo.h>
 #include <lila/UI.h>
@@ -408,7 +409,7 @@ void registerModes(ext::Context& ctx)
     for (const char* name : {"viewportShift", "viewportShiftObject"})
         markingMenus::add(ctx, std::string(kAnimateMode) + "/" + name, keysMenu);
     const events::SubscriptionId sub =
-        events::subscribe(events::Event::SelectionChanged, [](const events::EventData&) { QTimer::singleShot(0, [] { ensureCharacter(); }); }, "Puppeteer");
+        events::subscribe(events::Event::SelectionChanged, [](const events::EventData&) { QTimer::singleShot(0, lila::ui::scope("Puppeteer"), [] { ensureCharacter(); }); }, "Puppeteer");
     // Picking a Puppeteer layout enters its mode; any other layout leaves Puppeteer.
     const events::SubscriptionId layoutSub = events::subscribe(
         events::Event::LayoutChanged,
@@ -416,9 +417,9 @@ void registerModes(ext::Context& ctx)
             const std::string want = e.name == kAnimateLayout ? kAnimateMode : e.name == kRigLayout ? kRigMode : std::string();
             const std::string& now = modes::current();
             if (!want.empty() && now != want)
-                QTimer::singleShot(0, [want] { modes::activate(want); });
+                QTimer::singleShot(0, lila::ui::scope("Puppeteer"), [want] { modes::activate(want); });
             else if (want.empty() && (now == kAnimateMode || now == kRigMode))
-                QTimer::singleShot(0, [] { modes::activate(modes::kDefaultMode); });
+                QTimer::singleShot(0, lila::ui::scope("Puppeteer"), [] { modes::activate(modes::kDefaultMode); });
         },
         "Puppeteer");
     ctx.track("puppeteer:autoCharacter", [sub, layoutSub] {

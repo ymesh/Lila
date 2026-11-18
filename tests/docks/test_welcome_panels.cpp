@@ -49,7 +49,7 @@ void pressOutside(QWidget* dialog)
 }
 } // namespace
 
-TEST_CASE("welcome dialog shows whole rows of three examples and ignores clicks outside")
+TEST_CASE("welcome dialog shows whole example cards in one column and ignores clicks outside")
 {
     QPointer<ui::StartupDialog> welcome = new ui::StartupDialog({}, true, nullptr);
     auto* examples = welcome->findChild<QListWidget*>("welcomeExamples");
@@ -62,8 +62,8 @@ TEST_CASE("welcome dialog shows whole rows of three examples and ignores clicks 
     CHECK_FALSE(examples->horizontalScrollBar()->isVisible());
     CHECK(examples->verticalScrollBar()->isVisible());
     const QRect first = examples->visualItemRect(examples->item(0));
-    CHECK(examples->visualItemRect(examples->item(2)).top() == first.top());
-    CHECK(examples->visualItemRect(examples->item(3)).top() > first.top());
+    CHECK(examples->visualItemRect(examples->item(1)).left() == first.left());
+    CHECK(examples->visualItemRect(examples->item(1)).top() > first.top());
     const QRect view = examples->viewport()->rect();
     for (int i = 0; i < examples->count(); ++i)
     {

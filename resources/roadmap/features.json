@@ -1,0 +1,23 @@
+{
+  "texturing": {"menus": ["Texture"]},
+  "rendering": {"menus": ["Render"]},
+  "plating": {"extensions": ["Plating"], "menus": ["Mesh/Plating"], "actions": ["layout."]},
+  "grooms": {"menus": ["Curves/Groom"], "actions": ["groom."]},
+  "tailor": {"extensions": ["Tailor"]},
+  "deformers": {"menus": ["Deform"], "actions": ["deform."]},
+  "soft-net": {"actions": ["rig.softNet"]},
+  "weight-painting": {"menus": ["Rig/Weight Proxy", "Rig/Skinning Method"]},
+  "rigging": {"extensions": ["RigTemplates"], "menus": ["Rig"], "actions": ["rig."]},
+  "animation": {"menus": ["Animation"], "actions": ["anim.", "pose.", "picker."]},
+  "sound-video": {"actions": ["create.audio", "anim.importFootage"]},
+  "puppeteer": {"extensions": ["Puppeteer"]},
+  "generated-motion": {"extensions": ["Crowds"]},
+  "physics-animation": {"extensions": ["PhysicsAnimation", "Overlap"]},
+  "3d-printing": {"extensions": ["Print"]},
+  "seamwork": {"extensions": ["Seamwork"]},
+  "masonry": {"extensions": ["Masonry"]},
+  "stagehand": {"extensions": ["Stagehand"]},
+  "settlement": {"extensions": ["Settlement"]},
+  "terrain": {"extensions": ["Terrain"]},
+  "destruction": {"extensions": ["Destruction"]}
+}

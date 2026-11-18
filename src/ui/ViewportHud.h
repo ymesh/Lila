@@ -108,6 +108,13 @@ struct Context
     /** GPU time of the last drawn frame and the ambient occlusion part of it; 0 when unknown. */
     double gpuMs = 0.0;
     double aoMs = 0.0;
+    /** GPU time of the post passes that ran last frame (reflections, lens flares, depth of field, motion blur); 0 when off. */
+    double reflectionMs = 0.0, flareMs = 0.0, dofMs = 0.0, motionBlurMs = 0.0;
+    /**
+     * What the view drew in place of what was asked for, with why (a fallback): label and value rows shown top right
+     * whatever the HUD settings, so no fallback goes unseen.
+     */
+    std::vector<std::pair<QString, QString>> fallbacks;
     /** Receives the rect of every readout drawn, so tool messages can avoid them. */
     std::vector<QRectF>* drawn = nullptr;
 };

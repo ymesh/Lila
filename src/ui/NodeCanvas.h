@@ -608,6 +608,8 @@ public:
     std::function<void()> onFocused;
     /** Double-click on a Group node: the group it runs. */
     std::function<void(const std::string&)> onOpenGroup;
+    /** The mouse back button. */
+    std::function<void()> onBack;
     /** Ctrl+Shift+click on a node: preview it in a Viewer. */
     std::function<void(const std::string&)> onViewNode;
     /** Group files (the backend's suffixes) dropped on the canvas. */

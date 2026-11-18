@@ -135,6 +135,11 @@ void NodeCanvas::mousePressEvent(QMouseEvent* e)
     QPointF sp = mapToScene(e->pos());
     if (grabPress(e))
         return;
+    if (e->button() == Qt::BackButton && onBack)
+    {
+        onBack();
+        return;
+    }
     if (e->button() == Qt::MiddleButton)
     {
         mPanning = true;

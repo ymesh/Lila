@@ -442,11 +442,16 @@ TEST_CASE("strings rules: Manny's template contacts hold the feet without pins, 
 TEST_CASE("strings rules: posing Manny is interactive")
 {
     mannyCharacter();
-    const auto t0 = std::chrono::steady_clock::now();
+    // The fastest of several after a first, cold call: other processes only slow some of them, a regression every one.
+    run("stringsPose", {{"args", {"calf_l"}}, {"mode", "backward"}, {"axis", v3(1, 0, 0)}, {"angle", 1.0}});
+    double ms = 1e30;
     for (int i = 0; i < 10; ++i)
+    {
+        const auto t0 = std::chrono::steady_clock::now();
         run("stringsPose", {{"args", {"calf_l"}}, {"mode", "backward"}, {"axis", v3(1, 0, 0)}, {"angle", 1.0}});
-    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 10.0;
-    MESSAGE("Manny backward pose with contacts, command and write: " << ms << " ms");
+        ms = std::min(ms, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    }
+    MESSAGE("Manny backward pose with contacts, command and write: " << ms << " ms (fastest)");
     CHECK(ms < 50.0);
 }
 
@@ -1292,6 +1297,7 @@ TEST_CASE("Strings Rules editor: contacts, limbs and lines toggle on the joint g
     CHECK(run("undoInfo")["undo"] == undo);
 }
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 
@@ -1300,7 +1306,7 @@ TEST_CASE("stringsRuleWeb and unrealStringsRig: the rule web by bone name, writt
     loadPuppeteer();
     stringsBiped();
     run("stringsRules", {{"args", {"hero"}}, {"contacts", {"foot_l", "foot_r"}}, {"addChain", {"upperarm_l", "hand_l"}}});
-    const std::filesystem::path file = std::filesystem::temp_directory_path() / "lila_rule_web_test.json";
+    const std::filesystem::path file = std::filesystem::path(std::getenv("LILA_CONFIG_DIR")) / "lila_rule_web_test.json";
     const json web = run("stringsRuleWeb", {{"args", {"hand_l"}}, {"file", file.string()}});
     CHECK(web["version"] == 2);
     CHECK(web["hips"] == "hips");

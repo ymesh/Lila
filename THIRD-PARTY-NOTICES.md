@@ -34,6 +34,11 @@ web-ifc 0.78 and the CDT it bundles are statically linked and unmodified; their 
 | CRCpp (for libE57Format) | BSD-3-Clause | Daniel Bahr | https://github.com/d-bahr/CRCpp |
 | LASzip | Apache-2.0 | rapidlasso GmbH | https://laszip.org |
 | Imath | BSD-3-Clause | Contributors to the OpenEXR Project | https://github.com/AcademySoftwareFoundation/Imath |
+| OpenColorIO | BSD-3-Clause | Contributors to the OpenColorIO Project | https://opencolorio.org |
+| Expat (for OpenColorIO) | MIT | Expat maintainers | https://github.com/libexpat/libexpat |
+| yaml-cpp (for OpenColorIO) | MIT | Jesse Beder | https://github.com/jbeder/yaml-cpp |
+| pystring (for OpenColorIO) | BSD-3-Clause | Sony Pictures Imageworks Inc. | https://github.com/imageworks/pystring |
+| minizip-ng (for OpenColorIO) | Zlib | Nathan Moinvaziri | https://github.com/zlib-ng/minizip-ng |
 | Manifold | Apache-2.0 | The Manifold Authors | https://github.com/elalish/manifold |
 | Clipper2 | BSL-1.0 | Angus Johnson | https://github.com/AngusJohnson/Clipper2 (also built with Z values from `src/curve/third_party/clipper2`) |
 | Slang | Apache-2.0 WITH LLVM-exception | Slang contributors | https://github.com/shader-slang/slang |

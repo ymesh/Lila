@@ -210,8 +210,8 @@ void GpuImage::changed(int x0, int y0, int x1, int y1)
     std::scoped_lock lock(mChangeMutex);
     const uint64_t v = ++mVersion;
     mChanges.push_back({v, x0, y0, x1, y1});
-    if (mChanges.size() > 64)
-        mChanges.erase(mChanges.begin());
+    if (mChanges.size() > 256)
+        mChanges.erase(mChanges.begin(), mChanges.begin() + 64);
 }
 
 void GpuImage::noteWriteRows(int first, int last) { noteWriteRect(0, first, mDesc.width, last); }
@@ -260,6 +260,34 @@ std::optional<std::array<int, 4>> GpuImage::rectSince(uint64_t version) const
     r[1] = std::clamp(r[1], 0, mDesc.height);
     r[3] = std::clamp(r[3], r[1], mDesc.height);
     return r;
+}
+
+std::optional<std::vector<std::array<int, 4>>> GpuImage::rectsSince(uint64_t version) const
+{
+    std::scoped_lock lock(mChangeMutex);
+    std::vector<std::array<int, 4>> out;
+    if (version >= mVersion.load())
+        return out;
+    uint64_t expect = version + 1;
+    for (const Change& c : mChanges)
+    {
+        if (c.version <= version)
+            continue;
+        if (c.version != expect || c.x1 <= c.x0 || c.y1 <= c.y0)
+            return std::nullopt;
+        ++expect;
+        const int x0 = std::clamp(c.x0, 0, mDesc.width), y0 = std::clamp(c.y0, 0, mDesc.height);
+        out.push_back({x0, y0, std::clamp(c.x1, x0, mDesc.width), std::clamp(c.y1, y0, mDesc.height)});
+    }
+    if (expect != mVersion.load() + 1)
+        return std::nullopt;
+    return out;
+}
+
+void GpuImage::noteWriteRegions(std::vector<std::array<int, 4>> regions)
+{
+    std::scoped_lock lock(mChangeMutex);
+    mWriteRegions.insert(mWriteRegions.end(), regions.begin(), regions.end());
 }
 
 std::optional<std::pair<int, int>> GpuImage::rowsSince(uint64_t version) const
@@ -438,7 +466,7 @@ bool GpuImage::prepare(VulkanContext& vk, VkCommandBuffer cmd, std::vector<compu
     return true;
 }
 
-void GpuImage::recordMips(VkCommandBuffer cmd, VkImageLayout from, VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess)
+void GpuImage::recordMips(VkCommandBuffer cmd, VkImageLayout from, VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess, const int* rect)
 {
     constexpr auto transfer = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
     if (mMips == 1)
@@ -446,25 +474,35 @@ void GpuImage::recordMips(VkCommandBuffer cmd, VkImageLayout from, VkPipelineSta
         imageBarrier(cmd, mImage, 0, 1, from, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, srcStage, srcAccess, kReadStages, kReadAccess);
         return;
     }
+    // A region only once the mips hold the rest; a stroke's store then costs its own size, not the image's.
+    const bool region = rect && mMipsBuilt && rect[2] > rect[0] && rect[3] > rect[1];
     imageBarrier(cmd, mImage, 0, 1, from, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, srcStage, srcAccess, transfer, VK_ACCESS_2_TRANSFER_READ_BIT);
-    // The smaller mips are rebuilt whole, so what they held does not matter.
-    imageBarrier(cmd, mImage, 1, mMips - 1, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, kReadStages, 0, transfer,
-                 VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    imageBarrier(cmd, mImage, 1, mMips - 1, region ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
+                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, kReadStages, 0, transfer, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    int x0 = region ? rect[0] : 0, y0 = region ? rect[1] : 0, x1 = region ? rect[2] : mDesc.width, y1 = region ? rect[3] : mDesc.height;
     for (uint32_t mip = 1; mip < mMips; ++mip)
     {
         const int32_t sw = std::max(mDesc.width >> (mip - 1), 1), sh = std::max(mDesc.height >> (mip - 1), 1);
         const int32_t dw = std::max(mDesc.width >> mip, 1), dh = std::max(mDesc.height >> mip, 1);
+        // The level's texels over the region, rounded out, and the texels of the level above that make them.
+        x0 = std::clamp(x0 / 2, 0, dw - 1);
+        y0 = std::clamp(y0 / 2, 0, dh - 1);
+        x1 = std::clamp((x1 + 1) / 2, x0 + 1, dw);
+        y1 = std::clamp((y1 + 1) / 2, y0 + 1, dh);
         VkImageBlit b{};
         b.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, mip - 1, 0, 1};
-        b.srcOffsets[1] = {sw, sh, 1};
+        b.srcOffsets[0] = {std::min(x0 * 2, sw - 1), std::min(y0 * 2, sh - 1), 0};
+        b.srcOffsets[1] = {std::min(x1 * 2, sw), std::min(y1 * 2, sh), 1};
         b.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, mip, 0, 1};
-        b.dstOffsets[1] = {dw, dh, 1};
+        b.dstOffsets[0] = {x0, y0, 0};
+        b.dstOffsets[1] = {x1, y1, 1};
         vkCmdBlitImage(cmd, mImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, mImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b, VK_FILTER_LINEAR);
         imageBarrier(cmd, mImage, mip, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, transfer,
                      VK_ACCESS_2_TRANSFER_WRITE_BIT, transfer, VK_ACCESS_2_TRANSFER_READ_BIT);
     }
     imageBarrier(cmd, mImage, 0, mMips, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, transfer,
                  VK_ACCESS_2_TRANSFER_READ_BIT, kReadStages, kReadAccess);
+    mMipsBuilt = true;
 }
 
 void GpuImage::beginWrite(VkCommandBuffer cmd)
@@ -485,13 +523,19 @@ void GpuImage::recordClear(VkCommandBuffer cmd, const float (&rgba)[4])
 
 void GpuImage::endWrite(VkCommandBuffer cmd)
 {
-    recordMips(cmd, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
     int r[4] = {0, 0, 0, 0};
+    std::vector<std::array<int, 4>> regions;
     {
         std::scoped_lock lock(mChangeMutex);
         std::swap(r, mWrite);
+        std::swap(regions, mWriteRegions);
     }
-    changed(r[0], r[1], r[2], r[3]);
+    recordMips(cmd, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, r);
+    if (regions.empty() || r[2] <= r[0] || r[3] <= r[1])
+        changed(r[0], r[1], r[2], r[3]);
+    else
+        for (const std::array<int, 4>& g : regions)
+            changed(g[0], g[1], g[2], g[3]);
 }
 
 void GpuImage::recordRead(VkCommandBuffer cmd, const compute::Buffer& into)
@@ -574,6 +618,7 @@ void GpuImage::destroyDevice(VulkanContext& vk)
     mAlloc = VK_NULL_HANDLE;
     mView = mStorageView = VK_NULL_HANDLE;
     mFailed = false;
+    mMipsBuilt = false;
 }
 
 bool GpuImage::collectGarbage(VulkanContext& vk)

@@ -149,6 +149,7 @@ float outlineAt(int2 p, float width)
     int2 hi = int2(pc.size.xy) - 1;
     float d0 = depthTex.Load(int3(p, 0)).r;
     float3 n0 = normalTex.Load(int3(p, 0)).xyz;
+    n0 = dot(n0, n0) > 0.01 ? normalize(n0) : n0;
     int r = max(int(width + 0.5), 1);
     float edge = 0.0;
     const int2 offsets[4] = {int2(1, 0), int2(-1, 0), int2(0, 1), int2(0, -1)};
@@ -157,6 +158,7 @@ float outlineAt(int2 p, float width)
         int2 q = clamp(p + offsets[i] * r, int2(0), hi);
         float d = depthTex.Load(int3(q, 0)).r;
         float3 n = normalTex.Load(int3(q, 0)).xyz;
+        n = dot(n, n) > 0.01 ? normalize(n) : n;
         // Reversed-Z: relative change in depth, so the threshold holds near and far.
         float dd = abs(d - d0) / max(max(d, d0), 1e-9);
         edge = max(edge, smoothstep(0.05, 0.15, dd * pc.outline.a));

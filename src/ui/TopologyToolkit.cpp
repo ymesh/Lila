@@ -207,6 +207,8 @@ TopologyToolkit::TopologyToolkit(QWidget* parent) : QWidget(parent)
     mRetopo = topologyHint({}, sessionBox);
     session->addRow("Reference", mReference);
     session->addRow("Retopo", mRetopo);
+    if (QToolButton* b = push("retopo.setReference", "Set Reference", sessionBox))
+        session->addRow(QString(), b);
     mSymmetry = new controls::Segmented(sessionBox);
     mSymmetry->setObjectName("topologySymmetry");
     for (auto [text, id] : {std::pair{"Off", 0}, {"X", 1}, {"Y", 2}, {"Z", 3}})
@@ -228,8 +230,29 @@ TopologyToolkit::TopologyToolkit(QWidget* parent) : QWidget(parent)
         mRefresh->start();
     });
     session->addRow("Symmetry", mSymmetry);
-    if (QToolButton* b = push("retopo.setReference", "Set Reference", sessionBox))
-        session->addRow(QString(), b);
+    mXray = new QCheckBox(sessionBox);
+    mXray->setObjectName("topologyXray");
+    mXray->setToolTip("X-Ray Reference: draws the reference see-through while a topology tool runs, so the retopo mesh shows from both sides");
+    setCheckDefault(mXray, false);
+    connect(mXray, &QCheckBox::toggled, this, [](bool on) { setXrayReference(on); });
+    session->addRow("X-Ray", mXray);
+    mReferenceWire = new QCheckBox(sessionBox);
+    mReferenceWire->setObjectName("topologyReferenceWire");
+    mReferenceWire->setToolTip("Reference Wireframe: shows the reference's wireframe and selection highlight while a topology tool runs");
+    setCheckDefault(mReferenceWire, false);
+    connect(mReferenceWire, &QCheckBox::toggled, this, [](bool on) { setReferenceWire(on); });
+    session->addRow("Wireframe", mReferenceWire);
+    mDrawOffset = controls::valueField(0.0, 100.0, 2, "cm", sessionBox);
+    mDrawOffset->setObjectName("topologyDrawOffset");
+    mDrawOffset->setKeyboardTracking(false);
+    mDrawOffset->setToolTip("Draws the retopo mesh this much closer to the camera so the reference doesn't show through it. "
+                            "Display only: exports, snapping and picking use the real positions");
+    setSpinDefault(mDrawOffset, 0.0);
+    connect(mDrawOffset, &QDoubleSpinBox::valueChanged, this, [](double v) {
+        if (scene::Node* n = sessionRetopo())
+            runUi("setAttr", {{"args", {n->path() + ".drawOffset", v}}});
+    });
+    session->addRow("Draw Offset", mDrawOffset);
     add("Session", sessionBox);
 
     add("Draw", topologyGroup({tile("retopo.draw", "pencil", "Draw", body), tile("topo.patch", "square-plus", "Patch", body),
@@ -448,6 +471,20 @@ void TopologyToolkit::refreshState()
         QSignalBlocker block(mSymmetry);
         mSymmetry->setEnabled(ref != nullptr);
         mSymmetry->setCurrent(symmetrySource ? int(std::clamp<int64_t>(symmetrySource->as<int64_t>(scene::MeshNode::kSymmetry), 0, 3)) : 0);
+    }
+    {
+        QSignalBlocker block(mXray);
+        mXray->setChecked(xrayReference());
+    }
+    {
+        QSignalBlocker block(mReferenceWire);
+        mReferenceWire->setChecked(referenceWire());
+    }
+    if (!mDrawOffset->hasFocus())
+    {
+        QSignalBlocker block(mDrawOffset);
+        mDrawOffset->setEnabled(retopo != nullptr);
+        mDrawOffset->setValue(retopo ? retopo->as<double>(scene::MeshNode::kDrawOffset) : 0.0);
     }
     for (QDoubleSpinBox* s : findChildren<QDoubleSpinBox*>())
         if (s->objectName().startsWith("/topology/") && !s->hasFocus())

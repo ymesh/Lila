@@ -129,6 +129,11 @@ public:
      * palette). Tab and Ctrl+Space still complete.
      */
     bool autoPopups = true;
+    /**
+     * On: pasted or dropped text loses its outer whitespace and its line breaks become single spaces, for one-line hosts
+     * (the command palette). The host handles Enter itself.
+     */
+    bool singleLine = false;
     /** Tried before everything but the completion popup: a modal keymap such as VimBinding. */
     std::function<bool(QKeyEvent*)> modalKeyHandler;
 

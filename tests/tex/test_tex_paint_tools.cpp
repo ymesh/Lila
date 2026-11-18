@@ -16,6 +16,7 @@
 #include "tex/PaintStrokes.h"
 #include "tex/PaintSurface.h"
 #include "tex/TextureSet.h"
+#include "tex/Library.h"
 #include "ui/TexLive.h"
 
 #include <chrono>
@@ -263,6 +264,103 @@ TEST_CASE("texture paint tools: graph tips and material sources evaluate")
     CHECK(gp::pageBytes(set.id(), "Mat") == bytes);
 }
 
+TEST_CASE("texture paint tools: varied tiling breaks the repeat; a scene set paints as a material, edits included")
+{
+    if (!gpu())
+        return;
+    newScene();
+    addMesh("PanelMesh", seamPanel());
+    scene::Node& set = makeSet("Panel", 256);
+    const json channels = {{"baseColor", {1.0, 1.0, 1.0}}, {"roughness", 0.0}, {"normal", {0.5, 0.5, 1.0}}};
+    auto stroke = [&](const char* layer, json source) {
+        json s = surfaceStroke({{25, 0, 0}}, 25.0, {{"channels", channels}, {"source", std::move(source)}});
+        s["brush"]["falloff"] = "constant";
+        paintStroke("Panel", layer, s);
+        return gp::readChannel(set.id(), layer, "baseColor");
+    };
+    // Eight tiles per uv unit: one tile is 32 texels, so a plain repeat matches itself 32 texels along.
+    const json bricks = {{"library", "bricks"}, {"resolution", 256}, {"scale", 8.0}};
+    json varied = bricks;
+    varied["tiling"] = {{"rotate", 1.0}, {"contrast", 0.5}, {"jitter", 0.3}};
+    const image::Image plain = stroke("Plain", bricks);
+    const image::Image hex = stroke("Hex", varied);
+    double plainShift = 0.0, hexShift = 0.0, apart = 0.0;
+    int n = 0;
+    for (int y = 0; y < plain.height; ++y)
+        for (int x = 0; x + 32 < plain.width; ++x)
+        {
+            const float* a = &plain.rgba[(size_t(y) * plain.width + x) * 4];
+            const float* b = &plain.rgba[(size_t(y) * plain.width + x + 32) * 4];
+            const float* c = &hex.rgba[(size_t(y) * hex.width + x) * 4];
+            const float* d = &hex.rgba[(size_t(y) * hex.width + x + 32) * 4];
+            if (a[3] < 0.99f || b[3] < 0.99f || c[3] < 0.99f || d[3] < 0.99f)
+                continue;
+            plainShift += std::abs(a[0] - b[0]);
+            hexShift += std::abs(c[0] - d[0]);
+            apart += std::abs(a[0] - c[0]);
+            ++n;
+        }
+    REQUIRE(n > 100);
+    CHECK(plainShift / n < 0.02);
+    CHECK(hexShift / n > 3.0 * (plainShift / n) + 0.02);
+    CHECK(apart / n > 0.02);
+    // Normals blended across cells stay unit length.
+    const image::Image nrm = gp::readChannel(set.id(), "Hex", "normal");
+    for (size_t i = 0; i < nrm.rgba.size(); i += 4 * 37)
+        if (nrm.rgba[i + 3] > 0.99f)
+            CHECK(std::abs(glm::length(glm::vec3(nrm.rgba[i], nrm.rgba[i + 1], nrm.rgba[i + 2]) * 2.0f - 1.0f) - 1.0f) < 0.02f);
+    // Replaying the strokes (a rasterize rebuilds from them) gives the same texels.
+    run("texRasterize", {{"args", {"Panel", "Hex"}}});
+    CHECK(gp::readChannel(set.id(), "Hex", "baseColor").rgba == hex.rgba);
+
+    // A texture set built in the scene paints as a material, and its graph edited since paints the edit.
+    scene::Node& brushMat = makeSet("BrushMat", 256);
+    lila::tex::writeGraph(sg(), brushMat, lila::tex::library::graphOf(lila::tex::library::document(*lila::tex::library::find("bricks"))));
+    const json scene = {{"library", "scene/BrushMat"}, {"resolution", 256}, {"scale", 2.0}};
+    const image::Image first = stroke("Scene1", scene);
+    lila::tex::writeGraph(sg(), brushMat, lila::tex::library::graphOf(lila::tex::library::document(*lila::tex::library::find("copperPatina"))));
+    const image::Image second = stroke("Scene2", scene);
+    double changed = 0.0;
+    int m = 0;
+    for (size_t i = 0; i < first.rgba.size(); i += 4)
+        if (first.rgba[i + 3] > 0.99f && second.rgba[i + 3] > 0.99f)
+        {
+            changed += std::abs(first.rgba[i] - second.rgba[i]);
+            ++m;
+        }
+    REQUIRE(m > 100);
+    CHECK(changed / m > 0.02);
+}
+
+TEST_CASE("texture paint tools: one stroke paints every shading channel of a set")
+{
+    if (!gpu())
+        return;
+    newScene();
+    addMesh("PanelMesh", seamPanel());
+    scene::Node& set = makeSet("Panel", 128);
+    run("texAddShadingChannels", {{"args", {"Panel"}}});
+    // Past the first eight: every channel of the set but the two directions.
+    json channels = {{"baseColor", {0.9, 0.2, 0.1}}, {"roughness", 0.3}, {"metallic", 0.0}, {"height", 0.7}, {"emissive", {0.0, 0.0, 0.0}},
+                     {"sheenColor", {0.2, 0.4, 0.6}}, {"sheenRoughness", 0.4}, {"coat", 0.8}, {"coatRoughness", 0.1},
+                     {"subsurfaceColor", {0.8, 0.3, 0.2}}, {"subsurfaceRadius", 0.6}, {"anisotropy", 0.5}, {"transmission", 0.25},
+                     {"ior", 0.25}, {"specularWeight", 0.9}, {"specularColor", {0.7, 0.8, 0.9}}};
+    json s = surfaceStroke({{-25, 0, 0}}, 12.0, {{"channels", channels}});
+    s["brush"]["falloff"] = "constant";
+    paintStroke("Panel", "All", s);
+    const glm::vec2 uv = seamUv(0, -25.0, 0.0);
+    for (const auto& [name, v] : channels.items())
+    {
+        const image::Image img = gp::readChannel(set.id(), "All", name);
+        INFO(name);
+        REQUIRE(img.width > 0);
+        const float* t = at(img, uv);
+        CHECK(t[3] > 0.99f);
+        const float want = v.is_array() ? v[0].get<float>() : v.get<float>();
+        CHECK(std::abs(t[0] - want) < 0.01f);
+    }
+}
+
 TEST_CASE("texture paint tools: normal bumps, flat normals and direction flow maps")
 {
     if (!gpu())
@@ -428,7 +526,7 @@ TEST_CASE("texture paint tools: stroke frame time at 2K and 4K with 8 channels")
         }
         tex::writeGraph(sg(), set, g);
         ui::texLive::install();
-        REQUIRE(ui::texLive::mapsFor("Panel"));
+        REQUIRE(ui::texLive::mapsFor("M_Panel"));
         REQUIRE(ui::texLive::waitIdle(120000));
 
         tp::Stroke header;
@@ -496,6 +594,12 @@ TEST_CASE("texture paint tools: every starter brush preset paints")
             continue;
         CAPTURE(p->id);
         json payload = p->payload;
+        // Raise and Lower are the paint tool's: it paints them as height.
+        if (const std::string mode = payload.value("normalMode", std::string()); mode == "raise" || mode == "lower")
+        {
+            const double h = payload.value("intensity", 0.2);
+            payload = {{"kind", "paint"}, {"channels", {{"height", mode == "lower" ? -h : h}}}};
+        }
         const std::string kind = payload.value("kind", std::string("paint"));
         if ((kind == "paint" || kind == "fill") && !payload.contains("channels") && !payload.contains("source"))
             payload["channels"] = {{"baseColor", {0.2, 0.4, 0.8}}};

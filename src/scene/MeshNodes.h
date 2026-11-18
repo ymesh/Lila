@@ -5,6 +5,7 @@
 #include "geo/Symmetry.h"
 #include "scene/Transform.h"
 
+#include <algorithm>
 #include <functional>
 #include <optional>
 #include <vector>
@@ -41,6 +42,7 @@ public:
         kRadialCenter,
         kRetopoGuides,
         kRetopoConstructs,
+        kDrawOffset,
         kCount
     };
 
@@ -75,6 +77,12 @@ struct SymmetryState
     static constexpr int kRadialState = 3;
 };
 LILA_SCENE_API SymmetryState symmetryState(const Graph& g, const std::vector<NodeId>& nodes);
+
+/** The mesh's drawOffset (cm toward the camera, display only), 0 for nodes that aren't meshes. */
+inline float drawOffset(const Node& n)
+{
+    return n.type().isA("mesh") ? float(std::max(0.0, n.as<double>(MeshNode::kDrawOffset))) : 0.0f;
+}
 
 /**
  * Where a mesh's symmetry plane for axis (0-2) lies along that axis, in object space: through the object's pivot, or

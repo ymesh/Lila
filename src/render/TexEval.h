@@ -160,6 +160,8 @@ struct Stats
     size_t passesRun = 0;
     /** Passes the last setPlan found dirty. */
     size_t passesDirty = 0;
+    /** Buffers the last setPlan kept from the plan before it (a changed structure computing some of them the same way). */
+    size_t passesCarried = 0;
     size_t dispatches = 0;
     size_t slices = 0;
     /** Images written. */

@@ -50,6 +50,8 @@ LILA_UI_API Buffer makeBuffer(VulkanContext& vk, VkDeviceSize size, VkBufferUsag
 LILA_UI_API Buffer hostBuffer(VulkanContext& vk, const void* data, size_t size, VkBufferUsageFlags usage = 0);
 LILA_UI_API void destroy(VulkanContext& vk, Buffer& b);
 LILA_UI_API void copy(VkCommandBuffer cmd, const Buffer& from, const Buffer& to, VkDeviceSize size);
+/** Makes what the GPU wrote to a Host::Read buffer visible to the host, after its work finished. */
+LILA_UI_API void invalidate(VulkanContext& vk, const Buffer& b);
 /** Makes every earlier write visible to what follows in dstStage. */
 LILA_UI_API void memoryBarrier(VkCommandBuffer cmd, VkPipelineStageFlags2 dstStage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                                VkAccessFlags2 dstAccess = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
@@ -139,12 +141,17 @@ void dispatchChunks(VkCommandBuffer cmd, VkPipelineLayout layout, Push push, uin
     }
 }
 
-/** Records commands, submits and waits: one slice. Render thread only. */
+/**
+ * Records commands and submits them: run waits for the GPU, launch returns at once and poll finishes it later. A run or
+ * launch waits for an unfinished launch first. Render thread only, except waitLaunched.
+ */
 struct LILA_UI_API Submitter
 {
     VkCommandPool pool = VK_NULL_HANDLE;
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     VkFence fence = VK_NULL_HANDLE;
+    /** Two timestamps around each submission; null where the queue has none. */
+    VkQueryPool queries = VK_NULL_HANDLE;
 
     void init(VulkanContext& vk);
     void destroy(VulkanContext& vk);
@@ -154,15 +161,37 @@ struct LILA_UI_API Submitter
     {
         LILA_ZONE();
 
-        begin();
+        begin(vk);
         record(cmd);
-        return submit(vk);
+        return submit(vk, true);
     }
+    /** Records and submits without waiting for the GPU. */
+    template <class F> void launch(VulkanContext& vk, F&& record)
+    {
+        LILA_ZONE();
+
+        begin(vk);
+        record(cmd);
+        submit(vk, false);
+    }
+    /** Whether the last launch finished (true when nothing is in flight), waiting up to timeoutNs. Throws when the GPU failed. */
+    bool poll(VulkanContext& vk, uint64_t timeoutNs = 0);
+    bool busy() const { return mInFlight; }
+    /** Waits for the launch in flight without finishing it (poll still does that); from another thread, only while nothing launches. */
+    void waitLaunched(VulkanContext& vk) const;
+    /** GPU time of the last finished submission, ms: its timestamps, else the wall time to its fence. */
+    double gpuMs() const { return mGpuMs; }
 
 private:
-    /** Resets and begins cmd, with a barrier so earlier slices' writes are visible to this one. */
-    void begin();
-    /** Ends with a barrier for host reads, submits and waits. */
-    double submit(VulkanContext& vk);
+    /** Waits out a launch in flight, resets and begins cmd, with a barrier so earlier slices' writes are visible to this one. */
+    void begin(VulkanContext& vk);
+    /** Ends with a barrier for host reads and submits; with wait, waits for the GPU and returns the wall time, ms. */
+    double submit(VulkanContext& vk, bool wait);
+    /** After the fence: resets it and reads the timestamps. */
+    void finished(VulkanContext& vk, VkResult waited, double wallMs);
+
+    bool mInFlight = false;
+    double mGpuMs = 0.0;
+    std::chrono::steady_clock::time_point mSubmitted{};
 };
 } // namespace lila::render::compute

@@ -222,7 +222,20 @@ LILA_SCENE_API std::vector<Index> fillHoles(Mesh& mesh, std::span<const Index> e
 
 struct GridFillOptions
 {
-    /** The grid's size against the hole; the rest is a ring of quads out to the border. 1 grids right to the border. */
+    /**
+     * Grid: a ring of quads round one grid. Radial: rings of quads following the border inward, spokes halving as dense
+     * rings shrink, to a pole of kite quads at the centre. Borders under 6 points take Grid.
+     */
+    enum class Style
+    {
+        Grid,
+        Radial
+    };
+    Style style = Style::Grid;
+    /**
+     * The grid's size against the hole; the rest is a ring of quads out to the border. 1 grids right to the border.
+     * Radial: the pole's size (to 0.9); the smaller it is, the more rings reach it.
+     */
     double gridSize = 0.4;
     /** Steps the grid's corners round the border. */
     int rotate = 0;

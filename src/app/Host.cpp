@@ -142,6 +142,8 @@ Options parse(int argc, char** argv)
         }
         else if (a == "--version")
             o.printVersion = true;
+        else if (a == "--from-setup")
+            o.fromSetup = true;
         else if ((a == "-c" || a == "--command") && i + 1 < argc)
             o.command = argv[++i];
         else if (a == "--change-stream")

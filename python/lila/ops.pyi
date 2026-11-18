@@ -1779,6 +1779,17 @@ def collision(*objects: Any, colliders: Sequence[Any] | None = None, offset: flo
         name: Name for the deformer.
     """
 
+def colorManagement(mode: str | None = None, configPath: str | None = None, display: str | None = None, view: str | None = None, look: str | None = None, *, md: str | None = None, cfp: str | None = None, dsp: str | None = None, vw: str | None = None, lk: str | None = None) -> Any:
+    """The scene's colour management node, created if it has none. With flags, sets them on it. Returns its name.
+
+    Args:
+        mode: lila or ocio. Short form md.
+        configPath: An .ocio file; sets config to file. Empty goes back to the built-in config. Short form cfp.
+        display: OCIO display; empty for the config's default. Short form dsp.
+        view: OCIO view; empty for the display's default. Short form vw.
+        look: OCIO look; empty for none. Short form lk.
+    """
+
 def componentExport(*objects: Any, component: str | None = None, mode: str | None = None, unrealClass: str | None = None, tags: str | None = None, query: bool | None = None, c: str | None = None, m: str | None = None, uc: str | None = None, tg: str | None = None, q: bool | None = None) -> Any:
     """How a component on objects reaches Unreal: actorTags, assetUserData (the default), component (an actor component of unrealClass with matching properties), dataAsset (of unrealClass), custom (a registered exporter named by unrealClass) or none. actorTags tags the actor "Component.attr=value", or with tags="value" the bare values (a string attr holding whale-architecture tags whale-architecture; each element of a list; a true bool its attr's name). With query=True, returns the setting.
 
@@ -2052,7 +2063,7 @@ def createGroom(*objects: Any, guides: str | None = None, count: int | None = No
         sides: Points around each lock.
     """
 
-def createMaterial(*objects: Any, baseColor: Sequence[float] | None = None, metallic: float | None = None, roughness: float | None = None, specular: float | None = None, emissive: Sequence[float] | None = None, emissiveIntensity: float | None = None, opacity: float | None = None, opacityMaskClipValue: float | None = None, blendMode: Any | None = None, twoSided: bool | None = None, uvSet: int | None = None, normalFormat: Any | None = None, flipGreen: bool | None = None, baseColorMap: str | None = None, metallicMap: str | None = None, roughnessMap: str | None = None, normalMap: str | None = None, ambientOcclusionMap: str | None = None, ormMap: str | None = None, packedLayout: Any | None = None, emissiveMap: str | None = None, shadingModel: Any | None = None, painterlyStrength: float | None = None, strokeNormal: float | None = None, strokeScale: float | None = None, strokeLayerRatio: float | None = None, strokeMapping: Any | None = None, strokeMap: str | None = None, paletteCount: int | None = None, paletteShadow: Sequence[float] | None = None, paletteLight: Sequence[float] | None = None, paletteAccent: Sequence[float] | None = None, paletteContrast: float | None = None, paletteSpread: float | None = None, specularTint: float | None = None, boil: bool | None = None, boilFps: float | None = None, toonShadowColor: Sequence[float] | None = None, toonLightTint: Sequence[float] | None = None, toonThreshold: float | None = None, toonSoftness: float | None = None, toonOuterOffset: float | None = None, toonOuterColor: Sequence[float] | None = None, rimColor: Sequence[float] | None = None, rimWidth: float | None = None, rimStrength: float | None = None, foliageBottomColor: Sequence[float] | None = None, foliageTopColor: Sequence[float] | None = None, foliageGradient: float | None = None, foliageBottomShadow: float | None = None, foliageTopHighlight: float | None = None, foliageTranslucency: float | None = None, foliageWrap: float | None = None, subsurfaceColor: Sequence[float] | None = None, subsurfaceAmount: float | None = None, sheenColor: Sequence[float] | None = None, sheenRoughness: float | None = None, clearcoat: float | None = None, clearcoatRoughness: float | None = None, anisotropy: float | None = None, anisotropyRotation: float | None = None, hairShift: float | None = None, irisRadius: float | None = None, irisDepth: float | None = None, limbalRing: float | None = None, bevelRadius: float | None = None, heightMap: str | None = None, normalFromHeight: bool | None = None, heightDepth: float | None = None, heightUvWidth: float | None = None, heightUvHeight: float | None = None, baseColorMapWrapU: Any | None = None, baseColorMapWrapV: Any | None = None, baseColorMapFilter: Any | None = None, baseColorMapColorSpace: Any | None = None, metallicMapWrapU: Any | None = None, metallicMapWrapV: Any | None = None, metallicMapFilter: Any | None = None, metallicMapColorSpace: Any | None = None, roughnessMapWrapU: Any | None = None, roughnessMapWrapV: Any | None = None, roughnessMapFilter: Any | None = None, roughnessMapColorSpace: Any | None = None, normalMapWrapU: Any | None = None, normalMapWrapV: Any | None = None, normalMapFilter: Any | None = None, normalMapColorSpace: Any | None = None, ambientOcclusionMapWrapU: Any | None = None, ambientOcclusionMapWrapV: Any | None = None, ambientOcclusionMapFilter: Any | None = None, ambientOcclusionMapColorSpace: Any | None = None, ormMapWrapU: Any | None = None, ormMapWrapV: Any | None = None, ormMapFilter: Any | None = None, ormMapColorSpace: Any | None = None, emissiveMapWrapU: Any | None = None, emissiveMapWrapV: Any | None = None, emissiveMapFilter: Any | None = None, emissiveMapColorSpace: Any | None = None, bc: Sequence[float] | None = None) -> Any:
+def createMaterial(*objects: Any, baseColor: Sequence[float] | None = None, metallic: float | None = None, roughness: float | None = None, specular: float | None = None, emissive: Sequence[float] | None = None, emissiveIntensity: float | None = None, opacity: float | None = None, opacityMaskClipValue: float | None = None, blendMode: Any | None = None, twoSided: bool | None = None, uvSet: int | None = None, normalFormat: Any | None = None, flipGreen: bool | None = None, baseColorMap: str | None = None, metallicMap: str | None = None, roughnessMap: str | None = None, normalMap: str | None = None, ambientOcclusionMap: str | None = None, ormMap: str | None = None, packedLayout: Any | None = None, emissiveMap: str | None = None, shadingModel: Any | None = None, painterlyStrength: float | None = None, strokeNormal: float | None = None, strokeScale: float | None = None, strokeLayerRatio: float | None = None, strokeMapping: Any | None = None, strokeMap: str | None = None, paletteCount: int | None = None, paletteShadow: Sequence[float] | None = None, paletteLight: Sequence[float] | None = None, paletteAccent: Sequence[float] | None = None, paletteContrast: float | None = None, paletteSpread: float | None = None, specularTint: float | None = None, boil: bool | None = None, boilFps: float | None = None, toonShadowColor: Sequence[float] | None = None, toonLightTint: Sequence[float] | None = None, toonThreshold: float | None = None, toonSoftness: float | None = None, toonOuterOffset: float | None = None, toonOuterColor: Sequence[float] | None = None, rimColor: Sequence[float] | None = None, rimWidth: float | None = None, rimStrength: float | None = None, foliageBottomColor: Sequence[float] | None = None, foliageTopColor: Sequence[float] | None = None, foliageGradient: float | None = None, foliageBottomShadow: float | None = None, foliageTopHighlight: float | None = None, foliageTranslucency: float | None = None, foliageWrap: float | None = None, subsurfaceColor: Sequence[float] | None = None, subsurfaceAmount: float | None = None, sheenColor: Sequence[float] | None = None, sheenRoughness: float | None = None, clearcoat: float | None = None, clearcoatRoughness: float | None = None, anisotropy: float | None = None, anisotropyRotation: float | None = None, hairShift: float | None = None, irisRadius: float | None = None, irisDepth: float | None = None, limbalRing: float | None = None, bevelRadius: float | None = None, heightMap: str | None = None, normalFromHeight: bool | None = None, heightDepth: float | None = None, heightUvWidth: float | None = None, heightUvHeight: float | None = None, baseColorMapWrapU: Any | None = None, baseColorMapWrapV: Any | None = None, baseColorMapFilter: Any | None = None, baseColorMapColorSpace: Any | None = None, metallicMapWrapU: Any | None = None, metallicMapWrapV: Any | None = None, metallicMapFilter: Any | None = None, metallicMapColorSpace: Any | None = None, roughnessMapWrapU: Any | None = None, roughnessMapWrapV: Any | None = None, roughnessMapFilter: Any | None = None, roughnessMapColorSpace: Any | None = None, normalMapWrapU: Any | None = None, normalMapWrapV: Any | None = None, normalMapFilter: Any | None = None, normalMapColorSpace: Any | None = None, ambientOcclusionMapWrapU: Any | None = None, ambientOcclusionMapWrapV: Any | None = None, ambientOcclusionMapFilter: Any | None = None, ambientOcclusionMapColorSpace: Any | None = None, ormMapWrapU: Any | None = None, ormMapWrapV: Any | None = None, ormMapFilter: Any | None = None, ormMapColorSpace: Any | None = None, emissiveMapWrapU: Any | None = None, emissiveMapWrapV: Any | None = None, emissiveMapFilter: Any | None = None, emissiveMapColorSpace: Any | None = None, baseColorMapOcioSpace: str | None = None, emissiveMapOcioSpace: str | None = None, textureSet: str | None = None, bc: Sequence[float] | None = None) -> Any:
     """Create a material (Unreal default lit inputs). Faces use it through a slot of the same name. Returns its name.
 
     Args:
@@ -2156,6 +2167,9 @@ def createMaterial(*objects: Any, baseColor: Sequence[float] | None = None, meta
         emissiveMapWrapV: What emissiveMap shows past its edges along V: repeat, clamp (the edge texels), mirror (repeat flipped) or black.
         emissiveMapFilter: How emissiveMap is filtered: linear (smooth, mipmapped) or nearest (hard texels, for pixel art).
         emissiveMapColorSpace: How emissiveMap's 8- and 16-bit values are read: auto (sRGB, as a colour map), sRGB, or linear (raw data). EXR and HDR files are always linear.
+        baseColorMapOcioSpace: With OCIO colour management on: the config colour space the map is in (Utility - sRGB - Texture, ACEScg); empty reads it by its ColorSpace.
+        emissiveMapOcioSpace: With OCIO colour management on: the config colour space the map is in (Utility - sRGB - Texture, ACEScg); empty reads it by its ColorSpace.
+        textureSet: Texture set whose maps draw this material, in place of the maps it has. Any number of materials can use one set; painting a mesh with this material paints the set.
     """
 
 def createMesh(points: Sequence[Any] | None = None, faces: Sequence[Any] | None = None, uvs: Sequence[Any] | None = None, name: str | None = None, *, n: str | None = None) -> Any:
@@ -5202,6 +5216,15 @@ def lattice(*objects: Any, divisions: Sequence[float] | None = None, interpolati
         name: Name for the lattice.
     """
 
+def lensPreset(*objects: Any, node: str | None = None, camera: str | None = None, n: str | None = None, cam: str | None = None) -> Any:
+    """Set a post process's lens flare, streaks and dirt to a lens type: Spherical Prime (round glass, a few ghosts and a star), Anamorphic Scope (long blue streaks, oval ghosts), Vintage Glass (warm ghosts, strong halo, dust), Clean Coated (faint ghosts, no streaks). With no name, lists them.
+
+    Args:
+        objects: preset.
+        node: The post process; the active one (created if needed) when left out. Short form n.
+        camera: Also set this camera's anamorphicSqueeze and apertureBlades to match the lens. Short form cam.
+    """
+
 def light(type: str | None = None, name: str | None = None, parent: str | None = None, position: Sequence[float] | None = None, color: Sequence[float] | None = None, intensity: float | None = None, units: str | None = None, temperature: float | None = None, range: float | None = None, innerConeAngle: float | None = None, outerConeAngle: float | None = None, width: float | None = None, height: float | None = None, castShadows: bool | None = None, provider: str | None = None, skipSelect: bool | None = None, *, t: str | None = None, n: str | None = None, p: str | None = None, pos: Sequence[float] | None = None, c: Sequence[float] | None = None, i: float | None = None, u: str | None = None, tmp: float | None = None, r: float | None = None, ica: float | None = None, oca: float | None = None, w: float | None = None, h: float | None = None, cs: bool | None = None, prv: str | None = None, ss: bool | None = None) -> Any:
     """Create a light. Returns its path. Flags left out keep the light's defaults.
 
@@ -5644,7 +5667,7 @@ def measureSelection() -> Any:
     """Measure the selection without making nodes: 2 vertices or objects give distance and dx/dy/dz, 3 an angle, edges total and per-edge length, a closed edge loop or 4+ vertices a best-fit circle, faces area and perimeter, one object its bounding box (and diameter when it is cylinder-like), a measure node its value. Returns a dict: lengths in cm; 'value' and 'text' are the headline in the display unit (/units/linear)."""
 
 def measureView(view: str | None = None, lookThrough: str | None = None, yaw: float | None = None, pitch: float | None = None, width: int | None = None, height: int | None = None, display: str | None = None, isolate: bool | None = None, frameSelection: bool | None = None, grid: bool | None = None, showSelection: bool | None = None, samples: int | None = None, label: bool | None = None, overlays: bool | None = None, hud: bool | None = None, frames: int | None = None, ambientOcclusion: bool | None = None, *, v: str | None = None, lt: str | None = None, w: int | None = None, h: int | None = None, d: str | None = None, fs: bool | None = None, ov: bool | None = None, ao: bool | None = None) -> Any:
-    """Draw the scene offscreen several times like captureView and return the median GPU time per frame in ms, with the ambient occlusion share, and the render thread's time recording it: {gpuMs, aoMs, cpuMs, aoCpuMs, frames}. 0 where the GPU has no timestamps.
+    """Draw the scene offscreen several times like captureView and return the median GPU time per frame in ms, with the ambient occlusion and post pass shares, and the render thread's time recording it: {gpuMs, aoMs, cpuMs, aoCpuMs, reflectionMs, flareMs, dofMs, motionBlurMs, reflections (which ran), reflectionNote (why not what was asked), frames}. 0 where the GPU has no timestamps.
 
     Args:
         view: active, persp, three-quarter, front, back, left, right, side, top, bottom. Short form v. One of 'active', 'persp', 'three-quarter', 'front', 'back', 'left', 'right', 'side', 'top', 'bottom'. Default 'active'.
@@ -6119,6 +6142,14 @@ def objExists(*objects: Any) -> Any:
 
     Args:
         objects: name.
+    """
+
+def ocioInfo(config: str | None = None, display: str | None = None, *, cfg: str | None = None, dsp: str | None = None) -> Any:
+    """What an OpenColorIO config offers: its displays, the views of a display, looks and colour spaces, and the colour space Lila's scene-linear Rec.709 maps to. The scene's config (or the built-in one) when config is left out.
+
+    Args:
+        config: An .ocio file or ocio:// URI; the scene's when left out. Short form cfg.
+        display: The display whose views to list; the default display when left out. Short form dsp.
     """
 
 def offsetCurve(*objects: Any, distance: float | None = None, join: str | None = None, miterLimit: float | None = None, normal: Sequence[float] | None = None, tolerance: float | None = None, constructionHistory: bool | None = None, replaceOriginal: bool | None = None, name: str | None = None, ch: bool | None = None, rpo: bool | None = None, n: str | None = None) -> Any:
@@ -6980,11 +7011,12 @@ def polyFillHole() -> Any:
 def polyFlip() -> Any:
     """Reverse the winding of the selected faces (the whole mesh in object mode)."""
 
-def polyGridFill(gridSize: float | None = None, rotate: int | None = None) -> Any:
+def polyGridFill(style: str | None = None, gridSize: float | None = None, rotate: int | None = None) -> Any:
     """Rebuild triangle fans and other patches as a quad grid inside a ring of quads: select the fans' centre vertices or the faces. With edges selected, fills the holes they border the same way.
 
     Args:
-        gridSize: The grid's size against the hole; 1 grids right to the border with no ring. Default 0.4.
+        style: grid: one ring of quads round a grid. radial: rings following the border inward to a pole of kite quads, dense rings halving their spokes as they shrink. Borders under 6 points take grid. One of 'grid', 'radial'. Default 'grid'.
+        gridSize: The grid's size against the hole; 1 grids right to the border with no ring. With radial, the pole's size: smaller adds rings. Default 0.4.
         rotate: Steps the grid's corners round the border. Default 0.
     """
 
@@ -7032,7 +7064,7 @@ def polyInsetRegion(distance: float | None = None, depth: float | None = None, p
         planarAngle: Degrees a region's faces may bend and still count as flat. Default 1.0.
     """
 
-def polyKnife(mesh: str | None = None, points: Sequence[Any] | None = None, closed: bool | None = None, through: bool | None = None, eye: Sequence[float] | None = None, direction: Sequence[float] | None = None, loopEdge: int | None = None, fraction: float | None = None, deleteEdge: int | None = None, select: bool | None = None) -> Any:
+def polyKnife(mesh: str | None = None, points: Sequence[Any] | None = None, closed: bool | None = None, through: bool | None = None, eye: Sequence[float] | None = None, direction: Sequence[float] | None = None, loopEdge: int | None = None, fraction: float | None = None, deleteEdge: int | None = None, deleteLoop: bool | None = None, select: bool | None = None) -> Any:
     """Knife / multi-cut: cut a mesh along a path of points, splitting the faces between them and the edges the path crosses. Between two points the cut follows the surface under the straight screen line joining them (seen from eye= or along direction=; without either, along the points' average normal). With loopEdge= it inserts an edge loop across that edge's quad ring instead, and with deleteEdge= it dissolves that edge. Follows the mesh's symmetry. A single point on an edge inserts a vertex there. Returns the new edges.
 
     Args:
@@ -7045,6 +7077,7 @@ def polyKnife(mesh: str | None = None, points: Sequence[Any] | None = None, clos
         loopEdge: Insert an edge loop across this edge's ring instead of cutting a path. Default -1.
         fraction: Where along loopEdge the loop crosses it, from its first point. Default 0.5.
         deleteEdge: Dissolve this edge, joining its two faces, instead of cutting. Default -1.
+        deleteLoop: With deleteEdge, dissolve the whole edge loop through it. Default False.
         select: Select the new edges. Default True.
     """
 
@@ -7052,7 +7085,7 @@ def polyLockNormals() -> Any:
     """Store the current shading normals of the selected meshes as split normals, so later edits keep them."""
 
 def polyMerge(distance: float | None = None, average: bool | None = None) -> Any:
-    """Weld selected vertices closer than a distance (all of a mesh's points if it has no component selection). Exactly two selected vertices weld whatever the distance.
+    """Weld selected vertices closer than a distance (all of a mesh's points if it has no component selection). Exactly two selected vertices weld at their centre whatever the distance.
 
     Args:
         distance: Weld distance, cm. Default 0.01.
@@ -7775,7 +7808,7 @@ def renameTheme(*objects: Any, name: str | None = None, to: str | None = None, n
         to: New name.
     """
 
-def render(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, path: str | None = None, frame: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, p: str | None = None, f: float | None = None) -> Any:
+def render(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, passes: str | None = None, path: str | None = None, frame: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, ps: str | None = None, p: str | None = None, f: float | None = None) -> Any:
     """Render one frame of the scene through a camera, with the post process and lens, and write it. Returns the path.
 
     Args:
@@ -7787,7 +7820,8 @@ def render(camera: str | None = None, width: int | None = None, height: int | No
         motionBlur: Blur what moves across the camera's shutter. Short form mb.
         transparent: No backdrop: alpha is coverage (png, tif, exr, psd). Short form tr.
         renderPass: beauty; wireframe (beauty with every edge drawn, for breakdowns); or id (each object a flat colour from its path, for compositing mattes). Short form rp. One of 'beauty', 'wireframe', 'id'. Default 'beauty'.
-        path: Image to write: png, jpg, tga, tif, exr (linear light) or psd. The Render Output images, numbered, when left out. Short form p.
+        passes: Compositing passes beside the beauty in a multilayer EXR, comma separated: depth, normal, motion, cryptoObject, cryptoMaterial, or all. Short form ps.
+        path: Image to write: png, jpg, tga, tif, exr (linear light) or psd. The Render panel's images, numbered, when left out. Short form p.
         frame: Frame to render; the current one when left out. Short form f.
     """
 
@@ -7804,7 +7838,7 @@ def renderMaterialThumbnail(*objects: Any, size: int | None = None, mesh: str | 
         all: Every library material (the scene's sets excluded). Default False.
     """
 
-def renderSequence(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, path: str | None = None, video: str | None = None, codec: str | None = None, quality: float | None = None, start: float | None = None, end: float | None = None, step: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, p: str | None = None, v: str | None = None, q: float | None = None, st: float | None = None, en: float | None = None, by: float | None = None) -> Any:
+def renderSequence(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, passes: str | None = None, path: str | None = None, video: str | None = None, write: str | None = None, codec: str | None = None, quality: float | None = None, start: float | None = None, end: float | None = None, step: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, ps: str | None = None, p: str | None = None, v: str | None = None, wr: str | None = None, q: float | None = None, st: float | None = None, en: float | None = None, by: float | None = None) -> Any:
     """Render a frame range through a camera into an image sequence, an .mp4, or both. Returns {frames, path, video}.
 
     Args:
@@ -7816,8 +7850,10 @@ def renderSequence(camera: str | None = None, width: int | None = None, height: 
         motionBlur: Blur what moves across the camera's shutter. Short form mb.
         transparent: No backdrop: alpha is coverage (png, tif, exr, psd). Short form tr.
         renderPass: beauty; wireframe (beauty with every edge drawn, for breakdowns); or id (each object a flat colour from its path, for compositing mattes). Short form rp. One of 'beauty', 'wireframe', 'id'. Default 'beauty'.
-        path: Images to write, #### standing for the frame number (added when missing). The Render Output images when left out. Short form p.
+        passes: Compositing passes beside the beauty in a multilayer EXR, comma separated: depth, normal, motion, cryptoObject, cryptoMaterial, or all. Short form ps.
+        path: Images to write, #### standing for the frame number (added when missing). Short form p.
         video: An .mp4 to encode the frames into. Short form v.
+        write: With path and video left out: images, video or both, at the Render panel's paths. The Render panel's choice by default, else video. Short form wr. One of 'images', 'video', 'both'.
         codec: Video codec: h264 (default) or hevc. One of 'h264', 'hevc'.
         quality: Video quality, 0 to 1 (0.6 by default). Short form q.
         start: First frame; the playback range's when left out. Short form st.
@@ -7825,7 +7861,7 @@ def renderSequence(camera: str | None = None, width: int | None = None, height: 
         step: Frames between renders (1 by default). Short form by.
     """
 
-def renderTurntable(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, path: str | None = None, video: str | None = None, codec: str | None = None, quality: float | None = None, frames: int | None = None, turns: float | None = None, spin: str | None = None, turntable: str | None = None, pitch: float | None = None, yaw: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, p: str | None = None, v: str | None = None, q: float | None = None, fr: int | None = None, tt: str | None = None) -> Any:
+def renderTurntable(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, passes: str | None = None, path: str | None = None, video: str | None = None, write: str | None = None, codec: str | None = None, quality: float | None = None, frames: int | None = None, turns: float | None = None, spin: str | None = None, turntable: str | None = None, pitch: float | None = None, yaw: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, ps: str | None = None, p: str | None = None, v: str | None = None, wr: str | None = None, q: float | None = None, fr: int | None = None, tt: str | None = None) -> Any:
     """Render a loop turning around the selection (or everything shown), framed to fit, into images, an .mp4, or both. The last frame stops one step short of the first, so the video loops. Returns {frames, path, video}.
 
     Args:
@@ -7837,16 +7873,18 @@ def renderTurntable(camera: str | None = None, width: int | None = None, height:
         motionBlur: Blur what moves across the camera's shutter. Short form mb.
         transparent: No backdrop: alpha is coverage (png, tif, exr, psd). Short form tr.
         renderPass: beauty; wireframe (beauty with every edge drawn, for breakdowns); or id (each object a flat colour from its path, for compositing mattes). Short form rp. One of 'beauty', 'wireframe', 'id'. Default 'beauty'.
-        path: Images to write, #### standing for the frame number. Left out with video= given, video only. Short form p.
+        passes: Compositing passes beside the beauty in a multilayer EXR, comma separated: depth, normal, motion, cryptoObject, cryptoMaterial, or all. Short form ps.
+        path: Images to write, #### standing for the frame number. Short form p.
         video: An .mp4 to encode the turntable into. Short form v.
+        write: With path and video left out: images, video or both, at the Render panel's paths. The Render panel's choice by default, else video. Short form wr. One of 'images', 'video', 'both'.
         codec: Video codec: h264 (default) or hevc. One of 'h264', 'hevc'.
         quality: Video quality, 0 to 1 (0.6 by default). Short form q.
-        frames: Frames for the whole turn. Short form fr. Default 120.
-        turns: Turns over the frames. Default 1.0.
-        spin: object (the model turns in fixed light), camera (the camera circles, the light stays), lights, or turntable (a turntable node turns its members through the view's own camera). One of 'object', 'camera', 'lights', 'turntable'. Default 'object'.
+        frames: Frames for the whole turn; 120 by default. Short form fr.
+        turns: Turns over the frames; 1 by default.
+        spin: object (the model turns in fixed light), camera (the camera circles, the light stays), lights, or turntable (a turntable node turns its members through the view's own camera). One of 'object', 'camera', 'lights', 'turntable'.
         turntable: With spin=turntable: the turntable; the selected one or the first by default. Short form tt.
-        pitch: Camera elevation, degrees (negative looks down). Default -15.0.
-        yaw: Starting angle around the up axis, degrees. Default 35.0.
+        pitch: Camera elevation, degrees (negative looks down); -15 by default.
+        yaw: Starting angle around the up axis, degrees; 35 by default.
     """
 
 def reorderAnimLayer(*objects: Any, index: int | None = None, by: int | None = None, i: int | None = None, b: int | None = None) -> Any:
@@ -7874,6 +7912,20 @@ def reorderDisplayLayer(*objects: Any, index: int | None = None, i: int | None =
     Args:
         objects: layer.
         index: Row it moves to. Short form i. Default 0.
+    """
+
+def reorderMaterialSlots(*objects: Any) -> Any:
+    """Reorder an object's material slots, the order exporters write them in: the named slots first, in the order given, the rest after them. Returns the new slot order.
+
+    Args:
+        objects: object slot [slot...].
+    """
+
+def reorderMaterials(*objects: Any) -> Any:
+    """Reorder the Material Editor's list: the named materials first, in the order given, the rest after them. Returns the new order.
+
+    Args:
+        objects: material [material...].
     """
 
 def reportIssue(*objects: Any, message: str | None = None, severity: str | None = None, source: str | None = None, blocks: Sequence[Any] | None = None, fix: str | None = None, select: str | None = None, m: str | None = None, sv: str | None = None, src: str | None = None, b: Sequence[Any] | None = None, fx: str | None = None, sel: str | None = None) -> Any:
@@ -8733,10 +8785,10 @@ def selectByAngle(angle: float | None = None) -> Any:
     """
 
 def selectByMaterial(*objects: Any, faces: bool | None = None, f: bool | None = None) -> Any:
-    """Select what a material is assigned to: whole objects when it covers every face of each, otherwise just the faces it is assigned to. Default also takes faces on slots with no material. faces=true always selects faces, faces=false always whole objects. Returns the objects.
+    """Select what the materials are assigned to: whole objects when they cover every face of each, otherwise just the faces they are assigned to. Default also takes faces on slots with no material. faces=true always selects faces, faces=false always whole objects. Returns the objects.
 
     Args:
-        objects: material.
+        objects: material...
         faces: Force faces (true) or whole objects (false); unset picks by coverage. Short form f.
     """
 
@@ -9123,13 +9175,14 @@ def setLoopKey(*objects: Any, attribute: Any | None = None, time: float | None =
         snapRange: Move the playback range end to the loop key. Short form sr. Default True.
     """
 
-def setMaterialTexture(*objects: Any, channel: str | None = None, path: str | None = None, wrap: str | None = None, wrapU: str | None = None, wrapV: str | None = None, filter: str | None = None, c: str | None = None, p: str | None = None) -> Any:
-    """Set or clear (path='') a texture: channel baseColor, metallic, roughness, normal, ambientOcclusion, orm, mro (the packed map with the MRO layout) or emissive. Stored relative to the workspace root (or the scene folder without one). wrap, wrapU, wrapV and filter set how it is sampled; given without path they change only that.
+def setMaterialTexture(*objects: Any, channel: str | None = None, path: str | None = None, textureSet: str | None = None, wrap: str | None = None, wrapU: str | None = None, wrapV: str | None = None, filter: str | None = None, c: str | None = None, p: str | None = None, ts: str | None = None) -> Any:
+    """Set or clear (path='') a texture: channel baseColor, metallic, roughness, normal, ambientOcclusion, orm, mro (the packed map with the MRO layout) or emissive. Stored relative to the workspace root (or the scene folder without one). textureSet takes the channel's map from a texture set instead ('' stops). wrap, wrapU, wrapV and filter set how it is sampled; given without path they change only that.
 
     Args:
         objects: material.
         channel: Texture channel. Short form c.
         path: Image file; empty clears. Short form p.
+        textureSet: Take this map from a texture set; empty stops. Short form ts.
         wrap: Both wrap modes. One of 'repeat', 'clamp', 'mirror', 'black'.
         wrapU: Wrap along U. One of 'repeat', 'clamp', 'mirror', 'black'.
         wrapV: Wrap along V. One of 'repeat', 'clamp', 'mirror', 'black'.
@@ -10171,8 +10224,8 @@ def texAddGenerator(*objects: Any, name: str | None = None, mode: str | None = N
         index: Position in the mask stack, 0 the bottom; the top when left out.
     """
 
-def texAddLayer(*objects: Any, name: str | None = None, above: str | None = None, below: str | None = None, parent: str | None = None, index: int | None = None, material: Any | None = None, graph: Any | None = None, source: str | None = None, filter: str | None = None, values: Any | None = None, channels: Any | None = None) -> Any:
-    """Add a layer to a texture set's stack (on top unless placed). Kinds: fill (material + mask), paint (placeholder material, paint buffers and a painted mask), procedural (a graph with outputs named after channels, optionally mask), folder, instance (another layer's values and mask), filter (a filter node applied to the composite below). A graph made by hand joins the stack as its bottom layer. Returns {id}.
+def texAddLayer(*objects: Any, name: str | None = None, above: str | None = None, below: str | None = None, parent: str | None = None, index: int | None = None, material: Any | None = None, graph: Any | None = None, source: str | None = None, filter: str | None = None, values: Any | None = None, channels: Any | None = None, projection: Any | None = None, decal: Any | None = None, text: Any | None = None, scatter: Any | None = None) -> Any:
+    """Add a layer to a texture set's stack (on top unless placed). Kinds: fill (material + mask), paint (placeholder material, paint buffers and a painted mask), procedural (a graph with outputs named after channels, optionally mask), folder, instance (another layer's values and mask), filter (a filter node applied to the composite below), decal (pictures per channel placed by projection), text (words drawn in the material's base colour, placed like a decal) and scatter (copies of a pattern over the uvs). A graph made by hand joins the stack as its bottom layer. Returns {id}.
 
     Args:
         objects: set kind.
@@ -10187,6 +10240,10 @@ def texAddLayer(*objects: Any, name: str | None = None, above: str | None = None
         filter: Filter: the node type (blur, hsv, levels...).
         values: Filter: its parameter values.
         channels: Per-channel {enabled, mode, opacity}.
+        projection: Fill, procedural, decal and text: layerProjection's values {mode, positionX...}.
+        decal: Decal: {maps {channel: file}, columns, rows, cell}.
+        text: Text: {text, font, tracking, outline, outlineColor, resolution}.
+        scatter: Scatter: {pattern, maps, countX, countY, perCell, size, sizeRandom, rotationRandom, hueRandom, seed, avoidOverlap}.
     """
 
 def texAddMask(*objects: Any, name: str | None = None, mode: str | None = None, opacity: float | None = None, invert: bool | None = None, values: Any | None = None, bindings: Any | None = None, index: int | None = None, type: str | None = None, value: float | None = None, image: str | None = None, anchor: str | None = None, channel: str | None = None) -> Any:
@@ -10215,6 +10272,27 @@ def texAddNode(*objects: Any, position: Sequence[Any] | None = None, name: str |
         objects: set type.
         position: [x, y] on the canvas.
         name: Wanted name; made unique.
+    """
+
+def texAddShadingChannels(*objects: Any, channels: Sequence[Any] | None = None, c: Sequence[Any] | None = None) -> Any:
+    """Add shading channels to a texture set: sheen, coat, subsurface, anisotropy, transmission, IOR and specular. Each becomes a Material Output input, shades in the viewport and the path-traced view, and exports under the name the preset's renderer uses. The ior channel holds (IOR - 1) / 2. Returns the channels added.
+
+    Args:
+        objects: texture set.
+        channels: Channel names; all of them when left out. Short form c. One of 'sheenColor', 'sheenRoughness', 'coat', 'coatRoughness', 'coatNormal', 'subsurfaceColor', 'subsurfaceRadius', 'anisotropy', 'anisotropyDirection', 'transmission', 'ior', 'specularWeight', 'specularColor'.
+
+    Examples:
+        texAddShadingChannels("RockTex")
+
+        texAddShadingChannels("RockTex", channels=["coat", "coatRoughness"])
+    """
+
+def texAddVariant(*objects: Any, copy: str | None = None) -> Any:
+    """Add a named variant to a texture set and switch to it: from then on layer and mask edits are its overrides, until texSwitchVariant goes back to the base (name ''). copy= starts it from another variant's overrides.
+
+    Args:
+        objects: set name.
+        copy: A variant whose overrides it starts with.
     """
 
 def texApplySmartMaterial(*objects: Any, name: str | None = None, above: str | None = None, below: str | None = None, parent: str | None = None, index: int | None = None, layer: str | None = None, addMaps: bool | None = None) -> Any:
@@ -10247,6 +10325,19 @@ def texBuildGraph(*objects: Any, assign: Sequence[Any] | None = None) -> Any:
         assign: Meshes to give the material (created when missing).
     """
 
+def texCaptureView(*objects: Any, view: Any | None = None, file: str | None = None, channel: str | None = None, layer: str | None = None, mesh: str | None = None, scale: float | None = None) -> Any:
+    """Write what a view sees of a texture set's channel (the stack's, or one paint layer's with layer=) as a 16-bit PNG, unlit: colour in sRGB, data as it is, transparent where the mesh isn't. Edit it in an image editor and project it back with texPaintStroke (kind project, image the file, the same view). view is a screen view or a saved view's name. Returns {file, width, height, channel}.
+
+    Args:
+        objects: set.
+        view: The screen view, or a texProjectionView name.
+        file: The PNG to write.
+        channel: The channel. Default 'baseColor'.
+        layer: A paint layer's own paint instead of the stack.
+        mesh: The mesh; default the first using the set's material.
+        scale: Pixels per view pixel. Default 1.0.
+    """
+
 def texClearLayer(*objects: Any, layer: str | None = None) -> Any:
     """Clear a paint layer: drop its strokes and pixels.
 
@@ -10269,6 +10360,14 @@ def texConnect(*objects: Any) -> Any:
         objects: set from to.
     """
 
+def texCopyLayers(*objects: Any, layers: Sequence[Any] | None = None) -> Any:
+    """Copy layers (with their masks, children and paint) as text for texPasteLayers, into this set or another, in this scene or another. Returns the text.
+
+    Args:
+        objects: set [layer].
+        layers: The layers to copy, bottom first; else the positional one.
+    """
+
 def texCopyNodes(*objects: Any) -> Any:
     """Nodes as shareable text (JSON with a format header): their values and the links between them. Paste with texPasteNodes.
 
@@ -10276,13 +10375,14 @@ def texCopyNodes(*objects: Any) -> Any:
         objects: set nodes...
     """
 
-def texCreateSet(*objects: Any, settings: Any | None = None, resolution: int | None = None) -> Any:
-    """Create a texture set: a texture graph with a Material Output, and the channels, tile sizes and export preset its maps use. Returns its name.
+def texCreateSet(*objects: Any, settings: Any | None = None, resolution: int | None = None, materials: Sequence[Any] | None = None) -> Any:
+    """Create a texture set: a texture graph with a Material Output, and the channels, tile sizes and export preset its maps use. materials= points those materials at it. Returns its name.
 
     Args:
         objects: name.
-        settings: Settings dict: channels [{name, type, bits}], width, height, tiles [udim or {udim, width, height}], normalConvention (opengl/directx), bakeProject, exportPreset, material.
+        settings: Settings dict: channels [{name, type, bits}], width, height, tiles [udim or {udim, width, height}], normalConvention (opengl/directx), bakeProject, exportPreset.
         resolution: Width and height of every tile.
+        materials: Materials that use the set (their Texture Set), created when missing.
     """
 
 def texDeleteNode(*objects: Any) -> Any:
@@ -10290,6 +10390,21 @@ def texDeleteNode(*objects: Any) -> Any:
 
     Args:
         objects: set nodes...
+    """
+
+def texDeleteSnapshot(*objects: Any) -> Any:
+    """Drop a texture set's snapshot and the pixels only it held. Returns whether there was one.
+
+    Args:
+        objects: texture set, name.
+    """
+
+def texDeleteStrokes(*objects: Any, strokes: Sequence[Any] | None = None) -> Any:
+    """Delete strokes from a paint layer and re-rasterise it.
+
+    Args:
+        objects: set layer.
+        strokes: Stroke ids.
     """
 
 def texDisconnect(*objects: Any, source: str | None = None) -> Any:
@@ -10308,6 +10423,31 @@ def texDuplicateNodes(*objects: Any, offset: Sequence[Any] | None = None) -> Any
         offset: [x, y] shift for the copies. Default [40, 40].
     """
 
+def texEditPath(*objects: Any, stroke: int | None = None, layer: str | None = None, points: Sequence[Any] | None = None, radius: float | None = None) -> Any:
+    """Move a path stroke's points (points=, as texPaintPath takes them) or change its radius, and paint it again from them: the layer is rebuilt from its strokes with the path's new dabs. One undo step. Returns {layer, stroke (its new id), dabs}.
+
+    Args:
+        objects: set layer.
+        stroke: The path stroke's id.
+        layer: The paint layer.
+        points: The path's new points.
+        radius: Dab radius in object units.
+    """
+
+def texEditStroke(*objects: Any, stroke: int | None = None, color: Any | None = None, channels: Any | None = None, radius: float | None = None, sizeScale: float | None = None, strength: float | None = None, brush: Any | None = None) -> Any:
+    """Change a painted stroke after the fact and re-rasterise its layer: color (the colour channel), channels {name: value, null drops one}, radius (the widest dab's, the rest in proportion) or sizeScale, strength, brush (a patch over its brush settings). The stroke gets a new id, returned with the rest of it.
+
+    Args:
+        objects: set layer.
+        stroke: The stroke's id (texStrokes).
+        color: [r, g, b], linear.
+        channels: {channel: value}.
+        radius: Object units.
+        sizeScale: Multiplies every dab's radius.
+        strength: 0 to 1.
+        brush: Brush settings to change (falloff, roundness, alpha...).
+    """
+
 def texEvaluate(*objects: Any, channels: Sequence[Any] | None = None, resolution: int | None = None, folder: str | None = None, format: str | None = None, bits: int | None = None, backend: str | None = None) -> Any:
     """Evaluate a texture set and write its channels as images, on the GPU when there is one (else on the CPU). Returns the files, pass count, time, how many kernels compiled or came from the cache, and the backend used.
 
@@ -10321,7 +10461,7 @@ def texEvaluate(*objects: Any, channels: Sequence[Any] | None = None, resolution
         backend: gpu or cpu; the GPU when left out and the renderer can run. One of 'gpu', 'cpu'.
     """
 
-def texExport(*objects: Any, preset: str | None = None, folder: str | None = None, resolution: int | None = None, optional: bool | None = None, incremental: bool | None = None, backend: str | None = None, normalFromHeight: bool | None = None) -> Any:
+def texExport(*objects: Any, preset: str | None = None, folder: str | None = None, resolution: int | None = None, optional: bool | None = None, incremental: bool | None = None, backend: str | None = None, normalFromHeight: bool | None = None, variants: bool | None = None) -> Any:
     """Export a texture set's channels through an export preset (a bake target: unreal, substancePainter, or a saved one): its maps, channel packing (ORM), normal convention, names and bit depths. Returns the files.
 
     Args:
@@ -10333,6 +10473,17 @@ def texExport(*objects: Any, preset: str | None = None, folder: str | None = Non
         incremental: Only rewrite files whose inputs or pixels changed since the last export to this folder. Default False.
         backend: gpu or cpu; the GPU when left out and the renderer can run. One of 'gpu', 'cpu'.
         normalFromHeight: Write the normal as detail over the height, with the height at 16 bits, for materials that rebuild normals from it; the set's normalFromHeight when left out.
+        variants: Export the base and every variant in one go, each named by the {variant} token (base for the base). Default False.
+    """
+
+def texExportFlattened(*objects: Any, layers: Sequence[Any] | None = None, folder: str | None = None, format: str | None = None) -> Any:
+    """Write what flattening root layers would make (the stack with them, every channel they write) as images, leaving the stack alone. Returns {files, warnings}.
+
+    Args:
+        objects: set [layer].
+        layers: Root layers; else the positional one.
+        folder: Where the files go; textures/<set> by default.
+        format: png (16 bit, colour as sRGB) or exr (32 bit linear). One of 'png', 'exr'. Default 'png'.
     """
 
 def texExportGraph(*objects: Any) -> Any:
@@ -10365,12 +10516,45 @@ def texExportPsd(*objects: Any, channels: Sequence[Any] | None = None, folder: s
         backend: gpu or cpu. One of 'gpu', 'cpu'.
     """
 
+def texExportPtex(*objects: Any, mesh: str | None = None, file: str | None = None, channel: str | None = None, faceResolution: int | None = None) -> Any:
+    """Write one channel of a texture set to a Ptex file (.ptx): every face of the mesh gets its own texels, sampled from the set through the mesh's uvs. The mesh must be all quads or all triangles. Returns {file, faces, channels}.
+
+    Args:
+        objects: set.
+        mesh: The mesh the set paints (node path).
+        file: The .ptx to write; relative paths are under the workspace.
+        channel: The set's channel. Default 'baseColor'.
+        faceResolution: Texels per face side as a power of two: 6 is 64 x 64. Default 6.
+    """
+
+def texFaceGroup(*objects: Any, faces: Sequence[Any] | None = None, mesh: str | None = None, remove: bool | None = None) -> Any:
+    """Save a named face set on a texture set for painting (the faces given, else those selected on the mesh), or remove it. Groups make selection masks (texSelectionMask group=), fill targets (fillBy group) and locks (the paint tool's Lock). Returns every group.
+
+    Args:
+        objects: set name.
+        faces: Face indices; else the mesh's selected faces.
+        mesh: The mesh; else the selected one.
+        remove: Remove the group. Default False.
+    """
+
 def texFlattenLayer(*objects: Any, layer: str | None = None) -> Any:
     """Flatten a paint layer: keep its pixels and drop its stroke records, so the layer no longer replays or re-rasterises them (the pixels resample instead).
 
     Args:
         objects: set [layer].
         layer: The paint layer.
+    """
+
+def texFlattenLayers(*objects: Any, layers: Sequence[Any] | None = None, down: bool | None = None, keep: bool | None = None, name: str | None = None, folder: str | None = None) -> Any:
+    """Flatten root layers into one paint layer: what the stack shows with them (the stack below them included, every channel they write, masks baked in) becomes the new layer's pixels, written to folder as EXR. down=True merges the layer into the one below it. keep=True leaves the originals hidden under it. Returns {layer, channels, warnings}.
+
+    Args:
+        objects: set [layer].
+        layers: Root layers to flatten together; else the positional one.
+        down: Merge the layer with the one below it. Default False.
+        keep: Keep the flattened layers, hidden. Default False.
+        name: The new layer's name.
+        folder: Where its pixels go; textures/<set>/flattened by default.
     """
 
 def texGraphInfo(*objects: Any, source: bool | None = None) -> Any:
@@ -10412,11 +10596,36 @@ def texImportPainterSmartMaterials(*objects: Any, folder: str | None = None, bru
         overwrite: Replace ones of the same name there. Default True.
     """
 
+def texImportPtex(*objects: Any, mesh: str | None = None, file: str | None = None, channel: str | None = None, name: str | None = None, folder: str | None = None) -> Any:
+    """Bring a Ptex file (.ptx) onto a texture set: its faces are baked through the mesh's uvs into an image, which becomes a new fill layer on the channel. The mesh must be the quad or triangle mesh the file was painted on. Returns {id, image, faces}.
+
+    Args:
+        objects: set.
+        mesh: The mesh the file was painted on (node path).
+        file: The .ptx to read.
+        channel: The set's channel the layer fills. Default 'baseColor'.
+        name: Layer name; the file's name when left out.
+        folder: Where the baked image goes; textures/<set> under the workspace by default.
+    """
+
 def texLayerStack(*objects: Any) -> Any:
     """A texture set's layer stack as JSON: layers bottom first (with each channel's resolved enable, mode and opacity), masks, anchors, the base values, the mesh maps it reads, and mode: stack, or graph when the graph was edited as nodes beyond what the stack can show (or was never layered).
 
     Args:
         objects: set.
+    """
+
+def texMaterialFromMaps(*objects: Any, folder: str | None = None, recursive: bool | None = None, tier: str | None = None, category: str | None = None, path: str | None = None, set: str | None = None) -> Any:
+    """Make materials from texture maps: each file's channel comes from its name (BaseColor, albedo, diff, rough, gloss, metal, nrm or normal with dx or gl, height or disp, ao, emissive, opacity, and packed ORM, ARM, RMA, MRA), files differing only by that token make one material, and a size in the name (200cm, 2m) sets its scale. Packed maps are split, DirectX normals flipped, gloss inverted. Writes a .lilamat per material to the library (tier, category, or path), or with set= adds each as a material layer. Returns one entry per material with its maps and warnings.
+
+    Args:
+        objects: [file...].
+        folder: A folder of maps (searched recursively unless recursive=False).
+        recursive: Search the folder's subfolders too. Default True.
+        tier: user or workspace. One of 'user', 'workspace'. Default 'user'.
+        category: Library category. Default 'Imported'.
+        path: Write the .lilamat files to this folder instead.
+        set: Add them to this texture set as layers instead.
     """
 
 def texMoveLayer(*objects: Any, above: str | None = None, below: str | None = None, parent: str | None = None, index: int | None = None) -> Any:
@@ -10438,6 +10647,15 @@ def texMoveNodes(*objects: Any, positions: Any | None = None) -> Any:
         positions: {node: [x, y]}.
     """
 
+def texMoveStroke(*objects: Any, stroke: int | None = None, index: int | None = None) -> Any:
+    """Move a stroke to another place in its layer's order (0 the bottom) and re-rasterise the layer.
+
+    Args:
+        objects: set layer.
+        stroke: The stroke's id.
+        index: Its new place, 0 the bottom.
+    """
+
 def texNodeTypes(linkType: str | None = None, linkInput: bool | None = None, detail: bool | None = None, reload: bool | None = None) -> Any:
     """The texture node library: type, label, category, kind, tier and description of each. With linkType, only nodes that can take a link from (or, with linkInput, give one to) a port of that type, each with the socket it would use.
 
@@ -10456,8 +10674,25 @@ def texPaintInfo(*objects: Any, layer: str | None = None) -> Any:
         layer: One paint layer.
     """
 
-def texPaintStroke(*objects: Any, stroke: Any | None = None, layer: str | None = None, mesh: str | None = None, payload: Any | None = None, brush: Any | None = None, points: Sequence[Any] | None = None, view: Any | None = None, space: str | None = None, particles: Any | None = None, id: int | None = None) -> Any:
-    """Paint a stroke into a texture set's paint layer (layer=, else the active one, else the stack's top paint layer, else a new paint layer). The stroke is a record: {mesh, brush (radius, strength, flow, spacing, falloff, roundness, angle, alpha, strokeMode line, lazyRadius, mirror...), payload {kind, channels {baseColor: [r, g, b], roughness: 0.3, ...}, blend normal|erase|add|subtract|multiply, mask}, occlusion, particles}, plus either space=surface with dabs [{triangle, bary [u, v], radius, pressure, opacity, angle}] or [{position [x, y, z], radius}] (object space), or space=screen with points [[x, y, pressure]] and view {width, height, camera | view + proj | viewProj + eye | eye + lookAt + fov}. Payload kinds: paint; direction (tilt, channel: normal, or another channel for a flow map); smudge (amount), blur and sharpen (filterRadius texels, amount), clone and heal (sourceOffset [du, dv] or cloneFrom [x, y, z]); fill (fillBy mesh|island|material|polygon|triangle|selection with at [x, y, z], triangle, material or faces; no dabs); project (image: a file path, {path, rect [x, y, w, h], opacity}, or {width, height, data}, through view; facingFade, colorChannel; no dabs); normal (normalMode bump|stamp, stampImage, intensity, channel). paint and fill take source {library id | graph | node type, values, resolution, scale} to paint a material's channels, and any kind tip {node | graph, values, resolution} for a texture graph brush tip. particles {kind drips|rain|sparks, count, length, size, spread, rate, seed} adds particle dabs. Each stroke is one undo step and is kept, so texRasterize can replay it. Returns {layer, stroke, dabs, pages}.
+def texPaintPath(*objects: Any, points: Sequence[Any] | None = None, curve: str | None = None, layer: str | None = None, mesh: str | None = None, radius: float | None = None, payload: Any | None = None, brush: Any | None = None, stencil: Any | None = None, particles: Any | None = None, view: Any | None = None) -> Any:
+    """Paint a stroke along a path on the surface: points [[x, y, z], ...] or [{position, in, out}, ...] in the mesh's object space (Bezier handles; left out, they are smooth), or curve= a scene curve, projected onto the mesh. Dabs are spaced by the brush's spacing at radius (object units, default the brush's world radius). The path stays on the stroke, so texEditPath can move it later. Takes texPaintStroke's payload, brush, stencil and view. Returns texPaintStroke's result plus the path.
+
+    Args:
+        objects: set.
+        points: Path points in the mesh's object space.
+        curve: A scene curve to paint along instead of points.
+        layer: The paint layer.
+        mesh: The painted mesh; default the first using the set's material.
+        radius: Dab radius in object units.
+        payload: What the stroke writes (texPaintStroke's payload).
+        brush: Brush settings.
+        stencil: A stencil, as texPaintStroke takes it (needs view).
+        particles: Particle brush.
+        view: The stroke view record {objectToClip, eye, direction, width, height}.
+    """
+
+def texPaintStroke(*objects: Any, stroke: Any | None = None, layer: str | None = None, mesh: str | None = None, payload: Any | None = None, brush: Any | None = None, points: Sequence[Any] | None = None, view: Any | None = None, space: str | None = None, particles: Any | None = None, stencil: Any | None = None, id: int | None = None) -> Any:
+    """Paint a stroke into a texture set's paint layer (layer=, else the active one, else the stack's top paint layer, else a new paint layer). The stroke is a record: {mesh, brush (radius, strength, flow, spacing, falloff, roundness, angle, alpha, strokeMode line, lazyRadius, mirror...), payload {kind, channels {baseColor: [r, g, b], roughness: 0.3, ...}, blend normal|erase|add|subtract|multiply, mask}, occlusion, particles}, plus either space=surface with dabs [{triangle, bary [u, v], radius, pressure, opacity, angle}] or [{position [x, y, z], radius}] (object space), or space=screen with points [[x, y, pressure]] and view {width, height, camera | view + proj | viewProj + eye | eye + lookAt + fov}. Payload kinds: paint; direction (tilt, channel: normal, or another channel for a flow map); smudge (amount), blur and sharpen (filterRadius texels, amount), clone and heal (sourceOffset [du, dv] or cloneFrom [x, y, z]); fill (fillBy mesh|island|material|polygon|triangle|selection with at [x, y, z], triangle, material or faces; no dabs); project (image: a file path, {path, rect [x, y, w, h], opacity}, or {width, height, data}, through view; facingFade, colorChannel; no dabs); normal (normalMode bump|stamp, stampImage, intensity, channel). paint and fill take source {library id (scene/<set> for a texture set) | graph | node type, values, resolution, scale, tiling {rotate 0-1, contrast 0-1, jitter 0-1} for hex-tiled variation} to paint a material's channels, and any kind tip {node | graph, values, resolution} for a texture graph brush tip. particles {kind drips|rain|sparks, count, length, size, spread, rate, seed} adds particle dabs. stencil {image (file, image key or {width, height, data}), offset [x, y] view pixels, scale, rotation radians, invert, tile, mode mask|color, colorChannel} paints through a picture pinned to the stroke's view: mask scales the amount by its luminance, color paints its rgb into colorChannel. Each stroke is one undo step and is kept, so texRasterize can replay it. Returns {layer, stroke, dabs, pages}.
 
     Args:
         objects: set [layer].
@@ -10470,7 +10705,26 @@ def texPaintStroke(*objects: Any, stroke: Any | None = None, layer: str | None =
         view: Screen view, when stroke has none.
         space: surface or screen (default: screen when there are points). One of 'surface', 'screen'.
         particles: Particle brush {kind, count, length, size, spread, rate, seed}, when stroke has none.
+        stencil: Stencil {image, offset, scale, rotation, invert, tile, mode, colorChannel}, when stroke has none.
         id: The stroke id the paint tool painted live under.
+    """
+
+def texPaintStrokes(strokes: Sequence[Any] | None = None) -> Any:
+    """Paint one stroke that crosses several meshes or texture sets: strokes [{set, layer, stroke}], each as texPaintStroke takes it, all in one undo step. The paint tool commits a stroke dragged over several meshes this way. Returns each one's result.
+
+    Args:
+        strokes: [{set, layer, stroke}, ...].
+    """
+
+def texPasteLayers(*objects: Any, above: str | None = None, below: str | None = None, parent: str | None = None, index: int | None = None) -> Any:
+    """Paste layers texCopyLayers copied, with fresh layer and mask ids, unique anchor names and their own copies of the paint. Placed like texAddLayer (above, below, parent, index). Returns {layers, warnings}.
+
+    Args:
+        objects: set text.
+        above: Insert right above this layer.
+        below: Insert right below this layer.
+        parent: Folder to put them in.
+        index: Position in the root or parent, 0 the bottom.
     """
 
 def texPasteNodes(*objects: Any, position: Sequence[Any] | None = None) -> Any:
@@ -10479,6 +10733,41 @@ def texPasteNodes(*objects: Any, position: Sequence[Any] | None = None) -> Any:
     Args:
         objects: set text.
         position: [x, y] canvas centre for the pasted nodes. Default [0, 0].
+    """
+
+def texPatchFill(*objects: Any, holeUv: Sequence[Any] | None = None, hole: str | None = None, sourceUv: Sequence[Any] | None = None, source: str | None = None, mesh: str | None = None, acrossSeams: bool | None = None, patch: int | None = None, seed: int | None = None, name: str | None = None, folder: str | None = None) -> Any:
+    """Patch Fill a texture set in uv space: the hole (holeUv, a uv polygon, or hole, a mask image) is rebuilt from patches of its surroundings, every channel matched together, and lands as a new fill layer masked to the hole. With mesh=, each piece of the hole draws only from the uv islands it sits on, and sees across their seams to the content on the other side. Returns {id, pieces, mask, channels}.
+
+    Args:
+        objects: set.
+        holeUv: The hole: a polygon in uv space, [[u, v], ...].
+        hole: The hole: a mask image, white to fill.
+        sourceUv: Only take patches from inside this uv polygon.
+        source: Only take patches from where this mask image is white.
+        mesh: The set's mesh: keeps each piece of the hole to its own uv islands.
+        acrossSeams: With mesh: match across uv seams, each island padded with what lies on the other side. Default True.
+        patch: Patch side in texels (odd). Default 7.
+        seed: Random seed. Default 1.
+        name: Layer name. Default 'Patch Fill'.
+        folder: Where the filled images go; textures/<set> under the workspace by default.
+    """
+
+def texPickStroke(*objects: Any, position: Sequence[Any] | None = None, mesh: str | None = None) -> Any:
+    """The topmost stroke of a paint layer with a dab over a surface point, as texStrokes lists it; None when no stroke covers it.
+
+    Args:
+        objects: set layer.
+        position: [x, y, z] in the mesh's object space.
+        mesh: Only strokes on this mesh.
+    """
+
+def texProjectionView(*objects: Any, view: Any | None = None, remove: bool | None = None) -> Any:
+    """Save a projection view on a texture set by name (view=, a screen view as texPaintStroke takes it), remove it (remove=True), or recall it (neither): projecting from a saved view lands the same every time. texPaintStroke and texCaptureView take the name as view. Returns the view, or every saved view after a change.
+
+    Args:
+        objects: set name.
+        view: The view to save.
+        remove: Remove it. Default False.
     """
 
 def texRasterize(*objects: Any, layer: str | None = None, resolution: int | None = None, r: int | None = None) -> Any:
@@ -10511,6 +10800,25 @@ def texRemoveMask(*objects: Any) -> Any:
         objects: set layer mask...
     """
 
+def texRemoveVariant(*objects: Any) -> Any:
+    """Remove a texture set's variant; the set goes back to the base when it was active.
+
+    Args:
+        objects: set name.
+    """
+
+def texSampleChannels(*objects: Any, uv: Sequence[Any] | None = None, mesh: str | None = None, position: Sequence[Any] | None = None, source: str | None = None, layer: str | None = None) -> Any:
+    """Pick a texture set's channel values at a point: uv=[u, v], or mesh= and position=[x, y, z] in its object space. source=set reads every channel as the stack evaluates it; source=layer reads one paint layer's own paint (layer=, else the active one), leaving out channels it didn't paint there. Values are linear: [r, g, b] for colour and vector channels, a number for gray ones. Returns {uv, udim, source, channels}.
+
+    Args:
+        objects: set.
+        uv: [u, v].
+        mesh: The mesh position is on.
+        position: [x, y, z] in the mesh's object space.
+        source: set or layer. One of 'set', 'layer'. Default 'set'.
+        layer: The paint layer, for source=layer.
+    """
+
 def texSaveBrushPreset(*objects: Any, brush: Any | None = None, payload: Any | None = None, particles: Any | None = None, category: str | None = None, doc: str | None = None, tier: str | None = None) -> Any:
     """Save a texture brush preset to the user's (or the workspace's) brushes folder: brush settings, payload and particles, each optional. Returns {id, file}.
 
@@ -10532,6 +10840,21 @@ def texSaveSmartMaterial(*objects: Any, name: str | None = None, description: st
         name: Library name; the layer's when left out.
         description: Shown in the library.
         mask: Save the layer's mask stack as a smart mask. Default False.
+    """
+
+def texSelectionMask(*objects: Any, points: Sequence[Any] | None = None, rect: Sequence[Any] | None = None, view: Any | None = None, uvPoints: Sequence[Any] | None = None, group: str | None = None, mode: str | None = None, occlusion: bool | None = None, mesh: str | None = None) -> Any:
+    """Make a layer's selection mask from a shape: a lasso or polygon (points, screen pixels) or a rectangle (rect [x0, y0, x1, y1]) through view, projected into the texels the view sees (occlusion=False reaches hidden ones too); a polygon in uv space (uvPoints, the triangles whose middle is inside); or a face group (group). mode replace, add or subtract. A paint layer's own mask takes it; any other layer gets a paint mask named Selection. Returns texPaintStroke's result.
+
+    Args:
+        objects: set layer.
+        points: Lasso or polygon, [[x, y], ...] screen pixels.
+        rect: [x0, y0, x1, y1] screen pixels.
+        view: The screen view, as texPaintStroke takes it.
+        uvPoints: A polygon in uv space.
+        group: A face group (texFaceGroup).
+        mode: replace, add or subtract. One of 'replace', 'add', 'subtract'. Default 'replace'.
+        occlusion: Only what the view sees. Default True.
+        mesh: The painted mesh.
     """
 
 def texSetBookmarks(*objects: Any) -> Any:
@@ -10580,7 +10903,7 @@ def texSetNodeFlags(*objects: Any, muted: bool | None = None, collapsed: bool | 
     """
 
 def texSetSettings(*objects: Any) -> Any:
-    """Change a texture set's settings: the keys given replace the set's (channels, width, height, tiles, normalConvention, bakeProject, exportPreset, material, heightDepth, uvWidth, uvHeight, normalFromHeight, normalFade, heightSource). Returns the full settings.
+    """Change a texture set's settings: the keys given replace the set's (channels, width, height, tiles, normalConvention, bakeProject, exportPreset, heightDepth, uvWidth, uvHeight, normalFromHeight, normalFade, heightSource). Returns the full settings.
 
     Args:
         objects: set settings.
@@ -10610,6 +10933,13 @@ def texSetValue(*objects: Any) -> Any:
         objects: set node.id value.
     """
 
+def texSetVariant(*objects: Any) -> Any:
+    """Set or clear a variant's override for one layer without switching to it: props is merged into the override (as texSetLayer takes it, plus maskOverrides {mask id: patch}); props null clears the layer's override.
+
+    Args:
+        objects: set name layer props.
+    """
+
 def texSets() -> Any:
     """Names of the texture sets in the scene."""
 
@@ -10618,6 +10948,59 @@ def texSmartMaterials(tags: Sequence[Any] | None = None) -> Any:
 
     Args:
         tags: Only those carrying all of these tags.
+    """
+
+def texSnapshot(*objects: Any, name: str | None = None, resolution: int | None = None, backend: str | None = None, n: str | None = None, r: int | None = None) -> Any:
+    """Keep a texture set's evaluated channels as they are now, to compare later work against (texCompare). Unchanged regions share their pixels with earlier snapshots. Snapshots last the session. Returns {set, name, channels, newPages}.
+
+    Args:
+        objects: texture set.
+        name: Its name; Snapshot N when left out. An existing snapshot of that name is replaced. Short form n.
+        resolution: Largest side of each tile's images; 0 keeps the tiles' own sizes. Short form r. Default 1024.
+        backend: gpu or cpu; the GPU when left out and the renderer can run. One of 'gpu', 'cpu'.
+
+    Examples:
+        texSnapshot("RockTex", name="before rust")
+    """
+
+def texSnapshots(*objects: Any) -> Any:
+    """A texture set's snapshots, oldest first, and the memory every snapshot holds. Returns {snapshots: [{set, name, channels, newPages}], pages, bytes}.
+
+    Args:
+        objects: texture set.
+    """
+
+def texStrokes(*objects: Any) -> Any:
+    """A paint layer's strokes, bottom first: [{id, index, kind, mesh, channels, radius, strength, dabs, path}].
+
+    Args:
+        objects: set layer.
+    """
+
+def texSwitchVariant(*objects: Any) -> Any:
+    """Show a texture set as one of its variants ('' for the base). Layer and mask edits go to the variant shown.
+
+    Args:
+        objects: set name.
+    """
+
+def texTransferSet(*objects: Any, source: str | None = None, onto: str | None = None, into: str | None = None, maxDistance: float | None = None, folder: str | None = None) -> Any:
+    """Move a texture set's look from one mesh onto another (an old version onto a new one, a high mesh onto its low one): each texel of the target takes the set's evaluated channels at the closest point of the source surface, as a new paint layer of the set into= (else the same set). Texels with no source within maxDistance stay empty and are counted. Returns {layer, texels, missed, channels}.
+
+    Args:
+        objects: set.
+        source: The mesh the set paints now.
+        onto: The mesh to move it onto.
+        into: The set that gets the layer; else the same set.
+        maxDistance: How far a target texel may be from the source surface.
+        folder: Where the pixels go; textures/<target>/transferred by default.
+    """
+
+def texVariants(*objects: Any) -> Any:
+    """A texture set's variants: {active, variants {name: {layer id: override}}}. An override patches the layer's settings (enabled, opacity, material, params...) and maskOverrides {mask id: patch} its masks.
+
+    Args:
+        objects: set.
     """
 
 def textCurves(text: str | None = None, font: str | None = None, size: float | None = None, alignment: str | None = None, anchor: str | None = None, wrapWidth: float | None = None, letterSpacing: float | None = None, wordSpacing: float | None = None, lineSpacing: float | None = None, textCase: str | None = None, width: float | None = None, slant: float | None = None, weight: float | None = None, underline: bool | None = None, strikethrough: bool | None = None, kerning: bool | None = None, mergeOverlaps: bool | None = None, constructionHistory: bool | None = None, name: str | None = None, *, ch: bool | None = None, n: str | None = None) -> Any:
@@ -11949,7 +12332,7 @@ def viewportInspect(pick: Sequence[Any] | None = None, path: str | None = None, 
     """
 
 def viewportStats() -> Any:
-    """The active viewport's last finished frame as the GPU measured it: {frames, gpuMs, aoMs, cpuMs, meshDrawCalls, meshUploads, renderer}. frames counts frames drawn so far, so two calls apart give the frame rate; meshUploads counts GPU mesh copies the same way. Unlike measureView it times what the view really draws, components and highlights included. When an external renderer such as a Hydra delegate draws the view, rendererStats holds what it reports."""
+    """The active viewport's last finished frame as the GPU measured it: {frames, gpuMs, aoMs, cpuMs, meshDrawCalls, meshUploads, pathSamples, renderer}; pathSamples is how many samples the path-traced view has added up (0 when it is off). frames counts frames drawn so far, so two calls apart give the frame rate; meshUploads counts GPU mesh copies the same way. Unlike measureView it times what the view really draws, components and highlights included. When an external renderer such as a Hydra delegate draws the view, rendererStats holds what it reports."""
 
 def viewportToast(*objects: Any, all: bool | None = None, duration: float | None = None, error: bool | None = None, warning: bool | None = None, a: bool | None = None, d: float | None = None, e: bool | None = None, w: bool | None = None) -> Any:
     """Pop up a short message in the bottom-right corner of the active viewport; it fades out after duration. Showing the same text again restarts it instead of adding another.

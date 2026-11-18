@@ -11,6 +11,7 @@
 #include <lila/Controls.h>
 #include <lila/DebugDraw.h>
 #include <lila/Events.h>
+#include <lila/ExtensionScope.h>
 #include <lila/FileDialog.h>
 #include <lila/Icons.h>
 #include <lila/Motion.h>
@@ -374,7 +375,7 @@ public:
         catch (const std::exception& e)
         {
             log::write(LogLevel::Error, std::string("Drive: ") + e.what());
-            QTimer::singleShot(0, [] { viewportTools::set(nullptr); });
+            QTimer::singleShot(0, lila::ui::scope("Puppeteer"), [] { viewportTools::set(nullptr); });
             return;
         }
         qApp->installEventFilter(this);

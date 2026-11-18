@@ -1576,12 +1576,11 @@ json createTextureSet(Graph& g, Node& grp, const Args& a)
             g.deleteNode(old->id());
     const std::string project = a.get<bool>("bake", true) ? bakeProjectFor(h, target, warnings) : std::string();
     const int res = int(num(stored["values"], "bakeResolution"));
-    json settings = {{"material", h.bakeMaterial.empty() ? nodeStem(preset) + kBakeMaterialSuffix + "1" : h.bakeMaterial},
-                     {"bakeProject", project},
-                     {"exportPreset", target}};
+    const std::string material = h.bakeMaterial.empty() ? nodeStem(preset) + kBakeMaterialSuffix + "1" : h.bakeMaterial;
+    json settings = {{"bakeProject", project}, {"exportPreset", target}};
     if (res > 0)
         settings["width"] = settings["height"] = res;
-    const std::string set = ops::execute("texCreateSet", {{"args", {name}}, {"settings", settings}}).get<std::string>();
+    const std::string set = ops::execute("texCreateSet", {{"args", {name}}, {"materials", {material}}, {"settings", settings}}).get<std::string>();
 
     const json recipes = colourRecipes(h);
     std::vector<int64_t> ids;

@@ -13,6 +13,7 @@
 #include "scene/MeshNodes.h"
 #include "ui/AchievementRules.h"
 #include "ui/Actions.h"
+#include "ui/AttributeEditor.h"
 #include "ui/ChoiceTips.h"
 #include "ui/ColorPopup.h"
 #include "ui/Controls.h"
@@ -39,6 +40,7 @@
 #include <QDropEvent>
 #include <QFileInfo>
 #include <QMimeData>
+#include <QMouseEvent>
 #include <QComboBox>
 #include <QDockWidget>
 #include <QGridLayout>
@@ -72,6 +74,10 @@ using namespace scene::material;
 namespace fs = std::filesystem;
 
 constexpr int kPreviewThumb = 40;
+/** A map picker row value that takes the map from the texture set named after it. */
+constexpr const char* kSetValuePrefix = "texset:";
+
+void dimLabel(QLabel* l) { l->setStyleSheet("color: #8a8a8a;"); }
 constexpr int kPreviewSize = 112;
 
 QColor displayColor(const glm::dvec3& linear)
@@ -288,38 +294,58 @@ bool hasTextureMaps(const scene::Node& material)
     return false;
 }
 
-/** The texture set drawing a material in the viewport, and the material's map slots it replaces there. */
+/** The texture sets drawing a material's maps in the viewport: per map slot, the set that supplies it there. */
 struct BoundSet
 {
-    std::string name;
-    std::set<int> replaced;
+    std::map<int, std::string> from;
 };
+
+/** Whether a set has what the viewport draws in one of the material's map slots. */
+bool setSupplies(const tex::SetSettings& s, int attr)
+{
+    switch (attr)
+    {
+    case kBaseColorMap: return s.channel("baseColor") != nullptr;
+    case kNormalMap: return s.channel("normal") != nullptr;
+    case kEmissiveMap: return s.channel("emissive") != nullptr;
+    case kAmbientOcclusionMap: return s.channel("ao") != nullptr;
+    case kRoughnessMap: return s.channel("roughness") != nullptr;
+    case kMetallicMap: return s.channel("metallic") != nullptr;
+    case kOrmMap: return s.channel("ao") || s.channel("roughness") || s.channel("metallic");
+    default: return false;
+    }
+}
 
 BoundSet boundSet(const scene::Node& material)
 {
     scene::Graph& g = scene::Graph::current();
+    BoundSet out;
     if (!PrefStore::get().value<bool>("general", "/texture/liveViewport", true))
-        return {};
-    BoundSet out{textureSetForSlot(g, material.name()), {}};
-    scene::Node* set = out.name.empty() ? nullptr : tex::findSet(g, out.name);
-    if (!set)
-        return {};
-    try
+        return out;
+    for (const auto& [channel, attr] : scene::materials::textureChannels())
     {
-        const tex::SetSettings s = tex::readSettings(*set);
-        if (s.channel("baseColor"))
-            out.replaced.insert(kBaseColorMap);
-        if (s.channel("normal"))
-            out.replaced.insert(kNormalMap);
-        if (s.channel("emissive"))
-            out.replaced.insert(kEmissiveMap);
-        // The set's occlusion, roughness and metallic draw from one packed image, so any of them takes all four slots.
-        if (s.channel("ao") || s.channel("roughness") || s.channel("metallic"))
-            out.replaced.insert({kAmbientOcclusionMap, kRoughnessMap, kMetallicMap, kOrmMap});
+        const std::string name = scene::materials::textureSetFor(material, channel);
+        scene::Node* set = name.empty() ? nullptr : tex::findSet(g, name);
+        if (!set)
+            continue;
+        try
+        {
+            if (setSupplies(tex::readSettings(*set), attr))
+                out.from[attr] = name;
+        }
+        catch (const std::exception&)
+        {
+        }
     }
-    catch (const std::exception&)
-    {
-    }
+    return out;
+}
+
+/** A material map picker's rows for taking the map from a texture set: "texset:<set>" values. */
+std::vector<texturePicker::Item> setItems()
+{
+    std::vector<texturePicker::Item> out;
+    for (const std::string& name : tex::setNames(scene::Graph::current()))
+        out.push_back({kSetValuePrefix + name, qs(name), {}, "Texture Sets"});
     return out;
 }
 
@@ -369,6 +395,79 @@ std::vector<scene::Node*> materialsOnSelection()
             out.push_back(n);
     return out;
 }
+
+/**
+ * Middle-drag moves a list row, from firstRow() down only; dropped(order) then gets the rows' UserRole (or text)
+ * in their new order, from firstRow() on.
+ */
+class MiddleDragReorder : public QObject
+{
+public:
+    MiddleDragReorder(QListWidget* list, std::function<int()> firstRow, std::function<void(const std::vector<std::string>&)> dropped)
+        : QObject(list), mList(list), mFirstRow(std::move(firstRow)), mDropped(std::move(dropped))
+    {
+        list->viewport()->installEventFilter(this);
+    }
+
+    bool dragging() const { return mRow >= 0; }
+
+    static std::string key(const QListWidgetItem* item)
+    {
+        const QVariant v = item->data(Qt::UserRole);
+        return (v.typeId() == QMetaType::QString ? v.toString() : item->text()).toStdString();
+    }
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        auto* e = dynamic_cast<QMouseEvent*>(event);
+        if (!e)
+            return QObject::eventFilter(watched, event);
+        if (event->type() == QEvent::MouseButtonPress && e->button() == Qt::MiddleButton)
+        {
+            if (QListWidgetItem* item = mList->itemAt(e->position().toPoint()); item && mList->row(item) >= mFirstRow())
+            {
+                mRow = mList->row(item);
+                mList->viewport()->setCursor(Qt::ClosedHandCursor);
+            }
+            return true;
+        }
+        if (mRow < 0)
+            return QObject::eventFilter(watched, event);
+        if (event->type() == QEvent::MouseMove)
+        {
+            QListWidgetItem* over = mList->itemAt(QPoint(4, int(e->position().y())));
+            int to = over ? mList->row(over) : (e->position().y() < 0 ? mFirstRow() : mList->count() - 1);
+            to = std::max(to, mFirstRow());
+            if (to != mRow)
+            {
+                QSignalBlocker block(mList);
+                QListWidgetItem* moved = mList->takeItem(mRow);
+                mList->insertItem(to, moved);
+                mList->setCurrentItem(moved);
+                mRow = to;
+            }
+            return true;
+        }
+        if (event->type() == QEvent::MouseButtonRelease && e->button() == Qt::MiddleButton)
+        {
+            mRow = -1;
+            mList->viewport()->unsetCursor();
+            std::vector<std::string> order;
+            for (int i = mFirstRow(); i < mList->count(); ++i)
+                order.push_back(key(mList->item(i)));
+            mDropped(order);
+            return true;
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    QListWidget* mList;
+    std::function<int()> mFirstRow;
+    int mRow = -1;
+    std::function<void(const std::vector<std::string>&)> mDropped;
+};
 
 QPointer<MaterialEditor>& floatingEditor()
 {
@@ -467,6 +566,13 @@ MaterialEditor::MaterialEditor(QWidget* parent) : QWidget(parent)
     mList->setMaximumHeight(140);
     mList->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
     mList->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    mList->setToolTip("Middle-drag a material to move it in the list.");
+    new MiddleDragReorder(
+        mList, [this] { return mList->count() && isDefaultRow(mList->item(0)) ? 1 : 0; },
+        [](const std::vector<std::string>& order) {
+            if (!order.empty())
+                runUi("reorderMaterials", {{"args", order}});
+        });
     listColumn->addWidget(mList, 1);
     top->addLayout(listColumn, 1);
     connect(mFilter, &QLineEdit::textChanged, this, [this] { applyFilter(); });
@@ -548,8 +654,7 @@ MaterialEditor::MaterialEditor(QWidget* parent) : QWidget(parent)
         const std::string path = picked.front()->path();
         QMenu menu(this);
         menu.addAction(icon("brush"), "Assign", [path] { runUi("assignMaterial", {{"args", json::array({path})}}); })->setEnabled(one);
-        menu.addAction(icon("pointer"), "Select Users", [path] { runUi("selectByMaterial", {{"args", json::array({path})}}); })
-            ->setEnabled(one);
+        menu.addAction(icon("pointer"), "Select Users", [paths = materialPaths(picked)] { runUi("selectByMaterial", {{"args", paths}}); });
         menu.addSeparator();
         QAction* clear = menu.addAction(icon("photo-off"), one ? QString("Clear Texture Maps") : QString("Clear Texture Maps (%1)").arg(picked.size()),
                                         [paths = materialPaths(picked)] { runUi("clearMaterialTextures", {{"args", paths}}); });
@@ -666,11 +771,11 @@ void MaterialEditor::scheduleRefresh()
 
 void MaterialEditor::refreshList()
 {
+    LILA_ZONE();
     scene::Graph& g = scene::Graph::current();
     std::vector<std::string> names;
-    for (scene::Node* n : scene::materials::all(g))
+    for (scene::Node* n : scene::materials::ordered(g))
         names.push_back(n->name());
-    std::sort(names.begin(), names.end());
     // The built-in default heads the list, unless a material of that name has taken its slot.
     const bool defaultRow = !scene::materials::find(g, scene::materials::kDefaultSlot);
     if (defaultRow)
@@ -973,9 +1078,22 @@ void MaterialEditor::rebuild()
         QLabel* l = label(text);
         auto* box = new ImagePicker(nullptr, text, mBody);
         grid->addWidget(box, row++, 1, 1, 2);
+        box->setExtraItems(setItems);
+        // A file or None stops the map's own texture set pick; a "texset:" row starts one.
         auto apply = [this, channel](const std::string& p) {
-            if (scene::Node* m = current())
-                runUi("setMaterialTexture", {{"args", json::array({m->path()})}, {"channel", channel}, {"path", p}});
+            scene::Node* m = current();
+            if (!m)
+                return;
+            json call = {{"args", json::array({m->path()})}, {"channel", channel}};
+            if (p.starts_with(kSetValuePrefix))
+                call["textureSet"] = p.substr(std::string_view(kSetValuePrefix).size());
+            else
+            {
+                call["path"] = p;
+                if (scene::materials::textureSetMaps(*m).contains(channel))
+                    call["textureSet"] = "";
+            }
+            runUi("setMaterialTexture", call);
         };
         box->setResolver([](const std::string& p) { return paths::fromUtf8(scene::materials::resolvePath(p)); });
         box->setProblem([](const std::filesystem::path& f) { return textures::error(paths::toUtf8(f)); });
@@ -984,11 +1102,16 @@ void MaterialEditor::rebuild()
             if (scene::Node* m = current())
                 assignByName(*m, files);
         });
-        connect(box, &ImagePicker::chosen, this, [this, apply, attr](const QString& v) {
+        connect(box, &ImagePicker::chosen, this, [this, apply, attr, channel](const QString& v) {
             scene::Node* m = current();
-            if (m && v.toStdString() != m->as<std::string>(attr))
+            if (m && (v.toStdString() != m->as<std::string>(attr) || scene::materials::textureSetMaps(*m).contains(channel)))
                 apply(v.toStdString());
         });
+        auto* from = new QLabel(mBody);
+        from->setObjectName(QString("mapFromSet:") + channel);
+        from->setContentsMargins(kPreviewThumb + 6, 0, 0, 0);
+        dimLabel(from);
+        grid->addWidget(from, row++, 1, 1, 2);
         onMiddleClickReset(l, [apply] { apply(""); }, "none", box);
         if (const int first = scene::materials::samplingAttr(attr); first >= 0)
         {
@@ -1029,15 +1152,20 @@ void MaterialEditor::rebuild()
                     opts->setVisible(!m->as<std::string>(attr).empty());
             });
         }
-        mUpdaters.push_back([this, box, l, attr, bound] {
+        mUpdaters.push_back([this, box, l, from, attr, bound] {
             scene::Node* m = current();
             if (!m)
                 return;
             box->setValue(m->as<std::string>(attr));
-            // The slot stays editable under a texture set: it is what draws again once the set is unbound.
-            const bool replaced = bound->replaced.contains(attr);
+            // The slot stays editable under a texture set: it is what draws again once the set lets go of it.
+            auto it = bound->from.find(attr);
+            const bool replaced = it != bound->from.end();
             l->setEnabled(!replaced);
-            const QString tip = replaced ? QString("Not drawn: texture set %1 supplies this map in the viewport.").arg(qs(bound->name)) : QString();
+            // The Texture Set row already names the whole set; only a map taken from another set says so here.
+            from->setVisible(replaced && it->second != scene::materials::textureSet(*m));
+            if (replaced)
+                from->setText("From texture set " + qs(it->second));
+            const QString tip = replaced ? QString("Not drawn: texture set %1 supplies this map in the viewport.").arg(qs(it->second)) : QString();
             l->setToolTip(tip);
             box->setToolTip(tip);
         });
@@ -1161,35 +1289,44 @@ void MaterialEditor::rebuild()
     }
 
     section("Surface");
-    QLabel* setLabel = label("Texture Set");
-    auto* setButton = new QPushButton(mBody);
-    setButton->setObjectName("materialTextureSet");
-    setButton->setToolTip("The texture set drawing this material in the viewport. Its channels replace the dimmed map slots "
-                          "below. Click to open it in the Texture Graph.");
-    auto* unbind = new QToolButton(mBody);
-    unbind->setObjectName("materialTextureSetUnbind");
-    unbind->setIcon(icon("x"));
-    unbind->setToolTip("Unbind: the material draws its own maps again. The texture set is kept.");
+    label("Texture Set");
+    auto* setPick = new QComboBox(mBody);
+    setPick->setObjectName("materialTextureSet");
+    setPick->setToolTip("The texture set drawing this material's maps, in place of the files below. Any number of materials can "
+                        "use one set; painting a mesh with this material paints the set.");
+    auto* openSet = new QToolButton(mBody);
+    openSet->setObjectName("materialTextureSetOpen");
+    openSet->setIcon(icon("node-editor"));
+    openSet->setToolTip("Open the texture set in the Texture Graph");
     auto* setRow = new QHBoxLayout;
     setRow->setContentsMargins(0, 0, 0, 0);
     setRow->setSpacing(3);
-    setRow->addWidget(setButton);
-    setRow->addWidget(unbind);
-    setRow->addStretch(1);
+    setRow->addWidget(setPick, 1);
+    setRow->addWidget(openSet);
     grid->addLayout(setRow, row++, 1, 1, 2);
-    connect(setButton, &QPushButton::clicked, this, [bound] {
-        if (!bound->name.empty())
-            openTextureSet(bound->name);
+    connect(setPick, &QComboBox::activated, this, [this, setPick](int i) { setAttr(kTextureSet, setPick->itemData(i).toString().toStdString()); });
+    connect(openSet, &QToolButton::clicked, this, [this] {
+        if (scene::Node* m = current(); m && !scene::materials::textureSet(*m).empty())
+            openTextureSet(scene::materials::textureSet(*m));
     });
-    connect(unbind, &QToolButton::clicked, this, [bound] {
-        if (!bound->name.empty())
-            runUi("texSetSettings", {{"args", json::array({bound->name, {{"material", ""}}})}});
-    });
-    mUpdaters.push_back([setLabel, setButton, unbind, bound] {
-        setLabel->setVisible(!bound->name.empty());
-        setButton->setVisible(!bound->name.empty());
-        unbind->setVisible(!bound->name.empty());
-        setButton->setText(qs(bound->name));
+    mUpdaters.push_back([this, setPick, openSet] {
+        scene::Node* m = current();
+        if (!m)
+            return;
+        const std::string now = scene::materials::textureSet(*m);
+        QSignalBlocker block(setPick);
+        setPick->clear();
+        setPick->addItem("None", QString());
+        for (const std::string& name : tex::setNames(scene::Graph::current()))
+            setPick->addItem(icon("texture"), qs(name), qs(name));
+        int at = setPick->findData(qs(now));
+        if (at < 0 && !now.empty())
+        {
+            setPick->addItem(qs(now + " (missing)"), qs(now));
+            at = setPick->count() - 1;
+        }
+        setPick->setCurrentIndex(std::max(0, at));
+        openSet->setEnabled(!now.empty());
     });
     color("Base Color", kBaseColor);
     texture("Base Color Map", "baseColor", kBaseColorMap);
@@ -1264,6 +1401,7 @@ void MaterialEditor::rebuild()
 
 void MaterialEditor::updateValues()
 {
+    LILA_ZONE();
     scene::Node* n = current();
     if (!n)
         return;
@@ -1281,8 +1419,90 @@ void MaterialEditor::fitWidth()
     mScroll->setMinimumWidth(std::max(rows, kPreviewSize + fontMetrics().averageCharWidth() * 30));
 }
 
+namespace
+{
+/** An object's material slots in export order; middle-drag a row to move it. Double-click edits the material. */
+class MaterialSlotList : public QListWidget
+{
+public:
+    explicit MaterialSlotList(scene::NodeId mesh) : mMesh(mesh)
+    {
+        setSelectionMode(QAbstractItemView::NoSelection);
+        setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        setToolTip("Exporters write the slots in this order. Middle-drag a slot to move it; double-click to edit its material.");
+        connect(this, &QListWidget::itemDoubleClicked, this, [](QListWidgetItem* item) {
+            const std::string slot = MiddleDragReorder::key(item);
+            if (scene::materials::find(scene::Graph::current(), slot))
+                runUi("editMaterial", {{"args", json::array({slot})}});
+        });
+        mDrag = new MiddleDragReorder(this, [] { return 0; }, [this](const std::vector<std::string>& order) {
+            if (const scene::Node* n = scene::Graph::current().node(mMesh))
+            {
+                json args = json::array({n->path()});
+                for (const std::string& slot : order)
+                    args.push_back(slot);
+                runUi("reorderMaterialSlots", {{"args", args}});
+            }
+            refresh();
+        });
+        refresh();
+    }
+
+    void refresh()
+    {
+        if (mDrag->dragging())
+            return;
+        clear();
+        scene::Graph& g = scene::Graph::current();
+        const scene::Node* n = g.node(mMesh);
+        const scene::MeshPtr mesh = n ? n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh) : nullptr;
+        if (!mesh)
+            return;
+        int index = 0;
+        for (const auto& [slot, faces] : scene::materials::slotUsage(*mesh))
+        {
+            auto* item = new QListWidgetItem(QString("%1  %2").arg(index++).arg(QString::fromStdString(slot)), this);
+            item->setData(Qt::UserRole, QString::fromStdString(slot));
+            item->setToolTip(QString("%1 faces").arg(faces));
+        }
+        setFixedHeight(std::max(1, count()) * sizeHintForRow(0) + 2 * frameWidth());
+    }
+
+private:
+    scene::NodeId mMesh;
+    MiddleDragReorder* mDrag = nullptr;
+};
+
+/** The Material Slots section of a mesh with two or more slots, kept current by a graph listener. */
+QWidget* materialSlotsSection(scene::NodeId id)
+{
+    scene::Graph& g = scene::Graph::current();
+    const scene::Node* n = g.node(id);
+    const scene::MeshPtr mesh = n ? n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh) : nullptr;
+    if (!mesh || scene::materials::slotUsage(*mesh).size() < 2)
+        return nullptr;
+    auto* list = new MaterialSlotList(id);
+    // Deferred: listeners fire mid-edit, when the graph must not be evaluated.
+    auto queued = std::make_shared<bool>(false);
+    QPointer<MaterialSlotList> guard(list);
+    int listener = g.addListener([guard, queued](scene::Change, scene::NodeId) {
+        if (*queued || !guard)
+            return;
+        *queued = true;
+        QTimer::singleShot(0, guard, [guard, queued] {
+            *queued = false;
+            if (guard)
+                guard->refresh();
+        });
+    });
+    QObject::connect(list, &QObject::destroyed, [listener] { scene::Graph::current().removeListener(listener); });
+    return list;
+}
+} // namespace
+
 void registerMaterialUi()
 {
+    attributeEditor::addSection("mesh", "Material Slots", materialSlotsSection);
     scene::materials::registerTypes();
     if (!ops::find("createMaterial"))
         scene::materials::registerCommands();
@@ -1306,6 +1526,17 @@ void registerMaterialUi()
                   },
                   .doc = "Create a material and assign it to the selected objects or faces.",
                   .python = "assignMaterial(createMaterial('M_Material'))"});
+    actions::add({.id = "material.editAssigned", .label = "Edit Material", .category = "Materials",
+                  .run =
+                      [] {
+                          if (MaterialEditor* e = showEditor())
+                              e->followSelection();
+                      },
+                  .enabled = actions::hasSelection,
+                  .doc = "Open the Material Editor on the selected object's material.",
+                  .python = "lila.ui.run_action(\"material.editAssigned\")",
+                  .icon = "color-swatch",
+                  .keywords = {"material attributes", "show material", "open material editor", "hypershade"}});
     actions::add({.id = "material.clearTextures", .label = "Clear Texture Maps", .category = "Materials",
                   .run =
                       [] {

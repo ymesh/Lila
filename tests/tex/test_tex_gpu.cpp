@@ -300,6 +300,44 @@ TEST_CASE("tex gpu: value edits upload uniforms, create no pipelines and rerun o
     CHECK(ev.stats().passesRun == 0);
 }
 
+TEST_CASE("tex gpu: a changed structure keeps the buffers it computes the same way")
+{
+    if (!graphGpu())
+        return;
+    Graph g = Graph::makeMaterial("S");
+    add(g, "P", "perlin", {{"scale", 4}});
+    add(g, "B", "blur", {{"radius", 0.02}});
+    add(g, "V", "voronoi", {{"scale", 6}});
+    link(g, "P.out", "B.input");
+    link(g, "B.out", "Output.baseColor");
+    link(g, "V.f1", "Output.roughness");
+    PlanRequest r;
+    r.width = r.height = 128;
+    r.outputs = materialRequests(g, {{"baseColor", PortType::Color}, {"roughness", PortType::Gray}});
+    Plan first = buildPlan(g, r);
+    REQUIRE(first.error.empty());
+    texgpu::Evaluator ev;
+    REQUIRE(ev.setPlan(first).empty());
+    runAll(ev);
+
+    // A new node on top of the blur, as a layer added over the stack: the blur below it is kept, not rerun.
+    add(g, "L", "levels", {{"gamma", 2.0}});
+    link(g, "B.out", "L.input");
+    link(g, "L.out", "Output.baseColor");
+    Plan next = buildPlan(g, r);
+    REQUIRE(next.error.empty());
+    CHECK(next.structureHash != first.structureHash);
+    REQUIRE(ev.setPlan(next).empty());
+    runAll(ev);
+    texgpu::Stats s = ev.stats();
+    CHECK(s.passesCarried >= 1);
+    CHECK(s.passesRun < next.passes.size());
+    std::map<std::string, image::Image> out = ev.readOutputs();
+    EvalResult cpu = evaluateCpu(next);
+    CHECK(maxDiff(out.at("baseColor"), cpu.outputs.at("baseColor")) < 2e-3);
+    CHECK(maxDiff(out.at("roughness"), cpu.outputs.at("roughness")) < 2e-3);
+}
+
 TEST_CASE("tex gpu: a trimmed evaluator stays idle, then reruns in full on the next edit")
 {
     if (!graphGpu())
@@ -494,7 +532,7 @@ TEST_CASE("tex gpu: a texture set drives its material in the viewport, live")
         return;
     ui::texLive::install();
     run("newScene");
-    run("texCreateSet", {{"args", {"Paint"}}, {"settings", {{"width", 512}, {"height", 512}, {"material", "PaintMat"}}}});
+    run("texCreateSet", {{"args", {"Paint"}}, {"settings", {{"width", 512}, {"height", 512}}}, {"materials", {"PaintMat"}}});
     run("createMaterial", {{"args", {"PaintMat"}}});
     run("texAddNode", {{"args", {"Paint", "color"}}, {"name", "C"}});
     run("texSetValue", {{"args", {"Paint", "C.color", json::array({0.8, 0.05, 0.05, 1.0})}}});

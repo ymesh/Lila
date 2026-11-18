@@ -16,6 +16,7 @@
 #include "scene/Node.h"
 #include "tex/Evaluate.h"
 #include "tex/Generators.h"
+#include "tex/ShadingChannels.h"
 
 #include <algorithm>
 #include <bit>
@@ -282,8 +283,13 @@ void setExternalSource(ExternalSource fn) { externalSource() = std::move(fn); }
 std::map<std::string, image::Image> evaluateOutputs(scene::Node& set, const std::vector<OutputRequest>& requests, int udim, int width, int height,
                                                     const std::string& backend, std::vector<std::string>* warnings)
 {
+    return evaluateGraphOutputs(set, readGraph(set), requests, udim, width, height, backend, warnings);
+}
+
+std::map<std::string, image::Image> evaluateGraphOutputs(scene::Node& set, const Graph& g, const std::vector<OutputRequest>& requests, int udim,
+                                                         int width, int height, const std::string& backend, std::vector<std::string>* warnings)
+{
     LILA_ZONE();
-    Graph g = readGraph(set);
     SetSettings s = readSettings(set);
     const Tile* tile = &s.tiles.front();
     for (const Tile& t : s.tiles)
@@ -364,7 +370,7 @@ json exportSet(scene::Node& set, const ExportOptions& options)
     if (requests.empty())
         throw std::invalid_argument(g.firstOfType(kMaterialOutputType) ? "the set has no channels" : "the graph has no Material Output");
 
-    const std::string tmpl = target->output.value("name", std::string("T_{[!M_]material}_{map}"));
+    std::string tmpl = target->output.value("name", std::string("T_{[!M_]material}_{map}"));
     const std::string format = target->output.value("format", std::string("png"));
     const int outBits = target->output.value("bits", 8);
     const std::string udimStyle = target->output.value("udimNaming", std::string("1001"));
@@ -373,6 +379,11 @@ json exportSet(scene::Node& set, const ExportOptions& options)
     fs::create_directories(folder, ec);
 
     json warnings = json::array();
+    if (options.needVariantToken && !bake::hasToken(tmpl, "variant"))
+    {
+        tmpl += "_{variant}";
+        warnings.push_back("the " + presetName + " name template has no {variant}, so _{variant} was added to tell the variants apart");
+    }
     // Normals from height: the normal goes out as detail over the height, which goes out with it at 16 bits.
     bool fromHeight = options.normalFromHeight.value_or(s.normalFromHeight);
     if (fromHeight && !s.channel("height"))
@@ -386,6 +397,7 @@ json exportSet(scene::Node& set, const ExportOptions& options)
             if (r.name == "height")
                 r = {"height", "StackRebuildHeight", "out", PortType::Gray, {}};
     std::vector<bake::TargetMap> targetMaps = target->maps;
+    shading::addExportMaps(targetMaps, *target);
     if (fromHeight && std::ranges::none_of(targetMaps, [](const bake::TargetMap& tm) { return tm.settings.map == "height"; }))
     {
         bake::TargetMap tm;
@@ -500,13 +512,14 @@ json exportSet(scene::Node& set, const ExportOptions& options)
         {
             bake::NameTokens tokens;
             tokens.project = set.name();
-            tokens.material = s.material.empty() ? set.name() : s.material;
+            tokens.material = set.name();
             tokens.map = j.suffix;
             tokens.ext = j.format;
             tokens.udim = t.udim;
             tokens.udimStyle = udimStyle;
             tokens.width = all.width;
             tokens.height = all.height;
+            tokens.variant = options.variant;
             const fs::path path = folder / bake::expandName(tmpl, tokens, s.tiles.size() > 1);
             const std::string file = paths::toUtf8(path);
             uint64_t key = mix(mix(mix(0, file), uint64_t(j.bits)), uint64_t(j.flipGreen));

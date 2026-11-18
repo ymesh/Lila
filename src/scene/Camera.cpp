@@ -52,6 +52,13 @@ std::vector<AttrDef> cameraAttrs()
                                    .doc = "Blades shaping the bokeh; 0 is round.", .minValue = 0.0, .maxValue = 16.0};
     at(Camera::kApertureRotation) = floatAttr("apertureRotation", "ar", 0.0, "Rotation of the bladed aperture, degrees.");
     at(Camera::kShutterAngle) = floatAttr("shutterAngle", "sa", 180.0, "Motion blur: degrees of each frame the shutter is open (180 is half).", 0.0, 360.0);
+    at(Camera::kAnamorphicSqueeze) = floatAttr("anamorphicSqueeze", "asq", 1.0,
+                                               "Anamorphic lens squeeze: 1 is spherical; 1.33 to 2 stretch bokeh tall and flare streaks wide.", 1.0, 2.5);
+    at(Camera::kPhysicalExposure) = flag("physicalExposure", "pex", false,
+                                         "Expose by the camera: fStop, shutterAngle (at the scene frame rate) and iso set the exposure as on a real camera.");
+    at(Camera::kIso) = floatAttr("iso", "iso", 100.0, "Physical exposure: film speed.", 1.0, 409600.0);
+    at(Camera::kPostProcess) = {.name = "postProcess", .shortName = "ppr", .type = PlugType::String, .defaultValue = std::string(),
+                                .flags = kStoredFlags, .doc = "A post process node this camera grades with in place of the scene's, so shots can look different."};
     return a;
 }
 } // namespace
@@ -68,6 +75,10 @@ Lens lens(const Node& cam)
     l.bladeRotation = cam.as<double>(Camera::kApertureRotation);
     l.shutterAngle = cam.as<double>(Camera::kShutterAngle);
     l.focalLength = cam.as<double>(Camera::kFocalLength);
+    l.anamorphicSqueeze = cam.as<double>(Camera::kAnamorphicSqueeze);
+    l.physicalExposure = cam.as<bool>(Camera::kPhysicalExposure);
+    l.iso = cam.as<double>(Camera::kIso);
+    l.postProcess = cam.as<std::string>(Camera::kPostProcess);
     return l;
 }
 

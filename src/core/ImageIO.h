@@ -56,6 +56,29 @@ LILA_FOUNDATION_API void writePng(const fs::path& path, int width, int height, s
                                   int level = 6);
 /** bits 16 is half float, 32 is float. Throws std::runtime_error. */
 LILA_FOUNDATION_API void writeExr(const fs::path& path, int width, int height, std::span<const float> rgba, int bits = 16, int level = 6);
+
+/** One EXR channel: a value per pixel, top row first, named as layers do ("R", "depth.Z", "CryptoObject00.r"). */
+struct ExrChannel
+{
+    std::string name;
+    std::vector<float> data;
+    bool full = false; // 32-bit float; else half
+};
+
+/** A header attribute in its EXR encoding. */
+struct ExrAttribute
+{
+    std::string name, type;
+    std::vector<unsigned char> value;
+};
+
+LILA_FOUNDATION_API ExrAttribute exrString(const std::string& name, const std::string& value);
+/** Rec.709 primaries with a D65 white: Lila's scene-linear working space. */
+LILA_FOUNDATION_API ExrAttribute exrChromaticitiesRec709();
+
+/** A multi-channel (multilayer) EXR, ZIP compressed, with extra header attributes. Throws std::runtime_error. */
+LILA_FOUNDATION_API void writeExrChannels(const fs::path& path, int width, int height, std::vector<ExrChannel> channels,
+                                          const std::vector<ExrAttribute>& attributes = {}, int level = 6);
 /** 8 bit RGBA, top-left origin, run-length encoded unless rle is false. Throws std::runtime_error. */
 LILA_FOUNDATION_API void writeTga(const fs::path& path, int width, int height, std::span<const float> rgba, bool dither = false,
                                   bool rle = true);

@@ -18,6 +18,8 @@ struct Options
     std::string command;
     std::string path;
     bool batch = false;
+    /** --from-setup: started by the installer once its files are in place, while it still holds its mutex. */
+    bool fromSetup = false;
     /** --batch-run: everything after it, for batch::runCli. */
     std::vector<std::string> batchRun;
     bool batchRunCli = false;

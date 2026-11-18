@@ -87,6 +87,8 @@ LILA_UI_API std::string iconFor(const std::string& id);
 
 /** "Label  (Key)\ndoc", the tooltip of any button or menu item bound to an action. The id itself when unknown. */
 LILA_UI_API std::string tooltip(const std::string& id);
+/** The status bar line for an action: its doc, then its hotkey in parentheses when it has one. */
+LILA_UI_API std::string statusLine(const std::string& id);
 
 /**
  * Runs a binding target. Accepts:

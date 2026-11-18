@@ -107,6 +107,41 @@ TEST_CASE("trim: a sheet survives JSON, .rect, SVG and ID map round trips")
     CHECK(id.trims.size() == s.trims.size());
 }
 
+TEST_CASE("trim: ZenUV trims import from their JSON and from a trim preset script")
+{
+    const std::string jsonText = R"({"trimsheet": {
+        "Plank_Long": {"rect": [0.0, 1.0, 1.0, 0.75], "hide": false},
+        "Bolt": {"rect": [0.0, 0.75, 0.25, 0.5]},
+        "Hidden": {"rect": [0.5, 0.5, 1.0, 0.0], "hide": true}}})";
+    const Sheet j = fromZenUv(jsonText, 1024, 512);
+    REQUIRE(j.trims.size() == 2);
+    CHECK(j.trims[0].name == "Plank_Long");
+    CHECK(j.trims[0].kind == uv::TrimKind::StripU);
+    CHECK(j.trims[0].min == glm::ivec2(0, 0));
+    CHECK(j.trims[0].max == glm::ivec2(1024, 128));
+    CHECK(j.trims[1].name == "Bolt");
+    CHECK(j.trims[1].kind == uv::TrimKind::Rect);
+    CHECK(j.trims[1].min == glm::ivec2(0, 128));
+    CHECK(j.trims[1].max == glm::ivec2(256, 256));
+
+    const std::string script = "import bpy\n"
+                               "item = prefs.trimsheet.add()\n"
+                               "item.name = 'Bolt'\n"
+                               "item.rect = (0.0, 0.75, 0.25, 0.5)\n"
+                               "item.color = (0.8, 0.2, 0.2)\n"
+                               "item = prefs.trimsheet.add()\n"
+                               "item.name = \"Rim\"\n"
+                               "item.rect = (0.5, 0.25, 1.0, 0.0)\n";
+    const Sheet p = fromZenUv(script, 1024, 512);
+    REQUIRE(p.trims.size() == 2);
+    CHECK(p.trims[0].name == "Bolt");
+    CHECK(p.trims[0].min == glm::ivec2(0, 128));
+    CHECK(p.trims[1].name == "Rim");
+    CHECK(p.trims[1].min == glm::ivec2(512, 384));
+    CHECK(p.trims[1].max == glm::ivec2(1024, 512));
+    CHECK(fromZenUv("not trim data", 1024, 512).trims.empty());
+}
+
 TEST_CASE("trim: uv rectangles and world sizes follow the pixel layout")
 {
     Sheet s = stripLadder("T_Test", 1024, 1024, std::vector<int>{512, 256, 256});

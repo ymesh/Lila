@@ -1,0 +1,43 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "extractChannel",
+  "label": "Extract Channel",
+  "category": "Utility",
+  "doc": "One component of a colour as gray: r, g, b or a. For packed maps (ORM: occlusion, roughness, metallic).",
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0,
+        0,
+        0,
+        1
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "channel",
+      "type": "enum",
+      "default": "r",
+      "options": [
+        "r",
+        "g",
+        "b",
+        "a"
+      ]
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float4 c = input.sample(uv);\nreturn p.channel == 0 ? c.r : p.channel == 1 ? c.g : p.channel == 2 ? c.b : c.a;"
+  }
+}

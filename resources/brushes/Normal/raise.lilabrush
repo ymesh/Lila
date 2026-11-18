@@ -1,0 +1,17 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Raise",
+  "category": "Normal",
+  "doc": "Paints a raised plate in the height: strokes merge into one flat level with a soft bevel.",
+  "brush": {
+    "falloff": "sphere",
+    "spacing": 0.05,
+    "strength": 1.0
+  },
+  "payload": {
+    "kind": "normal",
+    "normalMode": "raise",
+    "intensity": 0.2
+  }
+}

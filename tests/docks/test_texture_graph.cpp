@@ -211,11 +211,12 @@ TEST_CASE("texture graph backend follows texture sets and their meshes")
 {
     registerTexGraphUi();
     run("newScene");
-    run("texCreateSet", {{"args", {"Wood"}}, {"settings", {{"material", "Planks"}}}});
+    run("texCreateSet", {{"args", {"Wood"}}, {"materials", {"Planks"}}});
     run("texCreateSet", {{"args", {"Stone"}}});
     scene::Graph& g = scene::Graph::current();
     CHECK(ui::textureSetForSlot(g, "Planks") == "Wood");
-    CHECK(ui::textureSetForSlot(g, "Stone") == "Stone");
+    // A set is picked by materials, never matched by name.
+    CHECK(ui::textureSetForSlot(g, "Stone").empty());
     CHECK(ui::textureSetForSlot(g, "Other").empty());
 
     QMainWindow win;

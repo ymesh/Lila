@@ -4,6 +4,7 @@
 #include "ui/Actions.h"
 #include "ui/Icons.h"
 #include "ui/OptionBox.h"
+#include "ui/PanelDefaults.h"
 #include "ui/Theme.h"
 
 #include <QButtonGroup>
@@ -20,6 +21,7 @@
 #include <QScrollArea>
 #include <QKeyEvent>
 #include <QScrollBar>
+#include <QShortcut>
 #include <QSpinBox>
 #include <QStyle>
 #include <QStyleOptionToolButton>
@@ -28,6 +30,7 @@
 #include <QWheelEvent>
 
 #include <algorithm>
+#include <memory>
 #include <cmath>
 
 namespace lila::ui::controls
@@ -145,6 +148,33 @@ void addVariants(QToolButton* b, const std::vector<std::string>& variants)
 }
 } // namespace
 
+void editInPlace(QWidget* over, const QString& text, std::function<void(const QString&)> commit)
+{
+    if (!over || !over->parentWidget())
+        return;
+    auto* edit = new QLineEdit(text, over->parentWidget());
+    edit->setGeometry(over->geometry());
+    edit->selectAll();
+    edit->show();
+    edit->raise();
+    edit->setFocus();
+    // editingFinished fires again when the box loses focus on its way out.
+    auto done = std::make_shared<bool>(false);
+    auto close = [edit, done] {
+        *done = true;
+        edit->deleteLater();
+    };
+    QObject::connect(new QShortcut(Qt::Key_Escape, edit, nullptr, nullptr, Qt::WidgetShortcut), &QShortcut::activated, edit, close);
+    QObject::connect(edit, &QLineEdit::editingFinished, edit, [edit, done, close, text, commit = std::move(commit)] {
+        if (*done)
+            return;
+        const QString to = edit->text().trimmed();
+        close();
+        if (!to.isEmpty() && to != text)
+            commit(to);
+    });
+}
+
 void setRole(QWidget* w, const char* role)
 {
     w->setProperty("role", role);
@@ -180,6 +210,7 @@ QWidget* section(const QString& title, QWidget* content, QWidget* parent, const 
         header->setIcon(icon(on ? "chevron-down" : "chevron-right"));
         PrefStore::get().set("general", key, !on);
     });
+    panelDefaults::addResetMenu(header, content);
     v->addWidget(header);
     v->addWidget(content, 1);
     // Keeps a collapsed header at the top when the section is given extra height.
@@ -313,6 +344,12 @@ QToolButton* Segmented::add(const QString& text, const QString& iconName, const 
     b->setToolTip(tip);
     b->setAccessibleName(text.isEmpty() ? tip : text);
     b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    // Qt squashes the icon's pixmap into whatever width is left inside the padding, so an icon-only segment keeps its icon's width.
+    if (text.isEmpty() && !iconName.isEmpty())
+    {
+        b->setProperty("iconOnly", true);
+        b->setMinimumWidth(b->iconSize().width() + 8);
+    }
     setRole(b, "segment");
     mGroup->addButton(b, id);
     mRow->addWidget(b, 1);

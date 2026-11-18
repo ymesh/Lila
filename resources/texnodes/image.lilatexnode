@@ -5,7 +5,15 @@
   "label": "Image",
   "category": "Input",
   "doc": "An image file sampled in uv, wrapping at the edges, repeated tiles times. Relative paths resolve against the workspace, the scene's folder, then Lila's resources (strokes/strokes_soft.png names a shipped stroke sheet). The set samples the image at the set's resolution: when the image is larger, Match Set on the node raises the set to fit. To show an image on an object without authoring maps, set it as a material's map in the Material Editor instead.",
-  "inputs": [],
+  "inputs": [
+    {
+      "id": "coord",
+      "type": "vector",
+      "label": "UV",
+      "implicit": "uv",
+      "doc": "Where to read the image: the mesh's uvs unless linked (Projection, Mapping)."
+    }
+  ],
   "outputs": [
     {
       "id": "out",
@@ -29,6 +37,6 @@
   ],
   "cost": 2,
   "body": {
-    "out": "return file.sample(uv * float(p.tiles));"
+    "out": "return file.sample(coord.sample(uv).xy * float(p.tiles));"
   }
 }

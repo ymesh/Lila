@@ -10,7 +10,7 @@
 
 static const uint kPage = 128;
 static const uint kTexels = kPage * kPage;
-static const uint kMaxChannels = 8;
+static const uint kMaxChannels = 24;
 static const uint kNoTriangle = 0xFFFFFFFF;
 
 static const uint kBlendNormal = 0;
@@ -140,9 +140,122 @@ struct Params
     float facingFade;
     float intensity;
     float valueScale;
-    uint pad0;
-    uint pad1;
+    uint stencilW;
+    uint stencilH;
+    float stencilX;
+    float stencilY;
+    float stencilScale;
+    float stencilAngle;
+    uint stencilFlags;
+    uint viewW;
+    uint viewH;
+    uint stencilColor;
+    float4* stencil;
+    float4x4 stencilToClip;
+    uint* locked;
+    float4* limit;
+    uint limitW;
+    uint limitH;
+    uint gradType;
+    uint gradSpace;
+    uint gradDither;
+    uint gradOn;
+    float2 gradA;
+    float2 gradB;
+    float4* ramp;
+    float4x4 gradToClip;
+    uint hexOn;
+    uint hexWeight;
+    float hexRotate;
+    float hexContrast;
+    float hexJitter;
+    uint hexColor;
+    uint valueSpace;
+    float valueSize;
 };
+
+static const uint kRamp = 256;
+
+/** Where a texel sits along the gradient, 0 to 1: linear, radial, reflected or angle, in uv or on the stroke's screen. */
+float gradientT(Params* p, float3 pos, float2 uv)
+{
+    float2 q = uv;
+    if (p.gradSpace == 1)
+    {
+        float4 clip = mul(p.gradToClip, float4(pos, 1.0));
+        q = clip.w > 1e-9 ? (clip.xy / clip.w * 0.5 + 0.5) * float2(float(p.viewW), float(p.viewH)) : float2(-1e9, -1e9);
+    }
+    float2 d = p.gradB - p.gradA;
+    float len2 = max(dot(d, d), 1e-12);
+    float2 r = q - p.gradA;
+    if (p.gradType == 1)
+        return saturate(length(r) / sqrt(len2));
+    if (p.gradType == 2)
+        return saturate(abs(dot(r, d)) / len2);
+    if (p.gradType == 3)
+    {
+        float a = atan2(d.x * r.y - d.y * r.x, dot(d, r));
+        return frac(a / 6.2831853 + 1.0);
+    }
+    return saturate(dot(r, d) / len2);
+}
+
+float4 rampAt(Params* p, uint c, float t)
+{
+    float x = saturate(t) * float(kRamp - 1);
+    uint i = min(uint(x), kRamp - 2);
+    return lerp(p.ramp[c * kRamp + i], p.ramp[c * kRamp + i + 1], x - float(i));
+}
+
+static const uint kStencilOn = 1;
+static const uint kStencilInvert = 2;
+static const uint kStencilTile = 4;
+static const uint kStencilColor = 8;
+
+float4 stencilTexel(Params* p, int x, int y)
+{
+    int w = int(p.stencilW), h = int(p.stencilH);
+    if ((p.stencilFlags & kStencilTile) != 0)
+    {
+        x = ((x % w) + w) % w;
+        y = ((y % h) + h) % h;
+    }
+    else if (x < 0 || y < 0 || x >= w || y >= h)
+        return float4(0.0);
+    float4 t = p.stencil[y * w + x];
+    return float4(t.rgb * t.a, t.a);
+}
+
+/**
+ * The stencil at a surface point: rgb its straight colour, a the amount it lets through. Pinned to the view: at scale 1
+ * the picture spans the view's height, centred, then moved, scaled and turned by its placement (tex::paint::Stencil).
+ */
+float4 stencilAt(Params* p, float3 pos)
+{
+    bool invert = (p.stencilFlags & kStencilInvert) != 0;
+    float4 clip = mul(p.stencilToClip, float4(pos, 1.0));
+    float4 none = float4(0.0, 0.0, 0.0, invert ? 1.0 : 0.0);
+    if (clip.w <= 1e-9)
+        return none;
+    float2 view = float2(float(p.viewW), float(p.viewH));
+    float2 px = (clip.xy / clip.w * 0.5 + 0.5) * view;
+    float2 center = view * 0.5;
+    float2 d = px - center - float2(p.stencilX, p.stencilY);
+    float c = cos(p.stencilAngle), s = sin(p.stencilAngle);
+    float2 q = float2(d.x * c + d.y * s, -d.x * s + d.y * c) / max(p.stencilScale, 1e-6);
+    float2 size = float2(float(p.stencilW), float(p.stencilH));
+    float2 src = q * (size.y / max(view.y, 1.0)) + size * 0.5;
+    if ((p.stencilFlags & kStencilTile) == 0 && (src.x < 0.0 || src.y < 0.0 || src.x > size.x || src.y > size.y))
+        return none;
+    float2 f = src - 0.5;
+    int x0 = int(floor(f.x)), y0 = int(floor(f.y));
+    float fx = f.x - float(x0), fy = f.y - float(y0);
+    float4 m = lerp(lerp(stencilTexel(p, x0, y0), stencilTexel(p, x0 + 1, y0), fx), lerp(stencilTexel(p, x0, y0 + 1), stencilTexel(p, x0 + 1, y0 + 1), fx), fy);
+    float3 rgb = m.a > 0.0 ? m.rgb / m.a : float3(0.0);
+    float amount = (p.stencilFlags & kStencilColor) != 0 ? m.a : dot(rgb, float3(0.2126, 0.7152, 0.0722)) * m.a;
+    amount = saturate(amount);
+    return float4(rgb, invert ? 1.0 - amount : amount);
+}
 
 struct Push
 {
@@ -305,6 +418,116 @@ float3 decodeNormal(float3 e)
     return dot(n, n) > 1e-12 ? normalize(n) : float3(0, 0, 1);
 }
 
+/**
+ * Varied tiling of a source image: hex tiling after Mikkelsen, "Practical Real-Time Hex-Tiling" (JCGT 2022). The plane
+ * is cut into hexagons, each takes the image at a random offset and turn, and the three around a point blend with
+ * weights sharpened toward the one whose steering value (height, or brightness) is highest, so seams follow the content.
+ */
+struct HexTiling
+{
+    float2 uv[3];
+    float angle[3];
+    float gain[3];
+    float3 w;
+};
+
+float2 hexHash(int2 v)
+{
+    float2 r = float2(dot(float2(v), float2(127.1, 311.7)), dot(float2(v), float2(269.5, 183.3)));
+    return frac(sin(r) * 43758.5453);
+}
+
+/** The three hexagon centres around st (one tile per uv unit) and st's barycentric weights between them. */
+void hexGrid(float2 st, out float3 w, out int2 v1, out int2 v2, out int2 v3)
+{
+    st *= 2.0 * sqrt(3.0);
+    float2 skewed = float2(st.x - 0.57735027 * st.y, 1.15470054 * st.y);
+    int2 base = int2(floor(skewed));
+    float3 t = float3(frac(skewed), 0.0);
+    t.z = 1.0 - t.x - t.y;
+    float s = step(0.0, -t.z);
+    float s2 = 2.0 * s - 1.0;
+    w = float3(-t.z * s2, s - t.y * s2, s - t.x * s2);
+    v1 = base + int2(int(s), int(s));
+    v2 = base + int2(int(s), int(1.0 - s));
+    v3 = base + int2(int(1.0 - s), int(s));
+}
+
+float2 hexCentre(int2 v)
+{
+    return float2(float(v.x) + 0.5 * float(v.y), float(v.y) / 1.15470054) / (2.0 * sqrt(3.0));
+}
+
+/** Where each of the three cells samples st (uv times the source's scale), and their turns and brightness gains. */
+HexTiling hexTiling(Params* p, float2 st)
+{
+    HexTiling h;
+    int2 v[3];
+    hexGrid(st, h.w, v[0], v[1], v[2]);
+    for (int i = 0; i < 3; ++i)
+    {
+        float2 r = hexHash(v[i]);
+        float2 r2 = hexHash(v[i] + int2(57, 113));
+        h.angle[i] = (r2.x * 2.0 - 1.0) * 3.14159265 * p.hexRotate;
+        float cs = cos(h.angle[i]), sn = sin(h.angle[i]);
+        float2 c = hexCentre(v[i]);
+        float2 d = st - c;
+        h.uv[i] = c + float2(cs * d.x - sn * d.y, sn * d.x + cs * d.y) + r;
+        h.gain[i] = 1.0 + (r2.y * 2.0 - 1.0) * p.hexJitter * 0.5;
+    }
+    return h;
+}
+
+float4 hexSample(Params* p, float4* img, float2 uv)
+{
+    return imageAt(img, p.valueW, p.valueH, float2(uv.x, 1.0 - uv.y), true);
+}
+
+/** The blend weights: the cells' barycentrics raised steeply, scaled by the steering value, then the contrast gain. */
+float3 hexWeights(Params* p, HexTiling h)
+{
+    float3 steer = float3(1.0);
+    if (p.hexWeight != 0xFFFFFFFFu && p.valueImages[p.hexWeight] != nullptr)
+    {
+        float4* img = p.valueImages[p.hexWeight];
+        float3 lum = float3(0.299, 0.587, 0.114);
+        for (int i = 0; i < 3; ++i)
+            steer[i] = dot(hexSample(p, img, h.uv[i]).rgb, lum);
+        steer = lerp(float3(1.0), steer, 0.6);
+    }
+    float3 w = steer * pow(max(h.w, float3(0.0)), float3(7.0));
+    w /= max(w.x + w.y + w.z, 1e-6);
+    if (abs(p.hexContrast - 0.5) > 1e-3)
+    {
+        float k = log(1.0 - p.hexContrast) / log(0.5);
+        float3 sel = 2.0 * step(float3(0.5), w);
+        float3 m = 2.0 * (1.0 - sel);
+        w = 0.5 * sel + 0.25 * m * pow(max(float3(0.0), sel + w * m), float3(k));
+        w /= max(w.x + w.y + w.z, 1e-6);
+    }
+    return w;
+}
+
+/** A channel's value through the hex tiling; normals turn with their cells, colour takes each cell's brightness gain. */
+float3 hexValue(Params* p, HexTiling h, float3 w, uint c, bool isNormal)
+{
+    float3 sum = float3(0.0);
+    for (int i = 0; i < 3; ++i)
+    {
+        float3 s = hexSample(p, p.valueImages[c], h.uv[i]).xyz;
+        if (isNormal)
+        {
+            float3 n = decodeNormal(s);
+            float cs = cos(h.angle[i]), sn = sin(h.angle[i]);
+            s = float3(cs * n.x + sn * n.y, -sn * n.x + cs * n.y, n.z);
+        }
+        else if (c == p.hexColor)
+            s *= h.gain[i];
+        sum += s * w[i];
+    }
+    return isNormal ? encodeNormal(normalize(sum)) : sum;
+}
+
 float3 encodeNormal(float3 n)
 {
     return normalize(n) * 0.5 + 0.5;
@@ -402,6 +625,8 @@ void paintDabCS(uint3 gid: SV_GroupID, uint3 local: SV_GroupThreadID)
     Item item = p.items[itemIndex];
     GeoTexel g = item.geo[texel];
     if (g.triangle == kNoTriangle)
+        return;
+    if (p.locked != nullptr && (p.locked[g.triangle >> 5] & (1u << (g.triangle & 31u))) != 0)
         return;
     Tri tri = p.tris[g.triangle];
     float w0 = 1.0 - g.u - g.v;
@@ -536,7 +761,55 @@ void paintDabCS(uint3 gid: SV_GroupID, uint3 local: SV_GroupThreadID)
         return;
     item.acc[texel] = float4(value, cov);
     float t = cov * p.strength;
+    if (p.limit != nullptr)
+        t *= saturate(imageAt(p.limit, p.limitW, p.limitH, float2(frac(uv.x), 1.0 - frac(uv.y)), false).a);
+    // A facing limit: surfaces turned away from the view fade out (a projection fades its own way above).
+    if (p.facingFade > 0.0 && hasView && p.mode != kModeProject)
+        t *= smoothstep(0.0, p.facingFade, dot(nrm, normalize(p.eye.xyz - pos)));
+    float gradT = 0.0;
+    if (p.gradOn != 0)
+    {
+        gradT = gradientT(p, pos, uv);
+        // Dither: half a step of 8 bits either way, fixed per texel, so banding breaks up and replays the same; the ends stay exact.
+        if (p.gradDither != 0 && gradT > 0.0 && gradT < 1.0)
+        {
+            uint hsh = (uint(xy.x) * 73856093u) ^ (uint(xy.y) * 19349663u) ^ (item.tile * 83492791u);
+            hsh = hsh * 1664525u + 1013904223u;
+            gradT = saturate(gradT + (float(hsh >> 8) / 16777216.0 - 0.5) / 255.0);
+        }
+    }
+    float3 stencilRgb = float3(0.0);
+    if ((p.stencilFlags & kStencilOn) != 0)
+    {
+        float4 st = stencilAt(p, pos);
+        t *= st.a;
+        stencilRgb = st.rgb;
+    }
     float2 here = float2(xy) + 0.5;
+    bool hex = p.hexOn != 0 && (p.flags & kFlagValueImages) != 0;
+    // Object space: the source keeps one size on the surface (valueSize cm a tile), whatever the uvs' density.
+    bool objectSpace = p.valueSpace != 0;
+    float3 triW = float3(0.0);
+    float2 planes[3] = { float2(0.0), float2(0.0), float2(0.0) };
+    if (objectSpace)
+    {
+        float3 q = pos * (p.valueScale / max(p.valueSize, 1e-3));
+        planes[0] = q.yz;
+        planes[1] = q.xz;
+        planes[2] = q.xy;
+        float3 a = pow(abs(nrm), float3(4.0));
+        triW = a / max(a.x + a.y + a.z, 1e-6);
+    }
+    float2 hexSt = uv * p.valueScale;
+    if (objectSpace)
+        hexSt = triW.x >= triW.y && triW.x >= triW.z ? planes[0] : triW.y >= triW.z ? planes[1] : planes[2];
+    HexTiling hexCells = {};
+    float3 hexW = float3(0.0);
+    if (hex)
+    {
+        hexCells = hexTiling(p, hexSt);
+        hexW = hexWeights(p, hexCells);
+    }
     for (uint c = 0; c < p.channels; ++c)
     {
         uint2* dst = item.dst[c];
@@ -590,13 +863,31 @@ void paintDabCS(uint3 gid: SV_GroupID, uint3 local: SV_GroupThreadID)
         else
         {
             float3 v = p.values[c].xyz;
-            if (direction && c == p.directionChannel)
+            float tc = t;
+            if (p.gradOn != 0)
+            {
+                float4 g = rampAt(p, c, gradT);
+                v = g.rgb;
+                tc = t * g.a;
+            }
+            if (c == p.stencilColor)
+                v = stencilRgb;
+            else if (direction && c == p.directionChannel)
                 v = value;
             else if (p.mode == kModeProject && c == p.colorChannel)
                 v = projected;
+            else if (hex && p.valueImages[c] != nullptr)
+                v = hexValue(p, hexCells, hexW, c, isNormal);
+            else if ((p.flags & kFlagValueImages) != 0 && p.valueImages[c] != nullptr && objectSpace)
+            {
+                v = float3(0.0);
+                for (int k = 0; k < 3; ++k)
+                    if (triW[k] > 0.0)
+                        v += triW[k] * imageAt(p.valueImages[c], p.valueW, p.valueH, float2(planes[k].x, 1.0 - planes[k].y), true).xyz;
+            }
             else if ((p.flags & kFlagValueImages) != 0 && p.valueImages[c] != nullptr)
                 v = imageAt(p.valueImages[c], p.valueW, p.valueH, float2(uv.x * p.valueScale, 1.0 - uv.y * p.valueScale), true).xyz;
-            r = blendTexel(p, o, v, t, mask);
+            r = blendTexel(p, o, v, tc, mask);
         }
         if (isNormal && !mask)
             r.rgb = encodeNormal(decodeNormal(r.rgb));

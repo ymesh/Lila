@@ -7,6 +7,7 @@
 #include "geo/Mesh.h"
 #include "geo/Ops.h"
 #include "geo/Primitives.h"
+#include "geo/Topology.h"
 #include "scene/Graph.h"
 #include "scene/Components.h"
 #include "scene/LastOp.h"
@@ -487,4 +488,52 @@ TEST_CASE("polyGridFill with symmetry fills round mirrored fans alike")
             CHECK(zeroAreaFaces(meshOf(cyl)) == 0);
             CHECK(coincidentFaces(meshOf(cyl)) == 0);
         }
+}
+
+TEST_CASE("polyGridFill radial rings a cap in quads, mirrored")
+{
+    for (int sides : {8, 12, 13, 16, 20, 22, 32, 48, 64})
+    {
+        CAPTURE(sides);
+        run("newScene");
+        std::string cyl = run("polyCylinder", {{"radius", 50.0}, {"height", 100.0}, {"subdivisionsAxis", sides}, {"capType", "fan"}})[0];
+        run("setSymmetry", {{"args", {cyl}}, {"axis", "y"}});
+        const geo::Mesh& m = meshOf(cyl);
+        Index top = geo::kInvalid;
+        for (Index p = 0; p < m.pointCapacity(); ++p)
+            if (m.pointValid(p) && glm::distance(m.position(p), glm::dvec3(0, 50, 0)) < 1e-6)
+                top = p;
+        REQUIRE(top != geo::kInvalid);
+        run("selectMode", {{"args", {"vertex"}}});
+        run("selectComponents", {{"args", {cyl}}, {"vertices", {top}}});
+        run("polyGridFill", {{"style", "radial"}});
+        const geo::Mesh& filled = meshOf(cyl);
+        CHECK(unmirroredY(filled) == 0);
+        CHECK(zeroAreaFaces(filled) == 0);
+        CHECK(coincidentFaces(filled) == 0);
+        CHECK(geo::boundaryLoops(filled).empty());
+        int triangles = 0, quads = 0, flipped = 0;
+        for (Index f = 0; f < filled.faceCapacity(); ++f)
+        {
+            if (!filled.faceValid(f))
+                continue;
+            triangles += filled.faceSize(f) == 3;
+            quads += filled.faceSize(f) == 4;
+            glm::dvec3 c{0.0}, nrm{0.0};
+            std::vector<glm::dvec3> pts;
+            filled.forEachFaceCorner(f, [&](Index fc) { pts.push_back(filled.position(filled.cornerPoint(fc))); });
+            for (size_t i = 0; i < pts.size(); ++i)
+                nrm += glm::cross(pts[i], pts[(i + 1) % pts.size()]);
+            for (const glm::dvec3& q : pts)
+                c += q / double(pts.size());
+            // Cap faces face away from the cylinder's middle.
+            if (std::abs(c.y) > 49.0 && nrm.y * c.y <= 0.0)
+                ++flipped;
+        }
+        CHECK(flipped == 0);
+        // Symmetry fills both caps: quads but for an odd border's one triangle each.
+        CHECK(triangles == (sides % 2 == 1 ? 2 : 0));
+        if (sides >= 32)
+            CHECK(quads > sides * 5); // rings, not one ring round a grid
+    }
 }

@@ -116,6 +116,22 @@ struct LILA_SCENE_API Payload
     std::string normalMode = "bump";
     std::string stampImage;
     float intensity = 1.0f;
+    /** Triangles of the stroke mesh's triangulation the stroke leaves alone (locked faces), ascending. */
+    std::vector<uint32_t> locked;
+    /** A PaintData::images key: a uv mask (its alpha, tile 1001) every texel's amount is multiplied by (the quick mask). */
+    std::string limit;
+    /**
+     * fill: a gradient over the filled triangles instead of flat values: {type linear|radial|reflected|angle, space screen|uv,
+     * start [x, y], end [x, y] (pixels of the stroke's view, or uv), stops [{position 0..1, amount 0..1, channels {name: value}}],
+     * dither}. Channels a stop leaves out take the payload's value; amount scales how much paints.
+     */
+    json gradient;
+    /**
+     * Brush limits, as asked: {cavity|convexity|curvature|ao|thickness|height: [lo, hi], id: {color [r, g, b], tolerance},
+     * group: name, facing: 0..1}. The command turns the map ranges into limit (a uv mask) and the group into locked, which
+     * is what replays; this stays for presets and to show what was asked.
+     */
+    json limits;
 
     /** The channels the stroke writes, the mask last. */
     std::vector<std::string> written() const;
@@ -145,6 +161,8 @@ struct Dab
     float angle = 0.0f;
     /** 0 for the dab, k for its k-th symmetry copy: direction strokes follow each copy separately. */
     uint32_t copy = 0;
+    /** Pen tilt, 0 upright to 1: the brush's tilt roundness narrows the tip by it. Size, opacity and angle already hold their tilt. */
+    float tilt = 0.0f;
 
     bool operator==(const Dab&) const = default;
 };
@@ -162,6 +180,38 @@ struct StrokeView
 
     bool operator==(const StrokeView&) const = default;
 };
+
+struct PaintImage;
+
+/**
+ * A picture pinned to the screen that a stroke paints through (needs the stroke's view). At scale 1 it spans the view's
+ * height, centred; offset (view pixels), scale and rotation (radians) place it. mask: its luminance times alpha scales
+ * the stroke's amount. color: its rgb is the value painted into colorChannel and its alpha the amount.
+ */
+struct LILA_SCENE_API StrokeStencil
+{
+    /** PaintData::images key. */
+    std::string image;
+    glm::vec2 offset{0.0f};
+    float scale = 1.0f;
+    float rotation = 0.0f;
+    bool invert = false;
+    bool tile = false;
+    std::string mode = "mask";
+    std::string colorChannel = "baseColor";
+
+    json toJson() const;
+    /** Throws std::invalid_argument on a bad value. */
+    static StrokeStencil fromJson(const json& j);
+    bool operator==(const StrokeStencil&) const = default;
+};
+
+/**
+ * Images strokes are about to refer to that no texture set holds yet (a stencil picked in the paint tool), so a live
+ * stroke can read them before its command stores them. Keeps the most recent few. Any thread.
+ */
+LILA_SCENE_API void holdImage(std::shared_ptr<const PaintImage> image);
+LILA_SCENE_API std::shared_ptr<const PaintImage> heldImage(const std::string& key);
 
 struct LILA_SCENE_API Stroke
 {
@@ -184,12 +234,26 @@ struct LILA_SCENE_API Stroke
      * Dab::copy; replay reads it for mirrored tips and stamps, and a projection projects once per copy.
      */
     json symmetry;
+    std::optional<StrokeStencil> stencil;
+    /**
+     * A path stroke's Bezier, in the stroke mesh's object space: {points: [{position, in, out}], curve?: the scene curve it
+     * came from}. The dabs are already sampled from it; editing it (texEditPath) samples them again.
+     */
+    json path;
+    /**
+     * Where each dab was, in the stroke mesh's object space, and the mesh's signature (PaintMesh::signature) then: when the
+     * mesh's triangles or uvs change, replay finds each dab again at the closest surface point.
+     */
+    std::vector<glm::vec3> anchors;
+    uint64_t meshSignature = 0;
 
+    /** The PaintData::images keys the stroke reads (a projection's picture, its stencil). */
+    std::vector<std::string> images() const;
     /** packed stores the dabs as binary arrays (for binary scene files); plain JSON otherwise. */
     json toJson(bool packed = true) const;
     /**
-     * Dabs as packed arrays, rows [triangle, u, v, radius, pressure, opacity, angle, copy], or objects
-     * {triangle, bary: [u, v], radius, pressure?, opacity?, angle?, copy?}. Throws std::invalid_argument.
+     * Dabs as packed arrays, rows [triangle, copy] and [u, v, radius, pressure, opacity, angle, tilt] (tilt optional), or objects
+     * {triangle, bary: [u, v], radius, pressure?, opacity?, angle?, copy?, tilt?}. Throws std::invalid_argument.
      */
     static Stroke fromJson(const json& j);
     bool operator==(const Stroke&) const;

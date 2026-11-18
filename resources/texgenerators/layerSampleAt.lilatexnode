@@ -1,0 +1,57 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "layerSampleAt",
+  "label": "Layer Sample At",
+  "category": "Layer",
+  "doc": "Reads the input at a coordinate from another node (xy; z 0 reads nothing), turning its hue by random times hue: a scatter's instances.",
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "coord",
+      "type": "vector",
+      "default": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "random",
+      "type": "gray",
+      "default": 0.5
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "hue",
+      "type": "float",
+      "default": 0.0,
+      "min": 0,
+      "max": 1,
+      "doc": "How far each instance's hue turns, at most."
+    }
+  ],
+  "cost": 2,
+  "helpers": [
+    "color"
+  ],
+  "body": {
+    "out": "float3 c = coord.sample(uv);\nif (c.z <= 0.0)\n    return float4(0.0, 0.0, 0.0, 0.0);\nfloat4 s = input.sample(c.xy);\nif (p.hue > 0.0)\n{\n    float3 h = rgbToHsv(s.rgb);\n    h.x = frac(h.x + (random.sample(uv) - 0.5) * p.hue);\n    s.rgb = hsvToRgb(h);\n}\nreturn s;"
+  }
+}

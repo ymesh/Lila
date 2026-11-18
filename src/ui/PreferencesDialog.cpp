@@ -29,6 +29,7 @@
 #include "ui/SoftSelectPanel.h"
 #include "ui/SpinScrub.h"
 #include "ui/TearOff.h"
+#include "ui/QuickMaskOverlay.h"
 #include "ui/TexturePicker.h"
 #include "ui/ThemeEditor.h"
 #include "ui/Telemetry.h"
@@ -653,6 +654,9 @@ void addBuiltIns(Registry<prefPages::Page>& r)
             QObject::connect(edit, &QPushButton::clicked, edit, [edit] { texturePicker::showFoldersDialog(edit->window()); });
             addRow(general, "Project texture folders", edit, "/textures");
         }
+        toggleField(general, "Quick Mask overlay", quickMaskOverlay::kShownPref, true);
+        colorField(general, "Quick Mask color", quickMaskOverlay::kColorPref, quickMaskOverlay::kDefaultColor);
+        numberField(general, "Quick Mask opacity", quickMaskOverlay::kOpacityPref, quickMaskOverlay::kDefaultOpacity, 0.0, 1.0, 0.05);
         sectionHeader(general, "References");
         toggleField(general, "Reload changed references", "/references/autoReload", true);
         sectionHeader(general, "Terminal");
@@ -836,6 +840,7 @@ void addBuiltIns(Registry<prefPages::Page>& r)
         toggleField(viewport, "Panel toolbar", vd::kToolbar, true);
         toggleField(viewport, "Smooth preview shows the subdivided edges", vd::kSmoothSubdivisions, false);
         toggleField(viewport, "Smooth preview keeps hard edges", vd::kSmoothHardEdges, false);
+        toggleField(viewport, "Modifier edges while editing (faint)", vd::kModifierEdges, false);
         toggleField(viewport, "Hiding a parent hides its children", scene::kInheritVisibilityPref, true);
         sectionHeader(viewport, "Deformers");
         toggleField(viewport, "Evaluate deformers on the GPU (exports always use the CPU)", "/deformers/gpu", true);

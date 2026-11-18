@@ -16,6 +16,7 @@
 #include <lila/Command.h>
 #include <lila/Deformer.h>
 #include <lila/Extension.h>
+#include <lila/ExtensionScope.h>
 #include <lila/GeometryNodes.h>
 #include <lila/Graph.h>
 #include <lila/Icons.h>
@@ -649,7 +650,7 @@ private:
                 viewportTools::requestRedraw();
                 return true;
             }
-            QTimer::singleShot(0, [] { viewportTools::set(nullptr); });
+            QTimer::singleShot(0, lila::ui::scope("Terrain"), [] { viewportTools::set(nullptr); });
             return true;
         }
         return false;
@@ -666,7 +667,7 @@ private:
         const double size = settings().stroke.worldRadius * 4.0;
         const json call = {{"args", {mesh}}, {"center", {hit.center.x, hit.center.y, hit.center.z}}, {"size", size},
                            {"stage", settings().afterErosion ? "final" : "base"}};
-        QTimer::singleShot(0, [call] {
+        QTimer::singleShot(0, lila::ui::scope("Terrain"), [call] {
             try
             {
                 ops::execute("terrainSculptRegion", call, CallSource::UI);
@@ -803,7 +804,7 @@ void watchRegionSessions(ext::Context& ctx)
         const scene::NodeId id = gRegionSession;
         gRegionSession = scene::kNoNode;
         // After the exit command finishes, so the bake is its own undo step with the sculpt already in the mesh.
-        QTimer::singleShot(0, [id] {
+        QTimer::singleShot(0, lila::ui::scope("Terrain"), [id] {
             scene::Node* n = scene::Graph::current().node(id);
             if (!n || n->type().attrIndex("terrainRegion") < 0)
                 return;

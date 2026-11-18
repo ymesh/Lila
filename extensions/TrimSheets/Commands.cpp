@@ -551,7 +551,8 @@ std::string ensureTextureSet(const Sheet& s, const std::filesystem::path& f, con
     if (!hasTextureSet(set))
     {
         ops::execute("texCreateSet", {{"args", {set}},
-                                      {"settings", {{"width", s.width}, {"height", s.height}, {"bakeProject", project}, {"material", materialName(s, palette)}}}});
+                                      {"settings", {{"width", s.width}, {"height", s.height}, {"bakeProject", project}}},
+                                      {"materials", {materialName(s, palette)}}});
         ops::execute("texAddLayer", {{"args", {set, "procedural"}}, {"name", kBakeLayer}, {"index", 0}, {"graph", bakeLayerGraph()}});
     }
     syncHeightNormals(s, f, set);
@@ -1295,25 +1296,34 @@ void registerCommands(ext::Context& ctx)
     ctx.registerCommand({
         .name = "trimSheetImport",
         .doc = "Make a trim sheet from another tool's layout: a Valve .rect (needs width and height), an SVG of rects, an ID map "
-               "image (one trim per flat colour), or a mesh's uv islands (source is a mesh name). Full-width rows become tiling "
-               "strips, the rest hotspot rectangles, all with a raised bevel profile to change with trimSheetEdit. Saves to file= "
-               "(default beside the source) and makes it current. Returns the sheet summary.",
+               "image (one trim per flat colour), ZenUV trims (its JSON, as Arcbrush copies it, or a ZenUV trim preset .py, read "
+               "and never run; or that JSON pasted as text=), or a mesh's uv islands (source is a mesh name). Full-width rows "
+               "become tiling strips, the rest hotspot rectangles, all with a raised bevel profile to change with trimSheetEdit. "
+               "Saves to file= (default beside the source, or the sheet folder for text) and makes it current. Returns the sheet "
+               "summary.",
         .positionalDoc = "source file or mesh",
         .flags = {{"file", "f", AT::String, nullptr, "Where to save the .lilatrim."},
+                  {"text", "t", AT::String, nullptr, "ZenUV trim JSON instead of a source, such as Arcbrush's copied trim data."},
                   {"width", "w", AT::Int, int64_t(2048), "Sheet width, px, for .rect and mesh sources.", {}, {}, 16.0, 16384.0},
                   {"height", "h", AT::Int, int64_t(2048), "Sheet height, px, for .rect and mesh sources.", {}, {}, 16.0, 16384.0},
                   {"name", "n", AT::String, nullptr, "Sheet name; default T_<source name>."},
                   {"pxPerM", "", AT::Float, 512.0, "Texels per metre.", {}, {}, 1.0}},
         .undoable = false,
         .run = [](const Args& a) -> json {
-            if (a.positional.empty())
-                throw CommandError("trimSheetImport: give a .rect, .svg or image file, or a mesh");
-            const std::string src = a.positional[0].get<std::string>();
             const int w = int(a.get<int64_t>("width", 2048)), h = int(a.get<int64_t>("height", 2048));
+            if (a.positional.empty() && !a.has("text"))
+                throw CommandError("trimSheetImport: give a .rect, .svg, .json, .py or image file, a mesh, or text=");
+            const std::string src = a.positional.empty() ? std::string("pasted trim data") : a.positional[0].get<std::string>();
             Sheet s;
             std::filesystem::path out;
             Graph& g = Graph::current();
-            if (Node* n = g.find(src); n && n->type().isA("mesh"))
+            if (a.positional.empty())
+            {
+                s = fromZenUv(a.get<std::string>("text"), w, h);
+                s.name = "T_Imported";
+                out = defaultSheetFolder() / ("T_Imported" + std::string(kExtension));
+            }
+            else if (Node* n = g.find(src); n && n->type().isA("mesh"))
             {
                 g.evaluate();
                 const scene::MeshPtr m = std::get<scene::MeshPtr>(g.value({n->id(), scene::MeshNode::kOutMesh, -1}));
@@ -1337,6 +1347,8 @@ void registerCommands(ext::Context& ctx)
                     s = fromRect(text.str(), w, h);
                 else if (ext == ".svg")
                     s = fromSvg(text.str());
+                else if (ext == ".json" || ext == ".txt" || ext == ".py")
+                    s = fromZenUv(text.str(), w, h);
                 else
                 {
                     std::string err;
@@ -1359,7 +1371,8 @@ void registerCommands(ext::Context& ctx)
             setCurrentSheet(out.generic_string());
             return sheetSummary(s, out);
         },
-        .examples = {"trimSheetImport('C:/maps/metal_trims.rect', width=1024, height=1024)", "trimSheetImport('C:/maps/hotspots_id.png')"},
+        .examples = {"trimSheetImport('C:/maps/metal_trims.rect', width=1024, height=1024)", "trimSheetImport('C:/maps/hotspots_id.png')",
+                     "trimSheetImport('C:/maps/Crate_TrimPreset.py')"},
     });
 
     ctx.registerCommand({

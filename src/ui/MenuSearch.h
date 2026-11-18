@@ -20,6 +20,11 @@ namespace lila::ui::menuSearch
 inline constexpr const char* kNoSearchProperty = "lilaNoSearch";
 /** A QMenu property: text the menu search appends to the menu's checkable rows, such as " Layout". */
 inline constexpr const char* kSearchSuffixProperty = "lilaSearchSuffix";
+/**
+ * A QAction property: the registered action a row does the same as when it isn't that action itself (a panel's dock
+ * toggle, a docs page). The menu search lists one row per action and shows that action's hotkey.
+ */
+inline constexpr const char* kSameAsProperty = "lilaSameAs";
 
 /** Type-to-filter for every QMenu in the app. */
 LILA_UI_API void install();

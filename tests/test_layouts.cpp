@@ -220,3 +220,16 @@ TEST_CASE("the Bake layout opens the modifier stack in the inspector tabs")
     json open = l->value(json::json_pointer("/preset/open"), json::array());
     CHECK(std::find(open.begin(), open.end(), json("modifierStack")) != open.end());
 }
+
+TEST_CASE("the Render layout sits between Bake and Rig with its toolkit and menus")
+{
+    const std::vector<std::string> names = layouts::builtInNames();
+    auto at = [&](const char* n) { return std::find(names.begin(), names.end(), n) - names.begin(); };
+    CHECK(at("Bake") + 1 == at("Render"));
+    CHECK(at("Render") + 1 == at("Rig"));
+    std::optional<json> l = layouts::builtIn("Render");
+    REQUIRE(l);
+    json open = l->value(json::json_pointer("/preset/open"), json::array());
+    CHECK(std::find(open.begin(), open.end(), json("renderToolkit")) != open.end());
+    CHECK(l->value("menuSet", std::string()) == "Render");
+}

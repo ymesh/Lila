@@ -1,0 +1,66 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "compare",
+  "label": "Compare",
+  "category": "Utility",
+  "doc": "A before-and-after wipe for looking at two versions side by side: a left of the line, b right of it. For previewing; wire a or b on, not this.",
+  "inputs": [
+    {
+      "id": "a",
+      "type": "color",
+      "default": [
+        0,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "id": "b",
+      "type": "color",
+      "default": [
+        1,
+        1,
+        1,
+        1
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "position",
+      "type": "float",
+      "default": 0.5,
+      "min": 0,
+      "max": 1,
+      "doc": "Where the line crosses, across u."
+    },
+    {
+      "id": "angle",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -90,
+      "softMax": 90,
+      "doc": "The line's lean, degrees."
+    },
+    {
+      "id": "lineWidth",
+      "type": "float",
+      "default": 0.004,
+      "min": 0,
+      "max": 0.05,
+      "doc": "The line's width; 0 hides it."
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float ang = radians(p.angle);\nfloat d = (uv.x - p.position) * cos(ang) + (uv.y - 0.5) * sin(ang);\nif (abs(d) < p.lineWidth * 0.5)\n    return float4(1.0, 1.0, 1.0, 1.0);\nreturn d < 0.0 ? a.sample(uv) : b.sample(uv);"
+  }
+}

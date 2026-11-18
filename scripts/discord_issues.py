@@ -191,6 +191,12 @@ def reply(api, post_id, text):
     print(f"replied: {post['name']}")
 
 
+def edit(api, post_id, message_id, text):
+    """Replaces the text of one of the bot's own messages in a post. No new ping: the reporter was notified when it was posted."""
+    api.request("PATCH", f"/channels/{post_id}/messages/{message_id}", {"content": text, "allowed_mentions": {"parse": []}})
+    print(f"edited: {message_id}")
+
+
 def created_at(snowflake):
     return datetime.fromtimestamp(((int(snowflake) >> 22) + 1420070400000) / 1000, tz=timezone.utc)
 
@@ -221,6 +227,7 @@ def main():
     parser.add_argument("--hold", metavar="POST_ID", help="tag a post On Hold: open but waiting (no repro, waiting on the reporter); --unsolve returns it to Pending")
     parser.add_argument("--unsolve", metavar="POST_ID", help="remove the solved tag from a post")
     parser.add_argument("--reply", nargs=2, metavar=("POST_ID", "TEXT"), help="reply in a post, mentioning its author, without changing its tags")
+    parser.add_argument("--edit", nargs=3, metavar=("POST_ID", "MESSAGE_ID", "TEXT"), help="replace the text of one of the bot's messages")
     parser.add_argument("--ack", metavar="POST_ID", help="mark the post's last message seen (needs no reply)")
     parser.add_argument("--note", help="with --solve/--unsolve, also reply in the post with this text, mentioning its author")
     parser.add_argument("--solved-tag", default="Solved", help="name of the forum tag that marks a post solved")
@@ -240,6 +247,9 @@ def main():
         return
     if args.ack:
         ack(api, args.ack)
+        return
+    if args.edit:
+        edit(api, *args.edit)
         return
     if (args.solve or args.dismiss) and not args.note:
         sys.exit("--solve and --dismiss need --note: tell the reporter the outcome")

@@ -920,7 +920,7 @@ void registerImageCommands(ext::Context& ctx)
                     surfCommit(t, cmd);
                 }
             }
-            ops::execute("texCreateSet", {{"args", {setName}}, {"resolution", res}, {"settings", {{"material", material}}}});
+            ops::execute("texCreateSet", {{"args", {setName}}, {"resolution", res}, {"materials", {material}}});
 
             // Stack masks: each layer covers its share of everything up to it, so normal blending reproduces the weights.
             const fs::path folder = surfFolder() / "preview";

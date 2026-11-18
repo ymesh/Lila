@@ -6,6 +6,7 @@
 
 #include <lila/Command.h>
 #include <lila/Extension.h>
+#include <lila/ExtensionScope.h>
 #include <lila/Graph.h>
 #include <lila/Log.h>
 #include <lila/Node.h>
@@ -1349,6 +1350,7 @@ bool registerScene(ext::Context& ctx)
 
 LILA_EXTENSION_EXPORT int lilaExtensionInit(lila::ext::Context& ctx)
 {
+    lila::ui::scope(ctx);
     if (!physanim::registerScene(ctx))
         return 1;
     physanim::registerUi(ctx);

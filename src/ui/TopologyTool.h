@@ -233,6 +233,7 @@ private:
     std::vector<glm::dvec3> mRefFaceNormals;
     scene::MeshPtr mRetopo;
     glm::dmat4 mRetopoWorld{1.0};
+    double mDrawOffset = 0.0; // the retopo mesh's drawOffset, cm
     std::optional<geo::SymmetryPlane> mSymmetry; // world space
     std::vector<retopo::Guide> mGuides;
     std::string mGuidesText, mConstructsText;
@@ -290,6 +291,34 @@ private:
 
     std::unique_ptr<QObject> mFilter;
 };
+
+/**
+ * Moves the 3D overlays a retopo tool draws while it lives (faces, edges, previews) drawOffset cm toward the camera when
+ * it ends, so they stay over the reference surface the way the mesh's own draw does.
+ */
+class LILA_UI_API RetopoOverlayOffset
+{
+public:
+    RetopoOverlayOffset(render::FrameState& s, const ViewInfo& view, const std::string& retopoMesh);
+    ~RetopoOverlayOffset();
+    RetopoOverlayOffset(const RetopoOverlayOffset&) = delete;
+    RetopoOverlayOffset& operator=(const RetopoOverlayOffset&) = delete;
+
+private:
+    render::FrameState& mState;
+    const ViewInfo& mView;
+    double mOffset = 0.0;
+    std::vector<size_t> mFrom;
+};
+
+/** Whether the retopo tools draw their reference see-through (X-Ray Reference). */
+LILA_UI_API bool xrayReference();
+LILA_UI_API void setXrayReference(bool on);
+/** Whether the retopo tools draw the reference's wireframe and selection highlight (Reference Wireframe, off by default). */
+LILA_UI_API bool referenceWire();
+LILA_UI_API void setReferenceWire(bool on);
+/** Applies X-Ray Reference and Reference Wireframe to reference's shaded draws in s. */
+LILA_UI_API void applyReferenceDisplay(render::FrameState& s, scene::NodeId reference);
 
 /** A retopo mesh edge: a light line over a dark halo, so it reads over light and dark surfaces alike. bold for hover. */
 LILA_UI_API void pushRetopoEdge(render::FrameState& s, const glm::vec3& a, const glm::vec3& b, const glm::vec4& color, bool bold = false);

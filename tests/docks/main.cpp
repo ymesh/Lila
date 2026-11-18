@@ -1,6 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 
+#include "render/Renderer.h"
+
 #include <QApplication>
 
 #include <cstdio>
@@ -57,5 +59,9 @@ int main(int argc, char** argv)
 #endif
     QApplication app(argc, argv);
     doctest::Context ctx(argc, argv);
-    return ctx.run();
+    const int result = ctx.run();
+    // Stopped while its threads still run: left to the static destructors, the device is torn down after the process
+    // has already killed them, which crashes in the driver.
+    lila::render::Renderer::get().stop();
+    return result;
 }

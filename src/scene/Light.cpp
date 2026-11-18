@@ -64,6 +64,10 @@ std::vector<AttrDef> lightAttrs()
     at(Light::kProvider) = stringAttr("provider", "prv", "Light provider asked first for this light; empty lets any handle it.");
     at(Light::kSourceFormat) = stringAttr("sourceFormat", "sfm", "What the light was read as, empty when made in Lila.", AttrHidden);
     at(Light::kExtra) = stringAttr("extra", "ext", "JSON of the source format's settings beyond these, written back on export.", AttrHidden);
+    at(Light::kLensFlare) = {.name = "lensFlare", .shortName = "lf", .type = PlugType::Bool, .defaultValue = false, .flags = kStoredFlags,
+                             .doc = "Draws a lens flare where the light shows on screen (viewport and renders), fading as things hide it."};
+    at(Light::kLensFlareIntensity) = floatAttr("lensFlareIntensity", "lfi", 1.0, "Lens flare: brightness on top of what the light's own brightness gives.", 0.0, 20.0);
+    at(Light::kLensFlareScale) = floatAttr("lensFlareScale", "lfs", 1.0, "Lens flare: size of its glare and ghosts.", 0.05, 10.0);
     return a;
 }
 

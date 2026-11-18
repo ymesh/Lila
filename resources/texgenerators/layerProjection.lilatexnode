@@ -1,0 +1,198 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "layerProjection",
+  "label": "Layer Projection",
+  "category": "Layer",
+  "doc": "Places a layer's content on the mesh: by uv, or projected from a box (planar, triplanar, spherical, cylindrical, warp) placed in the mesh's object space, so it ignores seams. coord is the coordinate it reads the content at.",
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "taps": 3
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    },
+    {
+      "id": "coord",
+      "type": "vector"
+    }
+  ],
+  "params": [
+    {
+      "id": "mode",
+      "type": "enum",
+      "default": "uv",
+      "options": [
+        "uv",
+        "planar",
+        "triplanar",
+        "spherical",
+        "cylindrical",
+        "warp"
+      ],
+      "doc": "How the content lands on the mesh."
+    },
+    {
+      "id": "positionX",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -100,
+      "softMax": 100,
+      "doc": "Projector centre, object units."
+    },
+    {
+      "id": "positionY",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -100,
+      "softMax": 100
+    },
+    {
+      "id": "positionZ",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -100,
+      "softMax": 100
+    },
+    {
+      "id": "rotationX",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -180,
+      "softMax": 180,
+      "doc": "Projector turn, degrees."
+    },
+    {
+      "id": "rotationY",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -180,
+      "softMax": 180
+    },
+    {
+      "id": "rotationZ",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -180,
+      "softMax": 180
+    },
+    {
+      "id": "sizeX",
+      "type": "float",
+      "default": 100.0,
+      "min": 0.001,
+      "softMax": 500,
+      "doc": "Projector box, object units: one repeat of the content."
+    },
+    {
+      "id": "sizeY",
+      "type": "float",
+      "default": 100.0,
+      "min": 0.001,
+      "softMax": 500
+    },
+    {
+      "id": "sizeZ",
+      "type": "float",
+      "default": 100.0,
+      "min": 0.001,
+      "softMax": 500
+    },
+    {
+      "id": "sharpness",
+      "type": "float",
+      "default": 4.0,
+      "min": 1,
+      "softMax": 32,
+      "doc": "Triplanar: how quickly the three projections hand over."
+    },
+    {
+      "id": "follow",
+      "type": "float",
+      "default": 0.0,
+      "min": 0,
+      "max": 1,
+      "doc": "Planar and warp: carry the content over edges that turn away from the projector."
+    },
+    {
+      "id": "warp00X",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -0.5,
+      "softMax": 0.5,
+      "doc": "Warp: corner offsets, in repeats."
+    },
+    {
+      "id": "warp00Y",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -0.5,
+      "softMax": 0.5
+    },
+    {
+      "id": "warp10X",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -0.5,
+      "softMax": 0.5
+    },
+    {
+      "id": "warp10Y",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -0.5,
+      "softMax": 0.5
+    },
+    {
+      "id": "warp01X",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -0.5,
+      "softMax": 0.5
+    },
+    {
+      "id": "warp01Y",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -0.5,
+      "softMax": 0.5
+    },
+    {
+      "id": "warp11X",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -0.5,
+      "softMax": 0.5
+    },
+    {
+      "id": "warp11Y",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -0.5,
+      "softMax": 0.5
+    }
+  ],
+  "cost": 12,
+  "externals": [
+    "position",
+    "normal"
+  ],
+  "helpers": [
+    "projection"
+  ],
+  "body": {
+    "out": "float3 f = projFrame(position.sample(uv).xyz, float3(p.positionX, p.positionY, p.positionZ), float3(p.rotationX, p.rotationY, p.rotationZ));\nfloat3 fn = projFrame(normal.sample(uv).xyz, float3(0.0, 0.0, 0.0), float3(p.rotationX, p.rotationY, p.rotationZ));\nfloat3 size = float3(p.sizeX, p.sizeY, p.sizeZ);\nfloat4 w0 = float4(p.warp00X, p.warp00Y, p.warp10X, p.warp10Y);\nfloat4 w1 = float4(p.warp01X, p.warp01Y, p.warp11X, p.warp11Y);\nif (p.mode == 2)\n{\n    float3 l = f / max(size, float3(1e-6, 1e-6, 1e-6));\n    float3 w = pow(abs(fn) + 1e-5, float3(p.sharpness, p.sharpness, p.sharpness));\n    w /= w.x + w.y + w.z;\n    return input.sample(l.yz + 0.5) * w.x + input.sample(l.xz + 0.5) * w.y + input.sample(l.xy + 0.5) * w.z;\n}\nreturn input.sample(projCoord(p.mode, uv, f, fn, size, p.follow, w0, w1));",
+    "coord": "float3 f = projFrame(position.sample(uv).xyz, float3(p.positionX, p.positionY, p.positionZ), float3(p.rotationX, p.rotationY, p.rotationZ));\nfloat3 fn = projFrame(normal.sample(uv).xyz, float3(0.0, 0.0, 0.0), float3(p.rotationX, p.rotationY, p.rotationZ));\nfloat3 size = float3(p.sizeX, p.sizeY, p.sizeZ);\nfloat4 w0 = float4(p.warp00X, p.warp00Y, p.warp10X, p.warp10Y);\nfloat4 w1 = float4(p.warp01X, p.warp01Y, p.warp11X, p.warp11Y);\nreturn float3(projCoord(p.mode, uv, f, fn, size, p.follow, w0, w1), 0.0);"
+  }
+}

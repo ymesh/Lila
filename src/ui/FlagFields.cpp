@@ -1,4 +1,5 @@
 #include "ui/FlagFields.h"
+#include "ops/Undo.h"
 #include "ui/ChoiceTips.h"
 #include "ui/Controls.h"
 #include "ui/Theme.h"
@@ -26,6 +27,7 @@
 #include <array>
 #include <cmath>
 #include <memory>
+#include <utility>
 
 namespace lila::ui
 {
@@ -43,6 +45,8 @@ public:
         setUsageHint(this, "Drag sideways to scrub; Ctrl for fine steps, Shift for coarse");
     }
 
+    ~ScrubLabel() override { endDrag(); }
+
     /** Scrubbing steps follow the field's own single step. */
     void setStepScale(double s) { mScale = s; }
 
@@ -50,7 +54,15 @@ protected:
     void mousePressEvent(QMouseEvent* e) override
     {
         if (e->button() == Qt::LeftButton || e->button() == Qt::MiddleButton)
+        {
             mLast = e->globalPosition().x();
+            // One drag is one undo step, however many values it sets on the way.
+            if (!mChunk)
+            {
+                UndoStack::get().openChunk("Drag " + text().toStdString());
+                mChunk = true;
+            }
+        }
         if (e->button() == Qt::MiddleButton)
             mMiddle.press(int(e->globalPosition().x()), int(e->globalPosition().y()), 0);
     }
@@ -58,11 +70,16 @@ protected:
     {
         if (e->button() == Qt::MiddleButton)
             mMiddle.cancel();
+        if (!(e->buttons() & (Qt::LeftButton | Qt::MiddleButton)))
+            endDrag();
     }
     void mouseMoveEvent(QMouseEvent* e) override
     {
         if (!(e->buttons() & (Qt::LeftButton | Qt::MiddleButton)))
+        {
+            endDrag();
             return;
+        }
         // A middle press only scrubs once it is clearly a drag; a click resets the value instead.
         if (mMiddle.down() && !mMiddle.dragging())
         {
@@ -79,7 +96,14 @@ protected:
     }
 
 private:
+    void endDrag()
+    {
+        if (std::exchange(mChunk, false))
+            UndoStack::get().closeChunk();
+    }
+
     std::function<void(double)> mStep;
+    bool mChunk = false;
     double mScale = 1.0;
     double mLast = 0.0;
     valueReset::ClickTracker mMiddle;

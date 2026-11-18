@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <mutex>
 #include <set>
 #include <stdexcept>
 
@@ -19,6 +20,8 @@ namespace lila::tex::paint
 {
 namespace
 {
+/** Floats per dab row in a stroke record: u, v, radius, pressure, opacity, angle, tilt. */
+constexpr size_t kDabFloats = 7;
 constexpr const char* kBlendNames[] = {"normal", "erase", "add", "subtract", "multiply"};
 
 constexpr char kB64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -146,6 +149,7 @@ std::vector<std::string> Payload::written() const
         for (const auto& [name, v] : channels)
             if (name != kMaskChannel)
                 out.push_back(name);
+    // A projection with no colour channel paints only the mask (a selection made on screen).
     if (kind == "project" && !colorChannel.empty() && std::find(out.begin(), out.end(), colorChannel) == out.end())
         out.insert(out.begin(), colorChannel);
     if (mask || channels.contains(kMaskChannel))
@@ -203,6 +207,14 @@ json Payload::toJson() const
         j["source"] = source;
     if (!tip.is_null())
         j["tip"] = tip;
+    if (!locked.empty())
+        j["locked"] = packed::make<uint32_t>(locked, 1);
+    if (!limit.empty())
+        j["limit"] = limit;
+    if (!gradient.is_null())
+        j["gradient"] = gradient;
+    if (!limits.is_null())
+        j["limits"] = limits;
     return j;
 }
 
@@ -254,6 +266,23 @@ Payload Payload::fromJson(const json& j)
     std::sort(p.triangles.begin(), p.triangles.end());
     p.triangles.erase(std::unique(p.triangles.begin(), p.triangles.end()), p.triangles.end());
     p.fillBy = j.value("fillBy", std::string());
+    if (j.contains("locked"))
+        for (double t : rows(j["locked"], 1, "payload locked"))
+            p.locked.push_back(uint32_t(t));
+    std::sort(p.locked.begin(), p.locked.end());
+    p.locked.erase(std::unique(p.locked.begin(), p.locked.end()), p.locked.end());
+    p.limit = j.value("limit", std::string());
+    if (j.contains("limits") && j["limits"].is_object())
+        p.limits = j["limits"];
+    if (j.contains("gradient") && j["gradient"].is_object())
+    {
+        p.gradient = j["gradient"];
+        const std::string type = p.gradient.value("type", std::string("linear")), space = p.gradient.value("space", std::string("uv"));
+        if (type != "linear" && type != "radial" && type != "reflected" && type != "angle")
+            throw std::invalid_argument("gradient type is linear, radial, reflected or angle");
+        if (space != "screen" && space != "uv")
+            throw std::invalid_argument("gradient space is screen or uv");
+    }
     p.image = j.value("image", std::string());
     p.colorChannel = j.value("colorChannel", p.colorChannel);
     p.facingFade = std::clamp(j.value("facingFade", p.facingFade), 0.0f, 1.0f);
@@ -294,6 +323,19 @@ json Stroke::toJson(bool packedDabs) const
         j["particles"] = particles;
     if (!symmetry.is_null())
         j["symmetry"] = symmetry;
+    if (stencil)
+        j["stencil"] = stencil->toJson();
+    if (!path.is_null())
+        j["path"] = path;
+    if (!anchors.empty())
+    {
+        std::vector<float> a(anchors.size() * 3);
+        for (size_t i = 0; i < anchors.size(); ++i)
+            a[i * 3] = anchors[i].x, a[i * 3 + 1] = anchors[i].y, a[i * 3 + 2] = anchors[i].z;
+        j["anchors"] = packedDabs ? json(packed::make<float>(a, 3)) : json(a);
+        // A string: JSON numbers can't hold every 64-bit value exactly.
+        j["meshSignature"] = std::to_string(meshSignature);
+    }
     if (view)
     {
         const float* m = &view->objectToClip[0][0];
@@ -304,19 +346,19 @@ json Stroke::toJson(bool packedDabs) const
                      {"height", view->height}};
     }
     std::vector<uint32_t> tri(dabs.size() * 2);
-    std::vector<float> d(dabs.size() * 6);
+    std::vector<float> d(dabs.size() * kDabFloats);
     for (size_t i = 0; i < dabs.size(); ++i)
     {
         const Dab& a = dabs[i];
         tri[i * 2] = a.triangle;
         tri[i * 2 + 1] = a.copy;
-        const float row[6] = {a.u, a.v, a.radius, a.pressure, a.opacity, a.angle};
-        std::copy(row, row + 6, &d[i * 6]);
+        const float row[kDabFloats] = {a.u, a.v, a.radius, a.pressure, a.opacity, a.angle, a.tilt};
+        std::copy(row, row + kDabFloats, &d[i * kDabFloats]);
     }
     if (packedDabs)
     {
         j["triangles"] = packed::make<uint32_t>(tri, 2);
-        j["dabs"] = packed::make<float>(d, 6);
+        j["dabs"] = packed::make<float>(d, kDabFloats);
     }
     else
     {
@@ -324,7 +366,7 @@ json Stroke::toJson(bool packedDabs) const
         for (size_t i = 0; i < dabs.size(); ++i)
         {
             t.push_back({tri[i * 2], tri[i * 2 + 1]});
-            r.push_back(json(std::vector<double>(&d[i * 6], &d[i * 6] + 6)));
+            r.push_back(json(std::vector<double>(&d[i * kDabFloats], &d[i * kDabFloats] + kDabFloats)));
         }
         j["triangles"] = t;
         j["dabs"] = r;
@@ -351,6 +393,17 @@ Stroke Stroke::fromJson(const json& j)
             s.particles = j["particles"];
         if (j.contains("symmetry") && j["symmetry"].is_object())
             s.symmetry = j["symmetry"];
+        if (j.contains("stencil") && j["stencil"].is_object())
+            s.stencil = StrokeStencil::fromJson(j["stencil"]);
+        if (j.contains("path") && j["path"].is_object())
+            s.path = j["path"];
+        if (j.contains("anchors"))
+        {
+            const std::vector<double> a = rows(j["anchors"], 3, "anchors");
+            for (size_t i = 0; i + 2 < a.size(); i += 3)
+                s.anchors.push_back({f32(a[i]), f32(a[i + 1]), f32(a[i + 2])});
+            s.meshSignature = std::stoull(j.value("meshSignature", std::string("0")));
+        }
         if (j.contains("view") && j["view"].is_object())
         {
             const json& v = j["view"];
@@ -383,18 +436,25 @@ Stroke Stroke::fromJson(const json& j)
                 d.opacity = o.value("opacity", 1.0f);
                 d.angle = o.value("angle", 0.0f);
                 d.copy = o.value("copy", 0u);
+                d.tilt = o.value("tilt", 0.0f);
                 s.dabs.push_back(d);
             }
         }
         else
         {
-            const std::vector<double> d = rows(dabs, 6, "dabs");
             const std::vector<double> t = rows(j.value("triangles", json::array()), 2, "triangles");
-            if (t.size() / 2 != d.size() / 6)
+            const size_t count = t.size() / 2;
+            // Rows of 6 are dabs recorded without tilt.
+            const std::vector<double> d = rows(dabs, 1, "dabs");
+            const size_t w = count ? d.size() / count : kDabFloats;
+            if ((w != 6 && w != kDabFloats) || w * count != d.size())
                 throw std::invalid_argument("triangles and dabs differ in length");
-            for (size_t i = 0; i < d.size() / 6; ++i)
-                s.dabs.push_back({uint32_t(t[i * 2]), f32(d[i * 6]), f32(d[i * 6 + 1]), f32(d[i * 6 + 2]), f32(d[i * 6 + 3]), f32(d[i * 6 + 4]),
-                                  f32(d[i * 6 + 5]), uint32_t(t[i * 2 + 1])});
+            for (size_t i = 0; i < count; ++i)
+            {
+                const double* r = &d[i * w];
+                s.dabs.push_back({uint32_t(t[i * 2]), f32(r[0]), f32(r[1]), f32(r[2]), f32(r[3]), f32(r[4]), f32(r[5]), uint32_t(t[i * 2 + 1]),
+                                  w > 6 ? f32(r[6]) : 0.0f});
+            }
         }
         for (const Dab& d : s.dabs)
             if (!(d.radius > 0.0f) || !std::isfinite(d.u) || !std::isfinite(d.v))
@@ -410,7 +470,84 @@ Stroke Stroke::fromJson(const json& j)
 bool Stroke::operator==(const Stroke& o) const
 {
     return id == o.id && mesh == o.mesh && brush == o.brush && payload == o.payload && seed == o.seed && occlusion == o.occlusion && view == o.view &&
-           dabs == o.dabs && particles == o.particles && symmetry == o.symmetry;
+           dabs == o.dabs && particles == o.particles && symmetry == o.symmetry && stencil == o.stencil && path == o.path &&
+           anchors == o.anchors && meshSignature == o.meshSignature;
+}
+
+std::vector<std::string> Stroke::images() const
+{
+    std::vector<std::string> out;
+    if (!payload.image.empty())
+        out.push_back(payload.image);
+    if (stencil && !stencil->image.empty())
+        out.push_back(stencil->image);
+    if (!payload.limit.empty())
+        out.push_back(payload.limit);
+    return out;
+}
+
+json StrokeStencil::toJson() const
+{
+    return {{"image", image}, {"offset", {offset.x, offset.y}}, {"scale", scale}, {"rotation", rotation}, {"invert", invert},
+            {"tile", tile},   {"mode", mode},                    {"colorChannel", colorChannel}};
+}
+
+StrokeStencil StrokeStencil::fromJson(const json& j)
+{
+    StrokeStencil s;
+    try
+    {
+        s.image = j.value("image", std::string());
+        if (j.contains("offset"))
+        {
+            const json& o = j["offset"];
+            if (!o.is_array() || o.size() != 2)
+                throw std::invalid_argument("stencil offset must be [x, y]");
+            s.offset = {o[0].get<float>(), o[1].get<float>()};
+        }
+        s.scale = j.value("scale", 1.0f);
+        s.rotation = j.value("rotation", 0.0f);
+        s.invert = j.value("invert", false);
+        s.tile = j.value("tile", false);
+        s.mode = j.value("mode", std::string("mask"));
+        s.colorChannel = j.value("colorChannel", std::string("baseColor"));
+    }
+    catch (const json::exception& e)
+    {
+        throw std::invalid_argument(std::string("stencil: ") + e.what());
+    }
+    if (s.mode != "mask" && s.mode != "color")
+        throw std::invalid_argument("stencil mode is mask or color");
+    if (!(s.scale > 0.0f) || !std::isfinite(s.rotation))
+        throw std::invalid_argument("stencil scale must be positive");
+    return s;
+}
+
+namespace
+{
+std::mutex gHeldMutex;
+std::vector<std::shared_ptr<const PaintImage>> gHeld;
+} // namespace
+
+void holdImage(std::shared_ptr<const PaintImage> image)
+{
+    if (!image)
+        return;
+    const std::string key = image->key();
+    std::scoped_lock lock(gHeldMutex);
+    std::erase_if(gHeld, [&](const auto& h) { return h->key() == key; });
+    gHeld.push_back(std::move(image));
+    if (gHeld.size() > 8)
+        gHeld.erase(gHeld.begin());
+}
+
+std::shared_ptr<const PaintImage> heldImage(const std::string& key)
+{
+    std::scoped_lock lock(gHeldMutex);
+    for (const auto& h : gHeld)
+        if (h->key() == key)
+            return h;
+    return nullptr;
 }
 
 // ---------------------------------------------------------------------------------------------------- Baseline
@@ -735,8 +872,8 @@ void PaintData::pruneImages()
     std::set<std::string> used;
     for (const auto& [id, buf] : buffers)
         for (const StrokePtr& st : buf.strokes)
-            if (!st->payload.image.empty())
-                used.insert(st->payload.image);
+            for (const std::string& k : st->images())
+                used.insert(k);
     std::erase_if(images, [&](const auto& kv) { return !used.contains(kv.first); });
 }
 

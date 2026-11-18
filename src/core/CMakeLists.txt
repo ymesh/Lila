@@ -20,6 +20,7 @@ lila_module(lila_core Foundation
     FileBytes.cpp
     ExtensionContext.cpp
     ExtensionManifest.cpp
+    Features.cpp
     ImageIO.cpp
     Log.cpp
     MainQueue.cpp

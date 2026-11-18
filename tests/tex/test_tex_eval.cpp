@@ -2,6 +2,8 @@
 
 #include "core/ExtensionContext.h"
 #include "tex/NodeDef.h"
+#include "geo/Attribute.h"
+#include "geo/Primitives.h"
 #include "tex/SlangRt.h"
 
 #include <cstdlib>
@@ -340,4 +342,92 @@ TEST_CASE("tex: externals feed position, with uv as the fallback")
     o.externals["position"] = {1, 1, {3.0f, 4.0f, 5.0f, 1.0f}};
     image::Image given = evaluateCpu(p, o).outputs.at("out");
     CHECK(texel(given, 4, 4)[2] == doctest::Approx(5.0));
+}
+
+TEST_CASE("tex: an unlinked UV input reads the coordinate, Mapping moves it")
+{
+    Graph uvOnly;
+    add(uvOnly, "U", "uv");
+    image::Image expected = eval(into(uvOnly, "U.uv"), "Output", "baseColor", 16);
+
+    Graph g;
+    add(g, "M", "mapping");
+    image::Image same = eval(into(g, "M.out"), "Output", "baseColor", 16);
+    CHECK(maxDiff(same, expected) < 1e-5);
+
+    g.node("M")->values["scaleX"] = 2.0;
+    g.node("M")->values["offsetY"] = 0.25;
+    image::Image moved = eval(into(g, "M.out"), "Output", "baseColor", 16);
+    for (int y : {1, 7, 12})
+        for (int x : {2, 9, 14})
+        {
+            // Rows run top down: row 0 is v 1.
+            const float u = (float(x) + 0.5f) / 16.0f, v = 1.0f - (float(y) + 0.5f) / 16.0f;
+            CHECK(texel(moved, x, y)[0] == doctest::Approx((u - 0.5f) * 2.0f + 0.5f).epsilon(1e-4));
+            CHECK(texel(moved, x, y)[1] == doctest::Approx(v + 0.25f).epsilon(1e-4));
+        }
+}
+
+/** Projection's spherical coordinate for an object-space point, as the node computes it with axis y. */
+static glm::vec2 sphericalUv(glm::vec3 q)
+{
+    const float u = std::atan2(q.z, -q.x) * 0.15915494f + 0.5f;
+    return {u, std::asin(std::clamp(q.y / glm::length(q), -1.0f, 1.0f)) * 0.31830989f + 0.5f};
+}
+
+TEST_CASE("tex: spherical Projection lines up with a sphere's own uvs")
+{
+    geo::SphereOptions so;
+    so.radius = 50.0;
+    so.subdivAxis = 24;
+    so.subdivHeight = 12;
+    const geo::Mesh m = geo::makeSphere(so);
+    const std::span<const glm::vec2> uv = m.cornerAttrs().get<glm::vec2>("uv0");
+    int checked = 0;
+    for (geo::Index f = 0; f < m.faceCapacity(); ++f)
+    {
+        if (!m.faceValid(f))
+            continue;
+        for (geo::Index c : m.faceCorners(f))
+        {
+            const glm::vec3 p(m.position(m.cornerPoint(c)));
+            const glm::vec2 s = sphericalUv(p);
+            // Away from the poles, where u is undefined, and the seam, where it wraps.
+            if (std::abs(s.y - 0.5f) > 0.4f || uv[c].x < 0.02f || uv[c].x > 0.98f)
+                continue;
+            CAPTURE(f);
+            CHECK(s.x == doctest::Approx(uv[c].x).epsilon(0.002));
+            CHECK(s.y == doctest::Approx(uv[c].y).epsilon(0.002));
+            ++checked;
+        }
+    }
+    CHECK(checked > 100);
+
+    // The node itself, fed object positions, gives the same coordinate.
+    Graph g;
+    add(g, "P", "projection", {{"shape", "spherical"}});
+    Plan plan_ = plan(into(g, "P.out"), "Output", "baseColor", 4);
+    REQUIRE(plan_.error.empty());
+    EvalOptions o;
+    const glm::vec3 point(30.0f, 20.0f, -10.0f);
+    o.externals["position"] = {1, 1, {point.x, point.y, point.z, 1.0f}};
+    image::Image out = evaluateCpu(plan_, o).outputs.at("out");
+    CHECK(texel(out, 1, 2)[0] == doctest::Approx(sphericalUv(point).x).epsilon(1e-4));
+    CHECK(texel(out, 1, 2)[1] == doctest::Approx(sphericalUv(point).y).epsilon(1e-4));
+}
+
+TEST_CASE("tex: Image reads through its UV input")
+{
+    Graph plain;
+    add(plain, "I", "image", {{"file", "strokes/strokes_soft.png"}});
+    image::Image expected = eval(into(plain, "I.out"), "Output", "baseColor", 32);
+
+    Graph g;
+    add(g, "I", "image", {{"file", "strokes/strokes_soft.png"}});
+    add(g, "M", "mapping");
+    link(g, "M.out", "I.coord");
+    CHECK(maxDiff(eval(into(g, "I.out"), "Output", "baseColor", 32), expected) < 1e-5);
+
+    g.node("M")->values["offsetX"] = 0.37;
+    CHECK(maxDiff(eval(into(g, "I.out"), "Output", "baseColor", 32), expected) > 0.05);
 }

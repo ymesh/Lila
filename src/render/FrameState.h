@@ -273,6 +273,48 @@ struct Lut3D
     uint64_t key = nextResourceKey();
 };
 
+/** Grading curves sampled into rows of kSize values (render::grade::Curve order): tone curves map 0..1, hue and saturation ones centre on 0.5. */
+struct GradeCurves
+{
+    static constexpr int kSize = 256;
+    static constexpr int kRows = 7;
+    std::vector<float> values; // kRows * kSize
+    uint64_t key = nextResourceKey();
+};
+
+/** An 8-bit RGBA image the post stack samples (lens dirt), top row first. */
+struct PostImage
+{
+    int width = 0, height = 0;
+    std::vector<uint8_t> rgba;
+    uint64_t key = nextResourceKey();
+};
+
+/** Lens flare from the bright parts of the picture, and the lens dirt bloom and flare light up. Lengths are shares of the picture. */
+struct LensFlare
+{
+    float intensity = 0.0f; // 0 is off
+    float threshold = 1.5f; // exposed light that starts to flare
+    float ghosts = 4.0f, ghostSpacing = 0.35f, chroma = 0.015f;
+    float halo = 0.3f, haloRadius = 0.45f;
+    float starburst = 0.4f, streakLength = 0.2f;
+    int blades = 6; // the camera's aperture blades: the star's arm count (twice that for an odd count)
+    float bladeRotation = 0.0f; // degrees
+    float anamorphic = 0.0f;
+    glm::vec3 anamorphicTint{0.45f, 0.65f, 1.0f};
+    float squeeze = 1.0f; // the camera's anamorphic squeeze: ghosts stretch wide
+    std::shared_ptr<const PostImage> dirt;
+    float dirtIntensity = 0.5f;
+};
+
+/** An OpenColorIO display and view baked to a 3D LUT over a log2 shaper of scene-linear light; outputs display code values. */
+struct ViewTransform
+{
+    std::shared_ptr<const Lut3D> lut;
+    float shaperMin = -12.0f, shaperMax = 10.0f; // log2 of the scene-linear range the LUT covers
+    std::string label;                           // "display / view", for logs and render metadata
+};
+
 /** How to turn the scene's light into the picture: tonemapper, grading, bloom and lens effects (scene::postProcess). */
 struct PostSettings
 {
@@ -294,6 +336,14 @@ struct PostSettings
     float contrast = 1.0f, saturation = 1.0f;
     glm::vec3 whiteBalance{1.0f};            // per channel gains (from temperature and tint)
     glm::vec3 lift{0.0f}, gamma{1.0f}, gain{1.0f};
+    /** Colour wheels: offset adds to every level; masters move luminance (lift and offset add, gamma and gain scale). */
+    glm::vec3 offset{0.0f};
+    float liftMaster = 0.0f, gammaMaster = 1.0f, gainMaster = 1.0f, offsetMaster = 0.0f;
+    /** Tonal balance: gains for shadows, midtones and highlights, split by luminance at the two range boundaries. */
+    glm::vec3 shadows{1.0f}, midtones{1.0f}, highlights{1.0f};
+    float shadowsRange = 0.33f, highlightsRange = 0.66f;
+    /** Tone, hue and saturation curves; null when every one is neutral. */
+    std::shared_ptr<const GradeCurves> curves;
     float bloom = 0.0f;                      // blend toward the bloom, 0..1
     float bloomRadius = 1.0f;                // tent filter radius in texels per level
     float vignette = 0.0f, grain = 0.0f;
@@ -302,6 +352,16 @@ struct PostSettings
     float sharpen = 0.0f;
     std::shared_ptr<const Lut3D> lut;
     float lutIntensity = 1.0f;
+    LensFlare flare;
+    /** Film halation: highlights bleed a tinted glow (through the bloom chain) above a threshold of exposed light. */
+    float halation = 0.0f, halationThreshold = 1.0f;
+    glm::vec3 halationTint{1.0f, 0.25f, 0.08f};
+    /** Film grain shape: grain size in pixels, 0 mono to 1 per channel, 0 even to 1 mid-tone weighted. */
+    float grainSize = 1.5f, grainColor = 0.3f, grainResponse = 0.7f;
+    /** Letterbox bars to this aspect (0 none), at this opacity. */
+    float letterboxAspect = 0.0f, letterboxOpacity = 1.0f;
+    /** Colour management: an OCIO view in place of the tonemapper and display gamma; null keeps Lila's tonemapper. */
+    std::shared_ptr<const ViewTransform> view;
     /** Off for passes whose values must come out exact, such as object mattes. */
     bool dither = true;
 };
@@ -326,6 +386,9 @@ struct LightDraw
     float cosInner = 1.0f, cosOuter = 0.0f; // spot cone
     float width = 0.0f, height = 0.0f;      // cm
     float radius = 0.0f;                    // cm, softens highlights and shadows
+    /** A lens flare drawn where the light shows on screen: brightness and size on top of the light's own. */
+    bool lensFlare = false;
+    float lensFlareIntensity = 1.0f, lensFlareScale = 1.0f;
     /** The light casts shadows: traced on GPUs with ray queries (any kind), else a shadow map (directional and spot). */
     bool castsShadows = false;
     /** World to the shadow map's clip space (reversed-Z), when it has one. */
@@ -372,6 +435,8 @@ struct FrameState
     glm::vec4 wireDefault{0.02f, 0.02f, 0.02f, 1.0f};
     DrawList meshes;
     float exposure = 1.0f; // linear multiplier
+    /** The share of exposure the post process applied, so applying another (a camera's own) replaces it rather than stacking. */
+    float postExposure = 1.0f;
     float gamma = 1.0f;    // display gamma on top of the tonemap, like Maya's viewport gamma
     /** Requested MSAA count (1, 2, 4, 8); the renderer clamps it to the device and rebuilds its targets on change. */
     int msaaSamples = 8;
@@ -393,9 +458,31 @@ struct FrameState
     float focusDistance = 500.0f;
     int apertureBlades = 0;
     float apertureRotation = 0.0f; // degrees
+    /** Anamorphic squeeze of the lens: the aperture is that much taller than wide, so bokeh stretches tall. */
+    float anamorphicSqueeze = 1.0f;
+    /**
+     * Live depth of field and motion blur: a gather over the picture (from the lens above and the camera's movement over
+     * `shutter`, a share of a frame) instead of the jittered lens a still view and renders accumulate.
+     */
+    bool viewportDof = false;
+    bool viewportMotionBlur = false;
+    float shutter = 0.5f;
     std::vector<LightDraw> lights;
     /** Up to four shadowed lights trace their shadows against the scene (GPUs with ray queries) instead of shadow maps. */
     bool rtShadows = false;
+    /**
+     * Reflections of the scene on glossy surfaces under environment light, in place of the environment alone: traced
+     * against the scene on GPUs with ray queries, else from the screen. Rougher than the cutoff reflects the environment.
+     */
+    enum class Reflections
+    {
+        Off,
+        ScreenSpace,
+        RayTraced,
+    };
+    Reflections reflections = Reflections::Off;
+    float reflectionCutoff = 0.6f;
+    float reflectionDistance = 10000.0f; // cm a reflected ray reaches
     /** Exponential height fog, lit by the first directional light as well as its own colour. Lengths cm. */
     struct Fog
     {
@@ -408,6 +495,20 @@ struct FrameState
         float sunScatter = 0.5f;           // how much the sun lights the fog
         float anisotropy = 0.6f;           // forward scattering toward the sun, 0 to 0.95
     } fog;
+    /**
+     * The path-traced viewport (render/PathTracer.h) in place of the shaded meshes, on GPUs with ray queries: samples add
+     * up while the view, scene, materials and textures stay the same, and start over when any changes.
+     */
+    struct PathTrace
+    {
+        bool on = false;
+        int bounces = 4;
+        int samplesPerFrame = 2;
+        int maxSamples = 1024;
+        bool denoise = true;
+        uint32_t seed = 0;
+        float clamp = 50.0f; // the brightest an indirect sample may be, against fireflies
+    } pathTrace;
     /** No backdrop: what no surface covers stays clear (alpha 0), for renders composited later. */
     bool transparentBackground = false;
     /**

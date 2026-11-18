@@ -36,6 +36,14 @@ inline constexpr const char* kVsync = "/viewport/vsync";
 inline constexpr const char* kSafeFrames = "/viewport/safeFrames";
 /** Shadows traced against the scene for up to four lights: exact contacts, soft by each light's size, on GPUs with ray tracing. */
 inline constexpr const char* kRtShadows = "/viewport/rtShadows";
+/** Reflections of the scene on glossy surfaces: "off", "screenSpace" or "rayTraced" (falls back to screen space without ray tracing). */
+inline constexpr const char* kReflections = "/viewport/post/reflections";
+/** Roughness above which surfaces reflect the environment alone. */
+inline constexpr const char* kReflectionCutoff = "/viewport/post/reflectionCutoff";
+/** Live depth of field: the camera's lens blur gathered every frame, so it shows while the view moves. */
+inline constexpr const char* kViewportDof = "/viewport/post/depthOfField";
+/** Live motion blur: the camera's movement smeared over its shutter, in the view and playblasts (renders accumulate their own). */
+inline constexpr const char* kViewportMotionBlur = "/viewport/post/motionBlur";
 inline constexpr const char* kThirds = "/viewport/thirds";
 /** The scene's post process grading, bloom and lens effects in viewports (its tonemapper and exposure always apply). */
 inline constexpr const char* kPostEffects = "/viewport/post/effects";
@@ -71,6 +79,8 @@ inline constexpr const char* kToolbar = "/viewport/toolbar";
 inline constexpr const char* kHideUnusedItems = "/viewport/toolbar/hideUnused";
 /** Smooth preview draws the subdivided mesh's own edges; off, only the cage edges, following the smooth surface. */
 inline constexpr const char* kSmoothSubdivisions = "/viewport/smoothPreview/subdivisions";
+/** Component editing on a mesh with modifiers also draws the edges the modifiers add, faintly. */
+inline constexpr const char* kModifierEdges = "/viewport/modifierEdgesWhileEditing";
 /** Smooth preview keeps normals split along hard edges; off, it shades smooth across them, like Maya. */
 inline constexpr const char* kSmoothHardEdges = "/viewport/smoothPreview/hardEdges";
 inline constexpr const char* kVertexColors = "/viewport/vertexColors"; // "off", "shaded" (multiplied in) or "unlit"
@@ -220,7 +230,17 @@ LILA_UI_API void tiltLight(double degrees);
 LILA_UI_API void resetLight();
 LILA_UI_API void applyQuality(Quality q);
 /** The scene's active post process into s (nothing when it has none); effects turns its grading, bloom and lens effects on. */
-LILA_UI_API void applyPostProcess(render::FrameState& s, bool effects);
+/** cameraPost: a post process the view's camera links to, used in place of the scene's; volumes blend over either. */
+LILA_UI_API void applyPostProcess(render::FrameState& s, bool effects, scene::NodeId cameraPost = scene::kNoNode);
+
+/**
+ * The scene's colour management into s: an OCIO view baked once per settings change, or Lila's tonemapper. A config
+ * that fails to load leaves Lila's tonemapper on and colorNote() says so.
+ */
+LILA_UI_API void applyColorManagement(render::FrameState& s);
+
+/** Why colour management isn't what the scene asks for (an OCIO config or view that failed), empty when it is. */
+LILA_UI_API std::string colorNote();
 /**
  * The scene's lights Lila's provider owns into s.lights, in the shader's units, with shadow matrices fit to the shown
  * meshes for directional and spot lights.

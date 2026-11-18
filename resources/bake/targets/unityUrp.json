@@ -1,0 +1,67 @@
+{
+  "name": "unityUrp",
+  "label": "Unity (URP Lit)",
+  "version": 1,
+  "doc": "Unity's Universal Render Pipeline Lit shader: Base Map, Metallic Map with smoothness (1 - roughness) in alpha, OpenGL normals, Occlusion, Height and Emission, named {material}_{suffix}.",
+  "output": {
+    "name": "{material}_{map}",
+    "format": "png",
+    "bits": 8
+  },
+  "pipeline": {
+    "autoAssign": true
+  },
+  "maps": [
+    {
+      "map": "baseColor",
+      "suffix": "BaseMap",
+      "slot": "_BaseMap"
+    },
+    {
+      "map": "orm",
+      "suffix": "MetallicSmoothness",
+      "slot": "_MetallicGlossMap",
+      "options": {
+        "channels": [
+          {
+            "map": "metallic"
+          },
+          0.0,
+          0.0,
+          {
+            "map": "roughness",
+            "invert": true
+          }
+        ]
+      }
+    },
+    {
+      "map": "normal",
+      "suffix": "Normal",
+      "slot": "_BumpMap",
+      "bits": 16,
+      "options": {
+        "greenUp": true
+      }
+    },
+    {
+      "map": "ao",
+      "suffix": "Occlusion",
+      "slot": "_OcclusionMap",
+      "optional": true
+    },
+    {
+      "map": "height",
+      "suffix": "Height",
+      "slot": "_ParallaxMap",
+      "bits": 16,
+      "optional": true
+    },
+    {
+      "map": "emissive",
+      "suffix": "Emission",
+      "slot": "_EmissionMap",
+      "optional": true
+    }
+  ]
+}

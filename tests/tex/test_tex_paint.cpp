@@ -72,6 +72,62 @@ TEST_CASE("texture paint: strokes replay bit for bit, live or recorded")
     CHECK(gp::pageBytes(c.id(), "P") == first);
 }
 
+TEST_CASE("texture paint: queued live batches keep their order through commit, cancel, undo and redo")
+{
+    if (!gpu())
+        return;
+    newScene();
+    addMesh("PanelMesh", seamPanel());
+    scene::Node& a = makeSet("PanelA", 256);
+    const json stroke = redStroke({{-30, 0, 0}, {-20, 0, 5}, {-10, 0, 8}, {0, 0, 10}, {10, 0, 8}, {25, 0, -5}}, 12.0);
+    paintStroke("PanelA", "P", stroke);
+    const auto whole = gp::pageBytes(a.id(), "P");
+    REQUIRE(!whole.empty());
+    tex::paint::Stroke rec = *tex::paint::readPaint(a)->buffer("P")->strokes.front();
+
+    // A dab per call, nothing waited on, committed at once: the same bytes as the stroke in one go.
+    scene::Node& b = makeSet("PanelB", 256);
+    rec.id = 11;
+    gp::beginLive(sg(), b, "P", std::make_shared<const tex::paint::Stroke>(rec));
+    for (size_t i = 0; i < rec.dabs.size(); ++i)
+        gp::liveDabs(b.id(), "P", std::span(rec.dabs).subspan(i, 1));
+    paintStroke("PanelB", "P", rec.toJson(false));
+    CHECK_FALSE(gp::liveActive(b.id(), "P"));
+    CHECK(gp::pageBytes(b.id(), "P") == whole);
+
+    // Undo and redo of the live stroke restore its pages bit for bit.
+    UndoStack::get().undo();
+    mainq::drain();
+    CHECK(gp::pageBytes(b.id(), "P").empty());
+    UndoStack::get().redo();
+    mainq::drain();
+    CHECK(gp::pageBytes(b.id(), "P") == whole);
+
+    // A second stroke cancelled while its dabs are still queued leaves the first stroke's pages as they were.
+    tex::paint::Stroke second = rec;
+    second.id = 12;
+    for (tex::paint::Dab& d : second.dabs)
+        d.radius *= 1.5f;
+    gp::beginLive(sg(), b, "P", std::make_shared<const tex::paint::Stroke>(second));
+    for (size_t i = 0; i < second.dabs.size(); ++i)
+        gp::liveDabs(b.id(), "P", std::span(second.dabs).subspan(i, 1));
+    gp::cancelLive(b.id(), "P");
+    CHECK_FALSE(gp::liveActive(b.id(), "P"));
+    CHECK(gp::pageBytes(b.id(), "P") == whole);
+
+    // Queued dabs reach the change listeners once painted.
+    int heard = 0;
+    const int listener = gp::addChangeListener([&](scene::NodeId id) { heard += id == b.id() ? 1 : 0; });
+    gp::beginLive(sg(), b, "P", std::make_shared<const tex::paint::Stroke>(second));
+    gp::liveDabs(b.id(), "P", second.dabs);
+    gp::settleLive();
+    CHECK(heard >= 1);
+    CHECK(gp::pageBytes(b.id(), "P") != whole);
+    gp::cancelLive(b.id(), "P");
+    gp::removeChangeListener(listener);
+    CHECK(gp::pageBytes(b.id(), "P") == whole);
+}
+
 TEST_CASE("texture paint: seams stay continuous across UV islands")
 {
     if (!gpu())
@@ -311,6 +367,48 @@ TEST_CASE("texture paint: the stroke's view hides what it can't see")
     CHECK(at(gp::readChannel(set.id(), "Q", "roughness"), seamUv(0, -5.0, 0.0))[3] > 0.5f);
 }
 
+TEST_CASE("texture paint: a stroke never touches pages only surfaces facing away from its view reach")
+{
+    if (!gpu())
+        return;
+    newScene();
+    // The panel, and the panel with a quad just below it facing down, its uv in a corner of its own.
+    geo::Mesh withFloor = seamPanel();
+    {
+        const std::vector<glm::dvec3> pts = {{10, -5, -10}, {10, -5, 10}, {-10, -5, 10}, {-10, -5, -10}};
+        const std::vector<geo::Index> sizes = {4}, idx = {0, 1, 2, 3};
+        geo::Mesh floor = geo::Mesh::fromPolygons(pts, sizes, idx);
+        auto uv = floor.cornerAttrs().getOrAdd<glm::vec2>(geo::attr::uvName(0));
+        for (geo::Index c : floor.faceCorners(0))
+        {
+            const glm::dvec3 p = floor.position(floor.cornerPoint(c));
+            uv[c] = {float(0.47 + (p.x + 10.0) / 20.0 * 0.06), float(0.93 + (p.z + 10.0) / 20.0 * 0.05)};
+        }
+        withFloor.append(floor);
+    }
+    addMesh("PanelMesh", seamPanel());
+    scene::Node& plain = makeSet("Panel", 512);
+    const json view = {{"eye", {0.0, 300.0, 0.01}}, {"lookAt", {0.0, 0.0, 0.0}}, {"up", {0.0, 0.0, -1.0}}, {"fov", 40.0}, {"width", 400}, {"height", 400}};
+    json brush = brushJson();
+    brush["radius"] = 1.0;
+    brush["radiusUnit"] = "world";
+    brush["worldRadius"] = 30.0;
+    brush["falloff"] = "constant";
+    const json paint = {{"args", {"Panel", "P"}}, {"points", {{200.0, 200.0}}}, {"view", view}, {"brush", brush}, {"stroke", {{"occlusion", false}}},
+                        {"payload", {{"channels", {{"roughness", 1.0}}}}}};
+    run("texPaintStroke", paint);
+    const size_t plainPages = gp::pageBytes(plain.id(), "P").size();
+    REQUIRE(plainPages > 0);
+
+    newScene();
+    addMesh("PanelMesh", std::move(withFloor));
+    scene::Node& floored = makeSet("Panel", 512);
+    run("texPaintStroke", paint);
+    // The floor is within the dab's reach but faces away: its texels stay unpainted and its pages untouched.
+    CHECK(gp::pageBytes(floored.id(), "P").size() == plainPages);
+    CHECK(at(gp::readChannel(floored.id(), "P", "roughness"), {0.5f, 0.955f})[3] == 0.0f);
+}
+
 TEST_CASE("texture paint: the live viewport composites a painted buffer")
 {
     if (!gpu())
@@ -324,7 +422,7 @@ TEST_CASE("texture paint: the live viewport composites a painted buffer")
     tex::writeGraph(sg(), set, g);
     paintStroke("Panel", "P", redStroke({{25, 0, 0}}, 20.0));
     ui::texLive::install();
-    REQUIRE(ui::texLive::mapsFor("Panel"));
+    REQUIRE(ui::texLive::mapsFor("M_Panel"));
     REQUIRE(ui::texLive::waitIdle());
     GpuImageRef img = ui::texLive::channelImage("Panel", "baseColor");
     REQUIRE(img);
@@ -364,7 +462,7 @@ TEST_CASE("texture paint: a committed or undone stroke redraws the viewport at f
     tex::writeGraph(sg(), set, g);
     paintStroke("Sharp", "P", redStroke({{25, 0, 0}}, 20.0));
     ui::texLive::install();
-    REQUIRE(ui::texLive::mapsFor("Sharp"));
+    REQUIRE(ui::texLive::mapsFor("M_Sharp"));
     REQUIRE(ui::texLive::waitIdle());
     auto counts = [](const char* key) {
         std::vector<uint64_t> out;
@@ -435,7 +533,7 @@ TEST_CASE("texture paint: the graph a first stroke makes is compiled ahead, so a
     addMesh("PanelMesh", seamPanel());
     scene::Node& set = makeSet("Ahead", 256);
     ui::texLive::install();
-    REQUIRE(ui::texLive::mapsFor("Ahead"));
+    REQUIRE(ui::texLive::mapsFor("M_Ahead"));
     REQUIRE(ui::texLive::waitIdle());
     std::vector<std::string> channels;
     for (const tex::Channel& c : tex::readSettings(set).channels)
@@ -475,4 +573,79 @@ TEST_CASE("texture paint: the graph a first stroke makes is compiled ahead, so a
     // Wired already: nothing left to compile ahead.
     CHECK_FALSE(gp::wiredGraph(set, layer, channels));
     ui::texLive::shutdown();
+}
+
+TEST_CASE("texture paint: a new layer never takes the id of paint left behind")
+{
+    if (!gpu())
+        return;
+    newScene();
+    addMesh("PanelMesh", seamPanel());
+    makeSet("Panel", 128);
+    // Paint under L1 with no layer of that id, as an undone layer leaves it.
+    paintStroke("Panel", "L1", redStroke({{0, 0, 0}}, 15.0, json::object()));
+    REQUIRE(run("texStrokes", {{"args", {"Panel", "L1"}}}).size() == 1);
+    const std::string id = run("texAddLayer", {{"args", {"Panel", "paint"}}})["id"];
+    CHECK(id != "L1");
+    // The new layer starts with no paint of its own.
+    CHECK_FALSE(run("texPaintInfo", {{"args", {"Panel"}}})["layers"].contains(id));
+}
+
+namespace
+{
+/** Two 100 cm quads side by side; the second's uv island is a fifth the size of the first's. */
+geo::Mesh unevenPanel()
+{
+    const std::vector<glm::dvec3> pts = {{-100, 0, -50}, {0, 0, -50}, {100, 0, -50}, {-100, 0, 50}, {0, 0, 50}, {100, 0, 50}};
+    const std::vector<geo::Index> sizes = {4, 4}, idx = {0, 3, 4, 1, 1, 4, 5, 2};
+    geo::Mesh m = geo::Mesh::fromPolygons(pts, sizes, idx);
+    auto uv = m.cornerAttrs().getOrAdd<glm::vec2>(geo::attr::uvName(0));
+    for (geo::Index f = 0; f < 2; ++f)
+        for (geo::Index c : m.faceCorners(f))
+        {
+            const glm::dvec3 p = m.position(m.cornerPoint(c));
+            const double u = (p.x - (f == 0 ? -100.0 : 0.0)) / 100.0, v = (p.z + 50.0) / 100.0;
+            uv[c] = f == 0 ? glm::vec2(float(0.05 + 0.4 * u), float(0.05 + 0.4 * v)) : glm::vec2(float(0.6 + 0.08 * u), float(0.6 + 0.08 * v));
+        }
+    return m;
+}
+
+/** How often the base colour crosses its mean along a row of a uv box, per uv unit. */
+double crossingsPerUv(const image::Image& img, float u0, float u1, float v)
+{
+    std::vector<float> row;
+    for (float u = u0; u < u1; u += 1.0f / float(img.width))
+        row.push_back(at(img, {u, v})[0]);
+    float mean = 0.0f;
+    for (float x : row)
+        mean += x / float(row.size());
+    int n = 0;
+    for (size_t i = 1; i < row.size(); ++i)
+        n += (row[i - 1] - mean) * (row[i] - mean) < 0.0f ? 1 : 0;
+    return n / double(u1 - u0);
+}
+
+double islandRatio(const std::string& space)
+{
+    newScene();
+    addMesh("PanelMesh", unevenPanel());
+    scene::Node& set = makeSet("Panel", 1024);
+    json stroke = redStroke({{-50, 0, 0}, {50, 0, 0}}, 80.0, {{"baseColor", {1.0, 1.0, 1.0}}});
+    stroke["payload"]["source"] = {{"node", "perlin"}, {"values", {{"scale", 8}}}, {"resolution", 256}, {"space", space}, {"size", 50.0}};
+    paintStroke("Panel", "P", stroke);
+    const image::Image img = gp::readChannel(set.id(), "P", "baseColor");
+    return crossingsPerUv(img, 0.6f, 0.68f, 0.64f) / crossingsPerUv(img, 0.05f, 0.45f, 0.25f);
+}
+} // namespace
+
+TEST_CASE("texture paint: a material source keeps its size on the surface, however dense the uvs")
+{
+    if (!gpu())
+        return;
+    // The second island is 5x denser in uv: the same pattern on the surface packs 5x more changes into each uv unit.
+    const double object = islandRatio("object");
+    const double uv = islandRatio("uv");
+    INFO("object " << object << ", uv " << uv);
+    CHECK(object > 3.0);
+    CHECK(uv < 2.0);
 }

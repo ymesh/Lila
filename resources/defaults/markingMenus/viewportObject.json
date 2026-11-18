@@ -28,6 +28,7 @@
     { "separator": true },
     { "label": "Select All", "action": "edit.selectAll" },
     { "separator": true },
+    { "label": "Edit Material", "action": "material.editAssigned" },
     { "label": "Assign New Material", "action": "material.assignNew" },
     { "label": "Assign Existing Material", "children": { "overflow": [ { "insert": "materials" } ] } },
     { "label": "Assign Default Material", "action": "material.assignDefault" },

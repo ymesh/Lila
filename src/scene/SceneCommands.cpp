@@ -38,6 +38,7 @@
 #include "scene/Picker.h"
 #include "scene/Poses.h"
 #include "scene/PostProcess.h"
+#include "scene/ColorManagement.h"
 #include "scene/Relocate.h"
 #include "scene/Georef.h"
 #include "pointcloud/PointCloudNode.h"
@@ -272,6 +273,7 @@ void registerCommands()
     registerCameraCommands();
     registerLightCommands();
     postProcess::registerCommands();
+    colorManagement::registerCommands();
     spaces::registerCommands();
     anim::registerCommands();
     drivers::registerCommands();

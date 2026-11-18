@@ -1,3 +1,4 @@
+#include "curve/Text.h"
 #include "ui/TextureSetPanel.h"
 
 // Plan.h has a member named like Qt's slots macro.
@@ -37,8 +38,10 @@
 #include "ui/ShelfTags.h"
 #include "ui/SpinScrub.h"
 #include "ui/TexParams.h"
+#include "ui/TexProjectionTool.h"
 #include "ui/TexPreview.h"
 #include "ui/TextureGraphUi.h"
+#include "ui/Favourites.h"
 #include "ui/TexturePaintTool.h"
 #include "ui/FileDialog.h"
 #include "ui/Theme.h"
@@ -51,6 +54,7 @@
 #include "ui/ViewportLayout.h"
 
 #include <QApplication>
+#include <QClipboard>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
@@ -137,6 +141,15 @@ protected:
     }
 };
 
+/** The layer stack column. It asks only for its minimum height, so the settings above it get their full height before it
+ *  grows; a tall stack hint would otherwise take an equal share of any shortfall from the settings. */
+class StackColumn final : public QWidget
+{
+public:
+    using QWidget::QWidget;
+    QSize sizeHint() const override { return {QWidget::sizeHint().width(), minimumSizeHint().height()}; }
+};
+
 /** A middle click picks item `index` and commits it as a user pick does (these combos act on activated). */
 void texComboDefaultIndex(QComboBox* c, int index)
 {
@@ -155,37 +168,6 @@ void texComboDefault(QComboBox* c, const QString& value)
 {
     texComboDefaultIndex(c, c->findData(value));
 }
-
-/** Lists the scene's materials, refreshed each time it opens, keeping `current` selected and listed. */
-class MaterialSlotCombo : public QComboBox
-{
-public:
-    MaterialSlotCombo(std::string current, QWidget* parent) : QComboBox(parent), mCurrent(std::move(current)) { fill(); }
-
-    void showPopup() override
-    {
-        mCurrent = currentData().toString().toStdString();
-        fill();
-        QComboBox::showPopup();
-    }
-
-private:
-    void fill()
-    {
-        std::vector<std::string> names;
-        for (const scene::Node* m : scene::materials::all(scene::Graph::current()))
-            names.push_back(m->path());
-        if (std::ranges::find(names, mCurrent) == names.end())
-            names.push_back(mCurrent);
-        std::ranges::sort(names);
-        clear();
-        for (const std::string& n : names)
-            addItem(QString::fromStdString(n), QString::fromStdString(n));
-        setCurrentIndex(std::max(0, findData(QString::fromStdString(mCurrent))));
-    }
-
-    std::string mCurrent;
-};
 
 // Active paint layers ------------------------------------------------------------------------------------------------
 
@@ -245,6 +227,12 @@ QString kindIcon(const std::string& kind, bool open = false)
         return "link";
     if (kind == "filter")
         return "filter";
+    if (kind == "decal")
+        return "sticker";
+    if (kind == "text")
+        return "typography";
+    if (kind == "scatter")
+        return "confetti";
     return "square";
 }
 
@@ -469,7 +457,7 @@ QIcon imageTile(const std::filesystem::path& file, int size)
 }
 
 /** The tool icon a brush preset's payload kind shows. */
-const char* presetIcon(const tex::brushes::Preset& p)
+const char* layerPresetIcon(const tex::brushes::Preset& p)
 {
     if (p.particles.is_object())
         return "droplet";
@@ -568,7 +556,7 @@ QIcon presetPreview(const tex::brushes::Preset& p)
             img.setPixel(x, y, qRgba(enc(rgb.r) * a / 255, enc(rgb.g) * a / 255, enc(rgb.b) * a / 255, a));
         }
     QPainter painter(&img);
-    icon(presetIcon(p)).paint(&painter, QRect(W - 17, H - 17, 16, 16));
+    icon(layerPresetIcon(p)).paint(&painter, QRect(W - 17, H - 17, 16, 16));
     painter.end();
     return QIcon(QPixmap::fromImage(img));
 }
@@ -781,6 +769,20 @@ std::string textureGraphSet()
     return {};
 }
 
+/** Whether the selection holds a mesh, or a group with one under it. */
+bool selectsMeshes(scene::Graph& g)
+{
+    for (scene::NodeId id : g.selection())
+    {
+        if (scene::Node* n = g.node(id); n && n->type().isA("mesh"))
+            return true;
+        for (scene::NodeId d : g.descendants(id))
+            if (scene::Node* n = g.node(d); n && n->type().isA("mesh"))
+                return true;
+    }
+    return false;
+}
+
 } // namespace
 
 // Panel ----------------------------------------------------------------------------------------------------------------
@@ -792,6 +794,7 @@ struct TextureSetPanel::Impl
     json view;
     tex::SetSettings settings;
     std::string viewKey, settingsKey, shelfKey;
+    bool shelfStale = false;
     std::string selLayer, selMask;
     std::map<std::string, bool> expanded;
     bool building = false;
@@ -800,6 +803,7 @@ struct TextureSetPanel::Impl
     std::string propsKey;
 
     QComboBox* sets = nullptr;
+    QComboBox* variants = nullptr;
     QToolButton* follow = nullptr;
     QToolButton* settingsToggle = nullptr;
     QWidget* settingsBox = nullptr;
@@ -826,6 +830,9 @@ struct TextureSetPanel::Impl
     QSplitter* split = nullptr;
     bool wide = false;
     QWidget* empty = nullptr;
+    QLabel* emptyText = nullptr;
+    /** Follow found meshes selected and no set on their materials: the panel shows none rather than the last one. */
+    bool noSetForSelection = false;
     QTimer* refreshTimer = nullptr;
     int sceneListener = 0;
     int activeListener = 0;
@@ -992,6 +999,17 @@ struct TextureSetPanel::Impl
             call["source"] = selLayer;
             call["name"] = src->value("name", selLayer) + " instance";
         }
+        if (kind == "decal" || kind == "scatter")
+        {
+            const QString f = ui::fileDialog::getOpenFileName(self, kind == "decal" ? "Decal Picture" : "Scatter Pattern", {},
+                                                              "Images (*.png *.jpg *.jpeg *.tga *.tif *.tiff *.exr *.psd)");
+            if (f.isEmpty())
+                return {};
+            if (kind == "decal")
+                call["decal"] = {{"maps", {{"baseColor", f.toStdString()}}}};
+            else
+                call["scatter"] = {{"pattern", f.toStdString()}};
+        }
         std::string id;
         {
             UndoChunk chunk("Add " + capitalised(kind).toStdString() + " Layer");
@@ -1064,6 +1082,7 @@ struct TextureSetPanel::Impl
 
     void updateThumbs()
     {
+        LILA_ZONE();
         thumbsQueued = false;
         QPointer<TextureSetPanel> guard(self);
         for (Thumb& t : thumbs)
@@ -1382,6 +1401,7 @@ struct TextureSetPanel::Impl
 
     void rebuildTree()
     {
+        LILA_ZONE();
         building = true;
         const int scroll = tree->verticalScrollBar()->value();
         thumbs.clear();
@@ -1411,6 +1431,7 @@ struct TextureSetPanel::Impl
 
     void rebuildSettings()
     {
+        LILA_ZONE();
         delete settingsBox->layout();
         // Children of nested layouts too, which taking the top layout's items would miss.
         for (QWidget* w : settingsBox->findChildren<QWidget*>(Qt::FindDirectChildrenOnly))
@@ -1652,21 +1673,31 @@ struct TextureSetPanel::Impl
         QObject::connect(fromHeight, &QCheckBox::toggled, settingsBox,
                          [this](bool on) { runUi("texSetSettings", args({json{{"normalFromHeight", on}}})); });
         form->addRow("Export", fromHeight);
-        form->addRow("Material", materialPicker(settingsBox));
+        auto* tileable = new QCheckBox("Tileable", settingsBox);
+        tileable->setObjectName("tileable");
+        tileable->setChecked(settings.tileable);
+        setCheckDefault(tileable, defaults.tileable);
+        tileable->setToolTip("The texture repeats (trim sheets, tiling materials): strokes wrap round the uv square's edges, and the 2D View tiles it");
+        QObject::connect(tileable, &QCheckBox::toggled, settingsBox, [this](bool on) { runUi("texSetSettings", args({json{{"tileable", on}}})); });
+        form->addRow("Painting", tileable);
+        form->addRow("Used By", usedBy(settingsBox));
         auto* bake = new QLabel(settings.bakeProject.empty() ? QString("None") : qs(settings.bakeProject), settingsBox);
         bake->setToolTip("The bake project whose maps feed the set's mesh inputs (texSetSettings bakeProject=)");
         form->addRow("Bake Project", bake);
         v->addLayout(form);
     }
 
-    /** The material slot the set drives. An empty setting means the material named after the set. */
-    QComboBox* materialPicker(QWidget* parent)
+    /** The materials that pick the set, as names; a material picks it in its Texture Set field. */
+    QLabel* usedBy(QWidget* parent)
     {
-        auto* box = new MaterialSlotCombo(settings.material.empty() ? set : settings.material, parent);
-        box->setToolTip("Meshes using this material show the set's maps");
-        QObject::connect(box, &QComboBox::activated, parent,
-                         [this, box](int) { runUi("texSetSettings", args({json{{"material", box->currentData().toString().toStdString()}}})); });
-        return box;
+        std::string names;
+        for (const std::string& m : tex::materialsUsing(scene::Graph::current(), set))
+            names += (names.empty() ? "" : ", ") + m;
+        auto* l = new QLabel(names.empty() ? QString("No material") : qs(names), parent);
+        l->setObjectName("usedBy");
+        l->setWordWrap(true);
+        l->setToolTip("Materials whose Texture Set (or one of whose maps) is this set. Pick it in the Material Editor.");
+        return l;
     }
 
     /** Wide: the smart materials sit under the settings in the side column. Narrow: one column, with them under the layers. */
@@ -1696,6 +1727,7 @@ struct TextureSetPanel::Impl
 
     void rebuildChannelPicker()
     {
+        LILA_ZONE();
         const QString keep = channel->currentData().toString();
         channel->blockSignals(true);
         channel->clear();
@@ -1708,6 +1740,7 @@ struct TextureSetPanel::Impl
 
     void rebuildBanner()
     {
+        LILA_ZONE();
         if (!graphMode())
         {
             bannerBox->hide();
@@ -1732,6 +1765,29 @@ struct TextureSetPanel::Impl
         it->setToolTip(tags.isEmpty() ? tip : tip + (Qt::mightBeRichText(tip) ? "<br>" : "\n") + "Tags: " + tags.join(", "));
     }
 
+    /** The favourites list a shelf item stars into, and its id; none for the Default and Round tiles. */
+    static std::pair<std::string, std::string> shelfFavourite(const QString& kind, const QString& id)
+    {
+        if (id.isEmpty())
+            return {};
+        return {"textureShelf/" + kind.toStdString(), id.toStdString()};
+    }
+
+    /** Favourites move to the front of the shelf, after the Default and Round tiles, in shelf order; the rest keep theirs. */
+    void favouritesFirst()
+    {
+        std::vector<QListWidgetItem*> fixed, fav, rest;
+        while (shelf->count() > 0)
+        {
+            QListWidgetItem* it = shelf->takeItem(0);
+            const auto [list, id] = shelfFavourite(it->data(Qt::UserRole + 1).toString(), it->data(Qt::UserRole).toString());
+            (list.empty() ? fixed : favourites::has(list, id) ? fav : rest).push_back(it);
+        }
+        for (const auto* group : {&fixed, &fav, &rest})
+            for (QListWidgetItem* it : *group)
+                shelf->addItem(it);
+    }
+
     static QStringList qtags(const std::vector<std::string>& tags)
     {
         QStringList out;
@@ -1748,6 +1804,7 @@ struct TextureSetPanel::Impl
     /** Every kind's items, filtered to one by the switch: smart materials and masks, brush presets, alphas, textures. */
     void rebuildShelf()
     {
+        LILA_ZONE();
         std::vector<tex::SmartMaterial> list;
         try
         {
@@ -1802,6 +1859,10 @@ struct TextureSetPanel::Impl
         for (const tex::brushes::Preset& p : presets)
             sorted.push_back(&p);
         std::stable_sort(sorted.begin(), sorted.end(), [](auto* a, auto* b) { return a->category < b->category; });
+        // Drawn like every preset, from the default brush.
+        tex::brushes::Preset round;
+        round.brush = defaultTexturePaintBrush();
+        addShelfItem(presetPreview(round), "Default", QString(), "brush", "Default: the round brush as before any preset", "default round reset");
         for (const tex::brushes::Preset* p : sorted)
             addShelfItem(presetPreview(*p), qs(p->name), qs(p->id), "brush",
                          (p->category.empty() ? QString() : qs(p->category) + ": ") + qs(p->name) + (p->doc.empty() ? QString() : "\n" + qs(p->doc)),
@@ -1814,6 +1875,7 @@ struct TextureSetPanel::Impl
         for (const std::filesystem::path& t : textures)
             addShelfItem(imageTile(t, 64), QString::fromStdWString(t.stem().wstring()), QString::fromStdWString(t.wstring()), "texture",
                          QString::fromStdWString(t.filename().wstring()) + "\nClick to paint through it", QString::fromStdWString(t.stem().wstring()));
+        favouritesFirst();
         filterShelf();
     }
 
@@ -1835,6 +1897,7 @@ struct TextureSetPanel::Impl
     /** Shows the kind the switch picks, narrowed by the search; masks need a layer to go on, so without one the shelf says so. */
     void filterShelf()
     {
+        LILA_ZONE();
         const int kind = shelfKindIndex();
         const QString want = kShelfKindNames[kind];
         const QString needle = shelfSearch ? shelfSearch->text().trimmed().toLower() : QString();
@@ -1888,7 +1951,9 @@ struct TextureSetPanel::Impl
             return;
         const QString kind = it->data(Qt::UserRole + 1).toString();
         const std::string id = it->data(Qt::UserRole).toString().toStdString();
-        if (kind == "brush")
+        if (kind == "brush" && id.empty())
+            resetTexturePaintBrush();
+        else if (kind == "brush")
             applyTexturePaintPreset(id);
         else if (kind == "alpha")
             setTexturePaintAlpha(id);
@@ -1932,7 +1997,9 @@ struct TextureSetPanel::Impl
         auto* head = boldHeading(w, qs(l.value("name", id)) + "  (" + capitalised(kind) + " layer, " + qs(id) + ")");
         v->addWidget(head);
 
-        if (kind == "fill" || kind == "paint")
+        if (kind == "decal" || kind == "text" || kind == "scatter")
+            placedProps(w, v, l, kind);
+        if (kind == "fill" || kind == "paint" || kind == "decal" || kind == "text" || kind == "scatter")
         {
             json node = {{"name", id}, {"label", kind == "paint" ? "Brush Material" : "Material"}, {"params", json::array()}};
             json inputs = json::array();
@@ -1958,6 +2025,8 @@ struct TextureSetPanel::Impl
                 v->addWidget(paint);
             }
             v->addWidget(texParams::nodePanel(w, node, [this](const std::string& c, const json& value) { propsLayer({{"material", {{c, value}}}}); }));
+            if (kind == "fill" || kind == "decal" || kind == "text")
+                projectionProps(w, v, l.value("projection", json::object()), id, {}, [this](const json& p) { propsLayer({{"projection", p}}); });
         }
         else if (kind == "procedural")
         {
@@ -1976,6 +2045,7 @@ struct TextureSetPanel::Impl
             v->addWidget(texParams::nodePanel(w, tilingNode, [this](const std::string& p, const json& value) {
                 propsLayer({{"tiling", {{p == "tiles" ? std::string("scale") : p, value}}}});
             }));
+            projectionProps(w, v, l.value("projection", json::object()), id, {}, [this](const json& p) { propsLayer({{"projection", p}}); });
         }
         else if (kind == "filter")
         {
@@ -2103,6 +2173,131 @@ struct TextureSetPanel::Impl
         v->addLayout(aForm);
     }
 
+    /** A row naming a picture file, picking another on click. */
+    QToolButton* pictureButton(QWidget* w, const std::string& file, std::function<void(const std::string&)> picked)
+    {
+        auto* b = new QToolButton(w);
+        controls::setRole(b, "row");
+        b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        b->setIcon(icon("photo"));
+        b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        b->setText(file.empty() ? QString("None") : QFileInfo(qs(file)).fileName());
+        b->setToolTip(file.empty() ? QString("Pick a picture") : qs(file));
+        QObject::connect(b, &QToolButton::clicked, w, [this, picked] {
+            const QString f = ui::fileDialog::getOpenFileName(this->self, "Picture", {}, "Images (*.png *.jpg *.jpeg *.tga *.tif *.tiff *.exr *.psd)");
+            if (!f.isEmpty())
+                picked(f.toStdString());
+        });
+        return b;
+    }
+
+    /** Decal, text and scatter: what they draw (pictures, words, pattern) and how. */
+    void placedProps(QWidget* w, QVBoxLayout* v, const json& l, const std::string& kind)
+    {
+        auto* form = new QFormLayout();
+        form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        auto spin = [&](const char* objectName, double lo, double hi, double step, int decimals, double value, std::function<void(double)> set) {
+            auto* f = new QDoubleSpinBox(w);
+            f->setObjectName(objectName);
+            f->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            f->setRange(lo, hi);
+            f->setSingleStep(step);
+            f->setDecimals(decimals);
+            f->setKeyboardTracking(false);
+            f->setValue(value);
+            QObject::connect(f, &QDoubleSpinBox::valueChanged, w, [set](double x) { set(x); });
+            return f;
+        };
+        if (kind == "decal")
+        {
+            const json dec = l.value("decal", json::object());
+            const json maps = dec.value("maps", json::object());
+            for (const tex::Channel& c : settings.channels)
+            {
+                const std::string ch = c.name;
+                form->addRow(qs(ch), pictureButton(w, maps.value(ch, std::string()), [this, ch](const std::string& f) {
+                    propsLayer({{"decal", {{"maps", {{ch, f}}}}}});
+                }));
+            }
+            auto* atlas = new QHBoxLayout;
+            for (const char* k : {"columns", "rows", "cell"})
+                atlas->addWidget(spin(k, k == std::string("cell") ? 0 : 1, 64, 1, 0, dec.value(k, k == std::string("cell") ? 0 : 1),
+                                      [this, key = std::string(k)](double x) { propsLayer({{"decal", {{key, int(x)}}}}); }));
+            auto* atlasRow = new QWidget(w);
+            atlas->setContentsMargins(0, 0, 0, 0);
+            atlasRow->setLayout(atlas);
+            atlasRow->setToolTip("Atlas: columns, rows and the cell shown (left to right, top to bottom)");
+            form->addRow("Atlas", atlasRow);
+        }
+        else if (kind == "text")
+        {
+            const json t = l.value("text", json::object());
+            auto* words = new QLineEdit(qs(t.value("text", std::string())), w);
+            words->setObjectName("layerText");
+            QObject::connect(words, &QLineEdit::editingFinished, w, [this, words] { propsLayer({{"text", {{"text", words->text().toStdString()}}}}); });
+            form->addRow("Text", words);
+            auto* font = new QComboBox(w);
+            font->setObjectName("layerFont");
+            font->addItem("Default", QString());
+            for (const std::string& f : curve::fontNames())
+                font->addItem(qs(f), qs(f));
+            font->setCurrentIndex(std::max(0, font->findData(qs(t.value("font", std::string())))));
+            QObject::connect(font, &QComboBox::activated, w, [this, font](int) { propsLayer({{"text", {{"font", font->currentData().toString().toStdString()}}}}); });
+            form->addRow("Font", font);
+            form->addRow("Tracking", spin("layerTracking", -0.5, 2.0, 0.01, 3, t.value("tracking", 0.0),
+                                          [this](double x) { propsLayer({{"text", {{"tracking", x}}}}); }));
+            form->addRow("Outline", spin("layerOutline", 0.0, 0.5, 0.01, 3, t.value("outline", 0.0),
+                                         [this](double x) { propsLayer({{"text", {{"outline", x}}}}); }));
+        }
+        else
+        {
+            const json sc = l.value("scatter", json::object());
+            form->addRow("Pattern", pictureButton(w, sc.value("pattern", std::string()), [this](const std::string& f) {
+                propsLayer({{"scatter", {{"pattern", f}}}});
+            }));
+            form->addRow("Picture", pictureButton(w, sc.value("maps", json::object()).value("baseColor", std::string()), [this](const std::string& f) {
+                propsLayer({{"scatter", {{"maps", {{"baseColor", f}}}}}});
+            }));
+            struct Num
+            {
+                const char* key;
+                const char* label;
+                double lo, hi, step, def;
+                int decimals;
+            };
+            const Num nums[] = {{"countX", "Across", 1, 64, 1, 6, 0},       {"countY", "Down", 1, 64, 1, 6, 0},
+                                {"perCell", "Per cell", 1, 16, 1, 3, 0},    {"size", "Size", 0.01, 2, 0.05, 0.6, 2},
+                                {"sizeRandom", "Size jitter", 0, 1, 0.05, 0.4, 2}, {"rotationRandom", "Turn jitter", 0, 1, 0.05, 1.0, 2},
+                                {"hueRandom", "Hue jitter", 0, 1, 0.05, 0.0, 2},   {"seed", "Seed", 0, 99999, 1, 0, 0}};
+            for (const Num& n : nums)
+                form->addRow(n.label, spin(n.key, n.lo, n.hi, n.step, n.decimals, sc.value(n.key, n.def), [this, key = std::string(n.key), d = n.decimals](double x) {
+                    propsLayer({{"scatter", {{key, d == 0 ? json(int(x)) : json(x)}}}});
+                }));
+            auto* avoid = new QCheckBox("Avoid overlap", w);
+            avoid->setObjectName("scatterAvoid");
+            avoid->setToolTip("One copy per cell, kept inside it");
+            avoid->setChecked(sc.value("avoidOverlap", false));
+            QObject::connect(avoid, &QCheckBox::toggled, w, [this](bool on) { propsLayer({{"scatter", {{"avoidOverlap", on}}}}); });
+            form->addRow(avoid);
+        }
+        v->addLayout(form);
+    }
+
+    /** Where the layer's or mask's content lands: layerProjection's fields, and a button to place it on the mesh. */
+    void projectionProps(QWidget* w, QVBoxLayout* v, const json& projection, const std::string& layer, const std::string& mask,
+                         std::function<void(const json&)> patch)
+    {
+        json node = defNodeJson("", "layerProjection", projection);
+        node["label"] = "Projection";
+        v->addWidget(texParams::nodePanel(w, node, [patch](const std::string& p, const json& value) { patch({{p, value}}); }));
+        auto* place = new QPushButton(icon("cube-3d-sphere"), "Place on Mesh", w);
+        place->setObjectName("placeProjection");
+        place->setToolTip("Place on Mesh: click the mesh to put the projection there; drag to move it, Shift turns, Ctrl scales");
+        const std::string setName = set;
+        QObject::connect(place, &QPushButton::clicked, w, [setName, layer, mask] { startProjectionPlacement(setName, layer, mask); });
+        v->addWidget(place);
+    }
+
     void maskProps(QWidget* w, QVBoxLayout* v, const json& m)
     {
         const std::string kind = m.value("kind", "fill");
@@ -2156,7 +2351,9 @@ struct TextureSetPanel::Impl
                     v->addLayout(form);
                 }
         }
-        else if (kind == "anchor")
+        if (kind == "generator" || kind == "paint")
+            projectionProps(w, v, m.value("projection", json::object()), selLayer, id, [this](const json& p) { propsMask({{"projection", p}}); });
+        if (kind == "anchor")
         {
             auto* form = new QFormLayout();
             auto* a = new QComboBox(w);
@@ -2183,6 +2380,7 @@ struct TextureSetPanel::Impl
 
     void rebuildProps()
     {
+        LILA_ZONE();
         std::string key = selLayer + "|" + selMask + "|";
         if (const json* l = layer(selLayer))
             key += selMask.empty() ? l->dump() : (mask(selLayer, selMask) ? mask(selLayer, selMask)->dump() : std::string());
@@ -2210,21 +2408,44 @@ struct TextureSetPanel::Impl
 
     // Refresh ------------------------------------------------------------------------------------------------------------
 
+    void refreshVariants()
+    {
+        LILA_ZONE();
+        if (!variants)
+            return;
+        variants->blockSignals(true);
+        variants->clear();
+        variants->addItem("Base", QString());
+        const json names = view.is_object() ? view.value("variants", json::array()) : json::array();
+        for (const json& v : names)
+            variants->addItem(qs(v.get<std::string>()), qs(v.get<std::string>()));
+        variants->insertSeparator(variants->count());
+        variants->addItem("New Variant...", QString("\x01new"));
+        const std::string active = view.is_object() ? view.value("variant", std::string()) : std::string();
+        if (!active.empty())
+            variants->addItem("Remove " + qs(active), QString("\x01remove"));
+        variants->setCurrentIndex(std::max(0, variants->findData(qs(active))));
+        variants->setEnabled(setNode() != nullptr);
+        variants->blockSignals(false);
+    }
+
     void refreshSets()
     {
+        LILA_ZONE();
         std::vector<std::string> names = tex::setNames(scene::Graph::current());
         sets->blockSignals(true);
         sets->clear();
         for (const std::string& n : names)
             sets->addItem(icon("texture"), qs(n), qs(n));
-        if (set.empty() || std::find(names.begin(), names.end(), set) == names.end())
+        if (!(set.empty() && noSetForSelection) && (set.empty() || std::find(names.begin(), names.end(), set) == names.end()))
             set = names.empty() ? std::string() : names.front();
-        sets->setCurrentIndex(sets->findData(qs(set)));
+        sets->setCurrentIndex(set.empty() ? -1 : sets->findData(qs(set)));
         sets->blockSignals(false);
     }
 
     void refresh()
     {
+        LILA_ZONE();
         refreshSets();
         texture2d::showSet(set);
         scene::Node* n = setNode();
@@ -2244,10 +2465,13 @@ struct TextureSetPanel::Impl
             }
         }
         empty->setVisible(!n);
+        emptyText->setText(noSetForSelection ? "The selected meshes' materials use no texture set. Click New Texture Set to make one, or pick one in the Material Editor."
+                                             : "No texture set. Click New Texture Set to make one for the selected meshes.");
         const std::string sKey = n ? nextSettings.toJson().dump() : std::string();
         const std::string vKey = set + "|" + nextView.dump() + "|" + sKey + "|" + shownChannel() + "|" + textureSets::activeLayer(set);
         settings = nextSettings;
         view = nextView;
+        refreshVariants();
         if (sKey != settingsKey || !settingsBox->layout())
         {
             settingsKey = sKey;
@@ -2271,7 +2495,11 @@ struct TextureSetPanel::Impl
         else
             updateThumbs();
         rebuildBanner();
-        rebuildShelf();
+        // A hidden panel (a closed dock) scans the libraries and draws their thumbnails when it shows.
+        if (self->isVisible())
+            rebuildShelf();
+        else
+            shelfStale = true;
         filterShelf();
         if (!std::exchange(keepProps, false))
             rebuildProps();
@@ -2316,6 +2544,9 @@ struct TextureSetPanel::Impl
         menu->addAction(icon("bucket"), "Add Fill Layer", [this] { addLayer("fill", {}); });
         menu->addAction(icon("brush"), "Add Paint Layer", [this] { addLayer("paint", {}); });
         menu->addAction(icon("topology-star-3"), "Add Procedural Layer", [this] { addLayer("procedural", {}); });
+        menu->addAction(icon("sticker"), "Add Decal Layer", [this] { addLayer("decal", {}); });
+        menu->addAction(icon("typography"), "Add Text Layer", [this] { addLayer("text", {}); });
+        menu->addAction(icon("confetti"), "Add Scatter Layer", [this] { addLayer("scatter", {}); });
         menu->addAction(icon("folder-plus"), "Add Folder", [this] { addLayer("folder", {}); });
         QMenu* filters = menu->addMenu(icon("filter"), "Add Filter Layer");
         for (const tex::NodeDef* def : filterNodes())
@@ -2370,6 +2601,12 @@ struct TextureSetPanel::Impl
         const bool any = layer(selLayer) != nullptr;
         QAction* dup = menu.addAction(icon("copy"), "Duplicate", [this] { self->duplicateSelected(); });
         dup->setEnabled(any && selMask.empty());
+        menu.addAction(icon("clipboard-copy"), "Copy Layer", [this] { self->copySelected(); })->setEnabled(any && selMask.empty());
+        menu.addAction(icon("clipboard"), "Paste Layers", [this] { self->paste(); })
+            ->setEnabled(QApplication::clipboard()->text().contains("\"lilaLayers\""));
+        menu.addAction(icon("arrow-merge"), "Merge Down", [this] { self->flattenSelected(true); })->setEnabled(any && selMask.empty());
+        menu.addAction(icon("stack-pop"), "Flatten Layer", [this] { self->flattenSelected(false); })->setEnabled(any && selMask.empty());
+        menu.addAction(icon("file-export"), "Export Flattened...", [this] { self->exportFlattened(); })->setEnabled(any && selMask.empty());
         menu.addAction(icon("trash"), selMask.empty() ? "Delete Layer" : "Delete Mask", [this] { self->deleteSelected(); })->setEnabled(any);
         menu.addSeparator();
         QAction* nodes = menu.addAction(icon("binary-tree"), "Open as Nodes", [this] { self->openSelectedAsNodes(); });
@@ -2418,18 +2655,32 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     d->sets = new QComboBox(this);
     d->sets->setObjectName("setPicker");
     d->sets->setToolTip("The texture set shown");
+    d->sets->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    d->sets->setMinimumContentsLength(10);
+    d->sets->setPlaceholderText("No texture set");
     d->follow = new QToolButton(this);
     d->follow->setText("Follow");
     d->follow->setToolTip("Follow: show the set of the selected mesh's material");
     d->follow->setCheckable(true);
     d->follow->setChecked(true);
     controls::setRole(d->follow, "push");
-    auto* newSet = toolButton(this, "plus", "New Texture Set");
+    auto* newSet = toolButton(this, "plus", "New Texture Set, with a paint layer, for the selected meshes. The arrow makes one per material.");
     QObject::connect(newSet, &QToolButton::clicked, this, [] { actions::run(json("texture.newSet")); });
+    newSet->setPopupMode(QToolButton::MenuButtonPopup);
+    auto* newMenu = new QMenu(newSet);
+    newMenu->addAction("New Texture Set per Material", newSet, [] { actions::run(json("texture.newSetPerMaterial")); });
+    newSet->setMenu(newMenu);
     auto* openGraph = toolButton(this, "node-editor", "Texture Graph: open this set's nodes");
     openGraph->setObjectName("openGraph");
     connect(openGraph, &QToolButton::clicked, this, [this] { openSelectedAsNodes(); });
+    d->variants = new QComboBox(this);
+    d->variants->setObjectName("variantPicker");
+    d->variants->setToolTip("Variant: the set's look shown and edited. A variant overrides layer settings (visibility, opacity, "
+                            "materials, seeds) over the base; Export with variants writes them all");
+    d->variants->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    d->variants->setMinimumContentsLength(6);
     top->addWidget(d->sets, 1);
+    top->addWidget(d->variants);
     top->addWidget(d->follow);
     top->addWidget(openGraph);
     top->addWidget(newSet);
@@ -2437,9 +2688,9 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     {
         auto* mode = new controls::Segmented(this);
         mode->setObjectName("viewMode");
-        mode->add("3D", {}, "3D: the viewport alone", int(ViewportLayout::TextureView::View3D));
-        mode->add("Split", {}, "Split: the viewport beside the texture laid out in UV space", int(ViewportLayout::TextureView::Split));
-        mode->add("2D", {}, "2D: the texture laid out in UV space, in place of the viewport", int(ViewportLayout::TextureView::View2D));
+        mode->add({}, "box", "3D: the viewport alone", int(ViewportLayout::TextureView::View3D));
+        mode->add({}, "layout-columns", "Split: the viewport beside the texture laid out in UV space", int(ViewportLayout::TextureView::Split));
+        mode->add({}, "texture", "2D: the texture laid out in UV space, in place of the viewport", int(ViewportLayout::TextureView::View2D));
         mode->setCurrent(int(views->textureView()));
         mode->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
         connect(mode, &controls::Segmented::picked, views, [views](int id) { views->setTextureView(ViewportLayout::TextureView(id)); });
@@ -2463,7 +2714,7 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     settingsScroll->setWidget(controls::section("Channels and Resolution", d->settingsBox, this, "/textureSets/collapsed", false, &d->settingsToggle));
     d->sideLayout->addWidget(settingsScroll);
     d->columns->addWidget(d->side);
-    auto* main = new QWidget(this);
+    auto* main = new StackColumn(this);
     d->columns->addWidget(main, 1);
     v = new QVBoxLayout(main);
     v->setContentsMargins(0, 0, 0, 0);
@@ -2535,10 +2786,9 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     d->empty = new QWidget(this);
     auto* eh = new QVBoxLayout(d->empty);
     eh->setContentsMargins(0, 4, 0, 4);
-    eh->addWidget(dim(d->empty, "No texture set. Click New Texture Set to start a layer stack for the selected mesh's material."));
-    auto* make = new QPushButton("New Texture Set", d->empty);
-    connect(make, &QPushButton::clicked, this, [] { actions::run(json("texture.newSet")); });
-    eh->addWidget(make);
+    d->emptyText = dim(d->empty, "No texture set. Click New Texture Set to make one for the selected meshes.");
+    eh->addWidget(d->emptyText);
+    eh->addWidget(controls::split("texture.newSet", {"texture.newSetPerMaterial"}, d->empty));
     v->addWidget(d->empty);
 
     auto* split = new QSplitter(Qt::Vertical, this);
@@ -2647,6 +2897,13 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
             d->rebuildShelf();
         }
     };
+    favourites::attach(
+        d->shelf,
+        [](const QModelIndex& i) { return Impl::shelfFavourite(i.data(Qt::UserRole + 1).toString(), i.data(Qt::UserRole).toString()); },
+        [this] {
+            d->favouritesFirst();
+            d->filterShelf();
+        });
     d->shelf->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(d->shelf, &QWidget::customContextMenuRequested, this, [this](const QPoint& p) {
         QListWidgetItem* it = d->shelf->itemAt(p);
@@ -2747,6 +3004,35 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
             d->expanded[it->data(0, kRoleId).toString().toStdString()] = false;
     });
     connect(d->sets, &QComboBox::activated, this, [this](int) { setTextureSet(d->sets->currentData().toString().toStdString()); });
+    d->sets->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(d->sets, &QWidget::customContextMenuRequested, this, [this](const QPoint& at) {
+        if (d->set.empty())
+            return;
+        QMenu menu(this);
+        menu.addAction(icon("pencil"), "Rename", this, [this] { startRename(); });
+        menu.addAction(icon("trash"), "Delete", this, [set = d->set] { deleteTextureSet(set); });
+        menu.exec(d->sets->mapToGlobal(at));
+    });
+    connect(d->variants, &QComboBox::activated, this, [this](int) {
+        const QString data = d->variants->currentData().toString();
+        const std::string set = d->set;
+        json call;
+        if (data == QString("\x01new"))
+        {
+            bool ok = false;
+            const QString name = QInputDialog::getText(this, "New Variant", "Name", QLineEdit::Normal, "Variant", &ok).trimmed();
+            if (ok && !name.isEmpty())
+                call = {{"command", "texAddVariant"}, {"args", {{"args", {set, name.toStdString()}}}}};
+        }
+        else if (data == QString("\x01remove"))
+            call = {{"command", "texRemoveVariant"},
+                    {"args", {{"args", {set, d->view.is_object() ? d->view.value("variant", std::string()) : std::string()}}}}};
+        else
+            call = {{"command", "texSwitchVariant"}, {"args", {{"args", {set, data.toStdString()}}}}};
+        if (!call.is_null())
+            actions::run(call);
+        d->refresh();
+    });
 
     d->refreshTimer = new QTimer(this);
     d->refreshTimer->setSingleShot(true);
@@ -2764,11 +3050,22 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
                     return;
                 if (GraphBackendPtr b = graphBackends::find(kTextureGraphBackend))
                 {
-                    GraphBackend::Owner o = b->followSelection(scene::Graph::current());
-                    if (!o.group.empty() && o.group != d->set)
+                    scene::Graph& g = scene::Graph::current();
+                    GraphBackend::Owner o = b->followSelection(g);
+                    if (!o.group.empty() && (o.group != d->set || d->noSetForSelection))
                     {
                         d->set = o.group;
+                        d->noSetForSelection = false;
                         showInTextureGraphs(o.group);
+                        d->selLayer.clear();
+                        d->selMask.clear();
+                        d->scheduleRefresh();
+                    }
+                    // Meshes picked whose materials have no set: show that, not the set picked before.
+                    else if (o.group.empty() && selectsMeshes(g) && !d->noSetForSelection)
+                    {
+                        d->set.clear();
+                        d->noSetForSelection = true;
                         d->selLayer.clear();
                         d->selMask.clear();
                         d->scheduleRefresh();
@@ -2805,6 +3102,7 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
         if (group.empty() || group == d->set)
             return;
         d->set = group;
+        d->noSetForSelection = false;
         d->selLayer.clear();
         d->selMask.clear();
         d->scheduleRefresh();
@@ -2844,11 +3142,34 @@ TextureSetPanel::~TextureSetPanel()
         lastFocusedPanel() = nullptr;
 }
 
+void TextureSetPanel::startRename()
+{
+    if (d->set.empty())
+        return;
+    controls::editInPlace(d->sets, QString::fromStdString(d->set), [this, from = d->set](const QString& to) {
+        std::string renamed = renameTextureSet(from, to.toStdString());
+        if (!renamed.empty())
+            setTextureSet(renamed);
+    });
+}
+
+bool startSetRename()
+{
+    for (TextureSetPanel* p : panelList())
+        if (p->isVisible())
+        {
+            p->startRename();
+            return true;
+        }
+    return false;
+}
+
 void TextureSetPanel::setTextureSet(const std::string& set)
 {
     if (set == d->set)
         return;
     d->set = set;
+    d->noSetForSelection = false;
     d->selLayer.clear();
     d->selMask.clear();
     d->refresh();
@@ -2859,6 +3180,7 @@ std::string TextureSetPanel::textureSet() const { return d->set; }
 
 void TextureSetPanel::refresh()
 {
+    LILA_ZONE();
     d->refreshTimer->stop();
     d->refresh();
 }
@@ -2948,6 +3270,56 @@ void TextureSetPanel::dropMaterial(const std::string& material, const std::strin
     d->selLayer = id;
     d->selMask.clear();
     refresh();
+}
+
+void TextureSetPanel::copySelected()
+{
+    if (!d->setNode() || !d->layer(d->selLayer))
+        return;
+    if (json r = runUi("texCopyLayers", d->args({d->selLayer})); r.is_string())
+        QApplication::clipboard()->setText(QString::fromStdString(r.get<std::string>()));
+}
+
+void TextureSetPanel::paste()
+{
+    if (!d->setNode())
+        return;
+    json call = d->args({QApplication::clipboard()->text().toStdString()});
+    if (d->layer(d->selLayer))
+        call["above"] = d->selLayer;
+    json r = runUi("texPasteLayers", call);
+    if (r.is_object() && !r["layers"].empty())
+        d->selLayer = r["layers"].back().get<std::string>();
+    refresh();
+}
+
+void TextureSetPanel::flattenSelected(bool down)
+{
+    if (!d->setNode() || !d->layer(d->selLayer))
+        return;
+    json call = d->args({d->selLayer});
+    call["down"] = down;
+    json r = runUi("texFlattenLayers", call);
+    if (r.is_object())
+    {
+        d->selLayer = r.value("layer", std::string());
+        for (const json& w : r.value("warnings", json::array()))
+            log::warn("{}: {}", down ? "Merge Down" : "Flatten Layer", w.get<std::string>());
+    }
+    refresh();
+}
+
+void TextureSetPanel::exportFlattened()
+{
+    if (!d->setNode() || !d->layer(d->selLayer))
+        return;
+    const QString dir = ui::fileDialog::getExistingDirectory(this, "Export Flattened");
+    if (dir.isEmpty())
+        return;
+    json call = d->args({d->selLayer});
+    call["folder"] = dir.toStdString();
+    if (json r = runUi("texExportFlattened", call); r.is_object())
+        log::info("exported {} images", r.value("files", json::object()).size());
 }
 
 void TextureSetPanel::duplicateSelected()
@@ -3074,6 +3446,13 @@ void TextureSetPanel::showLibrary(const std::string& kind)
             d->setShelfKind(k);
 }
 
+void TextureSetPanel::showEvent(QShowEvent* e)
+{
+    QWidget::showEvent(e);
+    if (std::exchange(d->shelfStale, false))
+        d->rebuildShelf();
+}
+
 void TextureSetPanel::refreshLibrary()
 {
     d->shelfKey.clear();
@@ -3190,7 +3569,7 @@ std::string setForDrop(scene::Node& meshNode, std::string slot)
     std::string name = tex::defaultSetName(slot);
     for (int i = 1; !g.findAll(name).empty(); ++i)
         name = tex::defaultSetName(slot) + std::to_string(i);
-    json r = runUi("texCreateSet", {{"args", {name}}, {"settings", {{"material", slot}}}});
+    json r = runUi("texCreateSet", {{"args", {name}}, {"materials", {slot}}});
     if (!r.is_string())
         return {};
     log::info("{}: new texture set {} for material {}", meshNode.name(), r.get<std::string>(), slot);
@@ -3287,6 +3666,34 @@ void registerTextureSetPanel()
                   .doc = "Copy the selected layer (with its masks, or a folder with its contents) right above it.",
                   .python = "lila.ops.texSaveSmartMaterial(\"RockTex\", \"L1\", \"copy.lilasmart\")\n"
                             "lila.ops.texApplySmartMaterial(\"RockTex\", \"copy.lilasmart\", above=\"L1\")"});
+    actions::add({.id = "textureSets.copyLayer",
+                  .label = "Copy Layer",
+                  .category = "Texture",
+                  .run = onPanel([](TextureSetPanel& p) { p.copySelected(); }),
+                  .doc = "Copy the selected layer (masks, children and paint) to the clipboard, to paste into any texture set.",
+                  .python = "text = texCopyLayers(\"RockTex\", \"L1\")",
+                  .keywords = {"copy layer", "clipboard"}});
+    actions::add({.id = "textureSets.pasteLayers",
+                  .label = "Paste Layers",
+                  .category = "Texture",
+                  .run = onPanel([](TextureSetPanel& p) { p.paste(); }),
+                  .doc = "Paste copied layers above the selection, with fresh ids and their own copies of the paint.",
+                  .python = "texPasteLayers(\"RockTex\", text)",
+                  .keywords = {"paste layer", "clipboard"}});
+    actions::add({.id = "textureSets.mergeDown",
+                  .label = "Merge Layer Down",
+                  .category = "Texture",
+                  .run = onPanel([](TextureSetPanel& p) { p.flattenSelected(true); }),
+                  .doc = "Bake the selected layer and the one below it into one paint layer that shows the same.",
+                  .python = "texFlattenLayers(\"RockTex\", \"L2\", down=True)",
+                  .keywords = {"merge down", "combine layers"}});
+    actions::add({.id = "textureSets.flatten",
+                  .label = "Flatten Layer",
+                  .category = "Texture",
+                  .run = onPanel([](TextureSetPanel& p) { p.flattenSelected(false); }),
+                  .doc = "Bake the selected layer or folder (with what is below it) into one paint layer that shows the same.",
+                  .python = "texFlattenLayers(\"RockTex\", layers=[\"L1\", \"L2\"])",
+                  .keywords = {"flatten", "bake layers", "rasterize"}});
     actions::add({.id = "textureSets.delete",
                   .label = "Delete Layer or Mask",
                   .category = "Texture",

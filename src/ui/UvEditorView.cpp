@@ -257,7 +257,7 @@ void UvView::paintEvent(QPaintEvent*)
     drawSewDrag(p);
     drawBrush(p);
     if (!mPackPreview)
-        mTexPaint.drawCursor(p, mMousePos);
+        mTexPaint.drawCursor(p, mMousePos, uvOf(), mZoom);
     if (uvTools::UvTool* t = uvTools::active(); t && !mPackPreview)
         t->draw(p, canvas());
     drawStacks(p);

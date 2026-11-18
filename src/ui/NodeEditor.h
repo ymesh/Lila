@@ -126,8 +126,16 @@ public:
     void ungroupSelected();
     /** Opens the group the selected Group node runs. */
     void openSelectedGroup();
+    /** Shows a group run from the one on show, remembering the way back for the path bar and Parent Group. */
+    void enterGroup(const QString& name);
+    /** Back to the group that runs this one, with its Group node selected: the way in, else the first group that runs it. */
+    void openParentGroup();
+    /** The group openParentGroup goes to; empty for a top-level group. */
+    QString parentGroup() const;
     /** Writes the group to a file picked in a dialog. */
     void exportGroup();
+    /** Opens a name box over the group picker; Enter or leaving it renames the group through the backend, Esc cancels. */
+    void startGroupRename();
     /** Reads group files into the scene and shows the last file's main group. */
     void importGroups(const QStringList& files);
     /** Previews a node through the backend: for geometry nodes, in the group's Viewer. */
@@ -146,6 +154,9 @@ private:
     void refreshSendButton();
     void refresh(bool panel = true);
     void refreshGroups();
+    void rebuildPathBar();
+    /** Drops the path past a group that's on it; any other group starts a new path. */
+    void retracePath(const QString& name);
     void rebuildSidePanel();
     void followSelection();
     void followOwner(const GraphBackend::Owner& owner);
@@ -171,9 +182,17 @@ private:
     QString mOwner;
     nlohmann::json mShownValues;
     bool mValueCheck = false;
+    /** What the canvas was last built from, so a refresh with an unchanged group stamp can skip the rebuild. */
+    std::optional<size_t> mBuiltStamp;
+    QString mBuiltGroup;
+    QString mBuiltOwner;
+    nlohmann::json mBuiltInfo;
     std::set<std::string> mSelectNext; // selected by the next refresh, after a paste or duplicate
     QWidget* mBar = nullptr;
     QComboBox* mGroups = nullptr;
+    /** The groups entered on the way to mGroup, outermost first. */
+    std::vector<QString> mPath;
+    QWidget* mPathBar = nullptr;
     NodeCanvas* mCanvas = nullptr;
     QScrollArea* mSide = nullptr;
     QTimer* mRefresh = nullptr;
@@ -184,6 +203,13 @@ private:
     int mPrefsListener = 0;
     bool mRefreshing = false;
     bool mPanelDirty = false;
+    /** A refresh came while hidden: it runs when the editor shows. */
+    bool mStaleHidden = false;
+
+protected:
+    void showEvent(QShowEvent* e) override;
+
+private:
 };
 
 /**

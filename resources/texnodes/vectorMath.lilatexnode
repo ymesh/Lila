@@ -1,0 +1,77 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "vectorMath",
+  "label": "Vector Math",
+  "category": "Utility",
+  "doc": "Arithmetic on vectors per component, such as UV, Mapping or Projection coordinates. Value gives Dot, Length and Distance as a single number.",
+  "inputs": [
+    {
+      "id": "a",
+      "type": "vector",
+      "default": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "b",
+      "type": "vector",
+      "default": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "scale",
+      "type": "float",
+      "default": 1.0,
+      "doc": "The factor for Scale."
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "vector"
+    },
+    {
+      "id": "value",
+      "type": "float"
+    }
+  ],
+  "params": [
+    {
+      "id": "operation",
+      "type": "enum",
+      "default": "add",
+      "options": [
+        "add",
+        "subtract",
+        "multiply",
+        "divide",
+        "scale",
+        "minimum",
+        "maximum",
+        "absolute",
+        "floor",
+        "fraction",
+        "modulo",
+        "sine",
+        "cosine",
+        "normalize",
+        "cross",
+        "dot",
+        "length",
+        "distance"
+      ]
+    }
+  ],
+  "cost": 3,
+  "body": {
+    "out": "return vecMathOp(p.operation, a.sample(uv), b.sample(uv), scale.sample(uv));",
+    "value": "return vecMathOp(p.operation, a.sample(uv), b.sample(uv), scale.sample(uv)).x;"
+  },
+  "code": "float3 vecMathOp(int op, float3 x, float3 y, float s)\n{\nswitch (op)\n{\ncase 1: return x - y;\ncase 2: return x * y;\ncase 3: return float3(abs(y.x) > 1e-8 ? x.x / y.x : 0.0, abs(y.y) > 1e-8 ? x.y / y.y : 0.0, abs(y.z) > 1e-8 ? x.z / y.z : 0.0);\ncase 4: return x * s;\ncase 5: return min(x, y);\ncase 6: return max(x, y);\ncase 7: return abs(x);\ncase 8: return floor(x);\ncase 9: return frac(x);\ncase 10: return float3(abs(y.x) > 1e-8 ? x.x - y.x * floor(x.x / y.x) : 0.0, abs(y.y) > 1e-8 ? x.y - y.y * floor(x.y / y.y) : 0.0, abs(y.z) > 1e-8 ? x.z - y.z * floor(x.z / y.z) : 0.0);\ncase 11: return sin(x);\ncase 12: return cos(x);\ncase 13: return length(x) > 1e-8 ? normalize(x) : float3(0.0);\ncase 14: return cross(x, y);\ncase 15: return float3(dot(x, y));\ncase 16: return float3(length(x));\ncase 17: return float3(distance(x, y));\ndefault: return x + y;\n}\n}"
+}

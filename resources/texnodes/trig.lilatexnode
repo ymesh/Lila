@@ -1,0 +1,45 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "trig",
+  "label": "Trig",
+  "category": "Utility",
+  "doc": "Trigonometry on a value (radians): tangent, inverse sine, cosine and tangent, atan2 of a over b, and hyperbolic tangent.",
+  "inputs": [
+    {
+      "id": "a",
+      "type": "float",
+      "default": 0.0
+    },
+    {
+      "id": "b",
+      "type": "float",
+      "default": 1.0
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "float"
+    }
+  ],
+  "params": [
+    {
+      "id": "operation",
+      "type": "enum",
+      "default": "tangent",
+      "options": [
+        "tangent",
+        "arcsine",
+        "arccosine",
+        "arctangent",
+        "arctangent2",
+        "hyperbolicTangent"
+      ]
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float x = a.sample(uv);\nif (p.operation == 0)\n    return tan(x);\nif (p.operation == 1)\n    return asin(clamp(x, -1.0, 1.0));\nif (p.operation == 2)\n    return acos(clamp(x, -1.0, 1.0));\nif (p.operation == 3)\n    return atan(x);\nif (p.operation == 4)\n    return atan2(x, b.sample(uv));\nreturn tanh(x);"
+  }
+}

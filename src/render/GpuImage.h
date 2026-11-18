@@ -92,6 +92,13 @@ public:
     std::optional<std::pair<int, int>> rowsSince(uint64_t version) const;
     /** The same as a rectangle {x0, y0, x1, y1} of texels, empty (x1 <= x0) when nothing changed. Any thread. */
     std::optional<std::array<int, 4>> rectSince(uint64_t version) const;
+    /** Each change after `version` on its own, so a reader can redo separate regions without their bounding box. Any thread. */
+    std::optional<std::vector<std::array<int, 4>>> rectsSince(uint64_t version) const;
+    /**
+     * Before endWrite: the write's separate regions, each counted as its own change (a stroke over distant uv islands).
+     * They should lie inside what noteWriteRect covers.
+     */
+    void noteWriteRegions(std::vector<std::array<int, 4>> regions);
     /** Before endWrite: the write touches only rows [first, last) (unioned over calls). Without it a write counts as whole. */
     void noteWriteRows(int first, int last);
     /** Before endWrite: the write touches only texels [x0, x1) x [y0, y1) (unioned over calls). */
@@ -159,7 +166,12 @@ private:
     explicit GpuImage(const GpuImageDesc& desc);
     void destroyDevice(VulkanContext& vk);
     bool createShared(VulkanContext& vk, VkImageCreateInfo ici);
-    void recordMips(VkCommandBuffer cmd, VkImageLayout from, VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess);
+    /**
+     * Rebuilds the mips below level 0 from it, all of them or (rect, texels of level 0, once they have been built whole)
+     * only over that region, keeping the rest.
+     */
+    void recordMips(VkCommandBuffer cmd, VkImageLayout from, VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
+                    const int* rect = nullptr);
     uint32_t mipCount() const;
 
     struct Pending
@@ -183,6 +195,7 @@ private:
     mutable std::mutex mChangeMutex;
     std::vector<Change> mChanges; // guarded, the latest few
     int mWrite[4] = {0, 0, 0, 0}; // guarded: x0, y0, x1, y1
+    std::vector<std::array<int, 4>> mWriteRegions; // guarded
     std::mutex mMutex;
     std::vector<Pending> mPending; // guarded by mMutex
     std::weak_ptr<const TextureImage> mTexture; // guarded by mMutex
@@ -198,6 +211,8 @@ private:
     VkImageView mStorageView = VK_NULL_HANDLE;
     VkFormat mFormat = VK_FORMAT_UNDEFINED;
     uint32_t mMips = 1;
+    /** The mips below level 0 hold a downsample of it: a later write can redo just its region. Render thread. */
+    bool mMipsBuilt = false;
     bool mFailed = false;
 };
 

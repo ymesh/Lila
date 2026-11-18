@@ -232,7 +232,7 @@ TEST_CASE("applyLibraryMaterial binds a set to the mesh's slot and tiles it to t
     std::string material = r["material"];
     scene::Node* set = findSet(scene::Graph::current(), setName);
     REQUIRE(set);
-    CHECK(readSettings(*set).material == material);
+    CHECK(materialsUsing(scene::Graph::current(), setName) == std::vector<std::string>{material});
     Graph g = readGraph(*set);
     REQUIRE(g.node(lib::kTilingNode));
     CHECK(g.node(lib::kTilingNode)->values["tilesX"].get<double>() == doctest::Approx(4.0).epsilon(1e-3));

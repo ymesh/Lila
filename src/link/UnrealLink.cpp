@@ -691,6 +691,8 @@ json materialInputs(scene::Graph& g, const std::string& slot)
         for (int i = 0; i < scene::material::kCount; ++i)
         {
             const scene::AttrDef& d = defs[size_t(i)];
+            if (d.flags & scene::AttrHidden)
+                continue;
             if (d.type == scene::PlugType::Enum)
             {
                 int64_t v = mat->as<int64_t>(i);

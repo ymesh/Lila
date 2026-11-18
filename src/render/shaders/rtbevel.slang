@@ -16,6 +16,9 @@ struct TraceInstance
     uint64_t vertices; // MeshVertex, 64 bytes each: the normal sits 12 bytes in
     uint64_t indices;
     float4 rows[3];
+    uint64_t sections; // rtreflect.slang's hit materials
+    uint sectionCount;
+    uint pad;
 };
 
 [[vk::push_constant]] BevelPush bp;

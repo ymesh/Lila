@@ -235,6 +235,11 @@ std::string toSvg(const Sheet& sheet);
 Sheet fromSvg(std::string_view text);
 /** Each distinct colour's bounding box becomes a trim; regions under minPx on a side are skipped. */
 Sheet fromIdMap(const lila::image::Image& image, double tolerance = 0.02, int minPx = 4);
+/**
+ * ZenUV trims, as its JSON (what Arcbrush copies for it) or a ZenUV trim preset script, read as text and never run: each
+ * trim's name and uv rect (left, top, right, bottom, V up), laid on a width by height sheet. Empty when the text has none.
+ */
+Sheet fromZenUv(std::string_view text, int width, int height);
 /** Each uv island's bounding box (0-1 uv) becomes a trim. */
 Sheet fromUvs(const geo::Mesh& mesh, std::string_view uvSet, int width, int height);
 

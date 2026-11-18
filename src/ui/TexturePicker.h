@@ -46,6 +46,11 @@ struct Options
     QString browseFilter;
     /** Footer menu entries: add to the library, open its folders... */
     std::vector<std::pair<QString, std::function<void()>>> actions;
+    /** The favourites list rows star into; listed first under Favourites. Empty: no stars. */
+    std::string favourites;
+    /** The None and Browse... rows; off for a pick that must be one of the items. */
+    bool none = true;
+    bool browse = true;
 };
 
 /**

@@ -1,0 +1,79 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "triplanarTiled",
+  "label": "Tri-Planar Tiled",
+  "category": "Input",
+  "doc": "Triplanar projection with each axis tiled at its own random turn and offset, so the three projections don't line up into a visible grid.",
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0.5,
+        0.5,
+        0.5,
+        1
+      ],
+      "taps": 3
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "space",
+      "type": "enum",
+      "default": "object",
+      "options": [
+        "object",
+        "world"
+      ]
+    },
+    {
+      "id": "scale",
+      "type": "float",
+      "default": 1.0,
+      "min": 0,
+      "softMax": 16,
+      "doc": "Repeats per unit."
+    },
+    {
+      "id": "sharpness",
+      "type": "float",
+      "default": 4.0,
+      "min": 1,
+      "softMax": 32
+    },
+    {
+      "id": "rotation",
+      "type": "float",
+      "default": 180.0,
+      "min": 0,
+      "max": 180,
+      "doc": "How far each axis's projection may turn, degrees."
+    },
+    {
+      "id": "seed",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "softMax": 1000
+    }
+  ],
+  "cost": 12,
+  "externals": [
+    "position",
+    "normal",
+    "worldPosition",
+    "worldNormal"
+  ],
+  "code": "float2 triTiledUv(float2 q, uint axis, float rotation, uint seed)\n{\n    float a = (texRand(uint2(axis, 7u), seed) - 0.5) * radians(rotation) * 2.0;\n    float2 off = float2(texRand(uint2(axis, 11u), seed), texRand(uint2(axis, 13u), seed));\n    return float2(q.x * cos(a) - q.y * sin(a), q.x * sin(a) + q.y * cos(a)) + off;\n}",
+  "body": {
+    "out": "float3 pos = (p.space == 0 ? position.sample(uv).xyz : worldPosition.sample(uv).xyz) * p.scale;\nfloat3 n = p.space == 0 ? normal.sample(uv).xyz : worldNormal.sample(uv).xyz;\nfloat3 w = pow(abs(n) + 1e-5, float3(p.sharpness, p.sharpness, p.sharpness));\nw /= w.x + w.y + w.z;\nuint s = uint(p.seed);\nreturn input.sample(triTiledUv(pos.yz, 0u, p.rotation, s)) * w.x + input.sample(triTiledUv(pos.xz, 1u, p.rotation, s)) * w.y + input.sample(triTiledUv(pos.xy, 2u, p.rotation, s)) * w.z;"
+  }
+}

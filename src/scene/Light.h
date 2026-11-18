@@ -46,6 +46,9 @@ public:
         kProvider,
         kSourceFormat,
         kExtra,
+        kLensFlare,
+        kLensFlareIntensity,
+        kLensFlareScale,
         kCount
     };
 };

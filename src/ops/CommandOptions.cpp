@@ -40,6 +40,10 @@ void registerBuiltinOverrides(std::map<std::string, Override, std::less<>>& m)
     transfer.ranges["targetUvSet"] = {-1.0, 7.0, 1.0, ""};
     m["transferAttributes"] = std::move(transfer);
 
+    O gridFill;
+    gridFill.choices["style"] = {{"grid", "Grid"}, {"radial", "Radial"}};
+    m["polyGridFill"] = std::move(gridFill);
+
     O remesh;
     remesh.order = {"symmetry", "middleSmoothing", "method"};
     remesh.labels["middleSmoothing"] = "Middle Smoothing";

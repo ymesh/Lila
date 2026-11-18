@@ -302,6 +302,9 @@ NodeType MeshNode::makeType(const NodeType& base)
          .doc = "Topology guides drawn with the Pencil: JSON, object space."},
         {.name = "retopoConstructs", .type = PlugType::String, .defaultValue = std::string(), .flags = AttrInput | AttrStorable | AttrHidden,
          .doc = "Live topology constructs (patches, strips, cylinders...) and their settings: JSON, object space."},
+        {.name = "drawOffset", .type = PlugType::Float, .defaultValue = 0.0, .flags = AttrInput | AttrStorable,
+         .doc = "Display-only: draws the mesh this many cm closer to the camera, so a retopo mesh stays on top of the surface it "
+                "is built on. Exports, snapping and picking use the real positions.", .minValue = 0.0, .softMax = 2.0},
     };
     t.create = [] { return std::make_unique<MeshNode>(); };
     return t;

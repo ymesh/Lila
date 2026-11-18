@@ -11,6 +11,7 @@
 #include "ui/Actions.h"
 #include "ui/Deletion.h"
 #include "ui/Icons.h"
+#include "ui/MenuSearch.h"
 #include "ui/Panels.h"
 #include "ui/Theme.h"
 
@@ -1466,7 +1467,9 @@ void attachTopicsMenu(QMenu* menu)
                 if (!e.external && !e.label && !e.target.empty() && (e.depth == 0 || e.depth == groupDepth))
                 {
                     std::string page = e.target;
-                    menu->addAction(qs(e.title), [page] { open(page); })->setToolTip("Shift+click opens it in the web browser");
+                    QAction* a = menu->addAction(qs(e.title), [page] { open(page); });
+                    a->setToolTip("Shift+click opens it in the web browser");
+                    a->setProperty(menuSearch::kSameAsProperty, QString::fromStdString(docs::pageActionId(page)));
                 }
             }
         }

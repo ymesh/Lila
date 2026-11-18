@@ -40,6 +40,7 @@ private:
 
     QTreeWidget* mTree = nullptr;
     QToolButton* mAllSets = nullptr;
+    QToolButton* mSelect = nullptr;
     QLabel* mEmpty = nullptr;
     int mGraphListener = 0;
     bool mPending = false;

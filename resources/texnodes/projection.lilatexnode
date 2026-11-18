@@ -1,0 +1,63 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "projection",
+  "label": "Projection",
+  "category": "Input",
+  "doc": "Texture coordinates projected onto the mesh instead of its uvs: flat, wrapped around a cylinder or around a sphere (an equirectangular map such as an earth texture). Link it into an Image's UV, through Mapping to move it.",
+  "inputs": [],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "vector"
+    }
+  ],
+  "params": [
+    {
+      "id": "shape",
+      "type": "enum",
+      "default": "planar",
+      "options": [
+        "planar",
+        "cylindrical",
+        "spherical"
+      ]
+    },
+    {
+      "id": "axis",
+      "type": "enum",
+      "default": "y",
+      "options": [
+        "x",
+        "y",
+        "z"
+      ],
+      "doc": "Planar: the direction it projects along. Cylindrical and spherical: the pole."
+    },
+    {
+      "id": "space",
+      "type": "enum",
+      "default": "object",
+      "options": [
+        "object",
+        "world"
+      ]
+    },
+    {
+      "id": "size",
+      "type": "float",
+      "default": 100.0,
+      "min": 0.001,
+      "softMax": 1000,
+      "doc": "Planar and cylindrical: cm per repeat (height for cylindrical)."
+    }
+  ],
+  "cost": 10,
+  "externals": [
+    "position",
+    "worldPosition"
+  ],
+  "body": {
+    "out": "float3 pos = p.space == 0 ? position.sample(uv).xyz : worldPosition.sample(uv).xyz;\nfloat3 q = p.axis == 0 ? pos.zxy : p.axis == 1 ? pos : pos.xzy;\nfloat size = max(p.size, 1e-3);\nif (p.shape == 0)\n    return float3(q.x / size + 0.5, -q.z / size + 0.5, 0.0);\nfloat u = atan2(q.z, -q.x) * 0.15915494 + 0.5;\nif (p.shape == 1)\n    return float3(u, q.y / size + 0.5, 0.0);\nfloat r = max(length(q), 1e-6);\nreturn float3(u, asin(clamp(q.y / r, -1.0, 1.0)) * 0.31830989 + 0.5, 0.0);"
+  }
+}

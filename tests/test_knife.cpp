@@ -49,6 +49,19 @@ TEST_CASE("polyKnife: deleteEdge joins its two faces in one undo step")
     CHECK_THROWS(run("polyKnife", {{"mesh", cube}, {"deleteEdge", 999}}));
 }
 
+TEST_CASE("polyKnife: deleteLoop removes the whole loop and the points it leaves")
+{
+    run("newScene");
+    std::string cube = run("polyCube")[0];
+    json loop = run("polyKnife", {{"mesh", cube}, {"loopEdge", 0}, {"fraction", 0.3}});
+    REQUIRE(faces(cube) == 10);
+    run("polyKnife", {{"mesh", cube}, {"deleteEdge", loop[0]}, {"deleteLoop", true}});
+    CHECK(faces(cube) == 6);
+    CHECK(meshOf(cube).numPoints() == 8);
+    run("undo");
+    CHECK(faces(cube) == 10);
+}
+
 TEST_CASE("polyKnife: one point on an edge inserts a vertex")
 {
     run("newScene");

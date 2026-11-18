@@ -166,13 +166,23 @@ TEST_CASE("isolation sets take in objects made from isolated ones")
     CHECK(set.nodes.contains(8));
 }
 
-TEST_CASE("merging exactly two vertices ignores the distance")
+TEST_CASE("merging exactly two vertices ignores the distance and meets at their centre")
 {
     run("newScene");
     std::string plane = run("polyPlane", {{"width", 100.0}, {"depth", 100.0}, {"subdivisionsX", 1}, {"subdivisionsZ", 1}})[0];
+    scene::Graph& g = scene::Graph::current();
+    auto mesh = [&]() -> const geo::Mesh& {
+        g.evaluate();
+        return *g.find(plane)->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+    };
+    const glm::dvec3 mid = (mesh().position(0) + mesh().position(1)) * 0.5;
     run("selectComponents", {{"args", {plane}}, {"vertices", {0, 1}}});
     run("polyMerge");
     CHECK(run("meshInfo", {{"args", {plane}}})["points"].get<int>() == 3);
+    bool atMid = false;
+    for (geo::Index p = 0; p < mesh().pointCapacity(); ++p)
+        atMid |= mesh().pointValid(p) && glm::distance(mesh().position(p), mid) < 1e-4;
+    CHECK(atMid);
     run("undo");
     run("selectComponents", {{"args", {plane}}, {"vertices", {0, 1, 2}}});
     run("polyMerge");

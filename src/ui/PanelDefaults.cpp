@@ -1,6 +1,7 @@
 #include "ui/PanelDefaults.h"
 
 #include "core/PrefStore.h"
+#include "ops/Undo.h"
 #include "ui/Controls.h"
 #include "ui/Icons.h"
 #include "ui/SpinScrub.h"
@@ -116,7 +117,37 @@ void setToggleDefault(QAbstractButton* button, bool on)
 void reset(QWidget* root)
 {
     for (QWidget* w : fields(root))
-        apply(w, w->property(kDefaultProperty));
+    {
+        const QVariant def = w->property(kDefaultProperty);
+        if (sameValue(w, def))
+            continue;
+        apply(w, def);
+        if (w->isVisible())
+            flashReset(w);
+    }
+}
+
+bool hasDefaults(QWidget* root)
+{
+    return !fields(root).empty();
+}
+
+void addResetMenu(QWidget* header, QWidget* root, std::function<void()> extra)
+{
+    header->setContextMenuPolicy(Qt::CustomContextMenu);
+    QObject::connect(header, &QWidget::customContextMenuRequested, header, [header, root, extra](const QPoint& at) {
+        if (!extra && !hasDefaults(root))
+            return;
+        QMenu menu;
+        menu.addAction(icon("restore"), "Reset All", header, [root, extra] {
+            UndoStack::get().openChunk("Reset All");
+            reset(root);
+            if (extra)
+                extra();
+            UndoStack::get().closeChunk();
+        });
+        menu.exec(header->mapToGlobal(at));
+    });
 }
 
 void saveAsDefaults(QWidget* root, const std::string& prefsKey)

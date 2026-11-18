@@ -5,6 +5,7 @@
 #include "scene/Node.h"
 
 #include <array>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -119,7 +120,15 @@ enum Attr
     kHeightUvHeight,
     // Per-texture sampling: wrapU, wrapV and filter for each of materials::sampledMaps(), in that order.
     kTextureSampling,
-    kCount = kTextureSampling + 7 * 4
+    // The colour maps' OCIO input colour spaces (base colour, emissive): a config colour space, empty to follow ColorSpace.
+    kBaseColorOcioSpace = kTextureSampling + 7 * 4,
+    kEmissiveOcioSpace,
+    // Position in the Material Editor's list; 0 sorts by name after the placed ones.
+    kListOrder,
+    // The texture set drawing every map it has, and per-map picks of one set's map ({channel: set}, JSON).
+    kTextureSet,
+    kTextureSetMaps,
+    kCount
 };
 
 /** The viewport (and Unreal master material) lighting model; DefaultLit is Unreal's default lit. */
@@ -213,8 +222,20 @@ LILA_SCENE_API std::vector<Node*> all(Graph& g);
 /** Creates a material node named exactly `name` when it is free (else made unique). Undoable. */
 LILA_SCENE_API Node* create(Graph& g, std::string_view name);
 
-/** Renames any node like Graph::rename; a material's slots on every mesh follow it. Returns the name it got. */
+/**
+ * Renames any node like Graph::rename; a material's slots on every mesh follow it, and the materials using a texture set
+ * follow the set. Returns the name it got.
+ */
 LILA_SCENE_API std::string rename(Graph& g, NodeId id, const std::string& name);
+
+/** The texture set the material picks whole (its textureSet attr); empty for none. */
+LILA_SCENE_API std::string textureSet(const Node& material);
+/** The material's per-map picks: {textureChannels name: set} for the maps that take one map of a set. */
+LILA_SCENE_API std::map<std::string, std::string> textureSetMaps(const Node& material);
+/** The set one of the material's maps (a textureChannels name) comes from: its own pick, else the whole set; empty for none. */
+LILA_SCENE_API std::string textureSetFor(const Node& material, std::string_view channel);
+/** Every set the material uses: the whole set first, then the per-map picks in textureChannels order. */
+LILA_SCENE_API std::vector<std::string> textureSetsUsed(const Node& material);
 
 /** Source channel (0 R, 1 G, 2 B) of occlusion, roughness and metallic in a packed map of this layout. */
 LILA_SCENE_API std::array<int, 3> packedChannels(material::PackedLayout layout);
@@ -261,6 +282,8 @@ LILA_SCENE_API std::string strokeSheetPath(const std::string& strokeMap);
 /** paths::resolvePath of a stored texture path, as UTF-8. */
 LILA_SCENE_API std::string resolvePath(const std::string& path);
 
+/** The scene's materials in the Material Editor's order: by listOrder, then unplaced ones by name. */
+LILA_SCENE_API std::vector<Node*> ordered(Graph& g);
 /** Slot index for name, added when missing. */
 LILA_SCENE_API int32_t slotIndex(geo::Mesh& mesh, const std::string& name);
 /** Points every face (faces empty) or the given faces at the named slot, then drops slots no face uses. */
@@ -269,6 +292,11 @@ LILA_SCENE_API void assign(geo::Mesh& mesh, const std::string& slot, const std::
 LILA_SCENE_API void pruneSlots(geo::Mesh& mesh);
 /** Slot name per face id; ids outside the names get "Material<id>", like the FBX exporter. */
 LILA_SCENE_API std::string slotName(const geo::Mesh& mesh, int32_t id);
+/**
+ * Puts the named slots first, in the given order, the rest after them in their current order, and renumbers the
+ * faces to match. Unknown names are ignored. False when nothing moved.
+ */
+LILA_SCENE_API bool reorderSlots(geo::Mesh& mesh, const std::vector<std::string>& order);
 /** Faces per slot name, in slot order. */
 LILA_SCENE_API std::vector<std::pair<std::string, uint32_t>> slotUsage(const geo::Mesh& mesh);
 

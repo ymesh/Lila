@@ -172,6 +172,146 @@ int fillStart(const std::vector<FillPoint>& outer, const GridFillOptions& o)
     return ((start + o.rotate) % n + n) % n;
 }
 
+/** The point at parameter t along the border (outer[i] at t = i), drawn toward the centre to r of its distance. */
+FillPoint ringPoint(Mesh& m, const std::vector<FillPoint>& outer, const FillPoint& centre, double t, double r)
+{
+    const size_t n = outer.size();
+    const double i = std::floor(t);
+    const double f = t - i;
+    const FillPoint& a = outer[size_t(i) % n];
+    const FillPoint& b = outer[(size_t(i) + 1) % n];
+    return blendPoint(m, {{&centre, 1 - r}, {&a, r * (1 - f)}, {&b, r * f}});
+}
+
+/**
+ * Rings of quads following the border inward along straight spokes, each ring about as deep as its quads are wide, to
+ * a pole of kite quads at the centre, poleSize of the border across. With 24 spokes or more, once the quads have shrunk to about half the border's, the next
+ * two rows halve the spokes, each four quads narrowing to two through a pair of 3-poles.
+ */
+std::vector<Index> fillRadial(Mesh& m, const std::vector<FillPoint>& outer, const FillPoint& centre, Index srcFace, double poleSize, bool flip)
+{
+    const int n = int(outer.size());
+    const double s = std::clamp(poleSize, 0.05, 0.9);
+    double radius = 0.0, perimeter = 0.0;
+    for (int i = 0; i < n; ++i)
+    {
+        radius += glm::distance(outer[size_t(i)].pos, centre.pos) / n;
+        perimeter += glm::distance(outer[size_t(i)].pos, outer[size_t((i + 1) % n)].pos);
+    }
+    Filler fill(m, srcFace, flip);
+    std::vector<FillPoint> ring = outer;
+    std::vector<double> at(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i)
+        at[size_t(i)] = i;
+    double r = 1.0;
+    // The ring-to-ring scale that reaches the pole's size in whole rings, each as near square quads as that allows.
+    auto ringScale = [&](size_t k) {
+        const double square = radius > 0.0 ? std::min(perimeter / (double(k) * radius), 0.45) : 0.45;
+        const double rings = std::max(1.0, std::round(std::log(s / r) / std::log(1 - square)));
+        return std::pow(s / r, 1.0 / rings);
+    };
+
+    if (n % 2 == 1)
+    {
+        // An odd border gets one extra spoke in its first ring, at the cost of one triangle.
+        const double next = r * ringScale(size_t(n) + 1);
+        std::vector<FillPoint> inner;
+        for (int i = 0; i < n; ++i)
+            inner.push_back(ringPoint(m, outer, centre, i, next));
+        inner.push_back(ringPoint(m, outer, centre, n - 0.5, next));
+        for (int i = 0; i < n - 1; ++i)
+            fill.face({&ring[size_t(i)], &ring[size_t(i + 1)], &inner[size_t(i + 1)], &inner[size_t(i)]});
+        fill.face({&ring.back(), &ring[0], &inner[0], &inner.back()});
+        fill.face({&ring.back(), &inner.back(), &inner[size_t(n - 1)]});
+        ring = std::move(inner);
+        at.push_back(n - 0.5);
+        r = next;
+    }
+
+    auto plainRing = [&](double next) {
+        const size_t k = ring.size();
+        std::vector<FillPoint> inner;
+        for (size_t j = 0; j < k; ++j)
+            inner.push_back(ringPoint(m, outer, centre, at[j], next));
+        for (size_t j = 0; j < k; ++j)
+            fill.face({&ring[j], &ring[(j + 1) % k], &inner[(j + 1) % k], &inner[j]});
+        ring = std::move(inner);
+        r = next;
+    };
+
+    while (r > s * 1.001)
+    {
+        const size_t k = ring.size();
+        const double scale = ringScale(k);
+        // Under 24 spokes all of them run on to the pole; halving so few shows its kinks.
+        if (k < 24 || r * n / double(k) >= 0.55 || r * scale * scale < s * 0.999)
+        {
+            plainRing(r * scale);
+            continue;
+        }
+        std::vector<FillPoint> inner;
+        std::vector<double> innerAt;
+
+        // Halving band: blocks of four segments narrowing to two, and with k = 4u + 2, two plain segments between them.
+        const double mid = r * scale, in = mid * scale;
+        const size_t units = k / 4;
+        std::vector<size_t> blocks;
+        for (size_t u = 0; u < units; ++u)
+        {
+            blocks.push_back(4);
+            if (k % 4 != 0 && (u + 1 == units / 2 || u + 1 == units))
+                blocks.push_back(1);
+        }
+        std::vector<FillPoint> mids;
+        mids.reserve(k);
+        std::vector<size_t> innerStart, midStart;
+        for (size_t b = 0, j = 0; b < blocks.size(); j += blocks[b++])
+        {
+            innerStart.push_back(inner.size());
+            midStart.push_back(mids.size());
+            inner.push_back(ringPoint(m, outer, centre, at[j], in));
+            innerAt.push_back(at[j]);
+            if (blocks[b] != 4)
+                continue;
+            inner.push_back(ringPoint(m, outer, centre, at[j + 2], in));
+            innerAt.push_back(at[j + 2]);
+            for (size_t x = 1; x <= 3; ++x)
+                mids.push_back(ringPoint(m, outer, centre, at[j + x], mid));
+        }
+        for (size_t b = 0, j = 0; b < blocks.size(); j += blocks[b++])
+        {
+            auto A = [&](size_t x) { return &ring[(j + x) % k]; };
+            const FillPoint* b0 = &inner[innerStart[b]];
+            const FillPoint* b2 = &inner[innerStart[(b + 1) % blocks.size()]];
+            if (blocks[b] != 4)
+            {
+                fill.face({A(0), A(1), b2, b0});
+                continue;
+            }
+            const FillPoint* b1 = &inner[innerStart[b] + 1];
+            const FillPoint* p1 = &mids[midStart[b]];
+            const FillPoint* p2 = p1 + 1;
+            const FillPoint* p3 = p1 + 2;
+            fill.face({A(0), A(1), p1, b0});
+            fill.face({A(1), A(2), p2, p1});
+            fill.face({A(2), A(3), p3, p2});
+            fill.face({A(3), A(4), b2, p3});
+            fill.face({p1, p2, b1, b0});
+            fill.face({p2, p3, b2, b1});
+        }
+        ring = std::move(inner);
+        at = std::move(innerAt);
+        r = in;
+    }
+
+    // A pole of kites, each taking two segments.
+    const FillPoint pole = blendPoint(m, {{&centre, 1.0}});
+    const size_t k = ring.size();
+    for (size_t j = 0; j < k; j += 2)
+        fill.face({&ring[j], &ring[j + 1], &ring[(j + 2) % k], &pole});
+    return fill.out;
+}
+
 /**
  * Fills a closed border round the centre point, the grid starting at outer[0]. The border runs in the winding the new
  * faces take, or against it with flip.
@@ -182,6 +322,8 @@ std::vector<Index> fillLoop(Mesh& m, const std::vector<FillPoint>& outer, const 
     const int n = int(outer.size());
     if (n < 3)
         return {};
+    if (o.style == GridFillOptions::Style::Radial && n >= 6)
+        return fillRadial(m, outer, centre, srcFace, o.gridSize, flip);
     const double s = std::clamp(o.gridSize, 0.05, 1.0);
     Filler fill(m, srcFace, flip);
     if (s >= 1.0)

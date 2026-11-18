@@ -23,16 +23,31 @@
  */
 namespace lila::tex::paint
 {
+/** A mirror in uv space: across u (or v) = center, or across each uv island's own middle. */
+struct UvMirror
+{
+    /** 0 mirrors u, 1 mirrors v. */
+    int axis = 0;
+    double center = 0.5;
+    bool perIsland = false;
+
+    bool operator==(const UvMirror&) const = default;
+};
+
 struct LILA_SCENE_API PaintSymmetry
 {
     std::optional<geo::SymmetryPlane> mirror;
+    /** Every copy above, again mirrored in uv space: for symmetric unwraps, whatever the mesh's shape. */
+    std::optional<UvMirror> uvMirror;
     brush::Radial radial;
     /** The mesh's radial symmetry: when set, its elements are the copies, in place of mirror and radial. */
     std::optional<geo::RadialSymmetry> group;
     /** Point pairs for topological mirror copies; not part of the record. */
     std::shared_ptr<const geo::SymmetryMap> map;
 
-    bool any() const { return group.has_value() || mirror.has_value() || radial.any(); }
+    bool any() const { return group.has_value() || mirror.has_value() || radial.any() || uvMirror.has_value(); }
+    /** Copies before the uv mirror doubles them. */
+    uint32_t spatialCount() const;
     /** Copies including the original. */
     uint32_t count() const;
     /** Whether copy k is a reflection (its tip turns the other way). */

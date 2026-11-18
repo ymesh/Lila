@@ -44,7 +44,8 @@ public:
 
     /** Under the UVs, over each tile's background. */
     void drawBackground(QPainter& p, const QRect& widget, const ToScreen& toScreen, const ToUv& toUv, bool udim);
-    void drawCursor(QPainter& p, QPointF at) const;
+    /** The brush ring at the size it paints: its object-space radius through the uv scale under the cursor and the zoom. */
+    void drawCursor(QPainter& p, QPointF at, const ToUv& toUv, double pxPerUv) const;
 
     /** pxPerUv is the view's zoom. True when painting took the event. */
     bool mousePress(QMouseEvent* e, const ToUv& toUv, double pxPerUv);

@@ -3,10 +3,13 @@
 #include "Puppeteer.h"
 #include "motion/PuppeteerMotion.h"
 
+#include <lila/ExtensionScope.h>
+
 using namespace lila;
 
 LILA_EXTENSION_EXPORT int lilaExtensionInit(ext::Context& ctx)
 {
+    ui::scope(ctx);
     if (!puppeteer::registerCharacter(ctx) || !puppeteer::registerRigElements(ctx))
         return 1;
     puppeteer::registerHands(ctx);

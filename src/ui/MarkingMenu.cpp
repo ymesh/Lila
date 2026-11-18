@@ -26,6 +26,7 @@
 #include <QScreen>
 #include <QStatusBar>
 #include <QTimer>
+#include <QToolTip>
 
 #include <algorithm>
 #include <cmath>
@@ -42,6 +43,8 @@ constexpr qint64 kBoxDwellMs = 250;
 // A submenu row or a submenu in the slot above the list opens only after the cursor rests this long, so moving past
 // it to reach something else never pops it open.
 constexpr qint64 kSubmenuDwellMs = 450;
+// Resting this long on an item shows its tooltip; a flick through the menu never does.
+constexpr int kTipDwellMs = 700;
 constexpr double kItemHeight = 32.0;
 // Text inset from an item's left and right edges.
 constexpr double kPadX = 13.0;
@@ -259,6 +262,8 @@ MarkingMenu::~MarkingMenu()
     commandPreview::clear();
     if (!mStatus.isEmpty())
         showStatus({});
+    if (!mTipAction.empty())
+        QToolTip::hideText();
     if (gActive == this)
         gActive = nullptr;
 }
@@ -382,9 +387,8 @@ MarkingMenu::Level MarkingMenu::buildLevel(const json& def, QPointF center, std:
             if (j.value("insert", std::string()) == "materials")
             {
                 std::vector<std::string> names;
-                for (const scene::Node* n : scene::materials::all(scene::Graph::current()))
+                for (const scene::Node* n : scene::materials::ordered(scene::Graph::current()))
                     names.push_back(n->path());
-                std::ranges::sort(names);
                 for (const std::string& name : names)
                     level.overflow.push_back(toItem({{"label", name},
                                                      {"action", {{"command", "assignMaterial"}, {"args", {{"args", {name}}}}}},
@@ -627,10 +631,22 @@ void MarkingMenu::updateHighlight(QPointF pos)
     }
     QString status;
     if (Item* it = highlighted(); it && it->action.is_string())
-        if (const Action* a = actions::find(it->action.get<std::string>()))
-            status = QString::fromStdString(a->doc);
+        status = QString::fromStdString(actions::statusLine(it->action.get<std::string>()));
     if (status != mStatus)
         showStatus(mStatus = status);
+    std::string tip;
+    if (Item* it = highlighted(); it && it->action.is_string())
+        tip = it->action.get<std::string>();
+    if (tip != mTipAction)
+    {
+        mTipAction = tip;
+        QToolTip::hideText();
+        if (!tip.empty())
+            QTimer::singleShot(kTipDwellMs, this, [this, tip] {
+                if (gActive == this && mTipAction == tip)
+                    QToolTip::showText(QCursor::pos() + QPoint(16, 16), QString::fromStdString(actions::tooltip(tip)), this);
+            });
+    }
     schedulePreview();
     update();
 }

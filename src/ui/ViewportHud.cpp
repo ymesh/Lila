@@ -518,7 +518,7 @@ const std::vector<Item>& items()
          {{"state", "Soft Select"}, {"radius", "Falloff Radius"}, {"mode", "Falloff Mode"}}},
         {"cameraNames", "Camera Names", "The view's camera name along the bottom."},
         {"frameRate", "Frame Rate", "How many frames per second the view draws, with the GPU time of the last frame and its ambient occlusion share.",
-         {{"fps", "Frame Rate"}, {"gpu", "GPU Time"}, {"ao", "AO Time"}}},
+         {{"fps", "Frame Rate"}, {"gpu", "GPU Time"}, {"ao", "AO Time"}, {"post", "Post Times"}}},
         {"currentFrame", "Current Frame", "The current frame of the time slider."},
         {"georeference", "Georeference", "Where the cursor and the selected object are on the Earth: projected grid coordinates and latitude, longitude and height, from the scene's georeference.",
          {{"cursor", "Cursor"}, {"selection", "Selection"}, {"projected", "Projected"}, {"geographic", "Latitude and Longitude"}}},
@@ -762,6 +762,13 @@ bool draw(OverlayPainter& p, const Context& ctx)
         rightBlocks.push_back(softSelectBlock(parts("softSelect")));
     if (on("georeference"))
         rightBlocks.push_back(georefBlock(g, ctx, parts("georeference")));
+    if (!ctx.fallbacks.empty())
+    {
+        Block b;
+        for (const auto& [label, value] : ctx.fallbacks)
+            b.push_back({label, {value}});
+        rightBlocks.insert(rightBlocks.begin(), std::move(b));
+    }
     // Shown whenever it is set, so nobody reads display-relative numbers as world ones.
     if (scene::relocate::hasDisplayOrigin())
     {
@@ -798,6 +805,11 @@ bool draw(OverlayPainter& p, const Context& ctx)
             rate.push_back({"GPU Time:", {fixed(ctx.gpuMs) + " ms"}, wide});
         if (ctx.aoMs > 0.0 && part("ao"))
             rate.push_back({"AO Time:", {fixed(ctx.aoMs) + " ms"}, wide});
+        if (part("post"))
+            for (const auto& [label, ms] : {std::pair{"Reflections:", ctx.reflectionMs}, {"Lens Flares:", ctx.flareMs}, {"Depth of Field:", ctx.dofMs},
+                                            {"Motion Blur:", ctx.motionBlurMs}})
+                if (ms > 0.0)
+                    rate.push_back({label, {fixed(ms) + " ms"}, wide});
         bottomBlocks.push_back(std::move(rate));
     }
     if (on("currentFrame"))

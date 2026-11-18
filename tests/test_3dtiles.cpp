@@ -18,7 +18,7 @@ namespace fs = std::filesystem;
 
 namespace
 {
-const fs::path kData = fs::path(LILA_TEST_3DTILES_DATA);
+const fs::path kTilesData = fs::path(LILA_TEST_3DTILES_DATA);
 
 /** World bounds of every mesh under node. */
 std::pair<glm::dvec3, glm::dvec3> meshBounds(scene::Graph& g, scene::NodeId node, size_t* faces = nullptr)
@@ -90,7 +90,7 @@ TEST_CASE("3D Tiles: a tileset's b3dm lands on its Earth-centred place, picked b
     ops::execute("newScene", json::object());
     scene::georef::setCurrent(std::nullopt);
     scene::Graph& g = scene::Graph::current();
-    const fs::path tileset = kData / "DiscreteLOD" / "tileset.json";
+    const fs::path tileset = kTilesData / "DiscreteLOD" / "tileset.json";
     const json low = ops::execute("import3dTiles", {{"args", {tileset.string()}}, {"maxError", 2.0}, {"name", "Low"}});
     CHECK(low["tiles"].get<int>() == 1);
     CHECK(low["skipped"].empty());
@@ -122,7 +122,7 @@ TEST_CASE("3D Tiles: i3dm instances stand inside their tile's region")
     ops::execute("newScene", json::object());
     scene::georef::setCurrent(std::nullopt);
     scene::Graph& g = scene::Graph::current();
-    const json r = ops::execute("import3dTiles", {{"args", {(kData / "TreeBillboards" / "tileset.json").string()}}});
+    const json r = ops::execute("import3dTiles", {{"args", {(kTilesData / "TreeBillboards" / "tileset.json").string()}}});
     CHECK(r["tiles"].get<int>() == 1);
     CHECK(r["skipped"].empty());
     const scene::NodeId root = g.find(r["node"].get<std::string>())->id();

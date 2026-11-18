@@ -35,7 +35,10 @@ float3 viewPos(int2 px, float depth)
 float3 worldNormal(int2 px, float depth)
 {
     if (ap.options.x < 0.5)
-        return normalTex.Load(int3(px, 0)).xyz;
+    {
+        float3 n = normalTex.Load(int3(px, 0)).xyz;
+        return dot(n, n) > 0.01 ? normalize(n) : n;
+    }
     const int2 last = int2(ap.size.xy) - 1;
     float3 P = viewPos(px, depth);
     float3 dx = float3(0, 0, 0), dy = float3(0, 0, 0);

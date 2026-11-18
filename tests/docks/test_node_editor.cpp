@@ -29,6 +29,7 @@
 #include <QLineEdit>
 #include <QMainWindow>
 #include <QMouseEvent>
+#include <QToolButton>
 
 #include <cmath>
 
@@ -979,4 +980,59 @@ TEST_CASE("W grabs the selection to the cursor and R scales its spacing; Esc put
     press(view, Qt::Key_Escape);
     CHECK(a->pos() == QPointF(0, 0));
     CHECK(b->pos() == QPointF(400, 0));
+}
+
+TEST_CASE("I opens a Group node's group, U and the path bar lead back out")
+{
+    run("newScene");
+    run("gnCreateGroup", {{"args", {"Outer"}}});
+    run("gnCreateGroup", {{"args", {"Mid"}}});
+    run("gnCreateGroup", {{"args", {"Inner"}}});
+    std::string midNode = run("gnAddNode", {{"args", {"Outer", "Group"}}}).get<std::string>();
+    run("gnSetValue", {{"args", {"Outer", midNode + ".group", "Mid"}}});
+    std::string innerNode = run("gnAddNode", {{"args", {"Mid", "Group"}}}).get<std::string>();
+    run("gnSetValue", {{"args", {"Mid", innerNode + ".group", "Inner"}}});
+
+    QMainWindow win;
+    ui::NodeEditor* editor = openOn(win, "Outer");
+    auto* view = editor->findChild<QGraphicsView*>();
+    auto crumbs = [editor] {
+        std::vector<QString> out;
+        for (QToolButton* b : editor->findChildren<QToolButton*>())
+            if (b->autoRaise() && b->isVisibleTo(editor))
+                out.push_back(b->text());
+        return out;
+    };
+    CHECK(crumbs().empty());
+
+    editor->focusNode(midNode);
+    press(view, Qt::Key_I);
+    CHECK(editor->group() == "Mid");
+    editor->focusNode(innerNode);
+    press(view, Qt::Key_I);
+    CHECK(editor->group() == "Inner");
+    CHECK(crumbs() == std::vector<QString>{"Outer", "Mid"});
+
+    press(view, Qt::Key_U);
+    CHECK(editor->group() == "Mid");
+    CHECK(crumbs() == std::vector<QString>{"Outer"});
+    CHECK(view->scene()->selectedItems().size() == 1);
+
+    for (QToolButton* b : editor->findChildren<QToolButton*>())
+        if (b->autoRaise() && b->text() == "Outer")
+            b->click();
+    pump();
+    CHECK(editor->group() == "Outer");
+    CHECK(crumbs().empty());
+
+    // Arriving without a path, U still finds the group that runs this one.
+    editor->setGroup("Inner");
+    pump();
+    editor->openParentGroup();
+    pump();
+    CHECK(editor->group() == "Mid");
+    editor->openParentGroup();
+    pump();
+    CHECK(editor->group() == "Outer");
+    CHECK(editor->parentGroup().isEmpty());
 }

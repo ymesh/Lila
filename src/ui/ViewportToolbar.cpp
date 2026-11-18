@@ -113,6 +113,7 @@ std::optional<bool> viewportActionState(const std::string& id, const ViewportWid
         {"viewport.defaultMaterial", vd::kDefaultMaterial, false},
         {"viewport.greyBaseColor", vd::kGreyBaseColor, false},
         {"viewport.smoothSubdivisions", vd::kSmoothSubdivisions, false},
+        {"viewport.modifierEdges", vd::kModifierEdges, false},
         {"viewport.toggleEnvBackground", "/viewport/env/background", true},
         {"viewport.toggleToolbar", vd::kToolbar, true},
         {"viewport.grayscaleWeights", vd::kGrayscaleWeights, false},

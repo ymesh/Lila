@@ -280,16 +280,21 @@ std::vector<unsigned char> exrUnpredict(std::vector<unsigned char> t)
     return raw;
 }
 
-void writeExrImpl(const fs::path& path, int w, int h, std::span<const float> rgba, bool full, int level)
+void writeExrChannelsImpl(const fs::path& path, int w, int h, std::vector<ExrChannel> channels, const std::vector<ExrAttribute>& extra, int level)
 {
     LILA_ZONE();
 
+    // Readers expect the channel list, and each line's channel data, sorted by name.
+    std::ranges::sort(channels, [](const ExrChannel& a, const ExrChannel& b) { return a.name < b.name; });
     std::vector<unsigned char> out = {0x76, 0x2f, 0x31, 0x01, 2, 0, 0, 0};
+    if (std::ranges::any_of(channels, [](const ExrChannel& c) { return c.name.size() > 31; }))
+        out[5] |= 0x04; // long names
     std::vector<unsigned char> chlist;
-    for (char c : {'A', 'B', 'G', 'R'})
+    for (const ExrChannel& c : channels)
     {
-        chlist.insert(chlist.end(), {static_cast<unsigned char>(c), 0});
-        putLe32(chlist, full ? kExrFloat : kExrHalf);
+        chlist.insert(chlist.end(), c.name.begin(), c.name.end());
+        chlist.push_back(0);
+        putLe32(chlist, c.full ? kExrFloat : kExrHalf);
         chlist.insert(chlist.end(), {0, 0, 0, 0});
         putLe32(chlist, 1);
         putLe32(chlist, 1);
@@ -308,12 +313,16 @@ void writeExrImpl(const fs::path& path, int w, int h, std::span<const float> rgb
     exrAttr(out, "pixelAspectRatio", "float", one);
     exrAttr(out, "screenWindowCenter", "v2f", {0, 0, 0, 0, 0, 0, 0, 0});
     exrAttr(out, "screenWindowWidth", "float", one);
+    for (const ExrAttribute& a : extra)
+        exrAttr(out, a.name.c_str(), a.type.c_str(), a.value);
     out.push_back(0);
 
+    size_t lineBytes = 0;
+    for (const ExrChannel& c : channels)
+        lineBytes += size_t(w) * (c.full ? 4 : 2);
     const int blocks = (h + kExrZipLines - 1) / kExrZipLines;
     const size_t tableAt = out.size();
     out.resize(out.size() + size_t(blocks) * 8);
-    static constexpr int kChannelOf[4] = {3, 2, 1, 0};
     struct Block
     {
         std::vector<unsigned char> raw, packed;
@@ -323,13 +332,13 @@ void writeExrImpl(const fs::path& path, int w, int h, std::span<const float> rgb
     tbb::parallel_for(0, blocks, [&](int b) {
         const int y0 = b * kExrZipLines, y1 = std::min(h, y0 + kExrZipLines);
         std::vector<unsigned char> raw;
-        raw.reserve(size_t(y1 - y0) * size_t(w) * (full ? 16 : 8));
+        raw.reserve(size_t(y1 - y0) * lineBytes);
         for (int y = y0; y < y1; ++y)
-            for (int c : kChannelOf)
+            for (const ExrChannel& c : channels)
                 for (int x = 0; x < w; ++x)
                 {
-                    const float f = rgba[(size_t(y) * size_t(w) + size_t(x)) * 4 + size_t(c)];
-                    if (full)
+                    const float f = c.data[size_t(y) * size_t(w) + size_t(x)];
+                    if (c.full)
                         putLe32(raw, std::bit_cast<uint32_t>(f));
                     else
                     {
@@ -366,6 +375,21 @@ void writeExrImpl(const fs::path& path, int w, int h, std::span<const float> rgb
     f.write(reinterpret_cast<const char*>(out.data()), std::streamsize(out.size()));
     if (!f)
         throw std::runtime_error("can't write " + path.string());
+}
+
+void writeExrImpl(const fs::path& path, int w, int h, std::span<const float> rgba, bool full, int level)
+{
+    std::vector<ExrChannel> channels(4);
+    const size_t count = size_t(w) * size_t(h);
+    for (int c = 0; c < 4; ++c)
+    {
+        channels[size_t(c)].name = std::string(1, "RGBA"[c]);
+        channels[size_t(c)].full = full;
+        channels[size_t(c)].data.resize(count);
+        for (size_t i = 0; i < count; ++i)
+            channels[size_t(c)].data[i] = rgba[i * 4 + size_t(c)];
+    }
+    writeExrChannelsImpl(path, w, h, std::move(channels), {exrChromaticitiesRec709()}, level);
 }
 
 Image readExrImpl(const fs::path& path, std::string* err)
@@ -1137,6 +1161,30 @@ void writePng(const fs::path& path, int width, int height, std::span<const float
     if (bits != 8 && bits != 16)
         throw std::runtime_error("PNG bit depth must be 8 or 16");
     writePngImpl(path, width, height, rgba, bits, dither, level);
+}
+
+ExrAttribute exrString(const std::string& name, const std::string& value)
+{
+    return {name, "string", std::vector<unsigned char>(value.begin(), value.end())};
+}
+
+ExrAttribute exrChromaticitiesRec709()
+{
+    std::vector<unsigned char> v;
+    for (float f : {0.64f, 0.33f, 0.30f, 0.60f, 0.15f, 0.06f, 0.3127f, 0.3290f})
+        putLe32(v, std::bit_cast<uint32_t>(f));
+    return {"chromaticities", "chromaticities", v};
+}
+
+void writeExrChannels(const fs::path& path, int width, int height, std::vector<ExrChannel> channels, const std::vector<ExrAttribute>& attributes,
+                      int level)
+{
+    if (width <= 0 || height <= 0)
+        throw std::runtime_error("EXR needs a size");
+    for (const ExrChannel& c : channels)
+        if (c.data.size() != size_t(width) * size_t(height) || c.name.empty())
+            throw std::runtime_error("EXR channel " + c.name + " has the wrong size");
+    writeExrChannelsImpl(path, width, height, std::move(channels), attributes, level);
 }
 
 void writeExr(const fs::path& path, int width, int height, std::span<const float> rgba, int bits, int level)

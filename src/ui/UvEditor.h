@@ -81,6 +81,10 @@ private:
     QHBoxLayout* mSectionRow = nullptr;
     QBoxLayout* mSectionColumn[2] = {};
     std::vector<QWidget*> mSections;
+    /** The extensions' sections (uvToolkit::add), rebuilt when they change; hidden while there are none. */
+    QWidget* mExtensionSections = nullptr;
+    int mExtensionListener = 0;
+    void rebuildExtensionSections();
     QComboBox* mSet = nullptr;
     QToolButton* mAddSet = nullptr;
     QToolButton* mDeleteSet = nullptr;

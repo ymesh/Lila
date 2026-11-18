@@ -141,7 +141,17 @@ enum class StrokeMode : uint8_t
     Line,
     /** Draw freely; on release the path is smoothed into a clean curve and the dabs go along it. */
     Curve,
+    /** Dabs keep coming while the brush is held, moving or not: paint builds up over time. */
+    Airbrush,
+    /** One dab at the press, sized by how far the drag goes from it. */
+    Anchored,
+    /** One dab that follows the drag and is laid where it is let go. */
+    DragDot,
 };
+
+/** freehand, line, curve, airbrush, anchored, dragDot. */
+LILA_SCENE_API const char* strokeModeName(StrokeMode m);
+LILA_SCENE_API StrokeMode strokeModeFromName(std::string_view name);
 
 struct LILA_SCENE_API BrushSettings
 {
@@ -156,12 +166,21 @@ struct LILA_SCENE_API BrushSettings
     double flow = 1.0;
     /** Dab spacing as a fraction of the radius. */
     double spacing = 0.15;
+    /** Airbrush: dabs a second while held. */
+    double airRate = 20.0;
     /** A shape name or soft select preset name, see Falloff::fromName. */
     std::string falloff = "smooth";
 
     PressureCurve pressureSize;
     PressureCurve pressureOpacity;
     PressureCurve pressureFlow;
+    /** Pen tilt (0 upright, 1 at 60 degrees) through the same curves: size and opacity grow with it, roundness flattens toward the floor. */
+    PressureCurve tiltSize;
+    PressureCurve tiltOpacity;
+    PressureCurve tiltRoundness;
+    /** The tip turns to the direction the pen leans, and with the pen's barrel rotation (art pens). */
+    bool tiltAngle = false;
+    bool rotationAngle = false;
     Jitter jitter;
 
     /** Tip angle in degrees, counterclockwise on screen; with followStroke it is relative to the direction of travel. */
@@ -217,6 +236,9 @@ struct Dab
     double radius = 1.0;
     /** Raw pen pressure, 0 to 1 (1 for a mouse). */
     double pressure = 1.0;
+    /** Pen tilt 0 to 1 and barrel rotation (radians), 0 for a mouse. */
+    double tilt = 0.0;
+    double rotation = 0.0;
     /** Weight multiplier: the pressure curve, jitter. */
     double opacity = 1.0;
     /** Per dab amount for brushes that build up. */

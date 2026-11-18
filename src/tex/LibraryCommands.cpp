@@ -191,20 +191,11 @@ std::map<NodeId, std::vector<uint32_t>> facesUsing(scene::Graph& g, const std::s
     return out;
 }
 
-/** The texture set bound to a material: the one whose material setting names it, else the one named like it. */
+/** The texture set the material uses; null for none. */
 Node* setFor(scene::Graph& g, const std::string& material)
 {
-    Node* named = nullptr;
-    for (const std::string& s : setNames(g))
-    {
-        Node* n = findSet(g, s);
-        SetSettings st = readSettings(*n);
-        if (st.material == material)
-            return n;
-        if (st.material.empty() && s == material)
-            named = n;
-    }
-    return named;
+    const std::string set = setForMaterial(g, material);
+    return set.empty() ? nullptr : findSet(g, set);
 }
 
 /** Takes out the tiling applyLibraryMaterial added, so a saved material carries no mesh's scale. */
@@ -500,8 +491,10 @@ void registerCommands()
                 set = findSet(g, a.get<std::string>("set"));
                 if (!set)
                     throw CommandError(std::string(cmd) + ": no texture set named '" + a.get<std::string>("set") + "'");
-                SetSettings st = readSettings(*set);
-                material = st.material.empty() ? set->name() : st.material;
+                const std::vector<std::string> users = materialsUsing(g, set->name());
+                if (a.positional.size() <= 1 && users.empty())
+                    throw CommandError(std::string(cmd) + ": no material uses " + set->name() + "; name the meshes, or pick the set in a material's Texture Set");
+                material = users.empty() ? std::string() : users.front();
                 tgts = a.positional.size() > 1 ? targets(g, a, cmd) : facesUsing(g, material);
             }
             else
@@ -599,9 +592,8 @@ void registerCommands()
             {
                 std::string name = freeName(meta.name, "Material");
                 set = g.createNode(*scene::types::find(kTextureSetType), name, scene::kNoNode, false);
-                SetSettings s = libSettings;
-                s.material = material;
-                writeSettings(g, *set, s);
+                writeSettings(g, *set, libSettings);
+                assignSet(g, set->name(), {material});
             }
             else
             {

@@ -80,6 +80,7 @@ enum AttrFlags : uint32_t
     AttrFont = 1 << 13,             // String naming a font (family and style, or a file): editors offer font pickers
     AttrCode = 1 << 14,             // String of source code: editors offer a monospace box that applies on Ctrl+Enter
     AttrImage = 1 << 15,            // with AttrFile, an image: editors offer thumbnails and the image library tied to the attr
+    AttrCurve = 1 << 16,            // String of curve points "x y, x y, ..." in 0..1: editors offer a curve editor
 };
 
 struct AttrDef

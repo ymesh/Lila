@@ -1,0 +1,61 @@
+{
+  "name": "godot",
+  "label": "Godot",
+  "version": 1,
+  "doc": "Godot's StandardMaterial3D with ORM: albedo, ORM packed (R occlusion, G roughness, B metallic), OpenGL normals, height and emission, named {material}_{suffix}.",
+  "output": {
+    "name": "{material}_{map}",
+    "format": "png",
+    "bits": 8
+  },
+  "pipeline": {
+    "autoAssign": true
+  },
+  "maps": [
+    {
+      "map": "baseColor",
+      "suffix": "albedo",
+      "slot": "albedo_texture"
+    },
+    {
+      "map": "orm",
+      "suffix": "orm",
+      "slot": "orm_texture",
+      "options": {
+        "channels": [
+          {
+            "map": "ao"
+          },
+          {
+            "map": "roughness"
+          },
+          {
+            "map": "metallic"
+          },
+          1.0
+        ]
+      }
+    },
+    {
+      "map": "normal",
+      "suffix": "normal",
+      "slot": "normal_texture",
+      "options": {
+        "greenUp": true
+      }
+    },
+    {
+      "map": "height",
+      "suffix": "height",
+      "slot": "heightmap_texture",
+      "bits": 16,
+      "optional": true
+    },
+    {
+      "map": "emissive",
+      "suffix": "emission",
+      "slot": "emission_texture",
+      "optional": true
+    }
+  ]
+}

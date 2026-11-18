@@ -1,0 +1,47 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "randomPerCell",
+  "label": "Random per Cell",
+  "category": "Pattern",
+  "doc": "A random value (and colour) per cell of a grid across the texture, from a seed: varies tiles, planks or anything laid out on a grid.",
+  "inputs": [],
+  "outputs": [
+    {
+      "id": "value",
+      "type": "gray"
+    },
+    {
+      "id": "color",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "cellsX",
+      "type": "int",
+      "default": 4,
+      "min": 1,
+      "softMax": 64
+    },
+    {
+      "id": "cellsY",
+      "type": "int",
+      "default": 4,
+      "min": 1,
+      "softMax": 64
+    },
+    {
+      "id": "seed",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "softMax": 1000
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "value": "uint2 c = uint2(floor(frac(uv) * float2(p.cellsX, p.cellsY)));\nreturn texRand(c, uint(p.seed));",
+    "color": "uint2 c = uint2(floor(frac(uv) * float2(p.cellsX, p.cellsY)));\nuint s = uint(p.seed);\nreturn float4(texRand(c, s ^ 0x1u), texRand(c, s ^ 0x2u), texRand(c, s ^ 0x3u), 1.0);"
+  }
+}

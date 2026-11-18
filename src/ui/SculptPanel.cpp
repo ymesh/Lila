@@ -26,6 +26,7 @@
 #include "ui/Outliner.h"
 #include "ui/ModelingToolkit.h"
 #include "ui/SculptTool.h"
+#include "ui/TexturePaintTool.h"
 #include "ui/SpinScrub.h"
 #include "ui/UiCommon.h"
 #include "ui/ViewportTool.h"
@@ -547,7 +548,8 @@ SculptPanel::SculptPanel(QWidget* parent) : QWidget(parent)
     pform->addRow("", mCavityPaint);
     pform->addRow("", controls::grid({controls::push("sculpt.colorFill", paintBox, "Fill"), controls::push("sculpt.colorClear", paintBox, "Clear")}, 2,
                                      paintBox));
-    col->addWidget(controls::section("Polypaint", paintBox, this, kSections));
+    pform->addRow("Texture", controls::push("sculpt.texturePaint", paintBox, "Paint Texture"));
+    col->addWidget(controls::section("Paint", paintBox, this, kSections));
 
     // Display
     auto* displayBox = new QWidget(this);
@@ -1208,6 +1210,28 @@ void registerSculptUi()
     maskAction("sculpt.maskFill", "Mask All", "fill", "mask", "Mask everything (then paint with Ctrl to free areas).");
     maskAction("sculpt.maskBlur", "Blur Mask", "blur", "mask", "Soften the mask's edges.");
     maskAction("sculpt.freezeClear", "Unfreeze All", "clear", "freeze", "Free every frozen point.");
+    actions::add({.id = "sculpt.texturePaint",
+                  .label = "Paint Texture in Sculpt",
+                  .category = "Sculpt",
+                  .run = [] {
+                      if (!sculpt::active())
+                      {
+                          log::warn("Paint Texture in Sculpt: enter Sculpt first");
+                          return;
+                      }
+                      sculptSettings().material = "mesh";
+                      sculptSettingsChanged();
+                      if (QDockWidget* d = sculptDock(false))
+                          for (QWidget* w : d->findChildren<QWidget*>())
+                              if (auto* panel = dynamic_cast<SculptPanel*>(w))
+                                  panel->syncFromSettings();
+                      startTexturePaint();
+                  },
+                  .enabled = [] { return sculpt::active() != nullptr; },
+                  .doc = "Paint the mesh's texture set on the sculpt without leaving Sculpt: the sculpt shows the mesh's own material and "
+                         "texture strokes land on the sculpted surface. Esc goes back to the sculpt brush.",
+                  .python = "lila.ui.run_action(\"sculpt.texturePaint\")",
+                  .keywords = {"texture", "paint", "layer", "material"}});
     actions::add({.id = "sculpt.colorFill",
                   .label = "Fill Polypaint",
                   .category = "Sculpt",

@@ -8,7 +8,7 @@ namespace lila::bake
 {
 const std::vector<std::string>& nameTokens()
 {
-    static const std::vector<std::string> t = {"project", "group", "mesh", "material", "map", "udim", "res", "ext"};
+    static const std::vector<std::string> t = {"project", "group", "mesh", "material", "map", "udim", "res", "ext", "variant"};
     return t;
 }
 
@@ -101,6 +101,8 @@ std::string expandName(std::string_view tmpl, const NameTokens& t, bool forceUdi
             return res;
         if (key == "ext")
             return t.ext;
+        if (key == "variant")
+            return fileSafe(t.variant.empty() ? std::string("base") : t.variant);
         known = false;
         return {};
     };

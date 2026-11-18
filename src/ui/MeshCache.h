@@ -53,6 +53,22 @@ struct SmoothCage
 /** smoothedFor(mesh, level) with its maps back to mesh; null for level 0. */
 LILA_UI_API std::shared_ptr<const SmoothCage> smoothCageFor(const scene::MeshPtr& mesh, int level);
 
+/** Whether a modifier stack changed the cage's edges (a bevel, a subdivide), rather than only moving its points. */
+LILA_UI_API bool modifiersAddEdges(const scene::MeshPtr& cage, const scene::MeshPtr& result);
+/**
+ * Wire for a modifier result, as line-only render meshes in the result's space: real is each cage edge laid onto the
+ * result's surface (a bevelled edge runs along the middle of its bevel), added is every result edge that is not on one
+ * of those (the bevel's own edges).
+ */
+struct ModifierWire
+{
+    std::shared_ptr<const render::RenderMesh> real, added;
+};
+LILA_UI_API ModifierWire modifierWireFor(const scene::MeshPtr& cage, const scene::MeshPtr& result);
+
+/** renderMeshFor(mesh) without its wire lines, for a surface whose edges are drawn by another draw. */
+LILA_UI_API std::shared_ptr<const render::RenderMesh> wirelessMeshFor(const scene::MeshPtr& mesh, bool tangents = false);
+
 /** renderMeshFor(smooth.mesh) with its wire cut down to the edges that run along the cage's. */
 LILA_UI_API std::shared_ptr<const render::RenderMesh> cageWireMeshFor(const SmoothCage& smooth, bool tangents = false);
 

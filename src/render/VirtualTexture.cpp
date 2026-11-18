@@ -781,6 +781,7 @@ TexturePtr Texture::map(int layer)
 
 void Texture::invalidate(int udim, const std::array<int, 4>& rect, bool pin)
 {
+    ++mContentVersion;
     const int tile = tileOf(udim);
     if (tile < 0 || rect[2] <= rect[0] || rect[3] <= rect[1])
         return;
@@ -816,6 +817,7 @@ void Texture::invalidate(int udim, const std::array<int, 4>& rect, bool pin)
 
 void Texture::invalidateAll()
 {
+    ++mContentVersion;
     {
         std::scoped_lock lock(g().mutex);
         const uint64_t frame = g().frame;

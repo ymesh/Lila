@@ -125,6 +125,12 @@ LILA_UI_API void fitScrollWidth(QScrollArea* scroll);
  */
 LILA_UI_API void cycle(QAbstractButton* button, std::function<void(int)> step);
 
+/**
+ * Opens a name box over `over` (a picker or label) holding text, all selected. Enter or leaving it calls commit with the
+ * trimmed text when it is non-empty and changed; Esc closes it without a call.
+ */
+LILA_UI_API void editInPlace(QWidget* over, const QString& text, std::function<void(const QString&)> commit);
+
 /** Sets a role property and re-polishes, for sheet rules keyed on it. */
 LILA_UI_API void setRole(QWidget* w, const char* role);
 

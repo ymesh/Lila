@@ -6,6 +6,7 @@
 #include "render/GpuImage.h"
 #include "scene/Graph.h"
 #include "tex/Graph.h"
+#include "tex/PaintParticles.h"
 #include "tex/PaintStrokes.h"
 #include "tex/PaintSurface.h"
 
@@ -32,7 +33,8 @@
  * The texture graph reads a channel through an External buffer named tex::paint::externalName(buffer, channel): its
  * image (externalImage) is kept up to date from the pages after every change.
  *
- * Everything here runs on the main thread (GPU work waits for the render thread), except externalImage.
+ * Everything here runs on the main thread (GPU work waits for the render thread), except externalImage. Live dabs paint
+ * on a worker: liveDabs returns at once, and every other call here waits for the dabs queued before it.
  */
 namespace lila::render::paint
 {
@@ -41,14 +43,30 @@ using tex::paint::PaintMesh;
 using tex::paint::Stroke;
 using tex::paint::StrokePtr;
 
+/** The surface texture paint works on: the live sculpt while the mesh is in Sculpt, else the mesh's output. */
+LILA_UI_API scene::MeshPtr paintSurface(const scene::Node& meshNode);
 /** The painted part of a mesh node for a material, cached by the node's evaluated mesh. Null when it is not a mesh. */
 LILA_UI_API std::shared_ptr<const PaintMesh> paintMesh(scene::Graph& g, const std::string& meshPath, const std::string& material);
-/** The material a set's tiles bind to (its settings' material, else its name). */
+/**
+ * The material key a set paints, for paintMesh: the materials using the set (tex::materialsUsing), joined by
+ * tex::paint::kMaterialSeparator. Empty when none does, which paints the whole mesh.
+ */
 LILA_UI_API std::string setMaterial(const scene::Node& set);
+/** Whether a mesh with these material slots has faces the set paints. */
+LILA_UI_API bool usesSet(const std::vector<std::string>& materialNames, const scene::Node& set);
 
 /** Brings a set's (or one buffer's) pages up to date with its paint data. Throws std::runtime_error on GPU failure. */
 LILA_UI_API void sync(scene::Graph& g, scene::Node& set);
 LILA_UI_API void syncBuffer(scene::Graph& g, scene::Node& set, const std::string& buffer);
+/** Dabs found again on a changed mesh, and those (or fill triangles) that weren't. */
+struct RetargetCount
+{
+    size_t found = 0;
+    size_t lost = 0;
+};
+/** The stroke moved onto a mesh whose triangles or uvs changed: each dab at the closest surface point to its anchor. */
+LILA_UI_API StrokePtr retarget(const StrokePtr& s, const PaintMesh& mesh, RetargetCount& n);
+
 /** Rasterises a buffer from its data from scratch, at its (or the set's) resolution. */
 LILA_UI_API void rasterize(scene::Graph& g, scene::Node& set, const std::string& buffer);
 
@@ -62,7 +80,13 @@ LILA_UI_API void rasterize(scene::Graph& g, scene::Node& set, const std::string&
 LILA_UI_API void beginLive(scene::Graph& g, scene::Node& set, const std::string& buffer, StrokePtr header);
 /** Builds the stroke pipelines on the render thread without waiting, so the first stroke doesn't stall on them. Nothing while the renderer is stopped. */
 LILA_UI_API void prewarm();
+/**
+ * Queues dabs for the live stroke and returns: they paint off the main thread, dabs queued while a batch runs joining the
+ * next one, and the change listeners hear of it once the GPU is done.
+ */
 LILA_UI_API void liveDabs(scene::NodeId set, const std::string& buffer, std::span<const Dab> dabs);
+/** Waits until the dabs queued so far have painted, and tells the change listeners. */
+LILA_UI_API void settleLive();
 /** Puts the pages back as they were before the live stroke. */
 LILA_UI_API void cancelLive(scene::NodeId set, const std::string& buffer);
 LILA_UI_API bool liveActive(scene::NodeId set, const std::string& buffer);
@@ -112,10 +136,23 @@ LILA_UI_API image::Image screenUvs(scene::Graph& g, const std::string& meshPath,
 
 /**
  * A GPU image resampled (nearest) over a uv rectangle (u0, v0, u1, v1; v up) into width x height RGBA8 pixels, rows top
- * first, transparent outside the image's 0-1 tile. colorDisplay shows linear colour as sRGB. For 2D views (the UV
- * editor's background); only the view-sized result comes back from the GPU.
+ * first, transparent outside the image's 0-1 tile. colorDisplay shows linear colour as sRGB; keepAlpha keeps the image's
+ * alpha, else it is opaque inside the tile. For 2D views (the UV editor's background); only the view-sized result comes
+ * back from the GPU.
  */
-LILA_UI_API std::vector<uint8_t> viewImage(const GpuImageRef& image, const glm::vec4& uvRect, int width, int height, bool colorDisplay);
+LILA_UI_API std::vector<uint8_t> viewImage(const GpuImageRef& image, const glm::vec4& uvRect, int width, int height, bool colorDisplay,
+                                           bool keepAlpha = false);
+
+/**
+ * tex::paint::withParticles on the GPU (paint_particles.slang): every dab followed by its particles' dabs, the same walks
+ * from the same seeds as the CPU reference, within float rounding. nullopt when the renderer isn't running or the device
+ * has no 64-bit integers.
+ */
+LILA_UI_API std::optional<std::vector<Dab>> withParticlesGpu(const std::shared_ptr<const PaintMesh>& mesh, std::span<const Dab> dabs,
+                                                             uint32_t firstIndex, const tex::paint::ParticleSpec& spec);
+/** withParticlesGpu, or the CPU reference when it can't run (logged). */
+LILA_UI_API std::vector<Dab> withParticles(const std::shared_ptr<const PaintMesh>& mesh, std::span<const Dab> dabs, uint32_t firstIndex,
+                                           const tex::paint::ParticleSpec& spec);
 
 /** A buffer channel's tile as a GPU image (RGBA16F), the one the texture graph reads; null when the buffer has no such tile. */
 LILA_UI_API GpuImageRef channelImage(scene::NodeId set, const std::string& buffer, const std::string& channel, int udim = 1001);

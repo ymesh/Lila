@@ -18,7 +18,9 @@ using json = nlohmann::json;
 
 /**
  * importTextures params for a set's export result (tex::exportSet). material is the slot's materialInputs. options: folder,
- * materialParent, materialFolder, save, meshes ({Lila node: Unreal mesh}) and slotMeshes (Lila nodes using the slot).
+ * materialParent, materialFolder, save, meshes ({Lila node: Unreal mesh}), slotMeshes (Lila nodes using the set's
+ * materials) and materials ({material: null for every map, or the map names it takes}; without it, material's name gets
+ * every map).
  * Unless all is set, only textures with a changed file (every tile of a UDIM set when one changed) go. warnings collects
  * what was skipped.
  */

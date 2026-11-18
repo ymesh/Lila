@@ -116,12 +116,14 @@ bool MainWindow::openScene(const std::filesystem::path& given)
             return false;
         path = chosen.toStdWString();
     }
+    const LogProblems problems;
     try
     {
         io::translators::run(io::translators::Op::Open, path, json::object(), CallSource::UI);
         addRecentFile(path);
         refreshSourceStatus();
         mViewports->frameUnlessRestored();
+        problems.toast("Opened", QString::fromStdWString(path.filename().wstring()));
         toastIfNewer();
         return true;
     }

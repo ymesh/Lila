@@ -1,4 +1,5 @@
 #include "ui/NodeCanvas.h"
+#include "ui/Hotkeys.h"
 
 namespace lila::ui::canvas
 {
@@ -39,7 +40,10 @@ NodeItem::NodeItem(NodeCanvas* canvas, const json& info) : mCanvas(canvas)
     setPos(pos[0].get<double>(), pos[1].get<double>());
     QString tip = label;
     if (!groupRef.empty())
-        tip += "\nGroup node: double-click to open " + qs(groupRef) + ".";
+    {
+        QString back = Hotkeys::get().keyFor("nodeEditor.parentGroup");
+        tip += "\nGroup node: double-click to open " + qs(groupRef) + (back.isEmpty() ? "." : ", " + back + " to come back.");
+    }
     if (isViewer())
         tip += "\nClick the eye to preview in the viewport.";
     if (reroute)

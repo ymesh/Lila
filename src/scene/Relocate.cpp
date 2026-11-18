@@ -1822,7 +1822,7 @@ void registerBuiltins()
              // Sound: timing and files only (a cue filters events by name, not place).
              "audio", "soundCue",
              // Scene organisation, shading and baking.
-             "displayLayer", "objectSet", "material", "postProcess", "textureSet", "bakeGroup", "bakeProject", "gnGroup",
+             "displayLayer", "objectSet", "material", "postProcess", "colorManagement", "textureSet", "bakeGroup", "bakeProject", "gnGroup",
              // Mesh sources and object-space modifiers and deformers.
              "meshSource", "polyCapsule", "polyCone", "polyCube", "polyCylinder", "polyDisc", "polyIcoSphere", "polyPipe", "polyPlane",
              "polyQuadSphere", "polySphere", "polyTorus", "bevelModifier", "decimateModifier", "mirrorModifier", "solidifyModifier",

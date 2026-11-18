@@ -41,11 +41,13 @@ if(WIN32)
     include(FetchContent)
     FetchContent_GetProperties(ufbx)
     FetchContent_GetProperties(nanobind)
-    add_custom_command(TARGET lila POST_BUILD
+    # Its own target, run on every build: a new notice or license text deploys without lila having to relink.
+    add_custom_target(lila_licenses ALL
         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DSHARE_DIR=${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share
             -DPYTHON_HOME=${LILA_PYTHON_HOME} -DUFBX_DIR=${ufbx_SOURCE_DIR} -DNANOBIND_DIR=${nanobind_SOURCE_DIR}
             -DOUT_DIR=$<TARGET_FILE_DIR:lila> -P ${CMAKE_SOURCE_DIR}/cmake/LilaLicenses.cmake
         COMMENT "Deploying third-party notices and license texts")
+    add_dependencies(lila_licenses lila)
     # Help > Record Performance Trace runs it against Lila over 127.0.0.1.
     if(LILA_TRACY AND VCPKG_INSTALLED_DIR)
         set(_tracy_tools ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/tracy)

@@ -98,4 +98,5 @@ jobs:
         shell: pwsh
         run: |
           $version = $env:TAG.Substring(1)
-          gh release create $env:TAG "build-installer\Lila-$version-Setup.exe" build-installer\latest.json --title "Lila $version" --generate-notes
+          $assets = @("build-installer\Lila-$version-Setup.exe", "build-installer\latest.json", "build-installer\files-$version.json") + @(Get-ChildItem "build-installer\Lila-$version-Patch-*.exe" | ForEach-Object FullName)
+          gh release create $env:TAG @assets --title "Lila $version" --generate-notes

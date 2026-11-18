@@ -1,0 +1,38 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "separateXyz",
+  "label": "Separate XYZ",
+  "category": "Utility",
+  "doc": "Splits a vector into its x, y and z values. Unlinked, it splits the mesh's uvs.",
+  "inputs": [
+    {
+      "id": "vec",
+      "type": "vector",
+      "label": "Vector",
+      "implicit": "uv",
+      "doc": "The vector to split: the mesh's uvs unless linked."
+    }
+  ],
+  "outputs": [
+    {
+      "id": "x",
+      "type": "float"
+    },
+    {
+      "id": "y",
+      "type": "float"
+    },
+    {
+      "id": "z",
+      "type": "float"
+    }
+  ],
+  "params": [],
+  "cost": 1,
+  "body": {
+    "x": "return vec.sample(uv).x;",
+    "y": "return vec.sample(uv).y;",
+    "z": "return vec.sample(uv).z;"
+  }
+}

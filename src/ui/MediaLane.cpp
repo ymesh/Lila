@@ -46,7 +46,7 @@ using scene::NodeId;
 
 constexpr double kMargin = 10.0; // the ruler's
 constexpr int kLaneRowHeight = 18;
-constexpr int kMaxRows = 4;
+constexpr int kMaxLaneRows = 4;
 constexpr double kEdgePx = 5.0;
 constexpr int kThumbs = 48;
 
@@ -280,7 +280,7 @@ void MediaLane::invalidate()
     QTimer::singleShot(0, this, [this] {
         mImpl->dirty = false;
         mImpl->rows = buildRows();
-        const int rows = std::min<int>(kMaxRows, int(mImpl->rows.size()));
+        const int rows = std::min<int>(kMaxLaneRows, int(mImpl->rows.size()));
         setFixedHeight(rows * kLaneRowHeight + 2);
         setVisible(rows > 0);
         update();
@@ -345,7 +345,7 @@ void MediaLane::paintEvent(QPaintEvent*)
     d.thumbsSeen = thumbsLanded().load();
     const double ppf = pxPerFrame(this);
     const QFontMetrics fm(font());
-    for (int i = 0; i < int(d.rows.size()) && i < kMaxRows; ++i)
+    for (int i = 0; i < int(d.rows.size()) && i < kMaxLaneRows; ++i)
     {
         const Row& r = d.rows[size_t(i)];
         double shift = 0.0, headTrim = 0.0, tailTrim = 0.0;
@@ -411,7 +411,7 @@ namespace
 int rowAt(const MediaLane* w, const std::vector<Row>& rows, QPointF at, double* x0 = nullptr, double* x1 = nullptr)
 {
     const int i = int(at.y() - 1) / kLaneRowHeight;
-    if (i < 0 || i >= int(rows.size()) || i >= kMaxRows)
+    if (i < 0 || i >= int(rows.size()) || i >= kMaxLaneRows)
         return -1;
     const double a = xOfSeconds(w, rows[size_t(i)].start), b = xOfSeconds(w, rows[size_t(i)].end);
     if (x0)

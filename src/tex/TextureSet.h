@@ -16,8 +16,9 @@
 #include <vector>
 
 /**
- * Texture sets: a scene node ("textureSet") per material slot, holding the texture graph and the settings its maps are
- * made with. Both are JSON string attrs, so scenes save them (.lila and .lilaa alike) and every edit undoes.
+ * Texture sets: a scene node ("textureSet") holding the texture graph and the settings its maps are made with. Both are
+ * JSON string attrs, so scenes save them (.lila and .lilaa alike) and every edit undoes. A set knows nothing of materials:
+ * a material picks a set (or single maps of one) the way it picks a texture file.
  */
 namespace lila::tex
 {
@@ -51,8 +52,6 @@ struct LILA_SCENE_API SetSettings
     std::string bakeProject;
     /** A bake target name (bake/Targets.h) texExport uses by default. */
     std::string exportPreset = "unreal";
-    /** The {material} token in file names; empty uses the set's name. */
-    std::string material;
     /** cm from height 0 to height 1: the relief the height channel stands for. */
     double heightDepth = 5.0;
     /** World size of the UV square along U and V, cm. With heightDepth, what turns height steps into slopes. */
@@ -67,6 +66,12 @@ struct LILA_SCENE_API SetSettings
     double normalFade = 45.0;
     /** The height an engine rebuilds normals from: channel (the set's height) or mesh (the bake project's height map). */
     std::string heightSource = "channel";
+    /** Named face sets for painting: {name: {mesh, faces: [...]}}, used as masks, fill targets and locks. */
+    json faceGroups = json::object();
+    /** Saved projection views by name: the screen view JSON texPaintStroke takes, for projecting again from the same place. */
+    json projectionViews = json::object();
+    /** The texture repeats (a trim sheet, a tiling material): strokes wrap round the uv square's edges. */
+    bool tileable = false;
 
     /** heightDepth over the UV square's size: the height's slope per UV unit along u and v. */
     glm::dvec2 heightSlope() const { return {heightDepth / std::max(uvWidth, 1e-3), heightDepth / std::max(uvHeight, 1e-3)}; }
@@ -88,13 +93,22 @@ LILA_SCENE_API void registerCommands();
 
 LILA_SCENE_API scene::Node* findSet(scene::Graph& g, std::string_view name);
 LILA_SCENE_API std::vector<std::string> setNames(scene::Graph& g);
-/** The set whose material setting names the material; empty when none does. */
+/**
+ * The set painting on the material's faces goes into: the set it picks whole, else the set of its first per-map pick;
+ * empty when it uses none (or there is no such material).
+ */
 LILA_SCENE_API std::string setForMaterial(scene::Graph& g, std::string_view material);
+/** The materials using the set, whole or for one of their maps, by name in scene order. */
+LILA_SCENE_API std::vector<std::string> materialsUsing(scene::Graph& g, std::string_view set);
+/** Points the materials at the whole set. Undoable (inside a command). Throws std::invalid_argument for a name that is not a material. */
+LILA_SCENE_API void assignSet(scene::Graph& g, std::string_view set, const std::vector<std::string>& materials);
 /** The name a material's new set gets: the material's name without its M_ or MI_ prefix, plus Tex. */
 LILA_SCENE_API std::string defaultSetName(std::string_view material);
 /** Throw std::invalid_argument when the stored JSON is unreadable. */
 LILA_SCENE_API Graph readGraph(const scene::Node& set);
 LILA_SCENE_API SetSettings readSettings(const scene::Node& set);
+/** A hash of the set's stored graph and settings: equal stamps mean texGraphInfo would answer the same. */
+LILA_SCENE_API size_t setStamp(const scene::Node& set);
 /** Undoable writes (inside a command). */
 LILA_SCENE_API void writeGraph(scene::Graph& g, scene::Node& set, const Graph& graph);
 LILA_SCENE_API void writeSettings(scene::Graph& g, scene::Node& set, const SetSettings& settings);
@@ -138,6 +152,11 @@ LILA_SCENE_API std::map<std::string, image::Image> evaluateOutputs(scene::Node& 
                                                                    int height, const std::string& backend = {},
                                                                    std::vector<std::string>* warnings = nullptr);
 
+/** As evaluateOutputs, for another graph in the set's place (its paint buffers and mesh maps): a stack not yet written. Throws. */
+LILA_SCENE_API std::map<std::string, image::Image> evaluateGraphOutputs(scene::Node& set, const Graph& g, const std::vector<OutputRequest>& requests,
+                                                                        int udim, int width, int height, const std::string& backend = {},
+                                                                        std::vector<std::string>* warnings = nullptr);
+
 /** Evaluates the set and writes <folder>/<set>_<channel>[.<udim>].<ext>. Returns {files, passes, milliseconds, compiled, cached, warnings, backend}. Throws. */
 LILA_SCENE_API json evaluateSet(scene::Node& set, const EvaluateOptions& options);
 
@@ -155,6 +174,10 @@ struct ExportOptions
      * into this folder, evaluating only the channels the rest read; a file whose pixels come out unchanged isn't rewritten.
      */
     bool incremental = false;
+    /** The variant the set shows, for the {variant} token. */
+    std::string variant;
+    /** Names must tell variants apart: a template without {variant} gets _{variant} added. */
+    bool needVariantToken = false;
     /** gpu or cpu; empty picks the GPU when there is one. */
     std::string backend;
     /** Overrides the set's normalFromHeight. */

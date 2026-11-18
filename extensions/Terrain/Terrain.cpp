@@ -13,9 +13,11 @@
 #include "Volume.h"
 
 #include <lila/Extension.h>
+#include <lila/ExtensionScope.h>
 
 LILA_EXTENSION_EXPORT int lilaExtensionInit(lila::ext::Context& ctx)
 {
+    lila::ui::scope(ctx);
     if (!terrain::registerNodes(ctx) || !terrain::registerVolume(ctx) || !terrain::registerLandformNodes(ctx) || !terrain::registerInputs(ctx)
         || !terrain::registerSurfaceNodes(ctx) || !terrain::registerQuery(ctx) || !terrain::cliffs::registerCliffNodes(ctx))
         return 1;

@@ -1,0 +1,25 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Dust Settle",
+  "category": "Particles",
+  "doc": "Dust that slides off steep faces and settles on flat ones.",
+  "brush": {
+    "falloff": "smooth",
+    "spacing": 0.2
+  },
+  "payload": {
+    "kind": "paint",
+    "channels": {
+      "baseColor": [
+        0.55,
+        0.5,
+        0.42
+      ],
+      "roughness": 0.95
+    }
+  },
+  "particles": {
+    "kind": "dustSettle"
+  }
+}

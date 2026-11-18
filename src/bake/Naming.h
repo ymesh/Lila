@@ -23,6 +23,8 @@ struct NameTokens
     std::string udimStyle = "1001";
     int width = 0;
     int height = 0;
+    /** A texture set variant's name; empty for the base. */
+    std::string variant;
 };
 
 /** Token names a template may use, without braces. */
@@ -35,7 +37,7 @@ LILA_SCENE_API std::string fileSafe(std::string_view s);
 LILA_SCENE_API bool hasToken(std::string_view tmpl, std::string_view token);
 
 /**
- * The file name a template gives: {project} {group} {mesh} {material} {map} {udim} {res} {ext} replaced (values made
+ * The file name a template gives: {project} {group} {mesh} {material} {map} {udim} {res} {ext} {variant} replaced (values made
  * file safe; {res} is "2048" for square sizes and "2048x1024" otherwise), ".{ext}" appended when the template has no
  * {ext}. A token may start with exclusions, each removed from the start or end of its value: {[!M_]material} turns
  * M_Rock into Rock, {[!M_][!_Mat]material} also strips a _Mat suffix. Unknown tokens are kept as written. forceUdim inserts ".<udim>" before the extension when the template has no

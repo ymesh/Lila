@@ -2,6 +2,7 @@
 
 #include "core/Export.h"
 
+#include <functional>
 #include <string>
 
 class QAbstractButton;
@@ -35,4 +36,13 @@ LILA_UI_API void load(QWidget* root, const std::string& prefsKey);
 
 /** A Reset button for the panel: click resets; its menu saves the current values as defaults or goes back to built-in. */
 LILA_UI_API QToolButton* resetButton(QWidget* root, const std::string& prefsKey, QWidget* parent);
+
+/** True when any field under root has a default to go back to. */
+LILA_UI_API bool hasDefaults(QWidget* root);
+
+/**
+ * Right-clicking header offers Reset All for the fields under root, as one undo step. `extra` resets what is not a
+ * field (an image picker); without it the menu only appears while root has fields with defaults.
+ */
+LILA_UI_API void addResetMenu(QWidget* header, QWidget* root, std::function<void()> extra = {});
 } // namespace lila::ui::panelDefaults

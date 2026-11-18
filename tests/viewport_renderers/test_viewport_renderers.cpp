@@ -492,6 +492,8 @@ TEST_CASE("viewport renderer: the example extension rasterises the scene on its 
     REQUIRE(vr::registry().contains("cpuShaded"));
     ops::execute("polyCube", {{"width", 100}, {"height", 100}, {"depth", 100}});
     REQUIRE(vr::select(kPanel, "cpuShaded"));
+    // Redraws earlier tests posted would otherwise count as this renderer's frames.
+    mainq::drain();
     int frames = 0;
     vr::setRedraw(kPanel, [&frames] { ++frames; });
 
@@ -499,15 +501,17 @@ TEST_CASE("viewport renderer: the example extension rasterises the scene on its 
     addLine(s);
     REQUIRE(vr::apply(kPanel, requestFor(s), s));
     // A quarter-size preview, then the full frame, both from its worker thread.
-    for (int i = 0; i < 500 && frames < 2; ++i)
+    FrameState shown = baseFrame();
+    addLine(shown);
+    for (int i = 0; i < 1000 && !(shown.externalColor && shown.externalColor->width == kSize); ++i)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         mainq::drain();
+        shown = baseFrame();
+        addLine(shown);
+        REQUIRE(vr::apply(kPanel, requestFor(shown), shown));
     }
-    REQUIRE(frames >= 2);
-    FrameState shown = baseFrame();
-    addLine(shown);
-    REQUIRE(vr::apply(kPanel, requestFor(shown), shown));
+    CHECK(frames >= 2);
     REQUIRE(shown.externalColor);
     CHECK(shown.externalColor->width == kSize);
     REQUIRE(shown.externalDepth);

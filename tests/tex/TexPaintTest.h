@@ -75,7 +75,8 @@ inline std::string addMesh(const std::string& name, geo::Mesh m)
 
 inline scene::Node& makeSet(const std::string& name, int resolution)
 {
-    run("texCreateSet", {{"args", {name}}, {"resolution", resolution}});
+    // M_<name> picks it, for the live viewport's maps.
+    run("texCreateSet", {{"args", {name}}, {"resolution", resolution}, {"materials", {"M_" + name}}});
     return *tex::findSet(sg(), name);
 }
 

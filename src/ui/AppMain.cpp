@@ -50,6 +50,10 @@
 #include "ui/Updater.h"
 #include "ui/CurveUi.h"
 #include "ui/ClayUi.h"
+#include "ui/ColorManagementUi.h"
+#include "ui/GradeUi.h"
+#include "ui/ScopesPanel.h"
+#include "ui/FocusTool.h"
 #include "ui/LayoutPencil.h"
 #include "ui/ConformTool.h"
 #include "ui/TexturePaintTool.h"
@@ -84,6 +88,7 @@
 #include "ui/NodeTools.h"
 #include "ui/Panels.h"
 #include "ui/PoseLibrary.h"
+#include "ui/PreviewQuality.h"
 #include "ui/ControlPicker.h"
 #include "ui/RetopoDrawTool.h"
 #include "ui/TopologyTool.h"
@@ -172,11 +177,16 @@ void registerUi()
     pointCloudDisplay::registerUi();
     registerConformActions();
     registerClayUi();
+    registerColorManagementUi();
+    registerGradeUi();
+    registerScopesPanel();
+    registerFocusTool();
     registerLayoutPencil();
     registerSculptUi();
     registerVertexPaintUi();
     registerBakePaintUi();
     registerTexturePaintUi();
+    previewQuality::registerUi();
     // Material textures in formats core ImageIO lacks (JPG, RGB PNG, BMP) come through Qt.
     bake::setTextureLoader([](const std::string& path, int& w, int& h, std::vector<float>& rgba, std::string& error) {
         image::Image img = image::read(paths::fromUtf8(path), &error);

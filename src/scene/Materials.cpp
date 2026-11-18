@@ -17,6 +17,7 @@
 #include <iterator>
 #include <map>
 #include <set>
+#include <tuple>
 
 namespace lila::scene
 {
@@ -116,7 +117,7 @@ void heightAttrs(std::vector<AttrDef>& a)
 }
 
 constexpr int kSampledMaps[] = {kBaseColorMap, kMetallicMap, kRoughnessMap, kNormalMap, kAmbientOcclusionMap, kOrmMap, kEmissiveMap};
-static_assert(kCount == kTextureSampling + int(std::size(kSampledMaps)) * 4);
+static_assert(kBaseColorOcioSpace == kTextureSampling + int(std::size(kSampledMaps)) * 4);
 
 /** wrapU, wrapV, filter and colorSpace of every sampled map, named after it (baseColorMapWrapU). */
 void samplingAttrs(std::vector<AttrDef>& a)
@@ -148,6 +149,13 @@ void samplingAttrs(std::vector<AttrDef>& a)
 std::vector<AttrDef> materialAttrs()
 {
     std::vector<AttrDef> a(kCount);
+    for (auto [attr, name] : {std::pair{kBaseColorOcioSpace, "baseColorMapOcioSpace"}, {kEmissiveOcioSpace, "emissiveMapOcioSpace"}})
+    {
+        a[attr] = {.name = name, .type = PlugType::String, .defaultValue = std::string(), .flags = AttrInput | AttrStorable,
+                   .doc = "With OCIO colour management on: the config colour space the map is in (Utility - sRGB - Texture, ACEScg); "
+                          "empty reads it by its ColorSpace."};
+        a[attr].category = "Texture Sampling";
+    }
     a[kBaseColor] = colorAttr("baseColor", glm::dvec3(0.5), "Linear base color, used when no base color map is set.");
     a[kBaseColorMap] = pathAttr("baseColorMap", "Base color texture (sRGB unless baseColorMapColorSpace says otherwise); its alpha is the opacity of masked and translucent materials.");
     a[kMetallic] = floatAttr("metallic", 0.0, "0 dielectric, 1 metal.", 0.0, 1.0);
@@ -174,6 +182,14 @@ std::vector<AttrDef> materialAttrs()
                     .doc = "Draw back faces too (with flipped normals). One-sided materials cull them, as in Unreal."};
     a[kUvSet] = {.name = "uvSet", .type = PlugType::Int, .defaultValue = int64_t(0), .flags = AttrInput | AttrStorable,
                  .doc = "UV set the textures use (0 or 1).", .minValue = 0.0, .maxValue = 1.0};
+    a[kTextureSet] = {.name = "textureSet", .type = PlugType::String, .defaultValue = std::string(), .flags = AttrInput | AttrStorable,
+                      .doc = "Texture set whose maps draw this material, in place of the maps it has. Any number of materials can "
+                             "use one set; painting a mesh with this material paints the set."};
+    a[kTextureSetMaps] = {.name = "textureSetMaps", .type = PlugType::String, .defaultValue = std::string(),
+                          .flags = AttrInput | AttrStorable | AttrHidden,
+                          .doc = "Single maps taken from texture sets: {channel: set} JSON, set with setMaterialTexture textureSet=."};
+    a[kListOrder] = {.name = "listOrder", .type = PlugType::Int, .defaultValue = int64_t(0), .flags = AttrInput | AttrStorable | AttrHidden,
+                     .doc = "Position in the Material Editor's list (reorderMaterials); 0 sorts by name after the placed ones."};
     stylisedAttrs(a);
     heightAttrs(a);
     samplingAttrs(a);
@@ -352,6 +368,30 @@ void renameSlots(Graph& g, const std::string& from, const std::string& to)
         g.setValue(base, MeshPtr(std::make_shared<geo::Mesh>(std::move(m))));
     }
 }
+/** Materials using the texture set from (whole or per map) use to instead. */
+void renameSetUsers(Graph& g, const std::string& from, const std::string& to)
+{
+    for (NodeId id : g.nodes())
+    {
+        Node* m = g.node(id);
+        if (!m->type().isA("material") || m->referenceId())
+            continue;
+        if (m->as<std::string>(kTextureSet) == from)
+            g.setValue({id, kTextureSet, -1}, to);
+        json maps = json::parse(m->as<std::string>(kTextureSetMaps), nullptr, false);
+        if (!maps.is_object())
+            continue;
+        bool changed = false;
+        for (auto& [channel, set] : maps.items())
+            if (set == from)
+            {
+                set = to;
+                changed = true;
+            }
+        if (changed)
+            g.setValue({id, kTextureSetMaps, -1}, maps.dump());
+    }
+}
 } // namespace
 
 namespace materials
@@ -374,6 +414,17 @@ std::vector<Node*> all(Graph& g)
     return out;
 }
 
+std::vector<Node*> ordered(Graph& g)
+{
+    std::vector<Node*> out = all(g);
+    auto key = [](const Node* n) {
+        const int64_t order = n->as<int64_t>(material::kListOrder);
+        return std::tuple(order == 0, order, n->name());
+    };
+    std::ranges::sort(out, [&](const Node* a, const Node* b) { return key(a) < key(b); });
+    return out;
+}
+
 Node* create(Graph& g, std::string_view name)
 {
     const NodeType* t = types::find("material");
@@ -383,6 +434,39 @@ Node* create(Graph& g, std::string_view name)
     return g.createNode(*t, name.empty() ? std::string_view("M_Material") : name, kNoNode, false);
 }
 
+std::string textureSet(const Node& material) { return material.as<std::string>(kTextureSet); }
+
+std::map<std::string, std::string> textureSetMaps(const Node& material)
+{
+    std::map<std::string, std::string> out;
+    const json j = json::parse(material.as<std::string>(kTextureSetMaps), nullptr, false);
+    if (j.is_object())
+        for (const auto& [channel, set] : j.items())
+            if (set.is_string() && !set.get<std::string>().empty())
+                out[channel] = set.get<std::string>();
+    return out;
+}
+
+std::string textureSetFor(const Node& material, std::string_view channel)
+{
+    const std::map<std::string, std::string> maps = textureSetMaps(material);
+    if (auto it = maps.find(std::string(channel)); it != maps.end())
+        return it->second;
+    return textureSet(material);
+}
+
+std::vector<std::string> textureSetsUsed(const Node& material)
+{
+    std::vector<std::string> out;
+    if (std::string whole = textureSet(material); !whole.empty())
+        out.push_back(whole);
+    const std::map<std::string, std::string> maps = textureSetMaps(material);
+    for (const auto& [channel, attr] : textureChannels())
+        if (auto it = maps.find(channel); it != maps.end() && std::ranges::find(out, it->second) == out.end())
+            out.push_back(it->second);
+    return out;
+}
+
 std::string rename(Graph& g, NodeId id, const std::string& name)
 {
     Node* n = g.node(id);
@@ -390,6 +474,8 @@ std::string rename(Graph& g, NodeId id, const std::string& name)
     std::string to = g.rename(id, name);
     if (to != from && n->type().isA("material"))
         renameSlots(g, from, to);
+    if (to != from && n->type().name == "textureSet")
+        renameSetUsers(g, from, to);
     return to;
 }
 
@@ -629,6 +715,31 @@ void pruneSlots(geo::Mesh& mesh)
     names = std::move(kept);
 }
 
+bool reorderSlots(geo::Mesh& mesh, const std::vector<std::string>& order)
+{
+    auto& names = mesh.materialNames();
+    if (names.size() < 2)
+        return false;
+    std::vector<std::string> next;
+    for (const std::string& s : order)
+        if (std::ranges::find(names, s) != names.end() && std::ranges::find(next, s) == next.end())
+            next.push_back(s);
+    for (const std::string& s : names)
+        if (std::ranges::find(next, s) == next.end())
+            next.push_back(s);
+    if (next == names)
+        return false;
+    std::vector<int32_t> remap(names.size());
+    for (size_t i = 0; i < names.size(); ++i)
+        remap[i] = int32_t(std::ranges::find(next, names[i]) - next.begin());
+    std::span<int32_t> ids = mesh.faceAttrs().getOrAdd<int32_t>(geo::attr::kMaterial);
+    for (geo::Index f = 0; f < mesh.faceCapacity(); ++f)
+        if (mesh.faceValid(f) && size_t(std::max(0, ids[f])) < remap.size())
+            ids[f] = remap[size_t(std::max(0, ids[f]))];
+    names = std::move(next);
+    return true;
+}
+
 std::vector<std::pair<std::string, uint32_t>> slotUsage(const geo::Mesh& mesh)
 {
     std::span<const int32_t> ids = mesh.faceAttrs().get<int32_t>(geo::attr::kMaterial);
@@ -705,6 +816,8 @@ void registerCommands()
     for (size_t i = kShadingModel; i < attrs.size(); ++i)
     {
         const AttrDef& d = attrs[i];
+        if (d.flags & AttrHidden)
+            continue;
         const T type = d.type == PlugType::Float ? T::Float : d.type == PlugType::Vec3 ? T::Vec3 : d.type == PlugType::Bool ? T::Bool
                        : d.type == PlugType::Int ? T::Int : d.type == PlugType::String ? T::String : T::Any;
         create.flags.push_back({d.name, "", type, nullptr, d.doc, {}, {}, d.minValue, d.maxValue});
@@ -739,6 +852,68 @@ void registerCommands()
                 out.push_back(g.node(id)->path());
             }
             return out;
+        },
+    });
+
+    ops::registerCommand({
+        .name = "reorderMaterials",
+        .doc = "Reorder the Material Editor's list: the named materials first, in the order given, the rest after them. "
+               "Returns the new order.",
+        .positionalDoc = "material [material...]",
+        .run = [](const Args& a) -> json {
+            Graph& g = Graph::current();
+            std::vector<Node*> next;
+            for (const json& v : a.positional)
+            {
+                if (!v.is_string())
+                    continue;
+                Node& n = materialArg(g, v.get<std::string>(), "reorderMaterials");
+                if (std::ranges::find(next, &n) == next.end())
+                    next.push_back(&n);
+            }
+            if (next.empty())
+                throw CommandError("reorderMaterials: give material names");
+            for (Node* n : materials::ordered(g))
+                if (std::ranges::find(next, n) == next.end())
+                    next.push_back(n);
+            UndoChunk chunk("Reorder Materials");
+            json out = json::array();
+            for (size_t i = 0; i < next.size(); ++i)
+            {
+                if (next[i]->as<int64_t>(material::kListOrder) != int64_t(i + 1))
+                    g.setValue({next[i]->id(), material::kListOrder, -1}, int64_t(i + 1));
+                out.push_back(next[i]->path());
+            }
+            return out;
+        },
+    });
+
+    ops::registerCommand({
+        .name = "reorderMaterialSlots",
+        .doc = "Reorder an object's material slots, the order exporters write them in: the named slots first, in the order "
+               "given, the rest after them. Returns the new slot order.",
+        .positionalDoc = "object slot [slot...]",
+        .run = [](const Args& a) -> json {
+            Graph& g = Graph::current();
+            if (a.positional.size() < 2 || !a.positional[0].is_string())
+                throw CommandError("reorderMaterialSlots: give an object and slot names");
+            Node* n = g.find(a.positional[0].get<std::string>());
+            if (!n || !n->type().isA("mesh"))
+                throw CommandError("reorderMaterialSlots: " + a.positional[0].get<std::string>() + " is not a mesh");
+            std::vector<std::string> order;
+            for (size_t i = 1; i < a.positional.size(); ++i)
+                if (a.positional[i].is_string())
+                    order.push_back(a.positional[i].get<std::string>());
+            UndoChunk chunk("Reorder Material Slots");
+            PlugRef base = modifiers::editPlug(g, n->id());
+            geo::Mesh m = baseMesh(g, base);
+            if (materials::reorderSlots(m, order))
+            {
+                json out = m.materialNames();
+                g.setValue(base, MeshPtr(std::make_shared<geo::Mesh>(std::move(m))));
+                return out;
+            }
+            return m.materialNames();
         },
     });
 
@@ -787,20 +962,32 @@ void registerCommands()
 
     ops::registerCommand({
         .name = "selectByMaterial",
-        .doc = "Select what a material is assigned to: whole objects when it covers every face of each, otherwise just the "
-               "faces it is assigned to. Default also takes faces on slots with no material. faces=true always selects faces, "
-               "faces=false always whole objects. Returns the objects.",
-        .positionalDoc = "material",
+        .doc = "Select what the materials are assigned to: whole objects when they cover every face of each, otherwise just "
+               "the faces they are assigned to. Default also takes faces on slots with no material. faces=true always "
+               "selects faces, faces=false always whole objects. Returns the objects.",
+        .positionalDoc = "material...",
         .flags = {{"faces", "f", T::Bool, nullptr, "Force faces (true) or whole objects (false); unset picks by coverage."}},
         .run = [](const Args& a) -> json {
             Graph& g = Graph::current();
-            if (a.positional.empty() || !a.positional[0].is_string())
+            if (a.positional.empty())
                 throw CommandError("selectByMaterial: give a material name");
-            const std::string arg = a.positional[0].get<std::string>();
-            // The default without a node of its name also takes faces whose slot has no material, since they draw with it.
-            const bool builtinDefault = arg == materials::kDefaultSlot && !materials::find(g, arg);
-            const std::string mat = builtinDefault ? arg : materialArg(g, arg, "selectByMaterial").name();
-            auto matches = [&](const std::string& slot) { return slot == mat || (builtinDefault && !materials::find(g, slot)); };
+            std::set<std::string> mats;
+            bool builtinDefault = false;
+            for (const json& name : a.positional)
+            {
+                if (!name.is_string())
+                    throw CommandError("selectByMaterial: material names are strings");
+                const std::string arg = name.get<std::string>();
+                // The default without a node of its name also takes faces whose slot has no material, since they draw with it.
+                if (arg == materials::kDefaultSlot && !materials::find(g, arg))
+                {
+                    builtinDefault = true;
+                    mats.insert(arg);
+                }
+                else
+                    mats.insert(materialArg(g, arg, "selectByMaterial").name());
+            }
+            auto matches = [&](const std::string& slot) { return mats.count(slot) || (builtinDefault && !materials::find(g, slot)); };
             g.evaluate();
             json objects = json::array();
             std::vector<std::pair<std::string, json>> faces;
@@ -853,11 +1040,12 @@ void registerCommands()
         .name = "setMaterialTexture",
         .doc = "Set or clear (path='') a texture: channel baseColor, metallic, roughness, normal, ambientOcclusion, orm, mro "
                "(the packed map with the MRO layout) or emissive. Stored relative to the workspace root (or the scene "
-               "folder without one). wrap, wrapU, wrapV and filter set how it is sampled; given without path they change "
-               "only that.",
+               "folder without one). textureSet takes the channel's map from a texture set instead ('' stops). wrap, wrapU, "
+               "wrapV and filter set how it is sampled; given without path they change only that.",
         .positionalDoc = "material",
         .flags = {{"channel", "c", T::String, nullptr, "Texture channel."},
                   {"path", "p", T::String, nullptr, "Image file; empty clears."},
+                  {"textureSet", "ts", T::String, nullptr, "Take this map from a texture set; empty stops."},
                   {"wrap", "", T::String, nullptr, "Both wrap modes.", {"repeat", "clamp", "mirror", "black"}},
                   {"wrapU", "", T::String, nullptr, "Wrap along U.", {"repeat", "clamp", "mirror", "black"}},
                   {"wrapV", "", T::String, nullptr, "Wrap along V.", {"repeat", "clamp", "mirror", "black"}},
@@ -872,7 +1060,27 @@ void registerCommands()
             if (attr < 0)
                 throw CommandError("setMaterialTexture: unknown channel '" + channel + "'");
             const bool sampled = a.has("wrap") || a.has("wrapU") || a.has("wrapV") || a.has("filter");
-            if (a.has("path") || !sampled)
+            if (a.has("textureSet"))
+            {
+                const std::string key = channel == "mro" ? "orm" : channel;
+                json maps = json::parse(n.as<std::string>(kTextureSetMaps), nullptr, false);
+                if (!maps.is_object())
+                    maps = json::object();
+                const std::string set = a.get<std::string>("textureSet");
+                if (set.empty())
+                    maps.erase(key);
+                else
+                {
+                    Node* s = g.find(set);
+                    if (!s || s->type().name != "textureSet")
+                        throw CommandError("setMaterialTexture: " + set + " is not a texture set");
+                    maps[key] = s->name();
+                }
+                g.setValue({n.id(), kTextureSetMaps, -1}, maps.empty() ? std::string() : maps.dump());
+                if (!a.has("path") && !sampled)
+                    return nullptr;
+            }
+            if (a.has("path") || (!sampled && !a.has("textureSet")))
             {
                 std::string path = a.has("path") ? a.get<std::string>("path") : std::string();
                 std::replace(path.begin(), path.end(), '\\', '/');

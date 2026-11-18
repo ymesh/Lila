@@ -75,7 +75,7 @@ std::string dockOf(QWidget* w)
 
 const std::vector<std::string>& sets()
 {
-    static const std::vector<std::string> all = {"Model", "Sculpt", "UV", "Texture", "Rig", "Animate", "Level",
+    static const std::vector<std::string> all = {"Model", "Sculpt", "UV", "Texture", "Render", "Rig", "Animate", "Level",
                                                  "Cloth", "Groom", "Effects", "Print", "Script"};
     return all;
 }
@@ -125,6 +125,8 @@ std::string setForDock(const std::string& dock)
         {"tailorPatternEditor", "Cloth"},
         {"groomPalette", "Groom"},
         {"levelToolkit", "Level"},
+        {"renderToolkit", "Render"},
+        {"scopesDock", "Render"},
         {"stagehand.library", "Level"},
         {"terrain.sculptPalette", "Level"},
         {"clayPalette", "Sculpt"},

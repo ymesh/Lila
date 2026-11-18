@@ -41,6 +41,10 @@ public:
         kApertureBlades,
         kApertureRotation,
         kShutterAngle,
+        kAnamorphicSqueeze,
+        kPhysicalExposure,
+        kIso,
+        kPostProcess,
         kCount
     };
 };
@@ -57,6 +61,10 @@ struct Lens
     double bladeRotation = 0.0;   // degrees
     double shutterAngle = 180.0;  // degrees of the frame the shutter is open, for motion blur
     double focalLength = 35.0;    // mm
+    double anamorphicSqueeze = 1.0; // above 1 an anamorphic lens: bokeh stretches tall, flare streaks run wide
+    bool physicalExposure = false;  // fStop, shutter and ISO set the exposure (EV100)
+    double iso = 100.0;
+    std::string postProcess;        // a post process node this camera grades with in place of the scene's
     /** Radius of the aperture, cm: the focal length over twice the f-number. */
     double apertureRadius() const { return focalLength / (2.0 * std::max(fStop, 0.1)) * 0.1; }
 };

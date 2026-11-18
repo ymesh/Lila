@@ -58,6 +58,12 @@ DWORD findChild(DWORD parent, const wchar_t* exe)
     return found;
 }
 
+/** Stacks name source files only when the helper's PDB is beside it, which Release builds don't write. */
+bool helperHasSymbols()
+{
+    return fs::exists(paths::executableDir() / "lila_crashtest.pdb");
+}
+
 /** Runs lila_crashtest.exe mode with its own config folder and no UI, and waits for its watchdog to finish. */
 HelperRun runHelper(const std::string& mode, bool wer)
 {
@@ -159,7 +165,8 @@ TEST_CASE("crash watchdog: access violation is captured live")
     CHECK(containsText(r.find("crash")->get("access"), "write of 0x0000000000000000"));
     CHECK(fs::file_size(run.report / "minidump.dmp") > 10000);
     REQUIRE(r.find("stack"));
-    CHECK(containsText(r.summary, "crash_helper.cpp"));
+    if (helperHasSymbols())
+        CHECK(containsText(r.summary, "crash_helper.cpp"));
     CHECK(r.find("threads")->lines.size() > r.find("stack")->lines.size());
     CHECK(r.find("modules")->lines.size() > 5);
 }
@@ -196,7 +203,8 @@ TEST_CASE("crash watchdog: __fastfail is reported through WER")
     CHECK(containsText(r.find("crash")->get("detected.by"), "Windows Error Reporting"));
     CHECK(containsText(r.find("crash")->get("fastfail.code"), "FAST_FAIL_FATAL_APP_EXIT"));
     CHECK(fs::exists(run.report / "minidump.dmp"));
-    CHECK(containsText(r.summary, "crash_helper.cpp"));
+    if (helperHasSymbols())
+        CHECK(containsText(r.summary, "crash_helper.cpp"));
 }
 
 TEST_CASE("crash watchdog: heap corruption is reported through WER")

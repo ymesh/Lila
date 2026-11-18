@@ -11,6 +11,7 @@
 #include "render/TexEval.h"
 #include "render/VirtualTexture.h"
 #include "scene/Graph.h"
+#include "scene/Materials.h"
 #include "tex/TextureSet.h"
 #include "ui/ViewportTool.h"
 
@@ -23,6 +24,7 @@
 #include <deque>
 #include <map>
 #include <mutex>
+#include <set>
 #include <thread>
 
 namespace lila::ui::texLive
@@ -168,6 +170,16 @@ struct WorkerGuard
     }
 } gWorkerGuard;
 
+/** When paint last landed on any set, steady clock ns: slices stay frame sized while a stroke goes on. */
+std::atomic<int64_t> gPaintedAt{0};
+
+/** A slice's GPU budget, ms: short while paint is landing, so the viewport keeps drawing between slices. */
+double sliceBudgetMs()
+{
+    const int64_t now = std::chrono::steady_clock::now().time_since_epoch().count();
+    return now - gPaintedAt.load() < std::chrono::nanoseconds(std::chrono::milliseconds(500)).count() ? 4.0 : 40.0;
+}
+
 // Render task.
 std::mutex gTaskMutex;
 std::vector<Entry> gEntries;
@@ -211,7 +223,34 @@ TextureFormat channelFormat(const tex::Channel& c)
     return c.bits >= 16 ? TextureFormat::RGBA16F : TextureFormat::RGBA8;
 }
 
-std::string materialOf(const scene::Node& n, const tex::SetSettings& s) { return s.material.empty() ? n.name() : s.material; }
+std::string joinMaterials(const std::vector<std::string>& names)
+{
+    std::string out;
+    for (const std::string& n : names)
+        out += (out.empty() ? "" : ", ") + n;
+    return out;
+}
+
+/** The set the viewport draws a material's occlusion, roughness and metallic from: one packed texture, so one set. */
+std::string packedSetFor(const scene::Node& material)
+{
+    const std::map<std::string, std::string> picks = scene::materials::textureSetMaps(material);
+    if (auto it = picks.find("orm"); it != picks.end())
+        return it->second;
+    std::vector<std::string> sets;
+    for (const char* c : {"ambientOcclusion", "roughness", "metallic"})
+        if (std::string set = scene::materials::textureSetFor(material, c); !set.empty() && std::ranges::find(sets, set) == sets.end())
+            sets.push_back(set);
+    if (sets.size() > 1)
+    {
+        static std::set<std::string> told;
+        if (told.insert(material.name() + "|" + sets[0] + "|" + sets[1]).second)
+            log::warn("{}: occlusion, roughness and metallic come from {} and {}; the viewport draws them from one texture set, so it "
+                      "shows {}'s",
+                      material.name(), sets[0], sets[1], sets[0]);
+    }
+    return sets.empty() ? std::string() : sets.front();
+}
 
 void requestRedraw()
 {
@@ -341,7 +380,7 @@ public:
             if (!s || s->failed)
                 continue;
             if (!s->ev->pagesReady())
-                s->ev->step(vk, budgetMs / double(udims.size()));
+                s->ev->step(vk, std::min(budgetMs, sliceBudgetMs()) / double(udims.size()));
             any = any || s->ev->pagesReady();
         }
         return any;
@@ -585,7 +624,7 @@ bool runSlice(render::VulkanContext& vk)
         }
         try
         {
-            const bool finished = e.ev->step(vk, 40.0);
+            const bool finished = e.ev->step(vk, sliceBudgetMs());
             // A preview writes the tile's full-size images too, upsampled: the full size writes its texels back over
             // them, even when it has nothing of its own to redo there.
             if (std::array<float, 4> uv; e.full && e.ev->takeStored(uv))
@@ -1006,7 +1045,7 @@ void replan(LiveSet& s)
         return;
     }
     s.name = n->name();
-    s.material = materialOf(*n, job.settings);
+    s.material = joinMaterials(tex::materialsUsing(g, n->name()));
     s.settings = job.settings;
     const std::string key = configKey(job.settings, previewLevels());
     if (key != s.configKey)
@@ -1041,15 +1080,29 @@ void ensureIndex()
         scene::Node* n = g.node(id);
         if (n->type().name != tex::kTextureSetType)
             continue;
-        try
-        {
-            gIndex.emplace(materialOf(*n, tex::readSettings(*n)), id);
-        }
-        catch (const std::exception&)
-        {
-        }
+        gIndex.emplace(n->name(), id);
     }
 }
+
+/** A live set's maps by set name, starting its evaluation the first time; nullopt when there is no such set. */
+std::optional<Maps> setMaps(const std::string& name)
+{
+    ensureIndex();
+    auto it = gIndex.find(name);
+    if (it == gIndex.end())
+        return std::nullopt;
+    std::shared_ptr<LiveSet>& live = gSets[it->second];
+    if (!live)
+    {
+        live = std::make_shared<LiveSet>();
+        live->node = it->second;
+        replan(*live);
+    }
+    Maps maps = live->maps;
+    maps.ready = live->ready || live->virtualTexture != nullptr;
+    return maps;
+}
+
 
 void dropSet(scene::NodeId id)
 {
@@ -1140,21 +1193,58 @@ std::optional<Maps> mapsFor(const std::string& material)
 {
     if (!gInstalled || material.empty() || !enabled() || !render::Renderer::get().running())
         return std::nullopt;
-    ensureIndex();
-    auto it = gIndex.find(material);
-    if (it == gIndex.end())
+    scene::Node* m = scene::materials::find(scene::Graph::current(), material);
+    if (!m)
         return std::nullopt;
-    std::shared_ptr<LiveSet>& live = gSets[it->second];
-    if (!live)
+    std::map<std::string, std::optional<Maps>> sets;
+    auto of = [&](const std::string& channel) -> const Maps* {
+        const std::string set = scene::materials::textureSetFor(*m, channel);
+        if (set.empty())
+            return nullptr;
+        auto [it, added] = sets.try_emplace(set);
+        if (added)
+            it->second = setMaps(set);
+        return it->second ? &*it->second : nullptr;
+    };
+    Maps out;
+    out.ready = true;
+    bool any = false;
+    auto take = [&](const Maps* from, render::TexturePtr Maps::* field) {
+        if (!from || !(from->*field))
+            return;
+        out.*field = from->*field;
+        out.ready = out.ready && from->ready;
+        any = true;
+    };
+    take(of("baseColor"), &Maps::baseColor);
+    take(of("normal"), &Maps::normal);
+    take(of("emissive"), &Maps::emissive);
+    // The viewport draws occlusion, roughness and metallic from one packed texture, so they come from one set.
+    const std::string packedSet = packedSetFor(*m);
+    if (!packedSet.empty())
     {
-        live = std::make_shared<LiveSet>();
-        live->node = it->second;
-        replan(*live);
+        auto [it, added] = sets.try_emplace(packedSet);
+        if (added)
+            it->second = setMaps(packedSet);
+        if (const Maps* from = it->second ? &*it->second : nullptr; from && from->orm)
+        {
+            take(from, &Maps::orm);
+            out.occlusion = from->occlusion && scene::materials::textureSetFor(*m, "ambientOcclusion") == packedSet;
+            out.roughness = from->roughness && scene::materials::textureSetFor(*m, "roughness") == packedSet;
+            out.metallic = from->metallic && scene::materials::textureSetFor(*m, "metallic") == packedSet;
+            if (scene::materials::textureSetMaps(*m).contains("orm"))
+            {
+                out.occlusion = from->occlusion;
+                out.roughness = from->roughness;
+                out.metallic = from->metallic;
+            }
+        }
     }
-    Maps maps = live->maps;
-    maps.ready = live->ready || live->virtualTexture != nullptr;
-    return maps;
+    if (!any)
+        return std::nullopt;
+    return out;
 }
+
 
 render::GpuImageRef channelImage(const std::string& set, const std::string& channel, int udim)
 {
@@ -1195,6 +1285,7 @@ void install()
         });
     });
     gPaintListener = render::paint::addChangeListener([](scene::NodeId set) {
+        gPaintedAt.store(std::chrono::steady_clock::now().time_since_epoch().count());
         auto it = gSets.find(set);
         if (it == gSets.end())
             return;
@@ -1288,6 +1379,7 @@ bool waitIdle(double timeoutMs)
     const auto end = std::chrono::steady_clock::now() + std::chrono::duration<double, std::milli>(timeoutMs);
     for (;;)
     {
+        render::paint::settleLive();
         mainq::drain();
         if (idle())
         {
@@ -1327,6 +1419,7 @@ json status()
                                   {"swaps", l < t->swaps.size() ? t->swaps[l].load() : 0},
                                   {"failed", failed},
                                   {"passesDirty", st.passesDirty},
+                                  {"passesCarried", st.passesCarried},
                                   {"passesRun", st.passesRun},
                                   {"compiled", st.compiled},
                                   {"pipelinesCreated", st.pipelinesCreated},

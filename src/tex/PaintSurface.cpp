@@ -11,6 +11,8 @@
 #include <cmath>
 #include <stdexcept>
 
+#include <tbb/parallel_for.h>
+
 namespace lila::tex::paint
 {
 namespace
@@ -90,6 +92,48 @@ glm::vec3 PaintMesh::normal(uint32_t tri, float u, float v) const
     return glm::length(s) > 0.0f ? glm::normalize(s) : glm::vec3(0, 1, 0);
 }
 
+std::vector<Dab> tileWrapped(const PaintMesh& mesh, const Dab& d)
+{
+    std::vector<Dab> out;
+    if (d.triangle >= mesh.triangleCount())
+        return out;
+    const glm::vec3* p = &mesh.positions[size_t(d.triangle) * 3];
+    const glm::vec2* t = &mesh.uvs[size_t(d.triangle) * 3];
+    const double area3 = glm::length(glm::cross(glm::dvec3(p[1] - p[0]), glm::dvec3(p[2] - p[0])));
+    const double areaUv = std::abs(double((t[1].x - t[0].x) * (t[2].y - t[0].y) - (t[2].x - t[0].x) * (t[1].y - t[0].y)));
+    if (area3 <= 1e-18 || areaUv <= 1e-18)
+        return out;
+    const float r = float(d.radius * std::sqrt(areaUv / area3));
+    const glm::vec2 uv = mesh.uv(d.triangle, d.u, d.v);
+    const glm::vec2 f = uv - glm::floor(uv);
+    const int du = f.x - r < 0.0f ? 1 : f.x + r > 1.0f ? -1 : 0;
+    const int dv = f.y - r < 0.0f ? 1 : f.y + r > 1.0f ? -1 : 0;
+    for (const glm::ivec2 o : {glm::ivec2(du, 0), glm::ivec2(0, dv), glm::ivec2(du, dv)})
+    {
+        if (o == glm::ivec2(0) || (o.x != 0 && du == 0) || (o.y != 0 && dv == 0))
+            continue;
+        // The copy's centre lies just off the other edge: found on the triangle at that edge, its barycentrics run past it
+        // (the triangle's plane carries on), so the dab reaches back in exactly as far as it reached out.
+        const glm::vec2 target = uv + glm::vec2(o);
+        const glm::vec2 inside = glm::clamp(target, glm::vec2(1e-4f), glm::vec2(1.0f - 1e-4f)) + glm::floor(uv);
+        uint32_t tri = 0;
+        float u = 0.0f, v = 0.0f;
+        if (!mesh.atUv(inside, tri, u, v, 1e-3f) || !mesh.paintable[tri])
+            continue;
+        const glm::vec2* q = &mesh.uvs[size_t(tri) * 3];
+        const glm::vec2 e1 = q[1] - q[0], e2 = q[2] - q[0], rel = target + glm::floor(uv) - q[0];
+        const float det = e1.x * e2.y - e2.x * e1.y;
+        if (std::abs(det) < 1e-12f)
+            continue;
+        Dab w = d;
+        w.triangle = tri;
+        w.u = (rel.x * e2.y - e2.x * rel.y) / det;
+        w.v = (e1.x * rel.y - rel.x * e1.y) / det;
+        out.push_back(w);
+    }
+    return out;
+}
+
 std::shared_ptr<const PaintMesh> PaintMesh::build(const geo::Mesh& mesh, std::shared_ptr<const geo::MeshBvh> bvh, std::string_view material)
 {
     LILA_ZONE();
@@ -117,20 +161,30 @@ std::shared_ptr<const PaintMesh> PaintMesh::build(const geo::Mesh& mesh, std::sh
         tangents = geo::cornerTangents(mesh, tris, cn);
     }
     std::span<const int32_t> slot = mesh.faceAttrs().get<int32_t>(geo::attr::kMaterial);
-    int32_t want = -1;
+    std::vector<char> want(mesh.materialNames().size(), 0);
+    bool wantAny = false;
     if (!material.empty() && !slot.empty())
-        for (size_t i = 0; i < mesh.materialNames().size(); ++i)
-            if (mesh.materialNames()[i] == material)
-                want = int32_t(i);
+        for (size_t start = 0; start <= material.size();)
+        {
+            size_t end = material.find(kMaterialSeparator, start);
+            if (end == std::string_view::npos)
+                end = material.size();
+            const std::string_view name = material.substr(start, end - start);
+            for (size_t i = 0; i < mesh.materialNames().size(); ++i)
+                if (mesh.materialNames()[i] == name)
+                    wantAny = want[i] = 1;
+            start = end + 1;
+        }
+    auto wanted = [&](int32_t s) { return s >= 0 && size_t(s) < want.size() && want[size_t(s)]; };
     bool anyUses = false;
-    if (want >= 0)
+    if (wantAny)
         for (size_t t = 0; t < n && !anyUses; ++t)
-            anyUses = slot[tris.faces[t]] == want;
+            anyUses = wanted(slot[tris.faces[t]]);
 
     for (size_t t = 0; t < n; ++t)
     {
         if (anyUses)
-            out->paintable[t] = slot[tris.faces[t]] == want ? 1 : 0;
+            out->paintable[t] = wanted(slot[tris.faces[t]]) ? 1 : 0;
         out->faces[t] = uint32_t(tris.faces[t]);
         if (!slot.empty())
             out->materials[t] = slot[tris.faces[t]];
@@ -147,6 +201,16 @@ std::shared_ptr<const PaintMesh> PaintMesh::build(const geo::Mesh& mesh, std::sh
                 out->tangents[t * 3 + k] = tangents[c];
         }
     }
+    uint64_t h = 1469598103934665603ull ^ n;
+    auto mix = [&](const void* data, size_t bytes) {
+        const auto* b = static_cast<const uint8_t*>(data);
+        for (size_t i = 0; i < bytes; ++i)
+            h = (h ^ b[i]) * 1099511628211ull;
+    };
+    mix(out->points.data(), out->points.size() * sizeof(uint32_t));
+    mix(out->uvs.data(), out->uvs.size() * sizeof(glm::vec2));
+    mix(out->paintable.data(), out->paintable.size());
+    out->signature = h;
     return out;
 }
 
@@ -276,6 +340,7 @@ bool recordDab(const PaintMesh& mesh, const brush::Dab& d, Dab& out)
     out.pressure = float(d.pressure);
     out.opacity = float(std::clamp(d.opacity * d.flow, 0.0, 1.0));
     out.copy = d.copy;
+    out.tilt = float(d.tilt);
     out.angle = 0.0f;
     if (glm::dot(d.tangent, d.tangent) > 0.5)
     {
@@ -370,6 +435,26 @@ const std::vector<GeoTexel>& SurfaceAtlas::page(uint32_t index)
 {
     if (auto it = mPages.find(index); it != mPages.end())
         return it->second;
+    return mPages.emplace(index, rasterise(index)).first->second;
+}
+
+void SurfaceAtlas::preparePages(std::span<const uint32_t> pages)
+{
+    std::vector<uint32_t> missing;
+    for (uint32_t p : pages)
+        if (!mPages.contains(p))
+            missing.push_back(p);
+    if (missing.size() < 2)
+        return;
+    LILA_ZONE();
+    std::vector<std::vector<GeoTexel>> built(missing.size());
+    tbb::parallel_for(size_t(0), missing.size(), [&](size_t i) { built[i] = rasterise(missing[i]); });
+    for (size_t i = 0; i < missing.size(); ++i)
+        mPages.emplace(missing[i], std::move(built[i]));
+}
+
+std::vector<GeoTexel> SurfaceAtlas::rasterise(uint32_t index) const
+{
     LILA_ZONE();
     std::vector<GeoTexel> texels(size_t(kPageSize) * kPageSize);
     std::vector<double> best(texels.size(), 1e300);
@@ -416,7 +501,7 @@ const std::vector<GeoTexel>& SurfaceAtlas::page(uint32_t index)
                     }
                 }
         }
-    return mPages.emplace(index, std::move(texels)).first->second;
+    return texels;
 }
 
 std::vector<uint32_t> SurfaceAtlas::pagesWhere(const std::function<bool(uint32_t tri)>& keep) const
@@ -432,7 +517,7 @@ std::vector<uint32_t> SurfaceAtlas::pagesWhere(const std::function<bool(uint32_t
     return out;
 }
 
-std::map<uint32_t, std::vector<uint32_t>> SurfaceAtlas::pagesFor(std::span<const DabReach> dabs, uint32_t first) const
+std::map<uint32_t, std::vector<uint32_t>> SurfaceAtlas::pagesFor(std::span<const DabReach> dabs, uint32_t first, std::span<const uint8_t> skip) const
 {
     LILA_ZONE();
     std::map<uint32_t, std::vector<uint32_t>> out;
@@ -448,7 +533,7 @@ std::map<uint32_t, std::vector<uint32_t>> SurfaceAtlas::pagesFor(std::span<const
         const float r2 = dabs[i].radius * dabs[i].radius;
         for (geo::Index t : bvh.overlapping(box))
         {
-            if (t >= mMesh->triangleCount() || !mMesh->paintable[t])
+            if (t >= mMesh->triangleCount() || !mMesh->paintable[t] || (t < skip.size() && skip[t]))
                 continue;
             for (uint32_t k = mTriPageStart[t]; k < mTriPageStart[size_t(t) + 1]; ++k)
             {

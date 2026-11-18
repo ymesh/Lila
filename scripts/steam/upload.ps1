@@ -1,5 +1,5 @@
 # Stages Lila and uploads it to Steam app 5520720 with the login saved by SteamPipe GUI.
-param([string]$Config = "Release", [switch]$SkipBuild)
+param([string]$Config = "Release", [string]$BuildDir = "build", [switch]$SkipBuild, [switch]$SkipSymbols)
 $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path "$PSScriptRoot\..\..").Path
 $builder = "$repo\third_party\steamworks\sdk\tools\ContentBuilder"
@@ -16,12 +16,14 @@ if (-not $settings -or -not $settings.SteamLogin -or -not $settings.SteamPasswor
     throw "No saved login in SteamPipe GUI for $builder. Open SteamPipe.lnk, fill it in with Save Password on."
 }
 
+if (-not $SkipSymbols) { & "$repo\scripts\release\symbols.ps1" -Check }
 if (-not $SkipBuild) {
-    cmd /c "`"$repo\scripts\env.cmd`" && cmake --build `"$repo\build`" --config $Config"
-    if ($LASTEXITCODE -ne 0) { throw "$Config build failed. If Lila is running from build\bin\$Config, close it." }
+    cmd /c "`"$repo\scripts\env.cmd`" && cmake --build `"$repo\$BuildDir`" --config $Config"
+    if ($LASTEXITCODE -ne 0) { throw "$Config build failed. If Lila is running from $BuildDir\bin\$Config, close it." }
 }
 
-& "$PSScriptRoot\stage.ps1" -Config $Config
+& "$PSScriptRoot\stage.ps1" -Config $Config -BuildDir $BuildDir
+if (-not $SkipSymbols) { & "$repo\scripts\release\symbols.ps1" -Config $Config -BuildDir $BuildDir }
 
 $rev = (git -C $repo rev-parse --short HEAD).Trim()
 $vdf = "$out\app_build.vdf"

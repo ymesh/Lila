@@ -5,6 +5,11 @@ cmake_path(ABSOLUTE_PATH CMAKE_SOURCE_DIR NORMALIZE OUTPUT_VARIABLE _source)
 cmake_path(GET _source PARENT_PATH _siblings)
 set(LILA_DOCS_REPO "${_siblings}/Lila-3D" CACHE PATH "Docs site checkout the API pages are written into; empty turns it off")
 
+# The roadmap the app ships (core/Features.h) is the one the site shows: copied in whenever the site's changes.
+if(LILA_DOCS_REPO AND EXISTS "${LILA_DOCS_REPO}/roadmap.json")
+    configure_file("${LILA_DOCS_REPO}/roadmap.json" "${CMAKE_SOURCE_DIR}/resources/roadmap/roadmap.json" COPYONLY)
+endif()
+
 if(LILA_DOCS_REPO AND EXISTS "${LILA_DOCS_REPO}/docs")
     get_property(_extensions GLOBAL PROPERTY LILA_EXTENSION_TARGETS)
     set(_binaries $<TARGET_FILE:lila> $<TARGET_FILE:LilaFoundation> $<TARGET_FILE:LilaScene> $<TARGET_FILE:LilaUI>)

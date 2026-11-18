@@ -1,0 +1,36 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "randomPerIsland",
+  "label": "Random per Island",
+  "category": "Input",
+  "doc": "A random value (and colour) per uv island, from the set's island map: each plank, bolt or panel gets its own variation.",
+  "inputs": [],
+  "outputs": [
+    {
+      "id": "value",
+      "type": "gray"
+    },
+    {
+      "id": "color",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "seed",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "softMax": 1000
+    }
+  ],
+  "cost": 1,
+  "externals": [
+    "uvIslands"
+  ],
+  "body": {
+    "value": "float4 id = uvIslands.sample(uv);\nuint2 k = uint2(uint(id.r * 255.0 + 0.5) | (uint(id.g * 255.0 + 0.5) << 8), uint(id.b * 255.0 + 0.5));\nreturn texRand(k, uint(p.seed));",
+    "color": "float4 id = uvIslands.sample(uv);\nuint2 k = uint2(uint(id.r * 255.0 + 0.5) | (uint(id.g * 255.0 + 0.5) << 8), uint(id.b * 255.0 + 0.5));\nuint s = uint(p.seed);\nreturn float4(texRand(k, s ^ 0x1u), texRand(k, s ^ 0x2u), texRand(k, s ^ 0x3u), 1.0);"
+  }
+}

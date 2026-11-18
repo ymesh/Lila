@@ -7,6 +7,7 @@
 #include <lila/Command.h>
 #include <lila/OptionBox.h>
 #include <lila/Events.h>
+#include <lila/ExtensionScope.h>
 #include <lila/Graph.h>
 #include <lila/Log.h>
 #include <lila/Node.h>
@@ -328,7 +329,7 @@ public:
         case Qt::Key_Return:
         case Qt::Key_Enter: apply(); return true;
         case Qt::Key_R: restart(); return true;
-        case Qt::Key_Escape: QTimer::singleShot(0, [] { viewportTools::set(nullptr); }); return true;
+        case Qt::Key_Escape: QTimer::singleShot(0, lila::ui::scope("PhysicsAnimation"), [] { viewportTools::set(nullptr); }); return true;
         default: return false;
         }
     }

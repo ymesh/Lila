@@ -1,0 +1,73 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "condition",
+  "label": "Condition",
+  "category": "Utility",
+  "doc": "Chooses between two inputs by comparing two values: if a compares to b as asked, the result is ifTrue, else ifFalse.",
+  "inputs": [
+    {
+      "id": "a",
+      "type": "float",
+      "default": 0.0
+    },
+    {
+      "id": "b",
+      "type": "float",
+      "default": 0.5
+    },
+    {
+      "id": "ifTrue",
+      "type": "color",
+      "default": [
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "id": "ifFalse",
+      "type": "color",
+      "default": [
+        0,
+        0,
+        0,
+        1
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "comparison",
+      "type": "enum",
+      "default": "greater",
+      "options": [
+        "greater",
+        "greaterOrEqual",
+        "less",
+        "lessOrEqual",
+        "equal",
+        "notEqual"
+      ]
+    },
+    {
+      "id": "epsilon",
+      "type": "float",
+      "default": 0.001,
+      "min": 0,
+      "max": 0.5,
+      "doc": "How close counts as equal."
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float x = a.sample(uv);\nfloat y = b.sample(uv);\nbool r;\nif (p.comparison == 0)\n    r = x > y;\nelse if (p.comparison == 1)\n    r = x >= y;\nelse if (p.comparison == 2)\n    r = x < y;\nelse if (p.comparison == 3)\n    r = x <= y;\nelse if (p.comparison == 4)\n    r = abs(x - y) <= p.epsilon;\nelse\n    r = abs(x - y) > p.epsilon;\nreturn r ? ifTrue.sample(uv) : ifFalse.sample(uv);"
+  }
+}

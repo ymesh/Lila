@@ -241,6 +241,8 @@ void MainWindow::registerPanels()
                  .area = Qt::LeftDockWidgetArea, .icon = "grid-dots", .open = false, .docs = "topology"});
     panels::add({.id = kLevelToolkitDock, .title = "Level", .create = make([](QWidget* p) { return new LevelToolkit(p); }),
                  .area = Qt::LeftDockWidgetArea, .icon = "map", .open = false, .toggleAction = "window.levelToolkit"});
+    panels::add({.id = kRenderToolkitDock, .title = "Render", .create = make([](QWidget* p) { return new RenderToolkit(p); }),
+                 .area = Qt::LeftDockWidgetArea, .icon = "aperture", .open = false, .toggleAction = "window.renderToolkit", .docs = "rendering"});
     panels::add({.id = kModifierStackDock, .title = "Modifiers", .create = make([](QWidget* p) { return new ModifierStackWidget(p); }),
                  .area = Qt::RightDockWidgetArea, .icon = "stack-front"});
     panels::add({.id = kMaterialEditorDock, .title = "Material Editor", .create = make([](QWidget* p) { return new MaterialEditor(p); }),
@@ -276,7 +278,7 @@ void MainWindow::arrangeDefaultDocks()
     if (!tools || !outliner || !channels)
         return;
     moveTo(tools, Qt::LeftDockWidgetArea);
-    for (const char* name : {kTopologyToolkitDock, kCurveToolkitDock, kLevelToolkitDock, "tailorToolkit", "stagehand.library", "textureSets", "baker",
+    for (const char* name : {kTopologyToolkitDock, kCurveToolkitDock, kLevelToolkitDock, kRenderToolkitDock, "tailorToolkit", "stagehand.library", "textureSets", "baker",
                              "materialBrowser", "sourceControl", kReferenceEditorDock})
         if (QDockWidget* d = dock(name))
         {

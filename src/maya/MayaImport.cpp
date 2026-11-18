@@ -11,7 +11,9 @@
 #include "geo/Normals.h"
 #include "geo/ObjIO.h"
 #include "geo/Ops.h"
+#include "geo/OpsCommon.h"
 #include "geo/Primitives.h"
+#include "geo/Topology.h"
 #include "ops/Undo.h"
 #include "io/References.h"
 #include "io/SceneFormats.h"
@@ -23,6 +25,7 @@
 #include "scene/AnimCurve.h"
 #include "scene/Camera.h"
 #include "scene/Deformers.h"
+#include "scene/Diagnostics.h"
 #include "scene/DisplayLayers.h"
 #include "scene/Drivers.h"
 #include "scene/Graph.h"
@@ -447,6 +450,368 @@ bool coversAll(const std::vector<std::string>& comps)
         if (s.ends_with("[*]"))
             return true;
     return false;
+}
+
+/** Sorted unique indices of one component kind ("f", "vtx") in a component list, below count; "[*]" is every one. */
+std::vector<int> componentIndices(const std::vector<std::string>& comps, std::string_view kind, int count)
+{
+    std::vector<int> out;
+    for (const std::string& s : comps)
+    {
+        std::string k;
+        int lo = 0, hi = 0;
+        if (!parseComponent(s, &k, &lo, &hi) || k != kind)
+            continue;
+        if (hi < 0)
+            hi = count - 1;
+        for (int i = std::max(lo, 0); i <= hi && i < count; ++i)
+            out.push_back(i);
+    }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
+/** Whether a component list names anything other than the given kinds. */
+bool hasOtherKinds(const std::vector<std::string>& comps, std::initializer_list<std::string_view> kinds)
+{
+    for (const std::string& s : comps)
+    {
+        std::string k;
+        int lo = 0, hi = 0;
+        if (parseComponent(s, &k, &lo, &hi) && std::find(kinds.begin(), kinds.end(), k) == kinds.end())
+            return true;
+    }
+    return false;
+}
+
+/**
+ * The mesh rebuilt from `faces` (Lila faces, in their new Maya order) with their points kept in ascending order: the
+ * numbering Maya leaves after it removes, splits off or merges components. Maya edge and uv numbering is not
+ * reproduced, so edge and uv indexed history after this can't be matched.
+ */
+Geom renumbered(const Geom& g, std::span<const Index> faces)
+{
+    const geo::Mesh& src = g.mesh;
+    Geom out;
+    geo::Mesh& m = out.mesh;
+    for (size_t d = 0; d < size_t(geo::Domain::Count); ++d)
+        m.attributes(geo::Domain(d)).mergeLayout(src.attributes(geo::Domain(d)));
+    m.materialNames() = src.materialNames();
+    m.colorSetInfo() = src.colorSetInfo();
+    std::vector<Index> used;
+    for (Index f : faces)
+        if (f != kInvalid && src.faceValid(f))
+            src.forEachFaceCorner(f, [&](Index c) { used.push_back(src.cornerPoint(c)); });
+    std::sort(used.begin(), used.end());
+    used.erase(std::unique(used.begin(), used.end()), used.end());
+    std::vector<Index> pmap(src.pointCapacity(), kInvalid);
+    for (Index p : used)
+    {
+        pmap[p] = m.addPoint(src.position(p));
+        m.pointAttrs().copyFrom(src.pointAttrs(), pmap[p], p);
+    }
+    std::vector<Index> pts;
+    for (Index f : faces)
+    {
+        if (f == kInvalid || !src.faceValid(f))
+            continue;
+        pts.clear();
+        src.forEachFaceCorner(f, [&](Index c) { pts.push_back(pmap[src.cornerPoint(c)]); });
+        const Index edgeCap = m.edgeCapacity();
+        const Index nf = m.addFace(pts);
+        out.faceOf.push_back(nf);
+        if (nf == kInvalid)
+            continue;
+        m.faceAttrs().copyFrom(src.faceAttrs(), nf, f);
+        Index c = m.faceCorner(nf);
+        src.forEachFaceCorner(f, [&](Index oc) {
+            m.cornerAttrs().copyFrom(src.cornerAttrs(), c, oc);
+            const Index e = m.cornerEdge(c);
+            if (e >= edgeCap)
+                m.edgeAttrs().copyFrom(src.edgeAttrs(), e, src.cornerEdge(oc));
+            c = m.cornerNext(c);
+        });
+    }
+    out.mayaPoints = g.mayaPoints;
+    return out;
+}
+
+/** Lila faces of Maya faces. */
+std::vector<Index> lilaFaces(const Geom& g, std::span<const int> mayaFaces)
+{
+    std::vector<Index> out;
+    for (int f : mayaFaces)
+        if (size_t(f) < g.faceOf.size() && g.faceOf[size_t(f)] != kInvalid)
+            out.push_back(g.faceOf[size_t(f)]);
+    return out;
+}
+
+/** Faces sharing a point belong to one shell; shells are numbered by their first Maya face, like polySeparate. */
+std::vector<std::vector<Index>> shellsInMayaOrder(const Geom& g)
+{
+    const geo::Mesh& m = g.mesh;
+    std::vector<Index> parent(m.pointCapacity());
+    for (Index p = 0; p < m.pointCapacity(); ++p)
+        parent[p] = p;
+    std::function<Index(Index)> root = [&](Index p) {
+        while (parent[p] != p)
+            p = parent[p] = parent[parent[p]];
+        return p;
+    };
+    for (Index f : g.faceOf)
+    {
+        if (f == kInvalid || !m.faceValid(f))
+            continue;
+        Index first = kInvalid;
+        m.forEachFaceCorner(f, [&](Index c) {
+            const Index p = root(m.cornerPoint(c));
+            if (first == kInvalid)
+                first = p;
+            else if (p != first)
+                parent[p] = first;
+        });
+    }
+    std::unordered_map<Index, size_t> shellOf;
+    std::vector<std::vector<Index>> shells;
+    for (Index f : g.faceOf)
+    {
+        if (f == kInvalid || !m.faceValid(f))
+            continue;
+        const Index r = root(m.cornerPoint(m.faceCorner(f)));
+        auto [it, added] = shellOf.emplace(r, shells.size());
+        if (added)
+            shells.emplace_back();
+        shells[it->second].push_back(f);
+    }
+    return shells;
+}
+
+/** deleteComponent of faces: the rest keep their order, points no face uses go. Empty why on success. */
+std::string replayDeleteFaces(Geom& g, const std::vector<std::string>& comps)
+{
+    if (hasOtherKinds(comps, {"f"}))
+        return "deletes vertices or edges";
+    if (g.faceOf.empty() || !g.mayaPoints)
+        return "earlier history changed the face numbering";
+    const std::vector<int> gone = componentIndices(comps, "f", int(g.faceOf.size()));
+    std::vector<Index> kept;
+    for (size_t f = 0, k = 0; f < g.faceOf.size(); ++f)
+    {
+        if (k < gone.size() && gone[k] == int(f))
+        {
+            ++k;
+            continue;
+        }
+        kept.push_back(g.faceOf[f]);
+    }
+    g = renumbered(g, kept);
+    return {};
+}
+
+/**
+ * polyMergeVert: selected points closer than the distance (in world space, through the node's input matrix) merge into
+ * the lowest numbered one, at their centre; two points always merge when the node says so.
+ */
+std::string replayMergeVertices(Geom& g, const std::vector<std::string>& comps, double distance, bool alwaysTwo, const glm::dmat3& toWorld)
+{
+    if (g.faceOf.empty() || !g.mayaPoints)
+        return "earlier history changed the vertex numbering";
+    if (hasOtherKinds(comps, {"vtx", "f"}))
+        return "merges by edge";
+    geo::Mesh& m = g.mesh;
+    std::vector<int> sel = componentIndices(comps, "vtx", int(m.pointCapacity()));
+    for (Index f : lilaFaces(g, componentIndices(comps, "f", int(g.faceOf.size()))))
+        m.forEachFaceCorner(f, [&](Index c) { sel.push_back(int(m.cornerPoint(c))); });
+    std::sort(sel.begin(), sel.end());
+    sel.erase(std::unique(sel.begin(), sel.end()), sel.end());
+    std::erase_if(sel, [&](int p) { return !m.pointValid(Index(p)); });
+
+    std::vector<int> group(sel.size());
+    for (size_t i = 0; i < sel.size(); ++i)
+        group[i] = int(i);
+    std::function<int(int)> root = [&](int i) {
+        while (group[size_t(i)] != i)
+            i = group[size_t(i)] = group[size_t(group[size_t(i)])];
+        return i;
+    };
+    if (alwaysTwo && sel.size() == 2)
+        group[1] = 0;
+    else
+    {
+        std::vector<glm::dvec3> world(sel.size());
+        for (size_t i = 0; i < sel.size(); ++i)
+            world[i] = toWorld * m.position(Index(sel[i]));
+        std::vector<size_t> byX(sel.size());
+        for (size_t i = 0; i < byX.size(); ++i)
+            byX[i] = i;
+        std::sort(byX.begin(), byX.end(), [&](size_t a, size_t b) { return world[a].x < world[b].x; });
+        const double tol = distance + 1e-9;
+        for (size_t a = 0; a < byX.size(); ++a)
+            for (size_t b = a + 1; b < byX.size() && world[byX[b]].x - world[byX[a]].x <= tol; ++b)
+                if (glm::length(world[byX[a]] - world[byX[b]]) <= tol)
+                {
+                    const int ra = root(int(byX[a])), rb = root(int(byX[b]));
+                    if (ra != rb)
+                        group[size_t(std::max(ra, rb))] = std::min(ra, rb);
+                }
+    }
+    std::vector<Index> target(m.pointCapacity(), kInvalid);
+    std::map<int, std::pair<glm::dvec3, int>> centre;
+    for (size_t i = 0; i < sel.size(); ++i)
+    {
+        const int r = root(int(i));
+        target[Index(sel[i])] = Index(sel[size_t(r)]);
+        auto& [sum, n] = centre[r];
+        sum += m.position(Index(sel[i]));
+        ++n;
+    }
+    for (const auto& [r, c] : centre)
+        if (c.second > 1)
+            m.setPosition(Index(sel[size_t(r)]), c.first / double(c.second));
+    std::unordered_map<Index, Index> rebuilt;
+    geo::detail::weldPoints(m, target, &rebuilt);
+    for (Index& f : g.faceOf)
+        if (auto it = rebuilt.find(f); it != rebuilt.end())
+            f = it->second;
+    g = renumbered(g, g.faceOf);
+    return {};
+}
+
+/**
+ * polyChipOff: duplicating copies the faces onto new points after the last face; extracting moves the faces onto new
+ * points where they meet the rest. New points follow the old ones, in the order of the points they copy.
+ */
+std::string replayChipOff(Geom& g, const std::vector<std::string>& comps, bool duplicate)
+{
+    if (g.faceOf.empty() || !g.mayaPoints)
+        return "earlier history changed the face numbering";
+    if (hasOtherKinds(comps, {"f"}))
+        return "chips off non-face components";
+    geo::Mesh& m = g.mesh;
+    const std::vector<int> mayaSel = componentIndices(comps, "f", int(g.faceOf.size()));
+    const std::vector<Index> sel = lilaFaces(g, mayaSel);
+    std::vector<char> chosen(m.faceCapacity(), 0);
+    for (Index f : sel)
+        chosen[f] = 1;
+
+    std::vector<Index> moved;
+    for (Index p : geo::pointsOfFaces(m, sel))
+    {
+        bool shared = duplicate;
+        if (!shared)
+            m.forEachPointCorner(p, [&](Index c) { shared = shared || !chosen[m.cornerFace(c)]; });
+        if (shared)
+            moved.push_back(p);
+    }
+    std::vector<Index> copyOf(m.pointCapacity(), kInvalid);
+    for (Index p : moved)
+    {
+        copyOf[p] = m.addPoint(m.position(p));
+        m.pointAttrs().copyFrom(m.pointAttrs(), copyOf[p], p);
+    }
+    std::vector<Index> order = g.faceOf;
+    std::vector<Index> pts;
+    for (Index f : sel)
+    {
+        pts.clear();
+        m.forEachFaceCorner(f, [&](Index c) {
+            const Index p = m.cornerPoint(c);
+            pts.push_back(copyOf[p] != kInvalid ? copyOf[p] : p);
+        });
+        if (!duplicate)
+        {
+            m.setFacePoints(f, pts);
+            continue;
+        }
+        const Index nf = m.addFace(pts);
+        order.push_back(nf);
+        if (nf == kInvalid)
+            continue;
+        m.faceAttrs().copyFrom(m.faceAttrs(), nf, f);
+        Index c = m.faceCorner(nf);
+        m.forEachFaceCorner(f, [&](Index oc) {
+            m.cornerAttrs().copyFrom(m.cornerAttrs(), c, oc);
+            c = m.cornerNext(c);
+        });
+    }
+    g = renumbered(g, order);
+    return {};
+}
+
+/**
+ * polySeparate output k: shell k, in Maya face order. With `picked` (separating specific shells, as Maya's Extract
+ * does) the outputs are the shells holding those Maya faces, then everything else as one last output.
+ */
+std::string replaySeparate(Geom& g, size_t k, const std::vector<int>* picked)
+{
+    if (g.faceOf.empty() || !g.mayaPoints)
+        return "earlier history changed the face numbering";
+    std::vector<std::vector<Index>> shells = shellsInMayaOrder(g);
+    if (picked)
+    {
+        std::vector<char> isPicked(g.mesh.faceCapacity(), 0);
+        for (Index f : lilaFaces(g, *picked))
+            isPicked[f] = 1;
+        std::vector<std::vector<Index>> out;
+        std::vector<Index> rest;
+        for (std::vector<Index>& s : shells)
+        {
+            if (std::any_of(s.begin(), s.end(), [&](Index f) { return isPicked[f] != 0; }))
+                out.push_back(std::move(s));
+            else
+                rest.insert(rest.end(), s.begin(), s.end());
+        }
+        std::vector<size_t> rank(g.mesh.faceCapacity(), 0);
+        for (size_t i = 0; i < g.faceOf.size(); ++i)
+            if (g.faceOf[i] != kInvalid)
+                rank[g.faceOf[i]] = i;
+        std::sort(rest.begin(), rest.end(), [&](Index a, Index b) { return rank[a] < rank[b]; });
+        if (!rest.empty())
+            out.push_back(std::move(rest));
+        shells = std::move(out);
+    }
+    if (k >= shells.size())
+        return std::format("asks for shell {} of {}", k + 1, shells.size());
+    g = renumbered(g, shells[k]);
+    return {};
+}
+
+/** polyNormal: reverse (0, 3) or conform (2) the faces. Points and faces keep their numbers. */
+std::string replayNormals(Geom& g, const std::vector<std::string>& comps, int mode)
+{
+    if (mode != 0 && mode != 2 && mode != 3)
+        return std::format("uses normal mode {}", mode);
+    geo::Mesh& m = g.mesh;
+    std::vector<Index> faces;
+    if (coversAll(comps))
+    {
+        for (Index f = 0; f < m.faceCapacity(); ++f)
+            if (m.faceValid(f))
+                faces.push_back(f);
+    }
+    else
+    {
+        if (g.faceOf.empty())
+            return "earlier history changed the face numbering";
+        faces = lilaFaces(g, componentIndices(comps, "f", int(g.faceOf.size())));
+    }
+    if (mode == 2)
+    {
+        geo::conformNormals(m, faces);
+        return {};
+    }
+    const bool locked = m.cornerAttrs().has(geo::attr::kNormal);
+    for (Index f : faces)
+    {
+        m.flipFace(f);
+        if (locked)
+        {
+            std::span<glm::vec3> n = m.cornerAttrs().getOrAdd<glm::vec3>(geo::attr::kNormal);
+            m.forEachFaceCorner(f, [&](Index c) { n[c] = -n[c]; });
+        }
+    }
+    return {};
 }
 
 /** While a referenced file is converted to its own .lila: where it goes, and the reference records it collects. */
@@ -1353,13 +1718,218 @@ private:
     {
         std::vector<std::string> warnings;
         std::vector<int> handled;
+        /** History steps that could not be replayed, by node type: the mesh came in as an earlier shape. */
+        std::set<std::string> notReplayed;
+        /** Outputs evaluated ahead by primeChain, by node and output attribute; each is taken by its one consumer. */
+        std::map<std::pair<int, std::string>, std::optional<Geom>> primed;
+        bool tooDeep = false;
     };
+
+    /** How many history steps evalNode recurses through before it evaluates the chain below ahead of itself. */
+    static constexpr int kPrimeInterval = 50;
+    /** A recursion depth no acyclic graph reaches, given priming: only a cycle gets here. */
+    static constexpr int kMaxEvalDepth = 4 * kPrimeInterval;
+
+    /**
+     * Evaluates the single-input history below a node bottom-up into log.primed, so that evaluating the node itself
+     * recurses only a step or two. A mesh can carry hundreds of modelling and UV steps, and each nested evalNode costs
+     * kilobytes of stack.
+     */
+    void primeChain(int node, const std::string& shape, int depth, EvalLog& log) const
+    {
+        std::vector<Plug> chain;
+        std::set<int> seen{node};
+        for (int at = node;;)
+        {
+            std::optional<Plug> src = mIx.input(at, {"ip", "inputPolymesh", "ig", "inputGeometry", "i", "inMesh", "im", "inputMesh",
+                                                     "ip[0].ig", "input[0].inputGeometry"});
+            if (!src || !seen.insert(src->node).second || log.primed.contains({src->node, src->attr}))
+                break;
+            chain.push_back(*src);
+            at = src->node;
+        }
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+            log.primed[{it->node, it->attr}] = evalNode(it->node, it->attr, shape, depth + 1, log);
+    }
+
+    void notReplayed(EvalLog& log, const std::string& shape, const MNode& n, std::string_view why) const
+    {
+        log.notReplayed.insert(n.type);
+        log.warnings.push_back(std::format("{}: history node {} '{}' not replayed ({}); the mesh is its input (delete history in Maya to keep it)",
+                                           shape, n.type, shortName(n.name), why));
+    }
+
+    /** Maya's local matrix of a transform, in Maya space and cm. Shear and joint orient are left out. */
+    glm::dmat4 mayaLocal(const MNode& n) const
+    {
+        const glm::dvec3 zero(0.0);
+        auto move = [&](Names whole, std::array<Names, 3> parts) { return glm::translate(glm::dmat4(1.0), vec3(n, whole, parts, zero) * mU.lin); };
+        const glm::dvec3 rp = vec3(n, {"rp", "rotatePivot"}, {Names{"rpx"}, Names{"rpy"}, Names{"rpz"}}, zero) * mU.lin;
+        const glm::dvec3 sp = vec3(n, {"sp", "scalePivot"}, {Names{"spx"}, Names{"spy"}, Names{"spz"}}, zero) * mU.lin;
+        const glm::dvec3 r = vec3(n, {"r", "rotate"}, {Names{"rx", "rotateX"}, Names{"ry", "rotateY"}, Names{"rz", "rotateZ"}}, zero) * mU.ang;
+        const glm::dvec3 ra = vec3(n, {"ra", "rotateAxis"}, {Names{"rax"}, Names{"ray"}, Names{"raz"}}, zero) * mU.ang;
+        const glm::dvec3 s = vec3(n, {"s", "scale"}, {Names{"sx", "scaleX"}, Names{"sy", "scaleY"}, Names{"sz", "scaleZ"}}, glm::dvec3(1.0));
+        const auto order = scene::RotateOrder(std::clamp(int64_t(num(n, {"ro", "rotateOrder"}, 0.0)), int64_t(0), int64_t(5)));
+        return move({"t", "translate"}, {Names{"tx", "translateX"}, Names{"ty", "translateY"}, Names{"tz", "translateZ"}}) *
+               move({"rpt", "rotatePivotTranslate"}, {Names{"rptx"}, Names{"rpty"}, Names{"rptz"}}) * glm::translate(glm::dmat4(1.0), rp) *
+               scene::eulerToMatrix(r, order) * scene::eulerToMatrix(ra, scene::RotateOrder::XYZ) * glm::translate(glm::dmat4(1.0), -rp) *
+               move({"spt", "scalePivotTranslate"}, {Names{"sptx"}, Names{"spty"}, Names{"sptz"}}) * glm::translate(glm::dmat4(1.0), sp) *
+               glm::scale(glm::dmat4(1.0), s) * glm::translate(glm::dmat4(1.0), -sp);
+    }
+
+    /** Maya's world matrix of a DAG node (a shape's is its transforms'). */
+    glm::dmat4 mayaWorld(int node) const
+    {
+        glm::dmat4 m(1.0);
+        for (int i = node; i >= 0; i = mIx.parent[size_t(i)])
+            if (mIx.node(i).type != "mesh")
+                m = mayaLocal(mIx.node(i)) * m;
+        return m;
+    }
+
+    /**
+     * polyUnite: each input in Maya face order, moved by its matrix (the source shape's world matrix, or the stored
+     * one), appended in input order.
+     */
+    std::optional<Geom> evalUnite(int node, const MNode& n, const std::string& shape, int depth, EvalLog& log) const
+    {
+        std::map<int, Plug> polys, mats;
+        for (const auto& [src, dst] : mIx.inputs(node))
+        {
+            std::vector<AttrSeg> segs = splitAttr(dst.attr);
+            if (segs.size() != 1 || segs[0].lo < 0)
+                continue;
+            if (oneOf(segs[0].name, {"ip", "inputPoly"}))
+                polys[segs[0].lo] = src;
+            else if (oneOf(segs[0].name, {"im", "inputMat"}))
+                mats[segs[0].lo] = src;
+        }
+        Geom out;
+        out.mayaPoints = true;
+        for (const auto& [k, src] : polys)
+        {
+            std::optional<Geom> g = evalNode(src.node, src.attr, shape, depth + 1, log);
+            if (!g)
+                continue;
+            if (g->faceOf.empty())
+            {
+                notReplayed(log, shape, n, "an input's face numbering is unknown");
+                return g;
+            }
+            glm::dmat4 mtx(1.0);
+            if (auto it = mats.find(k); it != mats.end())
+                mtx = mayaWorld(it->second.node);
+            else if (const AttrValue* a = lastAttr(n, {std::format("im[{}]", k), std::format("inputMat[{}]", k)}))
+            {
+                mtx = matrixOf(a->nums);
+                mtx[3] = glm::dvec4(glm::dvec3(mtx[3]) * mU.lin, 1.0);
+            }
+            Geom part = renumbered(*g, g->faceOf);
+            for (Index p = 0; p < part.mesh.pointCapacity(); ++p)
+                part.mesh.setPosition(p, glm::dvec3(mtx * glm::dvec4(part.mesh.position(p), 1.0)));
+            if (part.mesh.cornerAttrs().has(geo::attr::kNormal))
+            {
+                const glm::dmat3 nm = glm::transpose(glm::inverse(glm::dmat3(mtx)));
+                for (glm::vec3& v : part.mesh.cornerAttrs().getOrAdd<glm::vec3>(geo::attr::kNormal))
+                    if (glm::dot(v, v) > 0.0f)
+                        v = glm::vec3(glm::normalize(nm * glm::dvec3(v)));
+            }
+            out.mayaPoints = out.mayaPoints && g->mayaPoints;
+            out.mesh.append(part.mesh);
+        }
+        for (Index f = 0; f < out.mesh.faceCapacity(); ++f)
+            if (out.mesh.faceValid(f))
+                out.faceOf.push_back(f);
+        return out;
+    }
+
+    /**
+     * The Maya faces a polySeparate splits off when it separates specific shells (it carries an "rs" list) right after
+     * an extracting polyChipOff, as Maya's Extract builds it: the faces that chip-off extracted.
+     */
+    std::optional<std::vector<int>> extractedFaces(int separate, const MNode& n) const
+    {
+        if (!lastAttr(n, {"rs"}))
+            return std::nullopt;
+        std::optional<Plug> src = mIx.input(separate, {"ip", "inputPoly"});
+        for (int hops = 0; src && hops < 8; ++hops)
+        {
+            const MNode& up = mIx.node(src->node);
+            if (up.type == "polyChipOff")
+            {
+                if (num(up, {"dup", "duplicate"}, 1.0) != 0.0)
+                    return std::nullopt;
+                const AttrValue* ics = lastAttr(up, {"ics", "inputComponents"});
+                if (!ics || coversAll(ics->strs))
+                    return std::nullopt;
+                return componentIndices(ics->strs, "f", 1 << 26);
+            }
+            if (up.type == "mesh")
+                src = mIx.input(src->node, {"i", "inMesh"});
+            else if (up.type == "groupParts" || up.type == "groupId")
+                src = mIx.input(src->node, {"ig", "inputGeometry"});
+            else
+                return std::nullopt;
+        }
+        return std::nullopt;
+    }
+
+    /**
+     * Maya puts a groupParts holding all of an output's faces (f[0:N-1]) after each polySeparate output: a replayed
+     * output with another face count split the shells differently, so it is reported instead of passing as correct.
+     */
+    std::optional<Geom> checkedSeparateOutput(int node, const MNode& n, std::optional<Geom> g, const std::string& shape, EvalLog& log) const
+    {
+        std::optional<Plug> src = mIx.input(node, {"ig", "inputGeometry"});
+        const AttrValue* ic = lastAttr(n, {"ic", "inputComponents"});
+        if (!g || g->faceOf.empty() || !src || mIx.node(src->node).type != "polySeparate" || !ic || ic->strs.size() != 1)
+            return g;
+        std::string kind;
+        int lo = 0, hi = 0;
+        if (!parseComponent(ic->strs[0], &kind, &lo, &hi) || kind != "f" || lo != 0 || hi < 0)
+            return g;
+        if (size_t(hi + 1) != g->faceOf.size())
+            notReplayed(log, shape, mIx.node(src->node),
+                        std::format("its output {} has {} faces in Maya, {} here", src->attr, hi + 1, g->faceOf.size()));
+        return g;
+    }
+
+    /** Runs one replayed history step on the input; a step that can't be replayed reports why and leaves the input. */
+    std::optional<Geom> replay(std::optional<Geom> g, const MNode& n, const std::string& shape, EvalLog& log,
+                               const std::function<std::string(Geom&)>& step) const
+    {
+        if (!g)
+            return g;
+        if (std::string why = step(*g); !why.empty())
+            notReplayed(log, shape, n, why);
+        else
+        {
+            g->mayaEdges.clear();
+            g->cornerUv.clear();
+        }
+        return g;
+    }
 
     /** The geometry a node's output carries, evaluating what history it can. */
     std::optional<Geom> evalNode(int node, const std::string& outAttr, const std::string& shape, int depth, EvalLog& log) const
     {
-        if (node < 0 || depth > 200)
+        if (node < 0)
             return std::nullopt;
+        if (depth > kMaxEvalDepth)
+        {
+            if (!std::exchange(log.tooDeep, true))
+                log.warnings.push_back(std::format("{}: history loops back on itself at '{}'; evaluation stopped there", shape,
+                                                   shortName(mIx.node(node).name)));
+            return std::nullopt;
+        }
+        if (auto it = log.primed.find({node, outAttr}); it != log.primed.end())
+        {
+            std::optional<Geom> g = std::move(it->second);
+            log.primed.erase(it);
+            return g;
+        }
+        if (depth % kPrimeInterval == 0)
+            primeChain(node, shape, depth, log);
         log.handled.push_back(node);
         const MNode& n = mIx.node(node);
         const std::string& t = n.type;
@@ -1465,8 +2035,67 @@ private:
             }
             return g;
         }
-        if (t == "groupParts" || t == "groupId")
+        if (t == "groupId")
             return upstream({"ig", "inputGeometry"});
+        if (t == "groupParts")
+            return checkedSeparateOutput(node, n, upstream({"ig", "inputGeometry"}), shape, log);
+        auto comps = [&](Names names) {
+            const AttrValue* a = lastAttr(n, names);
+            return a ? a->strs : std::vector<std::string>{};
+        };
+        if (t == "deleteComponent")
+            return replay(upstream({"ig", "inputGeometry"}), n, shape, log,
+                          [&](Geom& g) { return replayDeleteFaces(g, comps({"dc", "deleteComponents"})); });
+        if (t == "polyMergeVert")
+            return replay(upstream({"ip", "inputPolymesh"}), n, shape, log, [&](Geom& g) {
+                const AttrValue* ix = lastAttr(n, {"ix", "inputMatrix"});
+                const glm::dmat3 toWorld = ix ? glm::dmat3(matrixOf(ix->nums)) : glm::dmat3(1.0);
+                return replayMergeVertices(g, comps({"ics", "inputComponents"}), num(n, {"d", "distance"}, 0.0) * mU.lin,
+                                           num(n, {"am", "alwaysMergeTwoVertices"}, 0.0) != 0.0, toWorld);
+            });
+        if (t == "polyChipOff")
+            return replay(upstream({"ip", "inputPolymesh"}), n, shape, log, [&](Geom& g) {
+                auto moves = [&](Names names) {
+                    const AttrValue* a = lastAttr(n, names);
+                    return a && std::any_of(a->nums.begin(), a->nums.end(), [](double v) { return v != 0.0; });
+                };
+                if (moves({"t", "translate"}) || moves({"r", "rotate"}) || moves({"lt", "localTranslate"}) || moves({"ltz", "localTranslateZ"}) ||
+                    moves({"off", "offset"}))
+                    return std::string("moves the faces it chips off");
+                if (num(n, {"kft", "keepFacesTogether"}, 1.0) == 0.0)
+                    return std::string("separates every face");
+                return replayChipOff(g, comps({"ics", "inputComponents"}), num(n, {"dup", "duplicate"}, 1.0) != 0.0);
+            });
+        if (t == "polySeparate")
+        {
+            size_t k = 0;
+            if (auto b = outAttr.find('['); b != std::string::npos)
+                k = size_t(std::max(0, std::atoi(outAttr.c_str() + b + 1)));
+            std::optional<std::vector<int>> picked = extractedFaces(node, n);
+            return replay(upstream({"ip", "inputPoly", "inputPolymesh"}), n, shape, log,
+                          [&](Geom& g) { return replaySeparate(g, k, picked ? &*picked : nullptr); });
+        }
+        if (t == "polyNormal")
+            return replay(upstream({"ip", "inputPolymesh"}), n, shape, log, [&](Geom& g) {
+                return replayNormals(g, comps({"ics", "inputComponents"}), int(num(n, {"nm", "normalMode"}, 0.0)));
+            });
+        if (t == "polyCloseBorder")
+            return replay(upstream({"ip", "inputPolymesh"}), n, shape, log, [&](Geom& g) {
+                const std::vector<std::string> ics = comps({"ics", "inputComponents"});
+                std::vector<Index> edges;
+                if (!coversAll(ics))
+                {
+                    edges = edgesOf(g, ics);
+                    if (edges.empty())
+                        return std::string("earlier history changed the edge numbering");
+                }
+                for (Index f : geo::fillHoles(g.mesh, edges))
+                    if (!g.faceOf.empty())
+                        g.faceOf.push_back(f);
+                return std::string();
+            });
+        if (t == "polyUnite")
+            return evalUnite(node, n, shape, depth, log);
         if (deformerTypes().contains(t))
         {
             // A deformer's output k comes from its input k.
@@ -1480,8 +2109,7 @@ private:
         }
 
         // Anything else: its input mesh, so at least the geometry before that step arrives.
-        log.warnings.push_back(std::format("{}: history node {} '{}' not evaluated; the mesh is its input (delete history in Maya to keep it)",
-                                          shape, t, shortName(n.name)));
+        notReplayed(log, shape, n, "not supported");
         return upstream({"ip", "inputPolymesh", "ig", "inputGeometry", "i", "inMesh", "im", "inputMesh", "ip[0].ig", "input[0].inputGeometry"});
     }
 
@@ -2048,10 +2676,25 @@ private:
             });
         });
         scope.checkCancel();
+        size_t earlier = 0;
         for (PendingMesh& p : mPending)
         {
             mHandled.insert(p.log.handled.begin(), p.log.handled.end());
             mR.warnings.insert(mR.warnings.end(), p.log.warnings.begin(), p.log.warnings.end());
+            if (!p.log.notReplayed.empty())
+            {
+                ++earlier;
+                std::string steps;
+                for (const std::string& t : p.log.notReplayed)
+                    steps += (steps.empty() ? "" : ", ") + t;
+                scene::diagnostics::Issue issue;
+                issue.source = "mayaImport";
+                issue.target = p.name;
+                issue.message = std::format("Maya history Lila can't replay ({}): this is an earlier shape{}. In Maya, delete its history "
+                                            "(Edit > Delete by Type > History) and save, then import again.",
+                                            steps, p.mesh ? "" : ", empty");
+                scene::diagnostics::report(std::move(issue));
+            }
             if (!p.mesh)
                 continue;
             if (p.mayaPoints)
@@ -2059,6 +2702,10 @@ private:
             mG.setValue({p.id, scene::MeshNode::kInMesh, -1}, p.mesh);
         }
         mPending.clear();
+        if (earlier > 0)
+            mR.warnings.push_back(std::format("{} mesh{} came in as an earlier shape: Maya history Lila can't replay. They are flagged in the "
+                                              "Outliner and the Validation panel; delete their history in Maya and import again.",
+                                              earlier, earlier == 1 ? "" : "es"));
     }
 
     bool isSkinned(int shape) const

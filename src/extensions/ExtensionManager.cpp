@@ -3,6 +3,7 @@
 #include "ops/Command.h"
 #include "ops/Undo.h"
 #include "core/Events.h"
+#include "core/Features.h"
 #include "core/Log.h"
 #include "core/MainQueue.h"
 #include "core/Paths.h"
@@ -135,16 +136,22 @@ fs::path shadowRoot()
     return fs::temp_directory_path(ec) / "lila-extension-shadow";
 }
 
-/** Copies left by earlier sessions. Ones another running Lila has loaded are locked and stay. */
+/**
+ * Copies left by earlier sessions. Ones another running Lila has loaded are locked and stay; recent ones are left too,
+ * since another process may have copied them and not loaded them yet.
+ */
 void clearOldShadows()
 {
     static bool done = false;
     if (std::exchange(done, true))
         return;
     std::error_code ec;
+    const fs::file_time_type cutoff = fs::file_time_type::clock::now() - std::chrono::minutes(10);
     for (const fs::directory_entry& e : fs::directory_iterator(shadowRoot(), ec))
     {
         std::error_code rm;
+        if (const fs::file_time_type made = e.last_write_time(rm); !rm && made > cutoff)
+            continue;
         fs::remove_all(e.path(), rm);
     }
 }
@@ -234,6 +241,8 @@ FileStamps stampPackage(const fs::path& package)
 json ExtensionInfo::toJson() const
 {
     json j = {{"name", name}, {"path", path.string()}, {"kind", kindName(kind)}, {"loaded", loaded}, {"autoload", autoload}};
+    if (const char* status = features::label(features::extensionStatus(name)); *status)
+        j["status"] = status;
     if (manifest)
     {
         j["displayName"] = manifest->name;
@@ -503,7 +512,7 @@ void ExtensionManager::loadInfo(const ExtensionInfo& found, std::set<std::string
     mLoaded[found.name] = std::move(rec);
     mOrder.push_back(found.name);
     if (kind == ExtensionKind::Native)
-        refreshPythonCommands();
+        commandsChanged();
     log::info("loaded extension {} ({})", found.name, found.path.string());
     events::send({.type = events::Event::ExtensionLoaded, .path = found.path, .name = found.name});
 }
@@ -557,6 +566,8 @@ void ExtensionManager::loadPython(Loaded& rec, const fs::path& module)
     const std::string& name = rec.info.name;
     if (!python::initialized())
         throw ExtensionError("can't load the Python part of " + name + ": Python is not running");
+    // Its import-time code may call commands a native extension earlier in the batch registered.
+    flushCommands();
     owners::OwnerScope attribute(name);
     python::Result r = python::run("__import__('lila.extension', fromlist=['_load'])._load(" + pyString(name) + ", " +
                                        pyString(module.string()) + ")",
@@ -650,7 +661,7 @@ void ExtensionManager::unload(const std::string& name)
     mLoaded.erase(it);
     mOrder.erase(std::remove(mOrder.begin(), mOrder.end(), name), mOrder.end());
     if (kind == ExtensionKind::Native)
-        refreshPythonCommands();
+        commandsChanged();
     log::info("unloaded extension {}", name);
     events::send({.type = events::Event::ExtensionUnloaded, .path = path, .name = name});
 }
@@ -683,6 +694,7 @@ std::string ExtensionManager::reload(const std::string& name)
 void ExtensionManager::unloadAll()
 {
     std::vector<std::string> names = mOrder;
+    ++mBatchDepth;
     for (auto n = names.rbegin(); n != names.rend(); ++n)
     {
         try
@@ -694,6 +706,23 @@ void ExtensionManager::unloadAll()
             log::warn("{}", e.what());
         }
     }
+    --mBatchDepth;
+    flushCommands();
+}
+
+void ExtensionManager::commandsChanged()
+{
+    mCommandsPending = true;
+    if (mBatchDepth == 0)
+        flushCommands();
+}
+
+void ExtensionManager::flushCommands()
+{
+    if (!mCommandsPending)
+        return;
+    mCommandsPending = false;
+    refreshPythonCommands();
 }
 
 bool ExtensionManager::isLoaded(const std::string& name) const
@@ -761,6 +790,8 @@ bool ExtensionManager::autoloads(const ExtensionInfo& info) const
 {
     if (contains(autoloadList(), info.name))
         return true;
+    if (features::extensionStatus(info.name) == features::Status::NotReady)
+        return false;
     return info.manifest && info.manifest->enabledByDefault && !contains(disabledList(), info.name);
 }
 
@@ -798,6 +829,7 @@ void ExtensionManager::loadAutoload()
                     out.push_back(d.id);
         return out;
     };
+    ++mBatchDepth;
     for (const std::string& name : ext::dependencyOrder(ids, depsOf))
     {
         try
@@ -809,6 +841,8 @@ void ExtensionManager::loadAutoload()
             log::error("autoload: {}", e.what());
         }
     }
+    --mBatchDepth;
+    flushCommands();
 }
 
 void ExtensionManager::addWatch(const std::string& name, WatchOptions options)

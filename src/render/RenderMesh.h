@@ -109,6 +109,13 @@ struct RenderMesh
      */
     std::vector<uint32_t> edgeMask;
 
+    /**
+     * Displacement preview (render/Displacement.h): per vertex the unit direction it moves along, and per section (or the
+     * one whole-mesh section) its run of vertices {first, count}. Empty for meshes that never displace.
+     */
+    std::vector<glm::vec4> displaceDirs;
+    std::vector<glm::uvec2> displaceRanges;
+
     size_t edgeVertexCount() const { return edgeIndices.empty() ? edgePoints.size() : edgeIndices.size(); }
     const glm::vec3& edgePoint(size_t k) const { return edgeIndices.empty() ? edgePoints[k] : edgePoints[edgeIndices[k]]; }
     glm::vec3 boundsMin{0.0f};
@@ -194,6 +201,51 @@ enum class ShadingModel : uint32_t
     Eye,
     /** The base colour map is a lit sphere looked up by the view-space normal, unlit otherwise. Viewport only. */
     Matcap,
+    /** Default lit plus the material's ExtendedShading (sheen, coat, subsurface, anisotropy, transmission, specular). */
+    Extended,
+};
+
+/** ExtendedShading's maps, in tex::shading::channels() order. */
+enum ExtendedMap : uint32_t
+{
+    ExtSheenColor,
+    ExtSheenRoughness,
+    ExtCoat,
+    ExtCoatRoughness,
+    ExtCoatNormal,
+    ExtSubsurfaceColor,
+    ExtSubsurfaceRadius,
+    ExtAnisotropy,
+    ExtAnisotropyDirection,
+    ExtTransmission,
+    ExtIor,
+    ExtSpecularWeight,
+    ExtSpecularColor,
+    kExtendedMaps,
+};
+
+/**
+ * Shading beyond Unreal's default lit inputs, from a texture set's shading channels (tex/ShadingChannels.h). Shaded when
+ * the material's model is ShadingModel::Extended. A map replaces its constant; maps are linear, the direction map holds a
+ * tangent-space vector as (x, y) * 0.5 + 0.5 and the ior map (ior - 1) / 2.
+ */
+struct ExtendedShading
+{
+    glm::vec3 sheenColor{0.0f};
+    float sheenRoughness = 0.5f;
+    float coat = 0.0f;
+    float coatRoughness = 0.05f;
+    glm::vec3 subsurfaceColor{0.0f};
+    float subsurfaceRadius = 1.0f;
+    float anisotropy = 0.0f;
+    float anisotropyRotation = 0.0f; // radians
+    float transmission = 0.0f;
+    float ior = 1.5f;
+    float specularWeight = 1.0f;
+    glm::vec3 specularColor{1.0f};
+    std::array<TexturePtr, kExtendedMaps> maps{};
+
+    bool operator==(const ExtendedShading&) const = default;
 };
 
 /** The stylised models' inputs (colours linear). Each model reads only its own group; see scene::material for meanings. */
@@ -258,6 +310,12 @@ constexpr int kStyleWords = 32;
 LILA_UI_API std::array<uint32_t, kStyleWords> packStyle(const MaterialStyle& s, uint32_t strokeHandle, const glm::vec3& boundsMin,
                                                                 const glm::vec3& boundsMax, bool zUp);
 
+/**
+ * The style block of a ShadingModel::Extended material: coat, sheen, subsurface, specular, anisotropy, transmission and ior,
+ * then the 16-bit table handles of its maps (ExtendedMap order, 0xffff for none). mesh.slang reads it.
+ */
+LILA_UI_API std::array<uint32_t, kStyleWords> packExtended(const ExtendedShading& e, const std::array<uint32_t, kExtendedMaps>& handles);
+
 /** Unreal default lit inputs for one slot. A map flag set means that map replaces its constant. */
 struct Material
 {
@@ -283,6 +341,15 @@ struct Material
     float bevelRadius = 0.0f;
     /** Shows its own base colour even under the Grey Base Color display (the UV checker). */
     bool keepBaseColor = false;
+    /**
+     * Displacement preview of a tessellated mesh (RenderMesh::displaceDirs): its vertices move by (height - displacementMid)
+     * * displacementDepth cm. The map's first channel is the height; GPU images (or UDIM sets of them) only.
+     */
+    TexturePtr heightMap;
+    float displacementDepth = 0.0f;
+    float displacementMid = 0.5f;
+    /** Shaded when style.model is ShadingModel::Extended. */
+    ExtendedShading ext;
 };
 
 /**
@@ -394,6 +461,8 @@ struct MeshDraw
     uint64_t node = 0;
     /** Lighting channel bits: lights whose bits share none with these leave it unlit. */
     uint32_t lightingChannels = 1;
+    /** Display-only: cm the mesh draws closer to the camera along each view ray, so it stays over a surface it lies on. */
+    float drawOffset = 0.0f;
 };
 
 /**

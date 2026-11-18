@@ -1,0 +1,25 @@
+{
+  "format": "lilabrush",
+  "version": 1,
+  "name": "Burn",
+  "category": "Particles",
+  "doc": "Charring that clusters where you paint.",
+  "brush": {
+    "falloff": "smooth",
+    "spacing": 0.2
+  },
+  "payload": {
+    "kind": "paint",
+    "channels": {
+      "baseColor": [
+        0.02,
+        0.02,
+        0.02
+      ],
+      "roughness": 0.9
+    }
+  },
+  "particles": {
+    "kind": "burn"
+  }
+}

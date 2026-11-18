@@ -38,6 +38,9 @@ using retopo::ConstructKind;
 constexpr const char* kBrushPref = "/topology/brush";
 constexpr const char* kEdgePref = "/topology/edgeLength";
 constexpr const char* kQualityPref = "/topology/qualityOverlay";
+constexpr const char* kXrayPref = "/topology/xrayReference";
+constexpr float kXrayOpacity = 0.35f;
+constexpr const char* kReferenceWirePref = "/topology/referenceWire";
 constexpr const char* kEvenSizePref = "/topology/relax/evenSize";
 constexpr const char* kSquarenessPref = "/topology/relax/squareness";
 constexpr const char* kStiffnessPref = "/topology/relax/stiffness";
@@ -202,6 +205,7 @@ void TopologyTool::refresh()
             mRegion.assign(mRefWorldMesh.faceCapacity(), 0);
     }
     mRetopo = nullptr;
+    mDrawOffset = 0.0;
     mSymmetry.reset();
     scene::Node* n = retopoNode();
     if (!n)
@@ -218,6 +222,7 @@ void TopologyTool::refresh()
     mRetopoName = n->path();
     mRetopo = scene::modifiers::cage(g, n->id());
     mRetopoWorld = n->as<glm::dmat4>(scene::Transform::kWorldMatrix);
+    mDrawOffset = scene::drawOffset(*n);
     if (mRigMesh && mRetopo != mRigMesh)
         clearHandles();
     if (int64_t axis = n->as<int64_t>(scene::MeshNode::kSymmetry); axis > 0 && axis <= 3)
@@ -297,7 +302,8 @@ bool TopologyTool::visible(const glm::dvec3& p, const ViewInfo& view) const
         return true;
     glm::dvec3 d = p - view.eye;
     double len = glm::length(d);
-    double slack = view.unitsPerPixel(p) * 3.0;
+    // Slack so points on the surface aren't hidden by it, plus the drawOffset that lifts the retopo mesh's draw.
+    double slack = view.unitsPerPixel(p) * 3.0 + mDrawOffset;
     return len <= slack || !mRefBvh.occluded(view.eye, d / len, len - slack);
 }
 
@@ -1188,6 +1194,9 @@ void TopologyTool::removeOwnDraw(render::FrameState& s) const
     const glm::dmat4 world(mRetopoWorld);
     float tol = float(std::max(1e-4, glm::length(b.max - b.min) * 1e-4));
     std::erase_if(s.meshes.edit(), [&](const render::MeshDraw& d) {
+        // A draw that names its node is matched by it: a reference with the same bounds and placement must stay.
+        if (d.node != 0)
+            return d.node == uint64_t(n->id());
         if (!d.mesh || d.world != world)
             return false;
         return glm::length(d.mesh->boundsMin - glm::vec3(b.min)) < tol && glm::length(d.mesh->boundsMax - glm::vec3(b.max)) < tol;
@@ -1307,6 +1316,89 @@ void TopologyTool::drawSurfacePolyline(OverlayPainter& p, const ViewInfo& view, 
                                        const glm::vec4& color, float dash) const
 {
     drawVisiblePolyline(p, view, pts, closed, width, color, dash, [&](const glm::dvec3& w) { return visible(w, view); });
+}
+
+bool xrayReference() { return PrefStore::get().value<bool>("general", kXrayPref, false); }
+
+void setXrayReference(bool on)
+{
+    PrefStore::get().set("general", kXrayPref, on);
+    viewportTools::requestRedraw();
+}
+
+bool referenceWire() { return PrefStore::get().value<bool>("general", kReferenceWirePref, false); }
+
+void setReferenceWire(bool on)
+{
+    PrefStore::get().set("general", kReferenceWirePref, on);
+    viewportTools::requestRedraw();
+}
+
+void applyReferenceDisplay(render::FrameState& s, scene::NodeId reference)
+{
+    if (reference == scene::kNoNode)
+        return;
+    const bool xray = xrayReference(), wire = referenceWire();
+    if (!xray && wire)
+        return;
+    constexpr uint32_t kHighlight = render::DrawSelected | render::DrawSelectedOther | render::DrawUnderSelected | render::DrawPreselect;
+    for (render::MeshDraw& d : s.meshes.edit())
+    {
+        if (d.node != uint64_t(reference) || !(d.flags & render::DrawShaded) || !d.mesh)
+            continue;
+        if (!wire)
+            d.flags &= ~(kHighlight | render::DrawWire);
+        if (!xray)
+            continue;
+        if (d.materials.empty())
+        {
+            uint32_t slots = 1;
+            for (const render::MeshSection& sec : d.mesh->sections)
+                slots = std::max(slots, sec.material + 1);
+            render::Material m;
+            m.baseColor = d.baseColor;
+            m.roughness = d.roughness;
+            d.materials.assign(slots, m);
+        }
+        for (render::Material& m : d.materials)
+        {
+            m.flags |= render::MatTranslucent;
+            m.opacity = std::min(m.opacity, kXrayOpacity);
+        }
+    }
+}
+
+namespace
+{
+std::vector<render::LineVertex>* retopoOverlayStreams(render::FrameState& s, size_t i)
+{
+    std::vector<render::LineVertex>* streams[] = {&s.tris3d, &s.linesOnTop, &s.curveHalo, &s.curveHaloBold, &s.curveLines, &s.curveLinesBold};
+    return i < std::size(streams) ? streams[i] : nullptr;
+}
+} // namespace
+
+RetopoOverlayOffset::RetopoOverlayOffset(render::FrameState& s, const ViewInfo& view, const std::string& retopoMesh) : mState(s), mView(view)
+{
+    if (const scene::Node* n = findNode(retopoMesh))
+        mOffset = scene::drawOffset(*n);
+    for (size_t i = 0; auto* stream = retopoOverlayStreams(s, i); ++i)
+        mFrom.push_back(stream->size());
+}
+
+RetopoOverlayOffset::~RetopoOverlayOffset()
+{
+    if (mOffset <= 0.0)
+        return;
+    const glm::dvec3 back(mView.view[0][2], mView.view[1][2], mView.view[2][2]);
+    for (size_t i = 0; auto* stream = retopoOverlayStreams(mState, i); ++i)
+        for (size_t k = mFrom[i]; k < stream->size(); ++k)
+        {
+            glm::dvec3& p = (*stream)[k].pos;
+            if (mView.ortho)
+                p += back * mOffset;
+            else if (const double dist = glm::length(mView.eye - p); dist > 0.0)
+                p += (mView.eye - p) * (std::min(mOffset, 0.5 * dist) / dist);
+        }
 }
 
 void pushRetopoEdge(render::FrameState& s, const glm::vec3& a, const glm::vec3& b, const glm::vec4& color, bool bold)
@@ -1493,6 +1585,8 @@ void TopologyTool::draw(render::FrameState& s, OverlayPainter& p, const ViewInfo
 
     refresh();
     removeOwnDraw(s);
+    applyReferenceDisplay(s, mReference);
+    const RetopoOverlayOffset offset(s, view, mRetopoName);
     if (mDrag == Drag::None)
         mMods = QGuiApplication::queryKeyboardModifiers();
     const bool here = view.camera == mCursorView;
@@ -1706,6 +1800,26 @@ void registerTopologyActions()
         .doc = "Marks poles by valence, triangles and n-gons on the retopo mesh while a topology tool runs.",
         .python = "lila.prefs.set(\"general\", \"/topology/qualityOverlay\", True)",
         .checked = [] { return TopologyTool::qualityOverlay(); },
+    });
+    actions::add({
+        .id = "topo.xrayReference",
+        .label = "X-Ray Reference",
+        .category = "Topology",
+        .run = [] { setXrayReference(!xrayReference()); },
+        .doc = "Draws the reference mesh see-through while a topology tool runs, so the retopo mesh shows from both sides.",
+        .python = "lila.prefs.set(\"general\", \"/topology/xrayReference\", True)",
+        .checked = [] { return xrayReference(); },
+        .keywords = {"xray", "x-ray", "see-through", "transparent", "ghost"},
+    });
+    actions::add({
+        .id = "topo.referenceWire",
+        .label = "Reference Wireframe",
+        .category = "Topology",
+        .run = [] { setReferenceWire(!referenceWire()); },
+        .doc = "Shows the reference mesh's wireframe and selection highlight while a topology tool runs. Off by default, so only the retopo mesh's edges show.",
+        .python = "lila.prefs.set(\"general\", \"/topology/referenceWire\", True)",
+        .checked = [] { return referenceWire(); },
+        .keywords = {"wireframe", "wire", "highlight", "selection", "edges", "reference"},
     });
     actions::add({
         .id = "topo.runRegion",

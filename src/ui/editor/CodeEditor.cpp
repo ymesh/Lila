@@ -1570,6 +1570,13 @@ void CodeEditor::formatOnType(QChar typed)
 
 void CodeEditor::insertFromMimeData(const QMimeData* source)
 {
+    if (singleLine)
+    {
+        static const QRegularExpression lineBreaks(R"(\s*[\r\n\x{2028}\x{2029}]+\s*)");
+        if (!isReadOnly() && source->hasText())
+            insertPlainText(source->text().trimmed().replace(lineBreaks, " "));
+        return;
+    }
     const int start = textCursor().selectionStart();
     QPlainTextEdit::insertFromMimeData(source);
     if (!isReadOnly() && format::Settings::load().onPaste && textCursor().position() > start)

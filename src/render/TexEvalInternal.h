@@ -210,6 +210,12 @@ struct Evaluator::State
     std::vector<Rect> passRect, loadRect, storeRect;
     /** What the stores wrote since takeStored last asked. */
     Rect stored;
+    /**
+     * Paint changed separate regions of its externals: the first is being redone, these follow one at a time, for
+     * regionBuffers with their load targets. Redoing their bounding box instead can cost the whole texture per dab.
+     */
+    std::vector<Rect> regionQueue;
+    std::map<size_t, uint64_t> regionTargets;
     /** Per buffer with a pending partial load: the image version it brings the buffer up to (0: whatever is current). */
     std::vector<uint64_t> loadTarget;
     std::vector<uint64_t> loadedVersion; // per buffer: the GPU external's key and version last loaded
@@ -222,6 +228,12 @@ struct Evaluator::State
     VkDeviceSize arenaLimit = 0;
     VkDeviceSize arenaTexels = 0;
     bool reallocate = true;
+    /** Buffers adopt kept from the last plan's arena: allocate copies them into the new one (texels). */
+    struct Carry
+    {
+        VkDeviceSize from = 0, to = 0, texels = 0;
+    };
+    std::vector<Carry> carry;
     VkDeviceSize scratchBase = 0;
     VkDeviceSize scratchCapacity = 0;
     /** Per-slice native frames (gU of kernel natives), bump allocated. */
@@ -244,6 +256,13 @@ struct Evaluator::State
     double rate = 4e6; // texel * cost units per ms
     VkDescriptorPool pool = VK_NULL_HANDLE;
     compute::Submitter sub;
+    /** The slice in flight (sub.busy()): its temporaries, predicted cost and counts, settled once the GPU is done. */
+    std::vector<compute::Buffer> sliceTemps;
+    double slicePredicted = 0.0;
+    Stats sliceDelta;
+
+    /** Waits up to timeoutNs for the slice in flight and settles it; false while it is still running. */
+    bool settle(VulkanContext& vk, uint64_t timeoutNs);
 
     void release(VulkanContext& vk)
     {
@@ -258,6 +277,7 @@ struct Evaluator::State
 
     void freeDevice(VulkanContext& vk)
     {
+        sub.waitLaunched(vk);
         for (compute::Buffer* b : {&arena, &uniforms, &uniformStaging, &headers, &scratch, &words, &frames, &loadRaw})
             compute::destroy(vk, *b);
         if (pool)
@@ -269,6 +289,9 @@ struct Evaluator::State
         compute::destroy(vk, pageHeaders);
         compute::destroy(vk, pageUniforms);
         sub.destroy(vk);
+        for (compute::Buffer& b : sliceTemps)
+            compute::destroy(vk, b);
+        sliceTemps.clear();
     }
 
     /** Marks every load, pass and store to be redone in full, from the first pass. */
@@ -281,6 +304,8 @@ struct Evaluator::State
         std::fill(loadRect.begin(), loadRect.end(), Rect::full());
         std::fill(storeRect.begin(), storeRect.end(), Rect::full());
         std::fill(loadTarget.begin(), loadTarget.end(), uint64_t(0));
+        regionQueue.clear();
+        regionTargets.clear();
         uniformsDirty = true;
         passIndex = 0;
         passRow = 0;
@@ -305,6 +330,12 @@ struct Evaluator::State
     void adopt(VkDeviceSize maxBytes);
     /** Loads the GPU externals whose version moved and dirties what reads them (render thread). */
     void markExternals();
+    /** Splits the pending partial external loads into separate regions when their changes lie apart. Before propagate. */
+    void splitRegions();
+    /** Starts the next queued region: loads, propagation and passes over it alone. Only with no work left. */
+    void nextRegion();
+    /** Folds the queued regions back into the pending loads (one bounding box). */
+    void flushRegions();
     /**
      * Marks a GPU external for loading: just what changed since its last load when that is known, else all of it.
      * Returns false when it is up to date.

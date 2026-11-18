@@ -1,5 +1,6 @@
 #include "ui/MainWindowDetail.h"
 #include "ui/MenuContext.h"
+#include "ui/MenuSearch.h"
 #include "ui/TopBar.h"
 #include "ui/Credits.h"
 #include "ui/CreditsDialog.h"
@@ -29,8 +30,9 @@ QMenu* MainWindow::refreshKeysOnShow(QMenu* menu)
             if (id.empty())
                 continue;
             QString key = Hotkeys::get().keyFor(id);
-            qa->setText(QString::fromStdString(actions::displayLabel(id)) + (key.isEmpty() ? "" : "	" + key));
+            qa->setText(QString::fromStdString(actions::displayLabel(id)) + qa->property(menus::kStatusSuffix).toString() + (key.isEmpty() ? "" : "	" + key));
             qa->setToolTip(QString::fromStdString(actions::tooltip(id)));
+            qa->setStatusTip(QString::fromStdString(actions::statusLine(id)));
             qa->setEnabled(actions::isEnabled(json(id)));
         }
     });
@@ -167,7 +169,7 @@ void MainWindow::buildMenus()
     menus::addActions("Topology", {"#Session", "retopo.setReference", "window.topologyToolkit", "#Draw", "retopo.draw", "topo.pencil", "topo.patch",
                                    "topo.strip", "topo.stroke", "topo.cylinder", "topo.cap", "#Shape", "topo.handles", "topo.relax", "topo.settle", "mesh.relax",
                                    "#Auto Retopo", "topo.region", "topo.runRegion", "mesh.quadRemesh", "retopo.poles", "mesh.voxelRemesh",
-                                   "#Constructs", "topo.freezeAll", "#Display", "topo.qualityOverlay"});
+                                   "#Constructs", "topo.freezeAll", "#Display", "topo.qualityOverlay", "topo.xrayReference", "topo.referenceWire"});
 
     menu("Model", "Model", Area::MenuBar, {}, "", {"Model"});
     menus::addActions("Model", {"#Components", "mesh.extrude", "mesh.inset", "mesh.insetRegion", "mesh.bevel", "mesh.insertLoop", "mesh.splitRings", "mesh.offsetLoop", "mesh.knife", "mesh.bridge",
@@ -310,12 +312,14 @@ void MainWindow::buildMenus()
                            "viewport.toggleXray", "viewport.toggleBackfaceCulling", "#Lighting and Effects"});
     addSubmenu("Display", "Lighting", syncChecks);
     menus::addActions("Display/Lighting", {"viewport.lighting.environment", "viewport.lighting.studio", "viewport.lighting.sculpt", "viewport.lighting.flat", "viewport.resetLight"});
+    addSubmenu("Display", "Reflections", syncChecks);
+    menus::addActions("Display/Reflections", {"viewport.reflections.off", "viewport.reflections.screenSpace", "viewport.reflections.rayTraced"});
     addSubmenu("Display", "Vertex Colors", syncChecks);
     menus::addActions("Display/Vertex Colors", {"viewport.vertexColors.off", "viewport.vertexColors.shaded", "viewport.vertexColors.unlit", "",
                                          "viewport.colorChannel.rgb", "viewport.colorChannel.r", "viewport.colorChannel.g",
                                          "viewport.colorChannel.b", "viewport.colorChannel.a", "", "viewport.grayscaleWeights",
                                          "viewport.monotone"});
-    menus::addActions("Display", {"viewport.toggleShadows", "viewport.toggleAO", "viewport.toggleAA", "viewport.toggleKuwahara",
+    menus::addActions("Display", {"viewport.toggleShadows", "viewport.toggleAO", "viewport.toggleAA", "viewport.toggleDepthOfField", "viewport.toggleMotionBlur", "viewport.toggleKuwahara",
                                   "viewport.toggleOutline"});
     addSubmenu("Display", "Antialiasing Samples", syncChecks);
     menus::addActions("Display/Antialiasing Samples", {"viewport.aaSamples2", "viewport.aaSamples4", "viewport.aaSamples8"});
@@ -360,9 +364,13 @@ void MainWindow::buildMenus()
     menus::addActions("Animation", {"#Offsets", "anim.createOffset", "anim.bakeOffset", "anim.deleteOffset", "window.offsets"});
     menus::addActions("Animation", {"#Retarget", "anim.retarget", "anim.characterize", "window.retargeter"});
 
-    menu("Render", "Render", Area::MenuBar, syncChecks, "", {"Texture", "Level", "Animate", "Effects"});
-    menus::addActions("Render", {"#Render", "render.frame", "render.sequence", "render.turntable", "window.renderOutput", "window.renderSettings", "#Look",
-                                 "render.postProcess", "render.lightRig.threePoint", "render.lightRig.rim", "render.lightRig.product", "viewport.toggleRtShadows", "viewport.togglePostEffects", "viewport.toggleTAA", "#Framing", "viewport.toggleResolutionGate",
+    menu("Render", "Render", Area::MenuBar, syncChecks, "", {"Texture", "Render", "Level", "Animate", "Effects"});
+    menus::addActions("Render", {"window.renderToolkit", "#Output", "render.frame", "render.sequence", "render.turntable", "render.openLast", "render.showFolder",
+                                 "window.renderSettings", "#Look",
+                                 "render.postProcess", "render.colorManagement", "render.exportGradeLut", "window.scopes", "render.lightRig.threePoint", "render.lightRig.rim", "render.lightRig.product", "viewport.toggleRtShadows", "viewport.togglePostEffects", "viewport.toggleTAA", "viewport.toggleDepthOfField", "viewport.toggleMotionBlur", "camera.pickFocus"});
+    addSubmenu("Render", "Reflections", syncChecks);
+    menus::addActions("Render/Reflections", {"viewport.reflections.off", "viewport.reflections.screenSpace", "viewport.reflections.rayTraced"});
+    menus::addActions("Render", {"#Framing", "viewport.toggleResolutionGate",
                                  "viewport.toggleSafeFrames", "viewport.toggleThirds"});
 
     menu("Windows", "Windows", Area::MenuBar, syncChecks);
@@ -373,8 +381,8 @@ void MainWindow::buildMenus()
     });
     addItem({.id = "Windows/layouts", .menu = "Windows", .kind = Kind::Custom, .setup = [this](QMenu* m) { m->addMenu(mLayouts->menu()); }});
     menus::addActions("Windows", {"window.resetLayout", "window.expandPanels", "window.toggleMaximizePanel", "#Menu Set", "menuSet.follow", "menuSet.model",
-                                  "menuSet.uv", "menuSet.sculpt", "menuSet.texture", "menuSet.rig", "menuSet.animate", "menuSet.level", "#Tools",
-                                  "window.modelingToolkit", "window.topologyToolkit", "window.curveToolkit", "window.uvToolkit", "window.levelToolkit",
+                                  "menuSet.uv", "menuSet.sculpt", "menuSet.texture", "menuSet.render", "menuSet.rig", "menuSet.animate", "menuSet.level", "#Tools",
+                                  "window.modelingToolkit", "window.topologyToolkit", "window.curveToolkit", "window.uvToolkit", "window.levelToolkit", "window.renderToolkit",
                                   "#Show", "window.toggleToolBox",
                            "window.toggleChannelBox", "window.toggleUvEditor", "window.commandPalette", "view.presenter", "reference.addImages", "reference.clickable", "#Customize",
                            "viewport.customizeHeader", "window.customizeToolBox", "window.markingMenuEditor", "window.userMenuEditor", "window.extensionManager"});
@@ -383,8 +391,8 @@ void MainWindow::buildMenus()
     menus::addActions("Help", {"#Learn", "help.docs"});
     addSubmenu("Help", "Docs Topics", [](QMenu* m) { docs::attachTopicsMenu(m); });
     menus::addActions("Help", {"help.hotkeyCheatSheet", "viewport.toggleKeys", "help.updateDocs", "#Search", "window.searchMenus", "window.searchScene", "window.searchTearOffs",
-                               "#Feedback", "help.reportIssue", "help.requestFeature", "help.myReports", "#Problems", "help.perfTrace", "help.supportBundle", "help.copyLastCrash",
-                               "help.crashReports", "#Setup", "help.agentSetup", "help.telemetry", "help.checkUpdates", "help.prefsFolder", "",
+                               "#Feedback", "help.reportIssue", "help.requestFeature", "help.myReports", "help.roadmap", "#Problems", "help.perfTrace", "help.supportBundle", "help.copyLastCrash",
+                               "help.crashReports", "#Setup", "help.agentSetup", "help.telemetry", "help.checkUpdates", "help.reinstall", "help.prefsFolder", "",
                                "help.licenses", "help.credits", "help.about"});
 
     buildPanelMenus();
@@ -424,7 +432,7 @@ void MainWindow::buildMenus()
 void MainWindow::raiseToolsFor(const std::string& set)
 {
     // The tools column follows the work too: its tab for the set comes forward when that panel is open.
-    static const std::map<std::string, const char*> kTools = {{"Model", kModelingToolkitDock}, {"Level", kLevelToolkitDock}, {"Texture", "textureSets"}, {"Cloth", "tailorToolkit"}};
+    static const std::map<std::string, const char*> kTools = {{"Model", kModelingToolkitDock}, {"Level", kLevelToolkitDock}, {"Render", kRenderToolkitDock}, {"Texture", "textureSets"}, {"Cloth", "tailorToolkit"}};
     auto it = kTools.find(set);
     if (it == kTools.end())
         return;
@@ -482,7 +490,11 @@ void MainWindow::fillEditorsMenu(QMenu* menu)
         for (QDockWidget* d : members)
         {
             if (const panels::Panel* p = panels::registry().find(d->objectName().toStdString()))
+            {
                 d->toggleViewAction()->setIcon(icon(QString::fromStdString(p->icon)));
+                const std::string toggle = p->toggleAction.empty() ? "window." + p->id : p->toggleAction;
+                d->toggleViewAction()->setProperty(menuSearch::kSameAsProperty, QString::fromStdString(toggle));
+            }
             menu->addAction(d->toggleViewAction());
         }
     };
@@ -515,7 +527,8 @@ void MainWindow::buildPanelMenus()
                               "referenceOverlay.bindView", "referenceOverlay.goToView", "referenceOverlay.park"});
     menus::addActions("panel.Shading", {"viewport.wireframe", "viewport.shaded", "viewport.textured", "viewport.wireOnShaded", "", "viewport.toggleAO",
                                  "viewport.aid.twoSidedLighting", "viewport.aid.backfaceTint",
-                                 "", "display.smoothOff", "display.smoothCage", "display.smoothOn", "viewport.smoothSubdivisions"});
+                                 "", "display.smoothOff", "display.smoothCage", "display.smoothOn", "viewport.smoothSubdivisions",
+                                 "viewport.modifierEdges"});
     menus::addActions("panel.Show", {"display.hide", "display.show", "display.showLastHidden", "display.showAll", "", "viewport.isolate", "viewport.isolateAdd",
                               "viewport.isolateRemove", "viewport.show.curve", "viewport.show.mesh", "viewport.show.joint", "viewport.show.light",
                               "viewport.show.locator", "rig.xrayJoints", "measure.toggleShow",

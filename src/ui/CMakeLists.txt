@@ -15,10 +15,11 @@ lila_module(lila_ui UI
     MenuSearch.cpp MenuSearch.h
     CommandPalette.cpp CommandPalette.h CommandHistory.h
     TexturePicker.cpp TexturePicker.h
+    Favourites.cpp Favourites.h
     AgentCapture.cpp AgentCapture.h
     HeightfieldDisplay.cpp HeightfieldDisplay.h
     RenderOutput.cpp RenderOutput.h
-    RenderOutputDialog.cpp RenderOutputDialog.h
+    RenderToolkit.cpp RenderToolkit.h
     AgentSetup.cpp AgentSetup.h
     Animation.cpp Animation.h
     ApiReference.cpp ApiReference.h
@@ -53,6 +54,7 @@ lila_module(lila_ui UI
     BakeCageView.cpp BakeCageView.h
     BakePaintTool.cpp BakePaintTool.h
     TexturePaintTool.cpp TexturePaintTool.h
+    TexProjectionTool.cpp TexProjectionTool.h
     TexPipelineUi.cpp TexPipelineUi.h
     Editors.cpp Editors.h
     Environments.cpp Environments.h
@@ -67,6 +69,9 @@ lila_module(lila_ui UI
     GraphCurveView.cpp GraphCurveView.h GraphModel.cpp GraphModel.h
     GraphMotion.cpp GraphMotion.h
     PoseLibrary.cpp PoseLibrary.h
+    PreviewQuality.cpp PreviewQuality.h
+    TexCompare.cpp TexCompare.h
+    QuickMaskOverlay.cpp QuickMaskOverlay.h
     ControlPicker.cpp ControlPicker.h
     HotkeyBindings.cpp HotkeyBindings.h
     HotkeyCheatSheet.cpp HotkeyCheatSheet.h
@@ -126,6 +131,7 @@ lila_module(lila_ui UI
     Overlay.cpp Overlay.h
     CursorBadges.cpp CursorBadges.h
     Panels.cpp Panels.h
+    ExtensionScope.cpp ExtensionScope.h
     RetopoDrawTool.cpp RetopoDrawTool.h
     RetopoPolesTool.cpp RetopoPolesTool.h
     TopologyTool.cpp TopologyTool.h TopologyModes.cpp TopologyToolkit.cpp TopologyToolkit.h
@@ -134,6 +140,11 @@ lila_module(lila_ui UI
     ArrayTool.cpp ArrayTool.h
     ClayTool.cpp
     ClayUi.cpp ClayUi.h
+    ColorManagementUi.cpp ColorManagementUi.h
+    GradeControls.cpp GradeControls.h
+    GradeUi.cpp GradeUi.h
+    ScopesPanel.cpp ScopesPanel.h
+    FocusTool.cpp FocusTool.h
     LayoutPencil.cpp LayoutPencil.h
     ConformTool.cpp ConformTool.h
     PythonBridge.cpp PythonBridge.h
@@ -164,6 +175,7 @@ lila_module(lila_ui UI
     PerfTrace.cpp PerfTrace.h
     Updater.cpp Updater.h
     WelcomeNews.cpp WelcomeNews.h
+    FeatureStatus.cpp FeatureStatus.h
     Credits.cpp Credits.h
     CreditsDialog.cpp CreditsDialog.h
     ProgressOverlay.cpp ProgressOverlay.h

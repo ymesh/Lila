@@ -11,6 +11,12 @@ void ViewportWidget::mousePressEvent(QMouseEvent* e)
     mLastPos = e->position();
     if (drone::mousePress(this, e))
         return;
+    // Alt+LMB+MMB dollies, as in Maya: the second button joins a tumble or track already under way.
+    if ((mNav == Nav::Tumble || mNav == Nav::Track) && (e->buttons() & Qt::LeftButton) && (e->buttons() & Qt::MiddleButton))
+    {
+        mNav = Nav::Dolly;
+        return;
+    }
     setFocus();
     if (mFramePickArmed && !(e->modifiers() & Qt::AltModifier))
     {
@@ -371,6 +377,12 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* e)
 {
     if (drone::mouseRelease(this, e))
         return;
+    if (mNav == Nav::Dolly && (e->button() == Qt::LeftButton || e->button() == Qt::MiddleButton) &&
+        (e->buttons() & (Qt::LeftButton | Qt::MiddleButton)))
+    {
+        mNav = (e->buttons() & Qt::LeftButton) ? Nav::Tumble : Nav::Track;
+        return;
+    }
     // Runs after this release is handled, so it sees the new selection and hilite.
     if (e->buttons() == Qt::NoButton && !(e->modifiers() & Qt::AltModifier))
         queuePreselect(e->position());

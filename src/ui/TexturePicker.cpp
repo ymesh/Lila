@@ -7,6 +7,7 @@
 #include "core/TextMatch.h"
 #include "core/Workspace.h"
 #include "scene/TextureFolders.h"
+#include "ui/Favourites.h"
 #include "ui/Icons.h"
 #include "ui/FileDialog.h"
 #include "ui/ImagePicker.h"
@@ -164,6 +165,15 @@ public:
         mList->setIconSize({kIcon, kIcon});
         mList->setFocusPolicy(Qt::NoFocus);
         mList->setTextElideMode(Qt::ElideMiddle);
+        if (!mOptions.favourites.empty())
+            favourites::attach(
+                mList,
+                [list = mOptions.favourites](const QModelIndex& i) {
+                    const int kind = i.data(kKindRole).toInt();
+                    return kind == kFile || kind == kProject ? std::pair{list, i.data(kValueRole).toString().toStdString()}
+                                                             : std::pair<std::string, std::string>{};
+                },
+                [this] { refill(); });
         auto* foot = new QHBoxLayout;
         mStatus = new QLabel(this);
         mStatus->setEnabled(false);
@@ -338,8 +348,10 @@ private:
             it->setData(kKindRole, kind);
             it->setSizeHint({0, kIcon + 4});
         };
-        special(kNone, "None", "ban", "none clear");
-        special(kBrowse, "Browse...", "folder-open", "browse file");
+        if (mOptions.none)
+            special(kNone, "None", "ban", "none clear");
+        if (mOptions.browse)
+            special(kBrowse, "Browse...", "folder-open", "browse file");
 
         QListWidgetItem* select = nullptr;
         auto mark = [&](QListWidgetItem* it, bool current) {
@@ -355,14 +367,37 @@ private:
                 select = it;
         };
 
-        // The library, by group; a group's heading shows only while it has matches.
-        QString group;
+        // Favourites first, under their own heading; they leave their usual place.
+        const std::vector<std::string> favs = mOptions.favourites.empty() ? std::vector<std::string>() : favourites::all(mOptions.favourites);
+        auto favourite = [&](const std::string& value) { return std::ranges::find(favs, value) != favs.end(); };
         bool listedCurrent = false;
         size_t libraryShown = 0;
+        bool favHeader = false;
+        for (const std::string& value : favs)
+        {
+            auto item = std::ranges::find_if(mItems, [&](const Item& i) { return i.value == value; });
+            const fs::path file = item != mItems.end() ? item->file : fs::path(paths::fromUtf8(value));
+            const QString name = item != mItems.end() ? item->name : QString::fromStdU16String(file.filename().u16string());
+            std::error_code ec;
+            if (item == mItems.end() && (!mOptions.projectTextures || !fs::exists(file, ec)))
+                continue;
+            if (!query.matches({name.toStdString()}))
+                continue;
+            if (!favHeader)
+                header("Favourites");
+            favHeader = true;
+            const bool current = item != mItems.end() ? isCurrent(*item) : comparable(value) == mCurrentFile;
+            listedCurrent |= current;
+            libraryShown += item != mItems.end() ? 1 : 0;
+            mark(fileRow(name, file, item != mItems.end() ? kFile : kProject, QString::fromStdString(value)), current);
+        }
+
+        // The library, by group; a group's heading shows only while it has matches.
+        QString group;
         for (const Item& item : mItems)
         {
             const std::string name = item.name.toStdString(), groupText = item.group.toStdString();
-            if (!query.matches({std::string_view(name), std::string_view(groupText)}))
+            if (!query.matches({std::string_view(name), std::string_view(groupText)}) || favourite(item.value))
                 continue;
             if (item.group != group || !libraryShown)
             {
@@ -417,6 +452,8 @@ private:
                 for (const std::string* f : *list)
                 {
                     fs::path abs = snap.root / paths::fromUtf8(*f);
+                    if (favourite(paths::toUtf8(abs)))
+                        continue;
                     size_t slash = f->rfind('/');
                     QString name = qs(slash == std::string::npos ? *f : f->substr(slash + 1));
                     QString folder = slash == std::string::npos ? QString() : qs(f->substr(0, slash));

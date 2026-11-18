@@ -113,7 +113,7 @@ TEST_CASE("tex: texBuildGraph builds a set from one spec, or reports every probl
     json prefixed = bricks;
     prefixed["material"] = "M_Wall";
     CHECK(run("texBuildGraph", {{"args", {prefixed}}})["set"] == "WallTex");
-    run("texCreateSet", {{"args", {"OddName"}}, {"settings", {{"material", "M_Floor"}}}});
+    run("texCreateSet", {{"args", {"OddName"}}, {"materials", {"M_Floor"}}});
     prefixed["material"] = "M_Floor";
     CHECK(run("texBuildGraph", {{"args", {prefixed}}})["set"] == "OddName");
 

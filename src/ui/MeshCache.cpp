@@ -3,6 +3,7 @@
 #include "core/Log.h"
 #include "core/PrefStore.h"
 #include "core/Profile.h"
+#include "geo/Bvh.h"
 #include "geo/Normals.h"
 #include "geo/Ops.h"
 #include "geo/RenderMesh.h"
@@ -12,7 +13,10 @@
 #include <tbb/parallel_reduce.h>
 
 #include <cstring>
+#include <array>
+#include <cmath>
 #include <map>
+#include <numbers>
 #include <unordered_map>
 
 namespace lila::ui
@@ -485,8 +489,8 @@ std::shared_ptr<const MaskedMesh> maskedRenderMeshFor(const scene::MeshPtr& mesh
         std::shared_ptr<const MaskedMesh> result;
     };
     // Never destroyed: at exit the meshes' owners (extension DLLs among them) may already be unloaded.
-    static auto& cache = *new std::map<std::tuple<const geo::Mesh*, uint64_t, bool>, Masked>();
-    auto key = std::make_tuple(mesh.get(), maskKey, cageWire != nullptr);
+    static auto& cache = *new std::map<std::tuple<const geo::Mesh*, uint64_t, const SmoothCage*>, Masked>();
+    auto key = std::make_tuple(mesh.get(), maskKey, cageWire);
     if (auto it = cache.find(key); it != cache.end() && it->second.source.lock() == mesh && it->second.base == full->built)
         return it->second.result;
     // Entries of deleted meshes hold gigabytes on dense meshes, so they go as soon as anything new is cached.
@@ -603,6 +607,150 @@ std::shared_ptr<const SmoothCage> smoothCageFor(const scene::MeshPtr& mesh, int 
     out->mesh = std::move(smoothed);
     cache[mesh.get()] = {mesh, level, keepHardEdges, out};
     return out;
+}
+
+namespace
+{
+/** Whether the meshes have the same edges between the same point ids, as a stack of deformers alone leaves them. */
+bool sameEdges(const geo::Mesh& a, const geo::Mesh& b)
+{
+    if (a.edgeCapacity() != b.edgeCapacity() || a.pointCapacity() != b.pointCapacity())
+        return false;
+    for (geo::Index e = 0; e < a.edgeCapacity(); ++e)
+        if (a.edgeValid(e) != b.edgeValid(e) || (a.edgeValid(e) && (a.edgePoint(e, 0) != b.edgePoint(e, 0) || a.edgePoint(e, 1) != b.edgePoint(e, 1))))
+            return false;
+    return true;
+}
+} // namespace
+
+bool modifiersAddEdges(const scene::MeshPtr& cage, const scene::MeshPtr& result)
+{
+    return cage && result && cage != result && !sameEdges(*cage, *result);
+}
+
+namespace
+{
+/** Squared distance from p to the segment ab. */
+double segmentDistance2(const glm::dvec3& p, const glm::dvec3& a, const glm::dvec3& b)
+{
+    const glm::dvec3 ab = b - a;
+    const double t = glm::clamp(glm::dot(p - a, ab) / std::max(glm::dot(ab, ab), 1e-300), 0.0, 1.0);
+    const glm::dvec3 d = a + ab * t - p;
+    return glm::dot(d, d);
+}
+
+std::shared_ptr<render::RenderMesh> lineMesh(const std::shared_ptr<const render::RenderMesh>& surface)
+{
+    auto m = std::make_shared<render::RenderMesh>();
+    m->shareVertices = surface;
+    m->boundsMin = surface->boundsMin;
+    m->boundsMax = surface->boundsMax;
+    return m;
+}
+} // namespace
+
+ModifierWire modifierWireFor(const scene::MeshPtr& cage, const scene::MeshPtr& result)
+{
+    if (!cage || !result || cage == result || result->numFaces() == 0)
+        return {};
+    struct Built
+    {
+        std::weak_ptr<const geo::Mesh> cage, result;
+        ModifierWire wire;
+    };
+    // Never destroyed: at exit the meshes' owners (extension DLLs among them) may already be unloaded.
+    static auto& cache = *new std::unordered_map<const geo::Mesh*, Built>();
+    if (auto it = cache.find(result.get()); it != cache.end() && it->second.result.lock() == result && it->second.cage.lock() == cage)
+        return it->second.wire;
+    auto surface = renderMeshFor(result);
+    if (!surface)
+        return {};
+    LILA_ZONE();
+    std::erase_if(cache, [](const auto& kv) { return kv.second.result.expired() || kv.second.cage.expired(); });
+    const geo::Mesh& r = *result;
+    const geo::MeshBvh bvh(r);
+    auto real = lineMesh(surface), added = lineMesh(surface);
+
+    // Each cage edge, sampled and laid onto the surface. Samples crowd the ends, where the surface turns around a corner,
+    // and sit a hair off it so the straight pieces between them don't sink under a curve.
+    constexpr int kSamples = 32;
+    std::vector<std::pair<glm::dvec3, glm::dvec3>> segments;
+    double total = 0.0;
+    for (geo::Index e = 0; e < cage->edgeCapacity(); ++e)
+    {
+        if (!cage->edgeValid(e))
+            continue;
+        const glm::dvec3 a = cage->position(cage->edgePoint(e, 0)), b = cage->position(cage->edgePoint(e, 1));
+        glm::dvec3 prev{0.0};
+        for (int i = 0; i <= kSamples; ++i)
+        {
+            geo::BvhClosest hit;
+            const double t = 0.5 - 0.5 * std::cos(std::numbers::pi * double(i) / kSamples);
+            const glm::dvec3 at = glm::mix(a, b, t);
+            glm::dvec3 on = bvh.closestPoint(at, hit) ? hit.point : at;
+            if (const double off = glm::length(at - on); off > 0.0)
+                on += (at - on) * (std::min(off * 0.1, 0.002 * glm::length(b - a)) / off);
+            if (i > 0)
+            {
+                segments.push_back({prev, on});
+                total += glm::length(on - prev);
+            }
+            prev = on;
+        }
+    }
+    for (const auto& [a, b] : segments)
+    {
+        real->edgePoints.push_back(glm::vec3(a));
+        real->edgePoints.push_back(glm::vec3(b));
+    }
+
+    // Result edges lying on those lines are already drawn by them; the rest are the modifiers' own.
+    const double cell = std::max(segments.empty() ? 1.0 : 2.0 * total / double(segments.size()), 1e-6);
+    auto cellOf = [cell](const glm::dvec3& p) {
+        return std::array<int64_t, 3>{int64_t(std::floor(p.x / cell)), int64_t(std::floor(p.y / cell)), int64_t(std::floor(p.z / cell))};
+    };
+    std::map<std::array<int64_t, 3>, std::vector<uint32_t>> grid;
+    for (uint32_t i = 0; i < segments.size(); ++i)
+    {
+        const auto lo = cellOf(glm::min(segments[i].first, segments[i].second)), hi = cellOf(glm::max(segments[i].first, segments[i].second));
+        for (int64_t x = lo[0]; x <= hi[0]; ++x)
+            for (int64_t y = lo[1]; y <= hi[1]; ++y)
+                for (int64_t z = lo[2]; z <= hi[2]; ++z)
+                    grid[{x, y, z}].push_back(i);
+    }
+    auto onLine = [&](const glm::dvec3& p, double tolerance) {
+        const auto c = cellOf(p);
+        for (int64_t x = -1; x <= 1; ++x)
+            for (int64_t y = -1; y <= 1; ++y)
+                for (int64_t z = -1; z <= 1; ++z)
+                    if (auto it = grid.find({c[0] + x, c[1] + y, c[2] + z}); it != grid.end())
+                        for (uint32_t i : it->second)
+                            if (segmentDistance2(p, segments[i].first, segments[i].second) <= tolerance * tolerance)
+                                return true;
+        return false;
+    };
+    for (geo::Index e = 0; e < r.edgeCapacity(); ++e)
+    {
+        if (!r.edgeValid(e))
+            continue;
+        const glm::dvec3 a = r.position(r.edgePoint(e, 0)), b = r.position(r.edgePoint(e, 1));
+        const double tolerance = 0.02 * glm::length(b - a) + 1e-5;
+        if (onLine((a + b) * 0.5, tolerance) && onLine(a, tolerance) && onLine(b, tolerance))
+            continue;
+        added->edgePoints.push_back(glm::vec3(a));
+        added->edgePoints.push_back(glm::vec3(b));
+    }
+    ModifierWire out{real, added};
+    cache[result.get()] = {cage, result, out};
+    return out;
+}
+
+std::shared_ptr<const render::RenderMesh> wirelessMeshFor(const scene::MeshPtr& mesh, bool tangents)
+{
+    // No edge maps onto it, so the mask keeps every triangle and drops every wire line.
+    static const SmoothCage& noEdges = *new SmoothCage();
+    auto masked = maskedRenderMeshFor(mesh, 0, {}, tangents, &noEdges);
+    return masked ? masked->mesh : nullptr;
 }
 
 std::shared_ptr<const render::RenderMesh> cageWireMeshFor(const SmoothCage& smooth, bool tangents)

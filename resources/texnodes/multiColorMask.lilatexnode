@@ -1,0 +1,93 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "multiColorMask",
+  "label": "Multi Color Mask",
+  "category": "Filter",
+  "doc": "Color Mask for up to four colours at once: white wherever the input is near any of the first count.",
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0,
+        0,
+        0,
+        1
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "count",
+      "type": "int",
+      "default": 2,
+      "min": 1,
+      "max": 4
+    },
+    {
+      "id": "color1",
+      "type": "color",
+      "default": [
+        1,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "id": "color2",
+      "type": "color",
+      "default": [
+        0,
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "id": "color3",
+      "type": "color",
+      "default": [
+        0,
+        0,
+        1,
+        1
+      ]
+    },
+    {
+      "id": "color4",
+      "type": "color",
+      "default": [
+        1,
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "id": "tolerance",
+      "type": "float",
+      "default": 0.1,
+      "min": 0,
+      "max": 1.8
+    },
+    {
+      "id": "softness",
+      "type": "float",
+      "default": 0.05,
+      "min": 0,
+      "max": 1
+    }
+  ],
+  "cost": 2,
+  "body": {
+    "out": "float3 c = input.sample(uv).rgb;\nfloat e = max(p.softness, 1e-5);\nfloat m = 1.0 - smoothstep(p.tolerance, p.tolerance + e, length(c - p.color1.rgb));\nif (p.count > 1)\n    m = max(m, 1.0 - smoothstep(p.tolerance, p.tolerance + e, length(c - p.color2.rgb)));\nif (p.count > 2)\n    m = max(m, 1.0 - smoothstep(p.tolerance, p.tolerance + e, length(c - p.color3.rgb)));\nif (p.count > 3)\n    m = max(m, 1.0 - smoothstep(p.tolerance, p.tolerance + e, length(c - p.color4.rgb)));\nreturn m;"
+  }
+}

@@ -18,6 +18,7 @@
 #include "scene/Components.h"
 #include "scene/Graph.h"
 #include "scene/MeshNodes.h"
+#include "scene/NodeBounds.h"
 #include "scene/Modifiers.h"
 
 #include <glm/gtc/matrix_inverse.hpp>
@@ -454,6 +455,14 @@ Index addOrientedFace(geo::Mesh& m, std::vector<Index> pts)
     return m.addFace(pts);
 }
 
+/** A new retopo mesh's drawOffset: enough to clear the reference where it bulges between the new mesh's vertices. */
+double defaultDrawOffset(Graph& g, const Node& reference)
+{
+    g.evaluate();
+    const geo::Bounds b = scene::worldBounds(g, reference.id());
+    return glm::length(b.size()) * 0.002;
+}
+
 /** The retopo mesh, created on demand. With reference=, that mesh's outMesh is connected as its Retopo Draw reference. */
 Node& retopoDrawTarget(const Args& a, const char* cmd, bool create)
 {
@@ -483,6 +492,8 @@ Node& retopoDrawTarget(const Args& a, const char* cmd, bool create)
             for (int attr : {int(MeshNode::kSymmetry), int(MeshNode::kRadialCount), int(MeshNode::kRadialAxis), int(MeshNode::kRadialDirection),
                              int(MeshNode::kRadialMirror), int(MeshNode::kRadialPhase)})
                 g.setValue({n->id(), attr, -1}, ref->value(attr));
+        if (created)
+            g.setValue({n->id(), MeshNode::kDrawOffset, -1}, defaultDrawOffset(g, *ref));
     }
     return *n;
 }

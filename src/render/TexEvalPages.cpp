@@ -23,7 +23,7 @@ bool Evaluator::pagesReady() const
 {
     const State& st = *m;
     std::scoped_lock lock(st.mutex);
-    return st.cur && st.cur->inputs.pages && !st.pending && st.arena.buffer && !st.anyWork() && !st.arenaFresh;
+    return st.cur && st.cur->inputs.pages && !st.pending && st.arena.buffer && !st.anyWork() && !st.arenaFresh && !st.sub.busy();
 }
 
 size_t Evaluator::recordPages(VulkanContext& vk, VkCommandBuffer cmd, std::span<const PageJob> jobs, std::span<const PageLayer> layers,

@@ -29,6 +29,8 @@ struct Request
     /** A channel of the set (baseColor, roughness...), read from its Material Output. */
     std::string channel;
     int size = 128;
+    /** Read the set's paint layers from their buffers (a GPU readback each), and evaluate again when the paint changes. */
+    bool paint = false;
 };
 
 struct Result

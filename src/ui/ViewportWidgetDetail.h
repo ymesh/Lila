@@ -409,6 +409,10 @@ struct ComponentShape
     glm::dmat4 world;
     std::shared_ptr<const SmoothCage> smooth;
     int level = 0;
+    /** For drawing only: points move this many cm toward the camera, matching the mesh's drawOffset. Picking leaves it 0. */
+    double offset = 0.0;
+    glm::dvec3 eye{0.0};
+    std::optional<glm::dvec3> orthoBack; // toward the camera in an orthographic view
 
     ComponentShape(const scene::Node& n, const geo::Mesh& cageMesh, const scene::MeshPtr& cagePtr, const glm::dmat4& w) : cage(cageMesh), world(w)
     {
@@ -432,7 +436,25 @@ struct ComponentShape
         return id < map.size() ? map[id] : geo::kInvalid;
     }
 
-    glm::dvec3 at(const geo::Mesh& m, geo::Index p) const { return glm::dvec3(world * glm::dvec4(m.position(p), 1.0)); }
+    /** Draws the components where the mesh's drawOffset draws its surface, in this view. */
+    void offsetFor(const scene::Node& n, const ViewInfo& view)
+    {
+        offset = scene::drawOffset(n);
+        eye = view.eye;
+        if (view.ortho)
+            orthoBack = glm::dvec3(view.view[0][2], view.view[1][2], view.view[2][2]);
+    }
+
+    glm::dvec3 at(const geo::Mesh& m, geo::Index p) const
+    {
+        const glm::dvec3 w(world * glm::dvec4(m.position(p), 1.0));
+        if (offset <= 0.0)
+            return w;
+        if (orthoBack)
+            return w + *orthoBack * offset;
+        const double dist = glm::length(eye - w);
+        return dist > 0.0 ? w + (eye - w) * (std::min(offset, 0.5 * dist) / dist) : w;
+    }
     glm::dvec3 point(uint32_t p) const { return smooth ? at(*smooth->mesh, smooth->map.points[p]) : at(cage, p); }
     /** A point on the surface along the edge, for occlusion tests. */
     glm::dvec3 edgeAnchor(uint32_t e) const
@@ -444,7 +466,12 @@ struct ComponentShape
     }
     glm::dvec3 faceCentre(uint32_t f) const
     {
-        return smooth ? at(*smooth->mesh, smooth->map.facePoints[f]) : glm::dvec3(world * glm::dvec4(cage.faceCentroid(f), 1.0));
+        if (smooth)
+            return at(*smooth->mesh, smooth->map.facePoints[f]);
+        const glm::dvec3 c(world * glm::dvec4(cage.faceCentroid(f), 1.0));
+        if (offset <= 0.0)
+            return c;
+        return orthoBack ? c + *orthoBack * offset : c + glm::normalize(eye - c) * std::min(offset, 0.5 * glm::length(eye - c));
     }
     /** fn(a, b) for each straight piece of edge e. */
     template <class Fn> void forEachSegment(uint32_t e, Fn&& fn) const

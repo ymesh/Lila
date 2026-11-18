@@ -8,13 +8,17 @@
 #include <lila/Command.h>
 #include <lila/Controls.h>
 #include <lila/Extension.h>
+#include <lila/FileDialog.h>
 #include <lila/Graph.h>
 #include <lila/LevelToolkit.h>
 #include <lila/Log.h>
 #include <lila/Menus.h>
 #include <lila/Panels.h>
+#include <lila/UvToolkit.h>
 
+#include <QClipboard>
 #include <QComboBox>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QImage>
 #include <QLabel>
@@ -429,6 +433,38 @@ void registerUi(ext::Context& ctx)
                        .run = [] { panels::show("trimSheetEditor"); },
                        .doc = "Lay out the current sheet: drag borders to resize strips, split and retype trims, set bevels and tags.",
                        .python = "lila.ui.run_action('trims.editor')"});
+    actions::add(ctx, {.id = "trims.import",
+                       .label = "Import Trim Layout...",
+                       .category = "Trim Sheets",
+                       .run =
+                           [] {
+                               const QString file = fileDialog::getOpenFileName(
+                                   nullptr, "Import Trim Layout", {},
+                                   "Trim layouts (*.png *.tga *.jpg *.exr *.rect *.svg *.json *.txt *.py);;All files (*)");
+                               if (!file.isEmpty())
+                                   run("trimSheetImport", {{"args", json::array({file.toStdString()})}});
+                           },
+                       .doc = "Make a trim sheet from an ID map (one trim per flat colour), ZenUV trims (.json or a trim preset .py), a "
+                              "Valve .rect or an SVG.",
+                       .python = "trimSheetImport('C:/maps/hotspots_id.png')",
+                       .keywords = {"zenuv", "arcbrush", "color id", "colour id", "id map", "hotspot", "rect"}});
+    actions::add(ctx, {.id = "trims.paste",
+                       .label = "Paste Trim Layout",
+                       .category = "Trim Sheets",
+                       .run =
+                           [] {
+                               const QString text = QGuiApplication::clipboard()->text();
+                               if (text.trimmed().isEmpty())
+                               {
+                                   log::write(LogLevel::Warning, "Paste Trim Layout: the clipboard is empty. Copy the trim data first (Arcbrush's "
+                                                                 "copy for ZenUV).");
+                                   return;
+                               }
+                               run("trimSheetImport", {{"text", text.toStdString()}});
+                           },
+                       .doc = "Make a trim sheet from ZenUV trim data on the clipboard, such as Arcbrush's copied trim data.",
+                       .python = "trimSheetImport(text=open('C:/maps/trims.json').read())",
+                       .keywords = {"zenuv", "arcbrush", "clipboard", "hotspot"}});
     actions::add(ctx, {.id = "trims.cycle",
                        .label = "Next Best Trim",
                        .category = "Trim Sheets",
@@ -469,7 +505,8 @@ void registerUi(ext::Context& ctx)
                             .docs = "trim-sheets"});
 
     menus::addItem(ctx, {.id = "trims.menu", .menu = levelToolkit::kMenu, .kind = menus::Kind::Submenu, .label = "Trim Sheets"});
-    const char* order[] = {"trims.create",  "trims.editor",   "trims.bake",      "trims.texture",   "trims.paint",
+    const char* order[] = {"trims.create",  "trims.import",   "trims.paste",     "",
+                           "trims.editor",   "trims.bake",      "trims.texture",   "trims.paint",
                            "",              "trims.generate", "trims.detail",    "trims.detailClear", "",
                            "trims.auto",    "trims.cycle",    "trims.shiftUp",   "trims.shiftDown", "trims.live",
                            "trims.check",   "",               "trims.edges",     "trims.decal",     "trims.cut",
@@ -483,5 +520,19 @@ void registerUi(ext::Context& ctx)
         else
             menus::addItem(ctx, {.id = std::string("trims.menu.") + a, .menu = "Level/Trim Sheets", .action = a});
     }
+
+    // The mapping tools work on uvs, so the UV editor has them too; making and baking sheets stays under Level.
+    const std::vector<uvToolkit::Item> mapping = {{"trims.auto", "wand", "Auto Trim"},     {"trims.cycle", "refresh", "Next Best"},
+                                                  {"trims.shiftUp", "arrow-up", "Shift Up"}, {"trims.shiftDown", "arrow-down", "Shift Down"},
+                                                  {"trims.live", "bolt", "Live Trim"},       {"trims.check", "checklist", "Check Trims"}};
+    uvToolkit::add(ctx, {.id = "trims", .title = "Trim Sheets", .items = mapping, .rare = {"trims.editor", "trims.import", "trims.paste", "trims.export"},
+                         .order = 60});
+    menus::addItem(ctx, {.id = "trims.uvMenu", .menu = "UV", .kind = menus::Kind::Submenu, .label = "Trim Sheets"});
+    for (const uvToolkit::Item& item : mapping)
+        menus::addItem(ctx, {.id = "trims.uvMenu." + item.action, .menu = "UV/Trim Sheets", .action = item.action});
+    menus::addItem(ctx, {.id = "trims.uvMenu.sep", .menu = "UV/Trim Sheets", .kind = menus::Kind::Separator});
+    menus::addItem(ctx, {.id = "trims.uvMenu.editor", .menu = "UV/Trim Sheets", .action = "trims.editor"});
+    menus::addItem(ctx, {.id = "trims.uvMenu.import", .menu = "UV/Trim Sheets", .action = "trims.import"});
+    menus::addItem(ctx, {.id = "trims.uvMenu.paste", .menu = "UV/Trim Sheets", .action = "trims.paste"});
 }
 } // namespace trims

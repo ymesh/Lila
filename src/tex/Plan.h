@@ -86,6 +86,8 @@ struct Pass
      * region of one changes only the same region of the output. Fused passes only.
      */
     std::vector<int> local;
+    /** Of the reads not in local, those read only within this many texels of the pass's own uv (neighbour taps). Fused passes only. */
+    std::map<int, int> reach;
     /** Native: the node type, its parameters' first gU slots by id, and its input buffers by input id. */
     std::string nativeType;
     std::map<std::string, int> paramSlots;

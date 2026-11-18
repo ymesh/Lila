@@ -160,6 +160,7 @@ private:
 
     std::vector<Level> mLevels;
     QString mStatus; // the highlighted action's doc, shown in the main window's status bar
+    std::string mTipAction; // the highlighted action, whose tooltip (with its hotkey) shows once the cursor rests on it
     QPointF mCursor;
     int mSlot = -1;     // highlighted compass slot on the top level
     int mOverflow = -1; // highlighted overflow row

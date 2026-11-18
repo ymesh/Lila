@@ -5,6 +5,7 @@
 #include "ui/Actions.h"
 #include "ui/Arrange.h"
 #include "ui/DocsUi.h"
+#include "ui/FeatureStatus.h"
 #include "ui/Icons.h"
 #include "ui/Shelf.h"
 
@@ -186,6 +187,39 @@ std::string menuPath(QMenu* menu, const std::string& id)
     return parts.join(" > ").toStdString();
 }
 
+namespace
+{
+/** The status every action row directly in a menu shows, or Ready when they differ or there are none. */
+features::Status sharedStatus(const std::vector<const Item*>& items, const std::string& path)
+{
+    features::Status shared = features::Status::Ready;
+    bool any = false;
+    for (const Item* item : items)
+    {
+        if (item->kind != Kind::Action)
+            continue;
+        const features::Status s = featureStatus::rowStatus(item->action, path);
+        if (any && s != shared)
+            return features::Status::Ready;
+        shared = s;
+        any = true;
+    }
+    return shared;
+}
+
+QString statusTip(features::Status s)
+{
+    return s == features::Status::NotReady ? "Not ready for use yet: expect broken tools and lost work. Help > Roadmap shows what is ready."
+                                           : "Usable, with bugs to expect. Help > Roadmap shows what is ready.";
+}
+
+/** "  (in development)", after a row's label. */
+QString statusSuffix(features::Status s)
+{
+    return "  (" + QString(features::label(s)).toLower() + ")";
+}
+} // namespace
+
 QAction* addActionRow(QMenu* menu, const std::string& id)
 {
     const Action* a = actions::find(id);
@@ -193,9 +227,12 @@ QAction* addActionRow(QMenu* menu, const std::string& id)
     qa->setData(QString::fromStdString(id));
     qa->setToolTip(QString::fromStdString(actions::tooltip(id)));
     qa->setIcon(icon(QString::fromStdString(actions::iconFor(id))));
-    if (a)
-        qa->setStatusTip(QString::fromStdString(a->doc));
+    qa->setStatusTip(QString::fromStdString(actions::statusLine(id)));
+    // Hotkeys can be rebound while the menu exists, so the tooltip naming one is refreshed with the check state.
+    menu->setToolTipsVisible(true);
     auto syncCheck = [qa, id] {
+        qa->setToolTip(QString::fromStdString(actions::tooltip(id)));
+        qa->setStatusTip(QString::fromStdString(actions::statusLine(id)));
         const Action* now = actions::find(id);
         qa->setCheckable(now && now->checked);
         if (qa->isCheckable())
@@ -277,7 +314,7 @@ void MenuBuilder::rebuild()
         }
         q->setTitle(QString::fromStdString(m->title));
         live.push_back(m->id);
-        fill(q, m->id, live);
+        fill(q, m->id, live, features::Status::Ready);
         if (!m->docs.empty())
         {
             q->addSeparator()->setProperty(kBuilt, true);
@@ -298,7 +335,7 @@ void MenuBuilder::rebuild()
     Q_EMIT rebuilt();
 }
 
-void MenuBuilder::fill(QMenu* menu, const std::string& path, std::vector<std::string>& live)
+void MenuBuilder::fill(QMenu* menu, const std::string& path, std::vector<std::string>& live, features::Status shownAbove)
 {
     // Rows a submenu's setup added stay; only what the registry put here is rebuilt.
     for (QAction* a : menu->actions())
@@ -311,6 +348,14 @@ void MenuBuilder::fill(QMenu* menu, const std::string& path, std::vector<std::st
     qsizetype before = menu->actions().size();
     std::vector<const Item*> items = itemsIn(path);
     bool sectioned = std::ranges::any_of(items, [](const Item* i) { return i->kind == Kind::Section; });
+    const features::Status shared = sharedStatus(items, path);
+    if (featureStatus::marked(shared) && shared != shownAbove)
+    {
+        QAction* note = menu->addAction(features::label(shared));
+        note->setEnabled(false);
+        note->setToolTip(statusTip(shared));
+        menu->addSeparator();
+    }
     bool lilaBefore = false;
     for (const Item* item : items)
     {
@@ -324,7 +369,17 @@ void MenuBuilder::fill(QMenu* menu, const std::string& path, std::vector<std::st
         lilaBefore = lila && item->kind != Kind::Section;
         switch (item->kind)
         {
-        case Kind::Action: addActionRow(menu, item->action); break;
+        case Kind::Action:
+        {
+            QAction* row = addActionRow(menu, item->action);
+            // Only where the menu's rows differ: a menu whose rows share a status says it once, at the top.
+            if (features::Status s = featureStatus::rowStatus(item->action, path); featureStatus::marked(s) && !featureStatus::marked(shared))
+            {
+                row->setProperty(kStatusSuffix, statusSuffix(s));
+                row->setText(row->text() + statusSuffix(s));
+            }
+            break;
+        }
         case Kind::Separator: menu->addSeparator(); break;
         case Kind::Section: menu->addSection(QString::fromStdString(item->label)); break;
         case Kind::Custom:
@@ -345,7 +400,7 @@ void MenuBuilder::fill(QMenu* menu, const std::string& path, std::vector<std::st
             }
             menu->addMenu(q);
             live.push_back(sub);
-            fill(q, sub, live);
+            fill(q, sub, live, featureStatus::marked(shared) ? shared : features::Status::Ready);
             break;
         }
         }

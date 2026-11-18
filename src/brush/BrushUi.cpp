@@ -10,6 +10,7 @@
 #include "ui/FileDialog.h"
 #include "ui/FlagFields.h"
 #include "ui/ImagePicker.h"
+#include "ui/PanelDefaults.h"
 #include "ui/SpinScrub.h"
 
 #include "brush/Alphas.h"
@@ -44,6 +45,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <filesystem>
 #include <map>
 
@@ -55,6 +57,7 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr double kMinRadius = 2.0, kMaxRadius = 2000.0;
 constexpr const char* kOpenPref = "/brush/strokeOptionsOpen";
 constexpr const char* kPressureOpenPref = "/brush/pressureOptionsOpen";
+constexpr const char* kTiltOpenPref = "/brush/tiltOptionsOpen";
 
 bool isViewport(QWidget* w) { return w && w->inherits("lila::ui::ViewportWidget"); }
 
@@ -82,8 +85,11 @@ public:
         {
         case QEvent::TabletPress:
         case QEvent::TabletMove:
-            mControls->tablet(static_cast<QTabletEvent*>(e)->pressure());
+        {
+            const auto* t = static_cast<QTabletEvent*>(e);
+            mControls->tablet(t->pressure(), t->xTilt(), t->yTilt(), t->rotation());
             return false;
+        }
         case QEvent::ApplicationDeactivate:
             mControls->mArmed = Adjust::None;
             mControls->mArmedKey = 0;
@@ -197,11 +203,21 @@ void BrushControls::tablet(double pressure)
     mPressureAt = nowMs();
 }
 
+void BrushControls::tablet(double pressure, double xTilt, double yTilt, double rotation)
+{
+    tablet(pressure);
+    mTilt = std::clamp(std::hypot(xTilt, yTilt) / 60.0, 0.0, 1.0);
+    // Qt's y tilt is positive toward the user, down the screen; angles here are counterclockwise.
+    mTiltDirection = std::atan2(-yTilt, xTilt);
+    mRotation = rotation * std::numbers::pi / 180.0;
+}
+
 double BrushControls::pressure() const { return mPressureAt && nowMs() - mPressureAt < 100 ? mPressure : 1.0; }
 
 StrokeInput BrushControls::input(const QMouseEvent* e) const
 {
-    return {glm::dvec2(e->position().x(), e->position().y()), pressure()};
+    const bool pen = mPressureAt && nowMs() - mPressureAt < 100;
+    return {glm::dvec2(e->position().x(), e->position().y()), pressure(), pen ? mTilt : 0.0, pen ? mTiltDirection : 0.0, pen ? mRotation : 0.0};
 }
 
 bool BrushControls::mousePress(const QMouseEvent* e)
@@ -463,8 +479,12 @@ const lila::ui::imagePicker::Library* alphaLibrary()
     return ip::library("alphas");
 }
 
-/** A header button over a body that it shows and hides, collapsed by default; the state is kept in the pref. */
-QWidget* collapsible(QWidget* parent, QVBoxLayout* into, const char* title, const char* tip, const char* pref)
+/**
+ * A header button over a body that it shows and hides, collapsed by default; the state is kept in the pref. Right-click
+ * on the header resets the body's fields, plus whatever resetExtra resets.
+ */
+QWidget* collapsible(QWidget* parent, QVBoxLayout* into, const char* title, const char* tip, const char* pref,
+                     std::function<void()> resetExtra = {})
 {
     auto* header = new QToolButton(parent);
     header->setText(title);
@@ -483,6 +503,7 @@ QWidget* collapsible(QWidget* parent, QVBoxLayout* into, const char* title, cons
         header->setIcon(lila::ui::icon(show ? "chevron-down" : "chevron-right"));
         PrefStore::get().set("general", pref, show);
     });
+    lila::ui::panelDefaults::addResetMenu(header, body, std::move(resetExtra));
     return body;
 }
 } // namespace
@@ -493,7 +514,7 @@ StrokeOptions::StrokeOptions(QWidget* parent, SettingsRef settings, std::functio
     auto* col = new QVBoxLayout(this);
     col->setContentsMargins(0, 0, 0, 0);
     mBody = collapsible(this, col, "Stroke", "Stabiliser, line strokes, jitter, tip shape, radial symmetry and pen pressure, shared by every brush",
-                        kOpenPref);
+                        kOpenPref, [this] { mResetAlpha(); });
     auto* bodyCol = new QVBoxLayout(mBody);
     bodyCol->setContentsMargins(8, 0, 0, 0);
     auto* form = new QFormLayout;
@@ -534,10 +555,11 @@ StrokeOptions::StrokeOptions(QWidget* parent, SettingsRef settings, std::functio
     addNumber(numberField("flow", "Flow", false, 0.0, 1.0, 0.05, "How much each dab adds; strokes that build up do so more slowly below 1"),
               &BrushSettings::flow);
 
-    add(choiceField("mode", "Stroke", {{"freehand", "Freehand"}, {"line", "Line"}, {"curve", "Curve"}},
-                    "Line: drag from where the line starts to where it ends. Curve: draw the path freely and it is smoothed into a clean curve. Both lay their dabs on release"),
-        [](const BrushSettings& s) { return json(s.mode == StrokeMode::Line ? "line" : s.mode == StrokeMode::Curve ? "curve" : "freehand"); },
-        [](BrushSettings& s, const json& v) { s.mode = v == "line" ? StrokeMode::Line : v == "curve" ? StrokeMode::Curve : StrokeMode::Freehand; });
+    add(choiceField("mode", "Stroke", {{"freehand", "Freehand"}, {"line", "Line"}, {"curve", "Curve"}, {"airbrush", "Airbrush"}, {"anchored", "Anchored"}, {"dragDot", "Drag Dot"}},
+                    "Line: drag from start to end. Curve: draw freely, smoothed on release. Airbrush: builds up while held. Anchored: drag out one dab's size. Drag Dot: one dab, placed on release"),
+        [](const BrushSettings& s) { return json(strokeModeName(s.mode)); },
+        [](BrushSettings& s, const json& v) { s.mode = strokeModeFromName(v.is_string() ? v.get<std::string>() : std::string()); });
+    addNumber(numberField("airRate", "Air rate", false, 1.0, 200.0, 1.0, "Airbrush: dabs a second while the button is held"), &BrushSettings::airRate);
     addNumber(numberField("lazyRadius", "Lazy radius", false, 0.0, 500.0, 5.0,
                           "Lazy mouse: the brush trails the cursor on a string this long, so strokes come out steady", " px"),
               &BrushSettings::lazyRadius);
@@ -587,7 +609,8 @@ StrokeOptions::StrokeOptions(QWidget* parent, SettingsRef settings, std::functio
         mAlpha->setValue(path);
         edited();
     };
-    lila::ui::onMiddleClickReset(alphaLabel, [setAlpha] { setAlpha({}); }, "none", mAlpha);
+    mResetAlpha = [setAlpha] { setAlpha({}); };
+    lila::ui::onMiddleClickReset(alphaLabel, mResetAlpha, "none", mAlpha);
     connect(mAlpha, &lila::ui::ImagePicker::chosen, this, [setAlpha](const QString& v) { setAlpha(v.toStdString()); });
     mSync.push_back([this] { mAlpha->setValue(mSettings().alphaPath); });
 
@@ -620,6 +643,25 @@ StrokeOptions::StrokeOptions(QWidget* parent, SettingsRef settings, std::functio
     add(numberField("pressureCurve", "Curve", false, 0.1, 5.0, 0.1, "Below 1 a light touch already reaches far, above 1 it takes a firm press"),
         [](const BrushSettings& s) { return json(s.pressureSize.exponent); },
         [](BrushSettings& s, const json& v) { s.pressureSize.exponent = s.pressureOpacity.exponent = s.pressureFlow.exponent = numberOf(v); });
+
+    QWidget* tilt = collapsible(mBody, bodyCol, "Tilt", "How leaning and turning the pen shape the tip", kTiltOpenPref);
+    target = new QFormLayout(tilt);
+    target->setContentsMargins(8, 0, 0, 0);
+    const char* tiltNames[] = {"Size", "Opacity", "Roundness"};
+    PressureCurve BrushSettings::* tiltCurves[] = {&BrushSettings::tiltSize, &BrushSettings::tiltOpacity, &BrushSettings::tiltRoundness};
+    for (int k = 0; k < 3; ++k)
+    {
+        PressureCurve BrushSettings::* c = tiltCurves[k];
+        add(checkField("tilt", tiltNames[k], "Leaning the pen scales this"), [c](const BrushSettings& s) { return json((s.*c).enabled); },
+            [c](BrushSettings& s, const json& v) { (s.*c).enabled = numberOf(v) != 0.0; });
+    }
+    add(numberField("tiltFloor", "Minimum", false, 0.0, 1.0, 0.05, "What an upright pen gives"),
+        [](const BrushSettings& s) { return json(s.tiltSize.floor); },
+        [](BrushSettings& s, const json& v) { s.tiltSize.floor = s.tiltOpacity.floor = s.tiltRoundness.floor = numberOf(v); });
+    add(checkField("tiltAngle", "Angle", "The tip turns toward where the pen leans"), [](const BrushSettings& s) { return json(s.tiltAngle); },
+        [](BrushSettings& s, const json& v) { s.tiltAngle = numberOf(v) != 0.0; });
+    add(checkField("penRotation", "Rotation", "The tip turns with the pen's barrel (art pens)"), [](const BrushSettings& s) { return json(s.rotationAngle); },
+        [](BrushSettings& s, const json& v) { s.rotationAngle = numberOf(v) != 0.0; });
     sync();
 }
 

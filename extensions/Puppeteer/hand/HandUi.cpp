@@ -9,6 +9,7 @@
 
 #include <lila/Controls.h>
 #include <lila/Events.h>
+#include <lila/ExtensionScope.h>
 #include <lila/Icons.h>
 #include <lila/Prefs.h>
 #include <lila/UI.h>
@@ -494,7 +495,7 @@ json padState()
 
 void padPoseMenu(QPoint global, const std::string& hand)
 {
-    QTimer::singleShot(0, [global, hand] {
+    QTimer::singleShot(0, lila::ui::scope("Puppeteer"), [global, hand] {
         QMenu menu;
         menu.addSection("Hand Pose");
         int shown = 0;

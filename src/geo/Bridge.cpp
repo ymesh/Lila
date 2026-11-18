@@ -859,6 +859,22 @@ double borderLength(const Mesh& m, const std::vector<Index>& chain)
     return len;
 }
 
+/** Farthest any point of the chain lies from the straight line between its ends. */
+double endBulge(const Mesh& m, const std::vector<Index>& chain)
+{
+    const glm::dvec3 a = m.position(chain.front()), b = m.position(chain.back());
+    const glm::dvec3 ab = b - a;
+    const double len2 = glm::dot(ab, ab);
+    double worst = 0.0;
+    for (Index p : chain)
+    {
+        const glm::dvec3 q = m.position(p);
+        const double t = len2 > 1e-24 ? std::clamp(glm::dot(q - a, ab) / len2, 0.0, 1.0) : 0.0;
+        worst = std::max(worst, glm::distance(q, a + t * ab));
+    }
+    return worst;
+}
+
 /** Attribute sources of a strip point: corners and points with weights. */
 struct Sources
 {
@@ -1169,6 +1185,11 @@ void PairBridge::pickRows()
     std::vector<Index> endChain[2], endEdges[2];
     if (!mClosed)
     {
+        double sideLen[2] = {0.0, 0.0};
+        for (int s = 0; s < 2; ++s)
+            for (Index e : (s ? mS1 : mS0).edges)
+                sideLen[s] += mMesh.edgeLength(e);
+        const double shortSide = std::min(sideLen[0], sideLen[1]);
         std::unordered_set<Index> stop(mS0.pts.begin(), mS0.pts.end());
         stop.insert(mS1.pts.begin(), mS1.pts.end());
         for (int e = 0; e < 2; ++e)
@@ -1185,7 +1206,9 @@ void PairBridge::pickRows()
             const Index skip = mS0.edges[e ? mS0.edges.size() - 1 : 0];
             endChain[e] = endBorder(mMesh, from, skip, to, stop, endEdges[e]);
             // A border that only reaches the other end by going round a hole is not this gap's end.
-            if (endChain[e].size() >= 2 && borderLength(mMesh, endChain[e]) > 2.0 * glm::distance(mMesh.position(from), mMesh.position(to)))
+            // Nor is one bulging farther from the straight end than the sides are long (two edges across a round hole).
+            if (endChain[e].size() >= 2 && (borderLength(mMesh, endChain[e]) > 2.0 * glm::distance(mMesh.position(from), mMesh.position(to)) ||
+                                            endBulge(mMesh, endChain[e]) > shortSide))
             {
                 endChain[e].clear();
                 endEdges[e].clear();

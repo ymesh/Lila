@@ -103,7 +103,8 @@ QString fileId(const QString& name)
 {
     static const std::pair<const char*, const char*> kIds[] = {
         {"Qt 6", "qtbase"}, {"Eigen", "eigen3"}, {"oneTBB", "tbb"}, {"hwloc", "hwloc"}, {"Alembic", "alembic"}, {"OpenUSD", "usd"},
-        {"Draco", "draco"}, {"Imath", "imath"}, {"Manifold", "manifold"}, {"Clipper2", "clipper2"}, {"Slang", "shader-slang"},
+        {"Draco", "draco"}, {"Imath", "imath"}, {"OpenColorIO", "opencolorio"}, {"Expat", "expat"}, {"yaml-cpp", "yaml-cpp"},
+        {"pystring", "pystring"}, {"minizip-ng", "minizip-ng"}, {"Manifold", "manifold"}, {"Clipper2", "clipper2"}, {"Slang", "shader-slang"},
         {"Vulkan-Headers", "vulkan-headers"}, {"Vulkan Memory Allocator", "vulkan-memory-allocator"}, {"volk", "volk"},
         {"meshoptimizer", "meshoptimizer"}, {"Jolt", "joltphysics"}, {"GLM", "glm"}, {"nlohmann", "nlohmann-json"},
         {"cpp-httplib", "cpp-httplib"}, {"Brotli", "brotli"}, {"cgltf", "cgltf"}, {"libwebp", "libwebp"}, {"Zstandard", "zstd"},

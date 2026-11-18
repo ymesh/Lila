@@ -34,7 +34,7 @@ scene::Node& setArg(const json& args)
     return *n;
 }
 
-json meshesUsing(scene::Graph& g, const std::string& slot)
+json meshesUsing(scene::Graph& g, const std::vector<std::string>& slots)
 {
     json out = json::array();
     for (scene::NodeId id : g.nodes())
@@ -44,8 +44,11 @@ json meshesUsing(scene::Graph& g, const std::string& slot)
             continue;
         if (const scene::MeshPtr& m = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh))
             for (const auto& [s, count] : scene::materials::slotUsage(*m))
-                if (s == slot && count > 0)
+                if (count > 0 && std::ranges::find(slots, s) != slots.end())
+                {
                     out.push_back(n->path());
+                    break;
+                }
     }
     return out;
 }
@@ -57,13 +60,14 @@ json describeTextureSet(scene::Node& set)
     g.evaluate();
     const tex::SetSettings s = tex::readSettings(set);
     const tex::Graph graph = tex::readGraph(set);
-    const std::string slot = s.material.empty() ? set.name() : s.material;
+    const std::vector<std::string> users = tex::materialsUsing(g, set.name());
+    const std::string slot = users.empty() ? std::string() : users.front();
     json channels = json::array();
     for (const tex::Channel& c : s.channels)
         channels.push_back({{"name", c.name}, {"type", tex::portTypeName(c.type)}, {"bits", c.bits}});
     json out = {{"set", set.name()},
-                {"slot", slot},
-                {"meshes", meshesUsing(g, slot)},
+                {"materials", users},
+                {"meshes", meshesUsing(g, users)},
                 {"channels", channels},
                 {"settings", s.toJson()}};
     if (scene::Node* mat = scene::materials::find(g, slot))
@@ -137,7 +141,7 @@ void registerTextureTools()
 
     s.addTool({
         .name = "describe_texture_set",
-        .description = "A texture set as JSON: its slot and the meshes using it, channels and settings, mode (layers, or graph when edited as "
+        .description = "A texture set as JSON: the materials using it and their meshes, channels and settings, mode (layers, or graph when edited as "
                        "nodes), the layer stack bottom first (each layer's kind, channels with mode and opacity, material values, masks), "
                        "bindings (mesh maps the graph reads, which the bake project doesn't make yet, each generator mask's sources) and "
                        "paint layers (images, stroke counts). Edit with run_command tex* commands (texAddLayer, texApplySmartMaterial, "

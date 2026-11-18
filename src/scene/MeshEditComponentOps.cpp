@@ -342,7 +342,7 @@ void registerMeshEditComponentCommands()
     ops::registerCommand({
         .name = "polyMerge",
         .doc = "Weld selected vertices closer than a distance (all of a mesh's points if it has no component selection). "
-               "Exactly two selected vertices weld whatever the distance.",
+               "Exactly two selected vertices weld at their centre whatever the distance.",
         .flags = {{"distance", "", T::Float, 0.01, "Weld distance, cm.", {}, {}, 0.0}, {"average", "", T::Bool, false, "Move merged points to their average."}},
         .run = [](const Args& a) -> json {
             const bool pair = components::mode() == K::Vertex;
@@ -351,8 +351,10 @@ void registerMeshEditComponentCommands()
                 // Just past the pair's own gap, so a mirrored pair welds too without reaching further. A symmetric
                 // selection is the pair once per side.
                 const Ids one = s && sel.size() > 2 ? s->wedgeGroups(sel).front() : sel;
-                if (pair && one.size() == 2 && m.pointValid(one[0]) && m.pointValid(one[1]))
+                if (pair && one.size() == 2 && m.pointValid(one[0]) && m.pointValid(one[1])) {
                     o.distance = std::max(o.distance, glm::distance(m.position(one[0]), m.position(one[1])) * 1.001 + 1e-6);
+                    o.average = true;
+                }
                 return points(geo::mergeByDistance(m, sel, o));
             }, true);
         },
@@ -612,10 +614,15 @@ void registerMeshEditComponentCommands()
         .name = "polyGridFill",
         .doc = "Rebuild triangle fans and other patches as a quad grid inside a ring of quads: select the fans' centre vertices "
                "or the faces. With edges selected, fills the holes they border the same way.",
-        .flags = {{"gridSize", "", T::Float, 0.4, "The grid's size against the hole; 1 grids right to the border with no ring.", {}, {}, 0.05, 1.0},
+        .flags = {{"style", "", T::String, "grid",
+                   "grid: one ring of quads round a grid. radial: rings following the border inward to a pole of kite quads, dense rings halving "
+                   "their spokes as they shrink. Borders under 6 points take grid.",
+                   {"grid", "radial"}},
+                  {"gridSize", "", T::Float, 0.4, "The grid's size against the hole; 1 grids right to the border with no ring. With radial, the pole's size: smaller adds rings.", {}, {}, 0.05, 1.0},
                   {"rotate", "", T::Int, 0, "Steps the grid's corners round the border."}},
         .run = [](const Args& a) -> json {
             geo::GridFillOptions o;
+            o.style = a.get<std::string>("style") == "radial" ? geo::GridFillOptions::Style::Radial : geo::GridFillOptions::Style::Grid;
             o.gridSize = std::clamp(a.get<double>("gridSize"), 0.05, 1.0);
             o.rotate = a.get<int>("rotate");
             const K mode = components::mode();

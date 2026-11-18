@@ -10,6 +10,7 @@
 #include <lila/Anim.h>
 #include <lila/Command.h>
 #include <lila/Events.h>
+#include <lila/ExtensionScope.h>
 #include <lila/Graph.h>
 #include <lila/GraphModel.h>
 #include <lila/Log.h>
@@ -1269,7 +1270,7 @@ void CurveOverlay::dragged(QMouseEvent* e, const ViewInfo& view)
             QMouseEvent up(QEvent::MouseButtonRelease, pos, e->globalPosition(), Qt::RightButton, Qt::NoButton, e->modifiers());
             viewportHooks::releaseDrag(&up, view);
             const QPoint global = (e->globalPosition() - total).toPoint();
-            QTimer::singleShot(0, [global] { popupTangentMarkingMenu(overlay().model, global, Qt::RightButton); });
+            QTimer::singleShot(0, lila::ui::scope("Puppeteer"), [global] { popupTangentMarkingMenu(overlay().model, global, Qt::RightButton); });
             return;
         }
         drag = Drag::Scale;
@@ -1411,7 +1412,7 @@ void CurveOverlay::cancelDrag()
 
 void CurveOverlay::showTangentMenu(QPoint global)
 {
-    QTimer::singleShot(0, [global] {
+    QTimer::singleShot(0, lila::ui::scope("Puppeteer"), [global] {
         QMenu menu;
         menu.addSection("Tangents");
         fillTangentMenu(&menu, overlay().model);

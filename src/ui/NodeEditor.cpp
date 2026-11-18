@@ -454,7 +454,15 @@ NodeEditor::NodeEditor(QWidget* parent, const std::string& backend) : QWidget(pa
     mRefresh = new QTimer(this);
     mRefresh->setSingleShot(true);
     mRefresh->setInterval(0);
-    connect(mRefresh, &QTimer::timeout, this, [this] { refresh(std::exchange(mPanelDirty, false)); });
+    connect(mRefresh, &QTimer::timeout, this, [this] {
+        // A hidden editor (a tab behind another) catches up when it shows: paint strokes change the graph's set each time.
+        if (!isVisible())
+        {
+            mStaleHidden = true;
+            return;
+        }
+        refresh(std::exchange(mPanelDirty, false));
+    });
 
     setProperty("hotkeyContext", "nodeEditor");
     deletion::claim(this, [this] { deleteSelected(); });
@@ -463,10 +471,11 @@ NodeEditor::NodeEditor(QWidget* parent, const std::string& backend) : QWidget(pa
     mCanvas->onFocused = [this] { lastFocused() = this; };
     mCanvas->onOpenGroup = [this](const std::string& g) {
         if (mBackend->hasGroup(scene::Graph::current(), g))
-            setGroup(qs(g));
+            enterGroup(qs(g));
         else
             showError("The group " + qs(g) + " isn't in this scene (only its embedded copy is).");
     };
+    mCanvas->onBack = [this] { openParentGroup(); };
     mCanvas->onViewNode = [this](const std::string& n) { viewNode(n); };
     mCanvas->onContextMenu = [this](QPoint global) { showCanvasMenu(global); };
     mCanvas->onFilesDropped = [this](const QStringList& files) { importGroups(files); };
@@ -577,6 +586,11 @@ void NodeEditor::buildToolbar()
     auto* groupLabel = new QLabel(b.groupNoun(), mBar);
     groupLabel->setForegroundRole(QPalette::PlaceholderText);
     bar->addWidget(groupLabel);
+    mPathBar = new QWidget(mBar);
+    auto* pathLay = new QHBoxLayout(mPathBar);
+    pathLay->setContentsMargins(4, 0, 0, 0);
+    pathLay->setSpacing(0);
+    bar->addWidget(mPathBar);
     bar->addWidget(mGroups);
     connect(mGroups, &QComboBox::currentTextChanged, this, [this](const QString& t) {
         if (!mRefreshing && t != mGroup)
@@ -606,7 +620,7 @@ void NodeEditor::buildToolbar()
         bar->addWidget(saveBtn);
     }
     bool files = !b.fileSuffixes().empty();
-    if (files && (b.supports("ExportGroup") || b.supports("ImportGroup")))
+    if (b.canRenameGroup() || b.canDeleteGroup() || (files && (b.supports("ExportGroup") || b.supports("ImportGroup"))))
     {
         auto* more = new QToolButton(mBar);
         more->setIcon(icon("dots"));
@@ -615,11 +629,34 @@ void NodeEditor::buildToolbar()
         controls::setRole(more, "overflow");
         auto* menu = new QMenu(more);
         menu->setToolTipsVisible(true);
-        const QString suffix = qs(b.fileSuffixes().front());
-        if (b.supports("ExportGroup"))
+        if (b.canRenameGroup() || b.canDeleteGroup())
+        {
+            std::vector<QAction*> needGroup;
+            if (b.canRenameGroup())
+            {
+                needGroup.push_back(menu->addAction(icon("pencil"), "Rename " + b.groupNoun(), this, [this] { startGroupRename(); }));
+                needGroup.back()->setToolTip("Rename this " + b.groupNoun().toLower() + " in place; Enter keeps it, Esc cancels");
+            }
+            if (b.canDeleteGroup())
+            {
+                needGroup.push_back(menu->addAction(icon("trash"), "Delete " + b.groupNoun(), this, [this] {
+                    if (!mGroup.isEmpty())
+                        mBackend->deleteGroup(mGroup.toStdString());
+                }));
+                needGroup.back()->setToolTip("Delete this " + b.groupNoun().toLower() + "; Ctrl+Z brings it back");
+            }
+            connect(menu, &QMenu::aboutToShow, menu, [this, needGroup] {
+                for (QAction* a : needGroup)
+                    a->setEnabled(!mGroup.isEmpty());
+            });
+            if (files)
+                menu->addSeparator();
+        }
+        const QString suffix = files ? qs(b.fileSuffixes().front()) : QString();
+        if (files && b.supports("ExportGroup"))
             menu->addAction(icon("file-export"), "Export Group...", this, [this] { exportGroup(); })
                 ->setToolTip("Export this group (and the groups nested in it) to a ." + suffix + " file to share");
-        if (b.supports("ImportGroup"))
+        if (files && b.supports("ImportGroup"))
             menu->addAction(icon("file-import"), "Import Groups...", this, [this] {
                     QStringList patterns;
                     for (const std::string& ext : mBackend->fileSuffixes())
@@ -670,6 +707,7 @@ bool NodeEditor::setBackend(const std::string& id)
         return true;
     mBackend = std::move(next);
     mCanvas->backend = mBackend.get();
+    mBuiltStamp.reset();
     mGroup.clear();
     mOwner.clear();
     mSelectedNode.clear();
@@ -695,8 +733,17 @@ NodeEditor::~NodeEditor()
 
 json NodeEditor::run(std::string_view verb, const json& call) const { return runVerb(*mBackend, verb, call); }
 
+void NodeEditor::retracePath(const QString& name)
+{
+    if (auto it = std::find(mPath.begin(), mPath.end(), name); it != mPath.end())
+        mPath.erase(it, mPath.end());
+    else if (name != mGroup)
+        mPath.clear();
+}
+
 void NodeEditor::setGroup(const QString& name)
 {
+    retracePath(name);
     mGroup = name;
     mSelectedNode.clear();
     refresh();
@@ -704,6 +751,7 @@ void NodeEditor::setGroup(const QString& name)
 
 void NodeEditor::showNode(const QString& group, const std::string& node)
 {
+    retracePath(group);
     mGroup = group;
     mSelectNext = {node};
     mSelectedNode = qs(node);
@@ -935,10 +983,106 @@ void NodeEditor::openSelectedGroup()
                 {
                     std::string g = d["values"].value("group", "");
                     if (mBackend->hasGroup(scene::Graph::current(), g))
-                        setGroup(qs(g));
+                        enterGroup(qs(g));
                     return;
                 }
         }
+}
+
+namespace
+{
+/** The node in a GroupInfo definition that runs child, or empty. */
+std::string nodeRunning(const GraphBackend& b, const json& info, const std::string& child)
+{
+    if (!info.is_object())
+        return {};
+    for (const json& d : info["definition"].value("nodes", json::array()))
+        if (b.runsSubgroup(d.value("type", "")) && d.contains("values") && d["values"].value("group", "") == child)
+            return d.value("name", "");
+    return {};
+}
+} // namespace
+
+void NodeEditor::enterGroup(const QString& name)
+{
+    if (name == mGroup || std::find(mPath.begin(), mPath.end(), name) != mPath.end())
+    {
+        setGroup(name);
+        return;
+    }
+    if (!mGroup.isEmpty())
+        mPath.push_back(mGroup);
+    mGroup = name;
+    mSelectedNode.clear();
+    refresh();
+}
+
+QString NodeEditor::parentGroup() const
+{
+    if (!mPath.empty())
+        return mPath.back();
+    if (mGroup.isEmpty())
+        return {};
+    const std::string child = mGroup.toStdString();
+    for (const std::string& g : mBackend->groupNames(scene::Graph::current()))
+        if (g != child && !nodeRunning(*mBackend, run("GroupInfo", args({g})), child).empty())
+            return qs(g);
+    return {};
+}
+
+void NodeEditor::openParentGroup()
+{
+    QString parent = parentGroup();
+    if (parent.isEmpty())
+        return;
+    std::string node = nodeRunning(*mBackend, run("GroupInfo", args({parent.toStdString()})), mGroup.toStdString());
+    if (node.empty())
+        setGroup(parent);
+    else
+        showNode(parent, node);
+}
+
+void NodeEditor::rebuildPathBar()
+{
+    if (!mPathBar)
+        return;
+    QLayout* lay = mPathBar->layout();
+    while (QLayoutItem* item = lay->takeAt(0))
+    {
+        delete item->widget();
+        delete item;
+    }
+    QString back = Hotkeys::get().keyFor("nodeEditor.parentGroup");
+    for (size_t i = 0; i < mPath.size(); ++i)
+    {
+        auto* b = new QToolButton(mPathBar);
+        b->setText(mPath[i]);
+        b->setAutoRaise(true);
+        b->setCursor(Qt::PointingHandCursor);
+        b->setToolTip(i + 1 == mPath.size() && !back.isEmpty() ? "Parent Group  (" + back + ")" : "Open " + mPath[i]);
+        const QString target = mPath[i];
+        connect(b, &QToolButton::clicked, this, [this, target] { setGroup(target); });
+        lay->addWidget(b);
+        auto* sep = new QLabel(mPathBar);
+        sep->setPixmap(icon("chevron-right").pixmap(12, 12));
+        lay->addWidget(sep);
+    }
+    mPathBar->setVisible(!mPath.empty());
+}
+
+void NodeEditor::startGroupRename()
+{
+    if (mGroup.isEmpty() || !mBackend->canRenameGroup())
+        return;
+    controls::editInPlace(mGroups, mGroup, [this, from = mGroup](const QString& to) {
+        std::string renamed = mBackend->renameGroup(from.toStdString(), to.toStdString());
+        if (renamed.empty())
+            return;
+        // The rename's own refresh may already have dropped the old name and moved to another group.
+        std::replace(mPath.begin(), mPath.end(), from, qs(renamed));
+        mGroup = qs(renamed);
+        refresh(true);
+    });
 }
 
 void NodeEditor::exportGroup()
@@ -1001,6 +1145,13 @@ void NodeEditor::showError(const QString& message)
     QToolTip::showText(QCursor::pos(), message, mCanvas, QRect(), 8000);
 }
 
+void NodeEditor::showEvent(QShowEvent* e)
+{
+    QWidget::showEvent(e);
+    if (std::exchange(mStaleHidden, false))
+        scheduleRefresh();
+}
+
 void NodeEditor::scheduleRefresh(bool panel)
 {
     mPanelDirty |= panel;
@@ -1032,10 +1183,11 @@ nlohmann::json NodeEditor::shownValues() const
     std::string owner = ownerInView();
     if (owner.empty() || mGroup.isEmpty())
         return out;
-    json info = run("GroupInfo", args({mGroup.toStdString()}));
+    scene::Graph& g = scene::Graph::current();
+    const bool cached = mBuiltStamp && mGroup == mBuiltGroup && mBackend->groupStamp(g, mGroup.toStdString()) == mBuiltStamp;
+    json info = cached ? mBuiltInfo : run("GroupInfo", args({mGroup.toStdString()}));
     if (!info.is_object() || !info.contains("definition"))
         return out;
-    scene::Graph& g = scene::Graph::current();
     for (const json& in : info["definition"].value("inputs", json::array()))
         if (std::string plug = owner + "." + in.value("name", ""); hasPlug(plug))
             out[plug] = scene::toJson(g.value(g.plug(plug)));
@@ -1081,8 +1233,13 @@ void NodeEditor::refreshGroups()
     if (mGroup.isEmpty() && !names.empty())
         mGroup = qs(names.front());
     if (std::find(names.begin(), names.end(), mGroup.toStdString()) == names.end())
+    {
         mGroup = names.empty() ? QString() : qs(names.front());
+        mPath.clear();
+    }
     mGroups->setCurrentText(mGroup);
+    std::erase_if(mPath, [&names](const QString& p) { return std::find(names.begin(), names.end(), p.toStdString()) == names.end(); });
+    rebuildPathBar();
     mRefreshing = false;
     if (mGroup != mAnnouncedGroup)
     {
@@ -1100,6 +1257,15 @@ void NodeEditor::refresh(bool panel)
 
     refreshGroups();
     refreshSendButton();
+    std::optional<size_t> stamp = mGroup.isEmpty() ? std::nullopt : mBackend->groupStamp(scene::Graph::current(), mGroup.toStdString());
+    if (stamp && stamp == mBuiltStamp && mGroup == mBuiltGroup && mOwner == mBuiltOwner && mSelectNext.empty() &&
+        qs(mCanvas->group()) == mGroup)
+    {
+        if (panel && shownValues() != mShownValues)
+            rebuildSidePanel();
+        mCanvas->refreshThumbs();
+        return;
+    }
     std::set<std::string> selected = std::move(mSelectNext);
     mSelectNext.clear();
     // Edits rebuild the canvas; what was selected stays selected.
@@ -1109,6 +1275,10 @@ void NodeEditor::refresh(bool panel)
     if (selected.empty() && !mSelectedNode.isEmpty())
         selected.insert(mSelectedNode.toStdString());
     json info = mGroup.isEmpty() ? json() : run("GroupInfo", args({mGroup.toStdString()}));
+    mBuiltStamp = stamp;
+    mBuiltGroup = mGroup;
+    mBuiltOwner = mOwner;
+    mBuiltInfo = stamp ? info : json();
     mCanvas->build(mGroup.toStdString(), info, selected);
     if (panel)
         rebuildSidePanel();
@@ -1537,6 +1707,17 @@ void NodeEditor::showCanvasMenu(QPoint global)
     for (const char* id : {"nodeEditor.addNode", "nodeEditor.duplicate", "nodeEditor.copy", "nodeEditor.paste", "nodeEditor.delete"})
         item(&menu, id);
     menu.addSeparator();
+    std::vector<std::string> selected = mCanvas->selectedNames();
+    bool groupNode = std::any_of(selected.begin(), selected.end(), [this](const std::string& n) { return mBackend->runsSubgroup(mCanvas->typeOf(n)); });
+    if (groupNode)
+        item(&menu, "nodeEditor.openGroup");
+    if (!parentGroup().isEmpty())
+        item(&menu, "nodeEditor.parentGroup");
+    if (!selected.empty())
+        item(&menu, "nodeEditor.groupNodes");
+    if (groupNode)
+        item(&menu, "nodeEditor.ungroup");
+    menu.addSeparator();
     QMenu* arrange = menu.addMenu("Arrange");
     for (const char* id : {"nodeEditor.alignLeft", "nodeEditor.alignCenter", "nodeEditor.alignRight", "nodeEditor.alignTop", "nodeEditor.alignMiddle",
                            "nodeEditor.alignBottom", "nodeEditor.distributeHorizontal", "nodeEditor.distributeVertical", "nodeEditor.grabSpacing", "nodeEditor.straighten", "nodeEditor.autoLayout"})
@@ -1701,7 +1882,8 @@ void NodeEditor::rebuildSidePanel()
             json value = s.value("value", json());
             if (value.is_null() && s.contains("implicit"))
             {
-                auto* l = new QLabel("implicit " + qs(s["implicit"].get<std::string>()), row);
+                const std::string implicit = s["implicit"].get<std::string>();
+                auto* l = new QLabel(implicit == "uv" ? QString("Mesh UV") : "implicit " + qs(implicit), row);
                 l->setStyleSheet("color: rgb(150,150,150);");
                 h->addWidget(l, 1);
             }
@@ -1789,6 +1971,8 @@ void registerEditActions()
         "Collapse the selected nodes into a new node group, run by a Group node in their place.");
     add("nodeEditor.ungroup", "Ungroup", &NodeEditor::ungroupSelected, "Replace the selected Group nodes with the nodes of their groups.");
     add("nodeEditor.openGroup", "Open Group", &NodeEditor::openSelectedGroup, "Open the group the selected Group node runs.");
+    add("nodeEditor.parentGroup", "Parent Group", &NodeEditor::openParentGroup,
+        "Go back to the group that runs this one, with its Group node selected.");
     add("nodeEditor.exportGroup", "Export Node Group...", &NodeEditor::exportGroup,
         "Write the group and the groups nested in it to a .lilanodes file to share.");
     struct AlignAction

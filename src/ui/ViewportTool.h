@@ -61,6 +61,8 @@ public:
     virtual std::string markingMenu(std::string_view base) const { (void)base; return {}; }
     /** False draws the selected mesh without its selection wire while this tool is active. */
     virtual bool showsSelection(scene::NodeId mesh) const { (void)mesh; return true; }
+    /** With showsSelection false: draws the selected mesh with the dim under-selection wire instead of none. */
+    virtual bool dimsSelection(scene::NodeId mesh) const { (void)mesh; return false; }
 };
 
 /** An X: the cursor while a modifier click deletes what is under it. */

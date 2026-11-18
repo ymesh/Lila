@@ -361,6 +361,8 @@ void ImagePicker::setResolver(std::function<fs::path(const std::string&)> fn)
     refresh();
 }
 
+void ImagePicker::setExtraItems(std::function<std::vector<texturePicker::Item>()> fn) { mExtraItems = std::move(fn); }
+
 void ImagePicker::setProblem(std::function<std::string(const fs::path&)> fn)
 {
     mProblem = std::move(fn);
@@ -478,6 +480,7 @@ void ImagePicker::open()
     texturePicker::Options o;
     o.current = mValue;
     o.title = mTitle;
+    o.favourites = "images/" + (mLibrary ? mLibrary->title : QString("Texture")).toStdString();
     if (mLibrary)
     {
         if (mLibrary->entries)
@@ -496,6 +499,14 @@ void ImagePicker::open()
     }
     else
         o.browseFilter = kImageFiles;
+    if (mExtraItems)
+        o.items = [extra = mExtraItems, library = std::move(o.items)] {
+            std::vector<texturePicker::Item> out = extra();
+            if (library)
+                for (texturePicker::Item& i : library())
+                    out.push_back(std::move(i));
+            return out;
+        };
     QPointer<ImagePicker> self(this);
     texturePicker::open(this, std::move(o), [self](const std::string& value) {
         if (!self)

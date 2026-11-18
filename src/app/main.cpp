@@ -29,7 +29,7 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    if (!opts.batch && ui::updater::deferToRunningInstall())
+    if (!opts.batch && !opts.fromSetup && ui::updater::deferToRunningInstall())
         return 0;
     host::startCore();
     ui::registerBatchCommands();

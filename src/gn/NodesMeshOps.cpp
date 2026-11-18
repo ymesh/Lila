@@ -811,8 +811,9 @@ void topologyOps()
         .label = "Grid Fill",
         .category = "Mesh",
         .doc = "Fills holes, or replaces disc patches of faces such as a pole's fan, with a quad grid inside a ring of quads.",
-        .props = {prop("mode", {"holes", "faces"}, "holes", "Holes bordered by the selected edges, or patches of selected faces.")},
-        .sockets = {.inputs = {geoIn("mesh"), selectionIn(), bounded(in("gridSize", T::Float, 0.4, "The grid's size against the hole."), 0.0, 1.0),
+        .props = {prop("mode", {"holes", "faces"}, "holes", "Holes bordered by the selected edges, or patches of selected faces."),
+                  prop("style", {"grid", "radial"}, "grid", "One ring round a grid, or rings following the border inward to a pole of kite quads.")},
+        .sockets = {.inputs = {geoIn("mesh"), selectionIn(), bounded(in("gridSize", T::Float, 0.4, "The grid's size against the hole. With radial, the pole's size: smaller adds rings."), 0.0, 1.0),
                                in("rotate", T::Int, 0, "Steps the grid's corners round the border.")},
                     .outputs = {geoOut("mesh"), fout("fill", T::Bool, "The new faces.")}},
         .exec =
@@ -823,6 +824,7 @@ void topologyOps()
                 c.out("mesh", editComponents(c.geometry("mesh"), {.mesh = [&](geo::Mesh& m) {
                                                                       std::vector<Index> sel = selected(c.field("selection"), FieldContext::forMesh(m, faces ? Domain::Face : Domain::Edge));
                                                                       geo::GridFillOptions o;
+                                                                      o.style = c.prop("style") == "radial" ? geo::GridFillOptions::Style::Radial : geo::GridFillOptions::Style::Grid;
                                                                       o.gridSize = std::clamp(c.f("gridSize"), 0.0, 1.0);
                                                                       o.rotate = int(c.i("rotate"));
                                                                       markFaces(m, name, faces ? geo::gridFillFaces(m, sel, o) : geo::gridFillHoles(m, sel, o));

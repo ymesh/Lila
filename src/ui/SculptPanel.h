@@ -51,8 +51,9 @@ public:
     explicit SculptPanel(QWidget* parent = nullptr);
     ~SculptPanel() override;
 
-private:
     void syncFromSettings();
+
+private:
     void refreshSession();
     QToolButton* brushButton(const QIcon& icon, const QString& label, const QString& doc, QLayout* flow = nullptr);
     void rebuildCustomBrushes();

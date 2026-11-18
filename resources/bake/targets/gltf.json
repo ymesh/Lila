@@ -1,0 +1,54 @@
+{
+  "name": "gltf",
+  "label": "glTF",
+  "version": 1,
+  "doc": "glTF 2.0's metallic-roughness material: baseColor, occlusionRoughnessMetallic packed as glTF reads it (R occlusion, G roughness, B metallic), OpenGL normals and emissive, named {material}_{suffix}.",
+  "output": {
+    "name": "{material}_{map}",
+    "format": "png",
+    "bits": 8
+  },
+  "pipeline": {
+    "autoAssign": true
+  },
+  "maps": [
+    {
+      "map": "baseColor",
+      "suffix": "baseColor",
+      "slot": "baseColorTexture"
+    },
+    {
+      "map": "orm",
+      "suffix": "occlusionRoughnessMetallic",
+      "slot": "metallicRoughnessTexture",
+      "options": {
+        "channels": [
+          {
+            "map": "ao"
+          },
+          {
+            "map": "roughness"
+          },
+          {
+            "map": "metallic"
+          },
+          1.0
+        ]
+      }
+    },
+    {
+      "map": "normal",
+      "suffix": "normal",
+      "slot": "normalTexture",
+      "options": {
+        "greenUp": true
+      }
+    },
+    {
+      "map": "emissive",
+      "suffix": "emissive",
+      "slot": "emissiveTexture",
+      "optional": true
+    }
+  ]
+}

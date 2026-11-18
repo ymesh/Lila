@@ -42,12 +42,12 @@ public:
     ~MaterialEditor() override;
 
     void showMaterial(const std::string& name);
+    /** Shows the first material of the last selected mesh. */
+    void followSelection();
     /** Side-panel width, like the channel box, rather than whatever the scroll area's contents ask for. */
     QSize sizeHint() const override { return {340, 640}; }
 
 private:
-    /** Shows the first material of the last selected mesh. */
-    void followSelection();
     void scheduleRefresh();
     /** Shows the row's material, or the read-only Default for the Default row. */
     void pickRow(QListWidgetItem* item);
