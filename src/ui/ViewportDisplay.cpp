@@ -365,7 +365,9 @@ void applyPostProcess(render::FrameState& s, bool effects, scene::NodeId cameraP
                 volumes.emplace_back(w, v);
     if (id == scene::kNoNode && volumes.empty())
         return;
-    std::ranges::sort(volumes, [&](const auto& x, const auto& y) { return x.second->as<double>(a + pp::kVolumePriority) < y.second->as<double>(a + pp::kVolumePriority); });
+    // Typed parameters, not auto: with auto, x.second->as<double> is a dependent name that needs "->template as<double>".
+    // MSVC accepts it without, Clang rejects it.
+    std::ranges::sort(volumes, [&](const std::pair<double, const scene::Node*>& x, const std::pair<double, const scene::Node*>& y) { return x.second->as<double>(a + pp::kVolumePriority) < y.second->as<double>(a + pp::kVolumePriority); });
     const scene::Node& base = id != scene::kNoNode ? *g.node(id) : *volumes.front().second;
     std::vector<scene::PlugValue> vals(pp::kCount);
     for (int i = 0; i < pp::kCount; ++i)
