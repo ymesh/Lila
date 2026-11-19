@@ -80,11 +80,11 @@ OpResult Provider::moveToChangelist(const std::vector<fs::path>&, const std::str
 
 OpResult Provider::shelve(const std::string&, const std::vector<fs::path>&)
 {
-    throw VcsError("shelving is only supported by Perforce");
+    throw VcsError(name() + " has no shelving");
 }
 
 OpResult Provider::unshelve(const std::string&)
 {
-    throw VcsError("shelving is only supported by Perforce");
+    throw VcsError(name() + " has no shelving");
 }
 } // namespace lila::vcs

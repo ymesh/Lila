@@ -279,7 +279,8 @@ bool SetSource(UTexture2D* Texture, const FTextureRequest& R, TArray<FString>& O
 }
 
 /** Created, or updated in place so every material using it keeps its reference. */
-UTexture2D* ImportTexture(const FTextureRequest& R, const FString& Folder, TArray<FString>& OutAssets, TArray<FString>& OutErrors)
+UTexture2D* ImportTexture(const FTextureRequest& R, const FString& Folder, TArray<FString>& OutAssets, TArray<FString>& OutWarnings,
+	TArray<FString>& OutErrors)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkTextures::ImportTexture);
 
@@ -309,6 +310,7 @@ UTexture2D* ImportTexture(const FTextureRequest& R, const FString& Folder, TArra
 	}
 	Texture->AssetImportData->Update(R.Files[0].File);
 	Texture->PostEditChange();
+	LilaLink::WarnIfCapped(Texture, OutWarnings);
 	Texture->MarkPackageDirty();
 	if (bCreated)
 	{
@@ -422,7 +424,7 @@ void ImportTextures(const TSharedPtr<FJsonObject>& Params, const FLilaLinkCallRe
 	for (int32 I = 0; I < Textures.Num(); ++I)
 	{
 		Call->Progress(FString::Printf(TEXT("importing %s (%d of %d)"), *Textures[I].Name, I + 1, Textures.Num()));
-		if (UTexture2D* Texture = ImportTexture(Textures[I], Folder, Assets, Errors))
+		if (UTexture2D* Texture = ImportTexture(Textures[I], Folder, Assets, Warnings, Errors))
 		{
 			ByName.Add(Textures[I].Name, Texture);
 		}

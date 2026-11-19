@@ -119,6 +119,27 @@ IncrementSnap incrementSnap(Tool t)
     return s;
 }
 
+static std::map<int, std::function<std::optional<SelectionSnap>()>> gSelectionSnaps;
+static int gNextSelectionSnap = 1;
+
+int addSelectionSnap(std::function<std::optional<SelectionSnap>()> fn)
+{
+    gSelectionSnaps[gNextSelectionSnap] = std::move(fn);
+    return gNextSelectionSnap++;
+}
+
+void removeSelectionSnap(int id) { gSelectionSnaps.erase(id); }
+
+std::optional<SelectionSnap> selectionSnap()
+{
+    if (gSnaps & SnapRotateHold)
+        return std::nullopt;
+    for (const auto& [id, fn] : gSelectionSnaps)
+        if (std::optional<SelectionSnap> s = fn())
+            return s;
+    return std::nullopt;
+}
+
 int addListener(std::function<void()> fn)
 {
     gListeners[gNextListener] = std::move(fn);
@@ -171,7 +192,8 @@ void registerActions()
     actions::add({.id = "tool.pivotEditOff", .label = "End Pivot Edit", .category = "Tools", .run = [] { setPivotEdit(false); },
                   .doc = "Returns the manipulator to moving the object."});
     actions::add({.id = "tool.cloneDragOn", .label = "Clone Drag (hold)", .category = "Tools", .run = [] { setCloneDrag(true); },
-                  .doc = "While held, dragging a manipulator handle duplicates the selected objects and moves the copies."});
+                  .doc = "While held, dragging a manipulator handle duplicates the selected objects and moves the copies; on faces and edges it extrudes them and moves the extruded ones.",
+                  .keywords = {"extrude drag", "shift extrude", "duplicate drag", "alt drag"}});
     actions::add({.id = "tool.cloneDragOff", .label = "End Clone Drag", .category = "Tools", .run = [] { setCloneDrag(false); },
                   .doc = "Returns manipulator drags to moving the selected objects themselves."});
     // Y: held, a manipulator drag clones; a tap without one reactivates the last viewport tool.
@@ -179,7 +201,7 @@ void registerActions()
                       gCloneKeyUsed = false;
                       setCloneDrag(true);
                   },
-                  .doc = "Press half of the clone key: hold and drag a manipulator handle to clone the selected objects."});
+                  .doc = "Press half of the clone key: hold and drag a manipulator handle to clone the selected objects, or extrude the selected faces or edges."});
     actions::add({.id = "tool.cloneKeyUp", .label = "Clone Key Up", .category = "Tools", .run = [] {
                       setCloneDrag(false);
                       if (!gCloneKeyUsed)

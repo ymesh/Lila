@@ -1121,3 +1121,21 @@ TEST_CASE("perf: ops on large meshes")
     MESSAGE("10k individual extrudes on 1M quads " << tExtrude << "s, subdivide 250k -> 1M quads " << tSub
                                                    << "s, bevel " << edges.size() << " edges " << tBevel << "s");
 }
+
+TEST_CASE("cutAlongPlane: a cut through both legs of a U-shaped face leaves the gap open")
+{
+    // An arch's frame with a square opening: 400 wide, 300 tall, the opening 200 wide and 200 tall up from the ground.
+    const glm::dvec3 pts[] = {{0, 0, 0}, {100, 0, 0}, {100, 200, 0}, {300, 200, 0}, {300, 0, 0}, {400, 0, 0}, {400, 300, 0}, {0, 300, 0}};
+    const Index sizes[] = {8};
+    const Index idx[] = {0, 1, 2, 3, 4, 5, 6, 7};
+    Mesh m = Mesh::fromPolygons(pts, sizes, idx);
+    const double before = m.faceArea(0);
+    const PlaneCut r = cutAlongPlane(m, {0, 100, 0}, {0, 1, 0});
+    CHECK(r.newFaces.size() == 2);
+    double after = 0.0;
+    for (Index f = 0; f < m.faceCapacity(); ++f)
+        if (m.faceValid(f))
+            after += m.faceArea(f);
+    CHECK(after == doctest::Approx(before));
+    CHECK(isValid(m));
+}

@@ -1009,6 +1009,22 @@ std::vector<Mesh> separate(const Mesh& mesh)
     return out;
 }
 
+namespace
+{
+/** The face's on-plane corners where its outline passes from one side of the plane to the other. */
+template <class Side> std::vector<Index> planeCrossings(const Mesh& m, Index face, const Side& side)
+{
+    std::vector<Index> out;
+    if (!m.faceValid(face))
+        return out;
+    m.forEachFaceCorner(face, [&](Index c) {
+        if (side(m.cornerPoint(c)) == 0 && side(m.cornerPoint(m.cornerPrev(c))) * side(m.cornerNextPoint(c)) < 0)
+            out.push_back(c);
+    });
+    return out;
+}
+} // namespace
+
 PlaneCut cutAlongPlane(Mesh& m, const glm::dvec3& origin, const glm::dvec3& normal, double tol, const std::function<bool(const glm::dvec3&)>& within,
                        std::span<const Index> faces)
 {
@@ -1057,7 +1073,31 @@ PlaneCut cutAlongPlane(Mesh& m, const glm::dvec3& origin, const glm::dvec3& norm
         m.setPosition(mid, x - dist(x) * n);
     }
 
-    // Each sign change round a face now passes through an on-plane point: split between consecutive ones.
+    // Each sign change round a face now passes through an on-plane point: split between consecutive ones. A concave face
+    // can cross more than twice (an arch's frame); its crossings pair up in order along the cut line instead, as walking
+    // round it would pair two that the cut only joins through the hole.
+    std::vector<Index> concave;
+    for (Index f : todo)
+        if (planeCrossings(m, f, side).size() > 2)
+            concave.push_back(f);
+    while (!concave.empty())
+    {
+        const Index face = concave.back();
+        concave.pop_back();
+        std::vector<Index> cs = planeCrossings(m, face, side);
+        if (cs.size() < 2)
+            continue;
+        const glm::dvec3 along = glm::cross(n, m.faceNormal(face));
+        std::ranges::sort(cs, [&](Index a, Index b) { return glm::dot(m.position(m.cornerPoint(a)), along) < glm::dot(m.position(m.cornerPoint(b)), along); });
+        if (m.cornerNext(cs[0]) == cs[1] || m.cornerPrev(cs[0]) == cs[1])
+            continue;
+        const Index rest = m.splitFace(face, cs[0], cs[1]);
+        if (rest == kInvalid)
+            continue;
+        out.newFaces.push_back(rest);
+        concave.push_back(face);
+        concave.push_back(rest);
+    }
     for (Index f : todo)
     {
         Index face = f;

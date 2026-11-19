@@ -176,7 +176,19 @@ geo::Mesh liveHotspot(const geo::Mesh& in, const scene::Node& n)
     const std::string set = str("uvSet").empty() ? std::string("uv0") : str("uvSet");
 
     geo::Mesh m = in;
-    const uv::HotspotResult r = uv::hotspot(m, {}, hotspotTrims(sheet), set, o);
+    std::vector<geo::Index> open;
+    bool kept = false;
+    const std::span<int32_t> keep = m.faceAttrs().get<int32_t>(uv::kHotspotKeepAttr);
+    for (geo::Index f = 0; f < geo::Index(keep.size()); ++f)
+        if (!m.faceValid(f))
+            continue;
+        else if (keep[f])
+            kept = true;
+        else
+            open.push_back(f);
+    if (kept && open.empty())
+        return m;
+    const uv::HotspotResult r = uv::hotspot(m, open, hotspotTrims(sheet), set, o);
     std::span<int32_t> trimAttr = m.faceAttrs().getOrAdd<int32_t>(kFaceTrim);
     std::vector<uint32_t> faces;
     for (const uv::HotspotIsland& is : r.islands)

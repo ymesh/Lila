@@ -1,0 +1,361 @@
+{
+  "decal": false,
+  "folder": "",
+  "height": 1024,
+  "high": [],
+  "highReplaces": false,
+  "lilatrim": 1,
+  "maps": [
+    "normal",
+    "ao",
+    "curvature",
+    "height",
+    "cavity",
+    "detailNormal",
+    "objectNormal",
+    "position"
+  ],
+  "material": "Trim Sandstone",
+  "mipLevel": 3,
+  "name": "T_Saltmarket",
+  "padding": 4,
+  "palettes": [
+    {
+      "material": "Stylized Castle Brick",
+      "name": "Brick",
+      "scalars": {},
+      "switches": {},
+      "vectors": {}
+    },
+    {
+      "material": "Trim Painted Concrete",
+      "name": "Plaster",
+      "scalars": {},
+      "switches": {},
+      "vectors": {}
+    },
+    {
+      "material": "Stylized Glazed Tiles",
+      "name": "Tiles",
+      "scalars": {},
+      "switches": {},
+      "vectors": {}
+    },
+    {
+      "material": "Stylized Cobblestone",
+      "name": "Cobble",
+      "scalars": {},
+      "switches": {},
+      "vectors": {}
+    }
+  ],
+  "preset": "monumentalStone",
+  "pxPerM": 128.0,
+  "scalars": {},
+  "supersampling": 16,
+  "switches": {},
+  "trims": [
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": -1,
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "kind": "stripU",
+      "max": [
+        1024,
+        128
+      ],
+      "min": [
+        0,
+        0
+      ],
+      "name": "Glyphs256",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 6.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "glyphs"
+      },
+      "reserved": false,
+      "tags": [
+        "inscription"
+      ]
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": -1,
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "kind": "stripU",
+      "max": [
+        1024,
+        192
+      ],
+      "min": [
+        0,
+        128
+      ],
+      "name": "Key128",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 6.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "meander"
+      },
+      "reserved": false,
+      "tags": [
+        "border"
+      ]
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": -1,
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "kind": "stripU",
+      "max": [
+        1024,
+        256
+      ],
+      "min": [
+        0,
+        192
+      ],
+      "name": "Channel128",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 6.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "channel"
+      },
+      "reserved": false,
+      "tags": [
+        "moulding"
+      ]
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": -1,
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "kind": "stripU",
+      "max": [
+        1024,
+        320
+      ],
+      "min": [
+        0,
+        256
+      ],
+      "name": "Torus128",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 6.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "torus"
+      },
+      "reserved": false,
+      "tags": [
+        "moulding"
+      ]
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": -1,
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "kind": "stripU",
+      "max": [
+        1024,
+        448
+      ],
+      "min": [
+        0,
+        320
+      ],
+      "name": "Ogee256",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 6.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "ogee"
+      },
+      "reserved": false,
+      "tags": [
+        "moulding"
+      ]
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": -1,
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "kind": "stripU",
+      "max": [
+        1024,
+        512
+      ],
+      "min": [
+        0,
+        448
+      ],
+      "name": "Cavetto128",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 6.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "cavetto"
+      },
+      "reserved": false,
+      "tags": [
+        "moulding"
+      ]
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": -1,
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "kind": "stripU",
+      "max": [
+        1024,
+        768
+      ],
+      "min": [
+        0,
+        512
+      ],
+      "name": "Fluting512",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 6.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 48.0,
+        "style": "fluting"
+      },
+      "reserved": false,
+      "tags": [
+        "moulding"
+      ]
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": -1,
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "kind": "stripU",
+      "max": [
+        1024,
+        832
+      ],
+      "min": [
+        0,
+        768
+      ],
+      "name": "Dentils128",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 6.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 48.0,
+        "style": "dentils"
+      },
+      "reserved": false,
+      "tags": [
+        "moulding"
+      ]
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": -1,
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "kind": "stripU",
+      "max": [
+        1024,
+        960
+      ],
+      "min": [
+        0,
+        832
+      ],
+      "name": "Steps256",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 6.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "steps"
+      },
+      "reserved": false,
+      "tags": [
+        "transition"
+      ]
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": -1,
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "kind": "stripU",
+      "max": [
+        1024,
+        1024
+      ],
+      "min": [
+        0,
+        960
+      ],
+      "name": "Ashlar128",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 6.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 96.0,
+        "style": "chipped"
+      },
+      "reserved": false,
+      "tags": [
+        "wall"
+      ]
+    }
+  ],
+  "vectors": {},
+  "width": 1024
+}

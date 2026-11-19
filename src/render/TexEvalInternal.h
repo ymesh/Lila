@@ -112,6 +112,8 @@ struct LoadedImage
 {
     fs::file_time_type time;
     std::shared_ptr<const image::Image> image;
+    /** Set when the file was scaled down to fit a GPU evaluation. */
+    std::string warning;
 };
 
 /** A region of a buffer or image as fractions of its size: x right, y down (rows), [x0, x1) x [y0, y1). */

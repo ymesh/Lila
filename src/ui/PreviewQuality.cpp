@@ -68,6 +68,8 @@ struct DisplacementCache
     /** Per set name: the height images it was made from and the map over them. */
     std::unordered_map<std::string, std::pair<std::vector<render::GpuImage*>, render::TexturePtr>> maps; // by set|channel
     std::unordered_map<uint64_t, std::string> status;
+    /** Per set, the height copy size the user was last told about. */
+    std::unordered_map<std::string, int> copyNoted;
     uint64_t frame = 0;
 };
 
@@ -165,6 +167,9 @@ render::TexturePtr channelMap(const std::string& set, const tex::SetSettings& se
     return entry.second;
 }
 
+/** Statuses that clear by themselves within a few frames, so they aren't logged as warnings. */
+constexpr const char* kWaiting = "waiting for ";
+
 /** The live height map of a set and its height depth, null (with why) when it isn't there. */
 render::TexturePtr heightMap(scene::Graph& g, const std::string& set, std::string& why, float& depth)
 {
@@ -181,8 +186,14 @@ render::TexturePtr heightMap(scene::Graph& g, const std::string& set, std::strin
     }
     depth = float(settings->heightDepth);
     render::TexturePtr t = channelMap(set, *settings, "height");
-    if (!t)
-        why = "height not evaluated as whole images (paged set, or materials hidden)";
+    if (t)
+        return t;
+    if (texLive::heightCopy(set))
+        why = std::string(kWaiting) + "the paged set's height copy";
+    else if (!texLive::isLive(set))
+        why = std::string(kWaiting) + "the texture set to evaluate";
+    else
+        why = "height not evaluated";
     return t;
 }
 
@@ -285,6 +296,7 @@ void drawDisplacement(render::FrameState& s, OverlayPainter&, const ViewInfo& vi
             continue;
         }
         std::string why = "no texture set";
+        std::string copyNote;
         bool any = false;
         for (size_t slot = 0; slot < d.materials.size(); ++slot)
         {
@@ -298,6 +310,16 @@ void drawDisplacement(render::FrameState& s, OverlayPainter&, const ViewInfo& vi
             render::TexturePtr height = heightMap(g, set, why, depth);
             if (!height)
                 continue;
+            if (std::optional<texLive::HeightCopy> copy = texLive::heightCopy(set); copy && copy->size < copy->full)
+            {
+                copyNote = ", height at " + std::to_string(copy->size) + " of " + std::to_string(copy->full) + " px";
+                // Once per set and size: the preview is coarser than the set, which users should know.
+                if (c.copyNoted[set] != copy->size)
+                {
+                    c.copyNoted[set] = copy->size;
+                    viewportToast::showActive(QString("Displacement Preview: height at %1 of %2 px (paged set)").arg(copy->size).arg(copy->full), 4000);
+                }
+            }
             render::Material& m = d.materials[slot];
             m.heightMap = std::move(height);
             m.displacementDepth = depth;
@@ -311,10 +333,10 @@ void drawDisplacement(render::FrameState& s, OverlayPainter&, const ViewInfo& vi
         }
         const int level = render::displacement::levelFor(*d.mesh, d.world, s.view, s.proj, view.height, detailOf(n));
         d.mesh = tessellated(d.mesh, level);
-        status[d.node] = "displaced (level " + std::to_string(level) + ", " + std::to_string(d.mesh->indices.size() / 3) + " triangles)";
+        status[d.node] = "displaced (level " + std::to_string(level) + ", " + std::to_string(d.mesh->indices.size() / 3) + " triangles" + copyNote + ")";
     }
     for (auto& [node, text] : status)
-        if (c.status[node] != text && !text.starts_with("displaced"))
+        if (c.status[node] != text && !text.starts_with("displaced") && !text.starts_with(kWaiting))
             log::warn("Displacement preview, {}: {}", g.node(scene::NodeId(node)) ? g.node(scene::NodeId(node))->name() : "?", text);
     c.status = std::move(status);
 }

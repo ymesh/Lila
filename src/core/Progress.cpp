@@ -46,6 +46,7 @@ std::function<void()> gPump;
 int gPumpInterval = 30;
 Clock::time_point gLastPump;
 bool gInPump = false;
+int gNoPump = 0;
 
 std::mutex gReporterMutex;
 std::function<void(const std::vector<Snapshot>&)> gReporter;
@@ -113,7 +114,7 @@ Snapshot snapshotOf(const Node& r)
 
 void maybePump(bool force)
 {
-    if (!gPump || gInPump || !mainq::isMainThread())
+    if (!gPump || gInPump || gNoPump > 0 || !mainq::isMainThread())
         return;
     const Clock::time_point now = Clock::now();
     if (!force && now - gLastPump < std::chrono::milliseconds(gPumpInterval))
@@ -356,6 +357,18 @@ void setReporter(std::function<void(const std::vector<Snapshot>&)> reporter, int
 void pumpNow()
 {
     maybePump(true);
+}
+
+NoPump::NoPump()
+{
+    if (mainq::isMainThread())
+        ++gNoPump;
+}
+
+NoPump::~NoPump()
+{
+    if (mainq::isMainThread())
+        --gNoPump;
 }
 
 void runOnWorker(const std::function<void()>& fn)

@@ -88,7 +88,7 @@ LILA_SCENE_API bool scenesByDefault(const fs::path& exeDir);
  * Applies the prefs to HKCU for this executable. Does nothing off Windows or with LILA_NO_FILE_TYPES set (test
  * instances). Called at GUI startup and when the prefs change.
  */
-LILA_SCENE_API void applyPrefs();
+LILA_SCENE_API void applyPrefs(bool force = false);
 
 /** Tells Explorer associations changed, so icons refresh. */
 LILA_SCENE_API void notifyShell();

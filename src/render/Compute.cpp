@@ -121,8 +121,11 @@ VkPipeline computePipeline(VulkanContext& vk, VkPipelineLayout layout, VkShaderM
     ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, module, entry};
     ci.layout = layout;
     VkPipeline p = VK_NULL_HANDLE;
-    if (vkCreateComputePipelines(vk.device, vk.pipelineCache, 1, &ci, nullptr, &p) != VK_SUCCESS)
+    if (VkResult r = vkCreateComputePipelines(vk.device, vk.pipelineCache, 1, &ci, nullptr, &p); r != VK_SUCCESS)
+    {
+        vk.pipelineFailed(entry, r);
         return VK_NULL_HANDLE;
+    }
     return p;
 }
 

@@ -77,6 +77,13 @@ LILA_SCENE_API NativeCpuFn nativeCpu(const std::string& type);
 /** An image parameter's file: absolute as given, else under root, the workspace, the scene's folder or Lila's resources. */
 LILA_SCENE_API std::filesystem::path resolveImagePath(const std::string& path, const std::filesystem::path& root);
 
+/**
+ * An Image node's file as a plan samples it: no larger than the plan (detail past the set's resolution never shows), and
+ * when maxTexels is above 0, scaled to hold at most that many texels. That second cut loses detail, so it sets *warning.
+ */
+LILA_SCENE_API image::Image fitSourceImage(image::Image img, const std::string& name, int planWidth, int planHeight, size_t maxTexels,
+                                           std::string* warning);
+
 /** The GPU evaluator the renderer installs: evaluate throws like evaluateCpu; available says whether a GPU can run it. */
 struct GpuEvaluator
 {

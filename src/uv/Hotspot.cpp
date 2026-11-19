@@ -70,6 +70,33 @@ glm::dvec3 chartNormal(const Chart& chart)
     return len > 1e-20 ? n / len : glm::dvec3(0.0);
 }
 
+/** How much of its tightest bounding rectangle an island must fill to be rectified onto it. */
+constexpr double kRectifyFill = 0.9;
+
+/** Every triangle faces within half a degree of the island's normal. */
+bool isPlanar(const Chart& chart, const glm::dvec3& normal)
+{
+    const double minCos = std::cos(glm::radians(0.5));
+    for (const auto& t : chart.tris)
+    {
+        const glm::dvec3 n = glm::cross(chart.pos[t[1]] - chart.pos[t[0]], chart.pos[t[2]] - chart.pos[t[0]]);
+        const double len = glm::length(n);
+        if (len > 1e-20 && glm::dot(n / len, normal) < minCos)
+            return false;
+    }
+    return true;
+}
+
+/** Lays the island's points flat in its plane: uvs are their coordinates along two axes across the normal. */
+void projectToPlane(Chart& chart, const glm::dvec3& normal)
+{
+    const glm::dvec3 helper = std::abs(normal.y) < 0.9 ? glm::dvec3(0, 1, 0) : glm::dvec3(1, 0, 0);
+    const glm::dvec3 u = glm::normalize(glm::cross(helper, normal)), v = glm::cross(normal, u);
+    chart.uv.resize(chart.pos.size());
+    for (size_t i = 0; i < chart.pos.size(); ++i)
+        chart.uv[i] = {glm::dot(chart.pos[i], u), glm::dot(chart.pos[i], v)};
+}
+
 /** A disk whose boundary sits at an even distance from its centre and fills the circle: caps, discs, round plates. */
 bool looksRadial(const Chart& chart)
 {
@@ -121,24 +148,44 @@ IslandMeasure measureChart(Chart& chart, const HotspotOptions& opts)
     if (chart.uv.size() != chart.pos.size() || m.area3d <= 0.0)
         return m;
 
+    // A flat island is laid flat exactly: an unwrap can fold polygons with points in a row, and rectifying would shear
+    // slanted quads (a carved wall) into a grid.
+    const bool planar = isPlanar(chart, m.normal);
+    if (planar)
+        projectToPlane(chart, m.normal);
+
     // Mirrored islands would put the trim on backwards.
     if (chart.areaUv() < 0.0)
         for (glm::dvec2& p : chart.uv)
             p.x = -p.x;
 
+    const glm::dvec3 up = glm::length(opts.up) > 0.0 ? glm::normalize(opts.up) : glm::dvec3(0.0, 1.0, 0.0);
+    const bool flat = std::abs(glm::dot(m.normal, up)) > std::cos(glm::radians(opts.flatTolerance));
     m.radial = looksRadial(chart);
     if (!m.radial)
     {
-        m.rectified = straightenChart(chart);
-        if (m.rectified == StraightenResult::Failed)
+        std::vector<glm::dvec2> pts(chart.uv.begin(), chart.uv.end());
+        glm::dvec2 box(0.0);
+        const double angle = minAreaRectAngle(pts, &box);
+        const bool boxy = box.x * box.y > 0.0 && std::abs(chart.areaUv()) / (box.x * box.y) > kRectifyFill;
+        Chart straight = chart;
+        m.rectified = planar ? StraightenResult::Failed : straightenChart(straight);
+        // Pulling the outline onto a rectangle warps an arch or a stair profile; those keep their unwrapped shape.
+        if (m.rectified == StraightenResult::Rectangle && !boxy)
+            m.rectified = StraightenResult::Failed;
+        if (m.rectified != StraightenResult::Failed)
+            chart = std::move(straight);
+        else if (opts.orient == HotspotOrient::WorldUp && !flat)
         {
-            std::vector<glm::dvec2> pts(chart.uv.begin(), chart.uv.end());
-            rotateUv(chart, -minAreaRectAngle(pts));
+            // A ramp's side has no box edge to follow (its tightest box lies along the slope), so up runs straight up.
+            const glm::dvec2 g = upGradient(chart, up);
+            if (glm::length(g) > 0.0)
+                rotateUv(chart, std::numbers::pi * 0.5 - std::atan2(g.y, g.x));
         }
+        else
+            rotateUv(chart, -angle);
     }
 
-    const glm::dvec3 up = glm::length(opts.up) > 0.0 ? glm::normalize(opts.up) : glm::dvec3(0.0, 1.0, 0.0);
-    const bool flat = std::abs(glm::dot(m.normal, up)) > std::cos(glm::radians(opts.flatTolerance));
     HotspotOrient orient = opts.orient;
     if (orient == HotspotOrient::WorldUp && (flat || m.radial))
         orient = HotspotOrient::LongestU;
@@ -418,6 +465,62 @@ size_t sliceOversizedCharts(geo::Mesh& mesh, const std::vector<Chart>& charts, s
     }
     return sliced;
 }
+/**
+ * Each measured chart's band leader: charts sharing an edge that runs from the bottom to the top of both (walls round a
+ * corner, and the bevel faces between them) are one band, led by its largest chart, so they take one trim and chain.
+ */
+std::vector<size_t> bandLeaders(const geo::Mesh& mesh, std::span<const Chart> charts)
+{
+    constexpr size_t kNone = ~size_t(0);
+    constexpr double kTol = 0.05;
+    std::vector<size_t> chartOf(mesh.faceCapacity(), kNone);
+    std::vector<std::unordered_map<Index, glm::dvec2>> uvAt(charts.size());
+    for (size_t i = 0; i < charts.size(); ++i)
+    {
+        for (Index f : charts[i].faces)
+            chartOf[f] = i;
+        for (size_t v = 0; v < charts[i].uv.size(); ++v)
+            uvAt[i].emplace(charts[i].vertexPoint[v], charts[i].uv[v]);
+    }
+    std::vector<size_t> root(charts.size());
+    for (size_t i = 0; i < root.size(); ++i)
+        root[i] = i;
+    auto find = [&](size_t i) {
+        while (root[i] != i)
+            i = root[i] = root[root[i]];
+        return i;
+    };
+    auto spansHeight = [&](size_t i, Index p0, Index p1) {
+        const auto a = uvAt[i].find(p0), b = uvAt[i].find(p1);
+        if (a == uvAt[i].end() || b == uvAt[i].end() || charts[i].uv.empty())
+            return false;
+        const double h = charts[i].uvMax().y - charts[i].uvMin().y;
+        return h > kTol && std::abs(a->second.x - b->second.x) < kTol && std::abs(a->second.y - b->second.y) > h - kTol;
+    };
+    for (size_t i = 0; i < charts.size(); ++i)
+        for (Index f : charts[i].faces)
+            mesh.forEachFaceCorner(f, [&](Index c) {
+                const Index e = mesh.cornerEdge(c);
+                const Index o = mesh.oppositeFace(e, f);
+                if (o == kInvalid || o >= chartOf.size() || chartOf[o] == kNone || chartOf[o] <= i)
+                    return;
+                const size_t j = chartOf[o];
+                const Index p0 = mesh.edgePoint(e, 0), p1 = mesh.edgePoint(e, 1);
+                if (spansHeight(i, p0, p1) && spansHeight(j, p0, p1))
+                    root[find(j)] = find(i);
+            });
+    std::vector<size_t> leader(charts.size(), kNone);
+    for (size_t i = 0; i < charts.size(); ++i)
+    {
+        size_t& l = leader[find(i)];
+        if (l == kNone || charts[i].area3d() > charts[l].area3d() + 1e-9)
+            l = i;
+    }
+    std::vector<size_t> out(charts.size());
+    for (size_t i = 0; i < charts.size(); ++i)
+        out[i] = leader[find(i)];
+    return out;
+}
 } // namespace
 
 double startOnWholeSheets(Chart& chart, const HotspotTrim& t)
@@ -584,41 +687,66 @@ HotspotResult hotspot(geo::Mesh& mesh, std::span<const Index> faceIds, std::span
     }
     res.islands.resize(charts.size());
 
+    std::vector<std::vector<TrimCandidate>> ranked(charts.size());
     tbb::parallel_for(size_t(0), charts.size(), size_t(1), [&](size_t i) {
-        Chart& ch = charts[i];
         HotspotIsland& out = res.islands[i];
-        out.faces = ch.faces;
-        out.measure = measureChart(ch, opts);
-        const std::vector<TrimCandidate> ranked = rankTrims(out.measure, trims, opts);
-        if (ranked.empty())
-            return;
+        out.faces = charts[i].faces;
+        out.measure = measureChart(charts[i], opts);
+        ranked[i] = rankTrims(out.measure, trims, opts);
+    });
 
-        // The island's first face keys its randomness, so it does not depend on the other islands.
-        const uint64_t key = ch.faces.empty() ? i : ch.faces.front();
-        size_t pick = 0;
+    // The island's first face keys its randomness, so it does not depend on the other islands; a band shares its leader's.
+    const std::vector<size_t> leaders = bandLeaders(mesh, charts);
+    auto keyOf = [&](size_t i) { return charts[leaders[i]].faces.empty() ? uint64_t(leaders[i]) : uint64_t(charts[leaders[i]].faces.front()); };
+    auto ownPick = [&](size_t i) {
+        const std::vector<TrimCandidate>& r = ranked[i];
         if (opts.cycle > 0)
-            pick = size_t(opts.cycle) % ranked.size();
-        else
+            return size_t(opts.cycle) % r.size();
+        std::vector<size_t> pool;
+        const TrimCandidate& best = r.front();
+        const int group = trims[size_t(best.trim)].altGroup;
+        for (size_t k = 0; k < r.size(); ++k)
         {
-            std::vector<size_t> pool;
-            const TrimCandidate& best = ranked.front();
-            const int group = trims[size_t(best.trim)].altGroup;
-            for (size_t k = 0; k < ranked.size(); ++k)
-            {
-                const TrimCandidate& c = ranked[k];
-                const bool tied = c.score <= best.score + opts.tieTolerance && (c.sizeError > opts.maxSizeError) == (best.sizeError > opts.maxSizeError);
-                // Alt groups swap interchangeable trims: same group and the same world size.
-                const HotspotTrim& a = trims[size_t(c.trim)];
-                const HotspotTrim& b = trims[size_t(best.trim)];
-                const bool sameGroup = group >= 0 && a.altGroup == group && glm::length(a.worldSize - b.worldSize) <= 1e-3 * glm::length(b.worldSize) &&
-                                       c.rotated == best.rotated;
-                if (tied || sameGroup)
-                    pool.push_back(k);
-            }
-            pick = pool[std::min(pool.size() - 1, size_t(hotspotRandom(opts.seed, key, 0) * double(pool.size())))];
+            const TrimCandidate& c = r[k];
+            const bool tied = c.score <= best.score + opts.tieTolerance && (c.sizeError > opts.maxSizeError) == (best.sizeError > opts.maxSizeError);
+            // Alt groups swap interchangeable trims: same group and the same world size.
+            const HotspotTrim& a = trims[size_t(c.trim)];
+            const HotspotTrim& b = trims[size_t(best.trim)];
+            const bool sameGroup = group >= 0 && a.altGroup == group && glm::length(a.worldSize - b.worldSize) <= 1e-3 * glm::length(b.worldSize) &&
+                                   c.rotated == best.rotated;
+            if (tied || sameGroup)
+                pool.push_back(k);
         }
-        const TrimCandidate& c = ranked[pick];
-        placeChart(ch, trims[size_t(c.trim)], c.rotated, opts, hotspotRandom(opts.seed, key, 1), hotspotRandom(opts.seed, key, 2),
+        return pool[std::min(pool.size() - 1, size_t(hotspotRandom(opts.seed, keyOf(i), 0) * double(pool.size())))];
+    };
+    constexpr size_t kNoPick = ~size_t(0);
+    std::vector<size_t> pick(charts.size(), kNoPick);
+    for (size_t i = 0; i < charts.size(); ++i)
+        if (leaders[i] == i && !ranked[i].empty())
+            pick[i] = ownPick(i);
+    for (size_t i = 0; i < charts.size(); ++i)
+    {
+        if (leaders[i] == i || ranked[i].empty())
+            continue;
+        const size_t l = leaders[i];
+        if (pick[l] != kNoPick)
+        {
+            const TrimCandidate& lead = ranked[l][pick[l]];
+            for (size_t k = 0; k < ranked[i].size() && pick[i] == kNoPick; ++k)
+                if (ranked[i][k].trim == lead.trim && ranked[i][k].rotated == lead.rotated && (ranked[i][k].sizeError <= opts.maxSizeError || lead.sizeError > opts.maxSizeError))
+                    pick[i] = k;
+        }
+        if (pick[i] == kNoPick)
+            pick[i] = ownPick(i);
+    }
+
+    tbb::parallel_for(size_t(0), charts.size(), size_t(1), [&](size_t i) {
+        if (pick[i] == kNoPick)
+            return;
+        HotspotIsland& out = res.islands[i];
+        const TrimCandidate& c = ranked[i][pick[i]];
+        const uint64_t key = keyOf(i);
+        placeChart(charts[i], trims[size_t(c.trim)], c.rotated, opts, hotspotRandom(opts.seed, key, 1), hotspotRandom(opts.seed, key, 2),
                    hotspotRandom(opts.seed, key, 3));
         out.trim = c.trim;
         out.score = c.score;

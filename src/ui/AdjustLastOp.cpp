@@ -60,6 +60,8 @@ LastOpEditor::LastOpEditor(QWidget* parent) : QWidget(parent)
     mTitleRow->addWidget(mTitle, 1);
     root->addLayout(mTitleRow);
     mFields = new QWidget(this);
+    // A drag re-runs the op as one replaced undo step, so the fields' scrubs must leave the undo stack free.
+    setScrubsWithoutUndoStep(mFields);
     mFieldsLayout = new QVBoxLayout(mFields);
     mFieldsLayout->setContentsMargins(0, 0, 0, 0);
     mFieldsLayout->setSpacing(2);

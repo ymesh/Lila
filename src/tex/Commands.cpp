@@ -272,6 +272,34 @@ json mergeSettings(const SetSettings& base, const json& changes, const char* cmd
     }
 }
 
+/**
+ * Linking or setting a Material Output input the set has no channel for adds that channel (bits as a new set gives it),
+ * since the set only evaluates the outputs it has channels for and the edit would otherwise do nothing.
+ */
+void addOutputChannel(const Args& a, const std::string& nodeName, const std::string& socket, const char* cmd)
+{
+    const std::string set = positionalString(a, 0, cmd, "texture set");
+    Node& n = setNode(set, cmd);
+    const Graph g = readGraph(n);
+    auto node = std::find_if(g.nodes.begin(), g.nodes.end(), [&](const GNode& x) { return x.name == nodeName; });
+    if (node == g.nodes.end() || node->type != kMaterialOutputType)
+        return;
+    const SetSettings s = readSettings(n);
+    if (s.channel(socket))
+        return;
+    const PortDecl* in = portsChecked(g, *node, s, cmd).input(socket);
+    if (!in || in->type == PortType::Material)
+        return;
+    int bits = 8;
+    for (const Channel& c : SetSettings::makeDefault().channels)
+        if (c.name == socket)
+            bits = c.bits;
+    json channels = s.toJson()["channels"];
+    channels.push_back({{"name", socket}, {"type", portTypeName(in->type)}, {"bits", bits}});
+    ops::execute("texSetSettings", {{"args", {set, json{{"channels", channels}}}}});
+    log::info("{}: added the {} channel to {}, which its Material Output needs", cmd, socket, set);
+}
+
 constexpr const char* kClipFormat = "lila.textureNodes";
 
 std::string joinIds(const std::vector<std::string>& ids)
@@ -617,7 +645,7 @@ void registerCommands()
         .run = [](const Args& a) -> json {
             auto [fn, fsock] = splitPlug(positionalString(a, 1, "texConnect", "from"), "texConnect");
             auto [tn, tsock] = splitPlug(positionalString(a, 2, "texConnect", "to"), "texConnect");
-            return editGraph(a, "texConnect", [&](Graph& g, const SetSettings& s) -> json {
+            const json result = editGraph(a, "texConnect", [&](Graph& g, const SetSettings& s) -> json {
                 NodePorts fp = portsChecked(g, nodeIn(g, fn, "texConnect"), s, "texConnect");
                 NodePorts tp = portsChecked(g, nodeIn(g, tn, "texConnect"), s, "texConnect");
                 const PortDecl* o = fp.output(fsock);
@@ -635,6 +663,8 @@ void registerCommands()
                 g.links.push_back({fn, fsock, tn, tsock});
                 return nullptr;
             });
+            addOutputChannel(a, tn, tsock, "texConnect");
+            return result;
         },
     });
 
@@ -666,7 +696,7 @@ void registerCommands()
             if (a.positional.size() < 3)
                 throw CommandError("texSetValue: value required");
             json value = a.positional[2];
-            return editGraph(a, "texSetValue", [&](Graph& g, const SetSettings& s) -> json {
+            const json result = editGraph(a, "texSetValue", [&](Graph& g, const SetSettings& s) -> json {
                 GNode& n = nodeIn(g, nn, "texSetValue");
                 if (n.type == kGroupInputType)
                 {
@@ -712,6 +742,8 @@ void registerCommands()
                 }
                 throw CommandError("texSetValue: " + nn + " has no parameter or input '" + id + "'");
             });
+            addOutputChannel(a, nn, id, "texSetValue");
+            return result;
         },
     });
 

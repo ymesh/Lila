@@ -6,6 +6,7 @@
 #include "ui/FlagFields.h"
 #include "ui/LocateFlash.h"
 #include "ui/OptionBox.h"
+#include "ui/SpinScrub.h"
 #include "ui/UiCommon.h"
 
 #include <QApplication>
@@ -38,6 +39,8 @@ public:
     {
         setAttribute(Qt::WA_DeleteOnClose);
         setWindowTitle("Smart Join Options");
+        // Live edits re-run the join as one replaced undo step, so scrubs must leave the undo stack free.
+        setScrubsWithoutUndoStep(this);
         auto* root = new QVBoxLayout(this);
         root->setContentsMargins(10, 8, 10, 8);
         root->setSpacing(6);

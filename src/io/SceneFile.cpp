@@ -428,6 +428,9 @@ void deserialize(const nlohmann::json& doc, const fs::path& sceneDir, double own
     Graph& g = Graph::current();
     State& s = state();
     s.loading = true;
+    // Nodes that evaluate while loading resolve their relative paths against this scene's folder.
+    const fs::path previousDir = paths::currentSceneDir();
+    paths::setCurrentSceneDir(sceneDir);
     std::vector<std::string> warnings;
     const json references = doc.value("references", json::array());
     const double refBytes = refs::loadedBytes(references, sceneDir);
@@ -475,6 +478,7 @@ void deserialize(const nlohmann::json& doc, const fs::path& sceneDir, double own
     {
         UndoStack::get().setEnabled(true);
         s.loading = false;
+        paths::setCurrentSceneDir(previousDir);
         // Never part of a scene: an aborted load's caller puts the previous one back.
         if (progress::cancelRequested())
         {

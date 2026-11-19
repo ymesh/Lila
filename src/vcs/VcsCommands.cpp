@@ -71,7 +71,7 @@ FlagDef pathFlag()
 
 FlagDef changelistFlag()
 {
-    return {"changelist", "", ArgType::String, nullptr, "Perforce changelist number; default changelist when omitted."};
+    return {"changelist", "", ArgType::String, nullptr, "Perforce changelist number or svn changelist name; default changelist when omitted."};
 }
 } // namespace
 
@@ -104,7 +104,8 @@ void registerCommands()
 
     ops::registerCommand({
         .name = "scCheckout",
-        .doc = "Check files out for edit. Perforce: p4 edit. Git: git lfs lock for LFS files, otherwise nothing to do. "
+        .doc = "Check files out for edit. Perforce: p4 edit. Git: git lfs lock for LFS files. svn: svn lock for svn:needs-lock files. "
+               "Otherwise nothing to do. "
                "Returns {files, warnings}.",
         .positionalDoc = "files",
         .flags = {changelistFlag()},
@@ -194,10 +195,10 @@ void registerCommands()
         .doc = "List pending changelists with their files, or create one, move files into one, shelve or unshelve.",
         .positionalDoc = "files (for move or shelve)",
         .flags = {
-            {"create", "", T::String, nullptr, "Create a changelist with this description; returns its number."},
+            {"create", "", T::String, nullptr, "Create a changelist with this description; returns its number (svn: its name)."},
             {"move", "", T::String, nullptr, "Move the given files into this changelist."},
-            {"shelve", "", T::String, nullptr, "Shelve this changelist (Perforce), optionally only the given files."},
-            {"unshelve", "", T::String, nullptr, "Unshelve this changelist into itself (Perforce)."},
+            {"shelve", "", T::String, nullptr, "Shelve this changelist (Perforce; svn: to <shelfRoot>/<user>/<name> in the repository), optionally only the given files."},
+            {"unshelve", "", T::String, nullptr, "Unshelve this changelist into itself (Perforce; svn: a shelf name, or user/name for someone else's)."},
             pathFlag(),
         },
         .undoable = false,
@@ -244,7 +245,7 @@ void registerCommands()
 
     ops::registerCommand({
         .name = "scLock",
-        .doc = "Lock files so nobody else can submit them (git: git lfs lock). unlock releases.",
+        .doc = "Lock files so nobody else can submit them (git: git lfs lock, svn: svn lock). unlock releases.",
         .positionalDoc = "files",
         .flags = {{"unlock", "", T::Bool, false, "Release the locks instead."}},
         .undoable = false,

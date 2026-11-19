@@ -6,7 +6,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
+#include <optional>
 #include <unordered_map>
 
 namespace blockwork
@@ -257,6 +259,41 @@ void hardenEdges(Mesh& mesh, double angle)
     }
 }
 
+std::vector<Index> bevelableEdges(const Mesh& mesh, double angle)
+{
+    const std::span<const bool> contact = mesh.edgeAttrs().has(kContactAttr) ? mesh.edgeAttrs().get<bool>(kContactAttr) : std::span<const bool>();
+    const double limit = std::cos(glm::radians(angle));
+    std::vector<Index> out;
+    for (Index e = 0; e < mesh.edgeCapacity(); ++e)
+    {
+        if (!mesh.edgeValid(e) || mesh.edgeFaceCount(e) != 2 || (e < contact.size() && contact[e]))
+            continue;
+        const Index c = mesh.edgeCorner(e);
+        const Index f0 = mesh.cornerFace(c), f1 = mesh.cornerFace(mesh.cornerRadial(c));
+        const glm::dvec3 n0 = mesh.faceNormal(f0);
+        if (glm::dot(n0, mesh.faceNormal(f1)) >= limit)
+            continue;
+        // Convex: the other face falls away behind this one's plane. A concave edge's bevel would fill the corner.
+        if (glm::dot(n0, mesh.faceCentroid(f1) - mesh.position(mesh.cornerPoint(c))) < 0.0)
+            out.push_back(e);
+    }
+    return out;
+}
+
+void markContact(Mesh& mesh, std::span<const Index> edges)
+{
+    std::span<bool> contact = mesh.edgeAttrs().getOrAdd<bool>(kContactAttr);
+    std::fill(contact.begin(), contact.end(), false);
+    for (Index e : edges)
+        if (e < contact.size())
+            contact[e] = true;
+}
+
+double archFrame(double width, double height, double thickness)
+{
+    return std::clamp(thickness, 0.0, std::min(std::abs(width), std::abs(height)) * 0.25);
+}
+
 Mesh buildShape(Shape shape, Frame f, const ShapeOptions& o)
 {
     // Normalise: positive extents, origin at the low corner. A prism's outline is already placed from the origin.
@@ -348,7 +385,7 @@ Mesh buildShape(Shape shape, Frame f, const ShapeOptions& o)
             break;
         }
         // A doorway: a frame thickness wide around an opening with a round top, open at the floor. Profile in (U, N).
-        const double t = std::clamp(o.thickness, 0.0, W * 0.49);
+        const double t = archFrame(W, h, o.thickness);
         const double ow = W - 2.0 * t, r = ow * 0.5;
         const double spring = std::max(0.0, h - t - r);
         if (ow <= 1e-6 || h - t <= 1e-6)
@@ -545,6 +582,127 @@ std::vector<Index> coveredFaces(const Mesh& a, const Mesh& b, double tolerance)
         }
     }
     return out;
+}
+
+std::vector<Index> touchingEdges(const Mesh& a, const Mesh& b, double tolerance)
+{
+    std::vector<std::vector<glm::dvec3>> polys;
+    std::vector<glm::dvec3> normals;
+    for (Index fb = 0; fb < b.faceCapacity(); ++fb)
+        if (b.faceValid(fb))
+        {
+            polys.push_back(facePositions(b, fb));
+            normals.push_back(b.faceNormal(fb));
+        }
+    std::vector<Index> out;
+    for (Index e = 0; e < a.edgeCapacity(); ++e)
+    {
+        if (!a.edgeValid(e))
+            continue;
+        const glm::dvec3 p0 = a.position(a.edgePoint(e, 0)), p1 = a.position(a.edgePoint(e, 1)), mid = (p0 + p1) * 0.5;
+        for (size_t i = 0; i < polys.size(); ++i)
+        {
+            const glm::dvec3& n = normals[i];
+            const glm::dvec3& o = polys[i][0];
+            if (std::abs(glm::dot(p0 - o, n)) > tolerance || std::abs(glm::dot(p1 - o, n)) > tolerance)
+                continue;
+            if (insidePolygon(polys[i], n, mid, tolerance))
+            {
+                out.push_back(e);
+                break;
+            }
+        }
+    }
+    return out;
+}
+
+std::optional<ContactCut> partialContactCut(const Mesh& a, const Mesh& b, std::span<const Index> edges, double tolerance)
+{
+    for (Index fb = 0; fb < b.faceCapacity(); ++fb)
+    {
+        if (!b.faceValid(fb))
+            continue;
+        const std::vector<glm::dvec3> poly = facePositions(b, fb);
+        const glm::dvec3 n = b.faceNormal(fb);
+        for (Index e : edges)
+        {
+            if (!a.edgeValid(e))
+                continue;
+            const glm::dvec3 p0 = a.position(a.edgePoint(e, 0)), p1 = a.position(a.edgePoint(e, 1));
+            if (std::abs(glm::dot(p0 - poly[0], n)) > tolerance || std::abs(glm::dot(p1 - poly[0], n)) > tolerance)
+                continue;
+            // Only where one of the edge's faces is pressed against b's face.
+            bool pressed = false;
+            const Index c0 = a.edgeCorner(e);
+            for (Index k = c0; !pressed;)
+            {
+                pressed = glm::dot(a.faceNormal(a.cornerFace(k)), n) < -0.999;
+                k = a.cornerRadial(k);
+                if (k == c0 || k == geo::kInvalid)
+                    break;
+            }
+            if (!pressed)
+                continue;
+            for (size_t i = 0; i < poly.size(); ++i)
+            {
+                // The plane standing on this side of b's face, across a's edge.
+                const glm::dvec3 q0 = poly[i], q1 = poly[(i + 1) % poly.size()];
+                const glm::dvec3 across = glm::cross(q1 - q0, n);
+                if (glm::length(across) < 1e-9)
+                    continue;
+                const glm::dvec3 side = glm::normalize(across);
+                const double d0 = glm::dot(p0 - q0, side), d1 = glm::dot(p1 - q0, side);
+                if (d0 * d1 >= 0.0 || std::abs(d0) <= tolerance || std::abs(d1) <= tolerance)
+                    continue;
+                const glm::dvec3 x = p0 + (p1 - p0) * (d0 / (d0 - d1));
+                const double t = std::clamp(glm::dot(x - q0, q1 - q0) / glm::dot(q1 - q0, q1 - q0), 0.0, 1.0);
+                if (glm::length(q0 + (q1 - q0) * t - x) > tolerance)
+                    continue;
+                ContactCut c{x, side, {}};
+                for (Index k = c0;;)
+                {
+                    c.faces.push_back(a.cornerFace(k));
+                    k = a.cornerRadial(k);
+                    if (k == c0 || k == geo::kInvalid)
+                        break;
+                }
+                return c;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+double depthThrough(const Mesh& m, const std::vector<glm::dvec3>& points, const glm::dvec3& dir)
+{
+    double deepest = 0.0;
+    for (const glm::dvec3& o : points)
+    {
+        double nearest = std::numeric_limits<double>::max();
+        for (Index f = 0; f < m.faceCapacity(); ++f)
+        {
+            if (!m.faceValid(f) || glm::dot(m.faceNormal(f), dir) <= 1e-6)
+                continue;
+            const std::vector<Index> ps = m.facePoints(f);
+            for (size_t i = 1; i + 1 < ps.size(); ++i)
+            {
+                const glm::dvec3 a = m.position(ps[0]), e1 = m.position(ps[i]) - a, e2 = m.position(ps[i + 1]) - a;
+                const glm::dvec3 pv = glm::cross(dir, e2);
+                const double det = glm::dot(e1, pv);
+                if (std::abs(det) < 1e-12)
+                    continue;
+                const glm::dvec3 tv = o - a;
+                const double u = glm::dot(tv, pv) / det;
+                const glm::dvec3 qv = glm::cross(tv, e1);
+                const double v = glm::dot(dir, qv) / det, t = glm::dot(e2, qv) / det;
+                if (u >= -1e-9 && v >= -1e-9 && u + v <= 1.0 + 1e-9 && t > 1e-4)
+                    nearest = std::min(nearest, t);
+            }
+        }
+        if (nearest < std::numeric_limits<double>::max())
+            deepest = std::max(deepest, nearest);
+    }
+    return deepest;
 }
 
 Index faceAt(const Mesh& mesh, const glm::dvec3& point, const glm::dvec3& normal, double tolerance)

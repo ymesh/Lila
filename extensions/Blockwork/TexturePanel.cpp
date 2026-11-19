@@ -7,6 +7,7 @@
 #include <lila/FileDialog.h>
 #include <lila/Icons.h>
 #include <lila/Log.h>
+#include <lila/MaterialThumbnails.h>
 #include <lila/Prefs.h>
 #include <lila/UI.h>
 #include <lila/ViewportTool.h>
@@ -96,6 +97,15 @@ void runOnTargets(const char* cmd, json call)
     {
         log::warn("{}", e.what());
     }
+}
+
+/** A flat tile of a linear colour, for materials with no image to show. */
+QIcon swatch(const glm::dvec3& linear)
+{
+    QPixmap px(kThumb, kThumb);
+    auto srgb = [](double c) { return int(std::lround(255.0 * std::pow(std::clamp(c, 0.0, 1.0), 1.0 / 2.2))); };
+    px.fill(QColor(srgb(linear.r), srgb(linear.g), srgb(linear.b)));
+    return QIcon(px);
 }
 
 QPixmap thumbnail(const QString& file)
@@ -428,9 +438,13 @@ private:
                 for (const auto& [ch, attr] : materials::textureChannels())
                     if (ch == "baseColor" && !m->as<std::string>(attr).empty())
                         px = thumbnail(QString::fromStdString(materials::resolvePath(m->as<std::string>(attr))));
-                auto* it = new QListWidgetItem(px.isNull() ? icon("palette") : QIcon(px), name, mList);
+                const std::string set = materials::textureSet(*m);
+                auto* it = new QListWidgetItem(px.isNull() ? swatch(m->as<glm::dvec3>(material::kBaseColor)) : QIcon(px), name, mList);
                 it->setData(Qt::UserRole, QString("material:") + name);
                 it->setSelected(m->name() == current);
+                // A material painted from a texture set (a trim sheet's palettes) shows the set on the preview ball.
+                if (!set.empty())
+                    showBall(it->data(Qt::UserRole).toString(), set);
             }
         }
         else
@@ -519,6 +533,40 @@ private:
         mSyncing = false;
     }
 
+    /** Puts the texture set's preview ball on the tile keyed key, rendering it once per panel (the renderer caches by content). */
+    void showBall(const QString& key, const std::string& set)
+    {
+        if (auto it = mBalls.find(set); it != mBalls.end())
+        {
+            if (!it->second.isNull())
+                setTileIcon(key, it->second);
+            return;
+        }
+        mBalls[set] = QPixmap();
+        materialThumbs::Options o;
+        o.size = 128;
+        QPointer<TexturePanel> alive(this);
+        materialThumbs::renderAsync(set, o, [alive, key, set](const materialThumbs::Result& r, const std::string& err) {
+            if (!alive)
+                return;
+            if (!err.empty())
+            {
+                log::warn("Block Textures: no preview for {}: {}", set, err);
+                return;
+            }
+            alive->mBalls[set] = QPixmap(QString::fromStdWString(r.file.wstring()));
+            alive->setTileIcon(key, alive->mBalls[set]);
+        });
+    }
+
+    void setTileIcon(const QString& key, const QPixmap& px)
+    {
+        for (int i = 0; i < mList->count(); ++i)
+            if (mList->item(i)->data(Qt::UserRole).toString() == key)
+                mList->item(i)->setIcon(QIcon(px));
+    }
+
+    std::map<std::string, QPixmap> mBalls;
     QToolButton *mBack = nullptr, *mForward = nullptr, *mFavourite = nullptr;
     QComboBox* mPlaces = nullptr;
     QLineEdit* mFilter = nullptr;

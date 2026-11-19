@@ -3,6 +3,7 @@
 #include "ops/Command.h"
 #include "core/Log.h"
 #include "core/PrefStore.h"
+#include "core/Progress.h"
 #include "core/Workspace.h"
 #include "python/Python.h"
 #include "ui/Actions.h"
@@ -473,6 +474,8 @@ void LayoutController::applyColumns(const json& columns)
 
 void LayoutController::applyPreset(const json& preset)
 {
+    // Qt's dock layout must not re-enter the event loop while it rearranges: events run there can delete what it uses.
+    const progress::NoPump noPump;
     holdOwnColumns(mWindow);
     mReset();
     std::set<std::string> open;
@@ -519,6 +522,7 @@ void LayoutController::applyPreset(const json& preset)
 
 void LayoutController::apply(const json& layout)
 {
+    const progress::NoPump noPump;
     mWindow->setUpdatesEnabled(false);
     json docks = layout.value("docks", json::object());
     ensureDocks(docks);

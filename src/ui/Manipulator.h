@@ -122,7 +122,8 @@ private:
         bool componentPivot = false; // Edit Pivot on components: moves or orients the transient component pivot
         bool surfaceSlide = false; // Ctrl+MMB off the handles: the pivot follows the surface under the cursor
         bool clone = false;        // a clone drag (Y held): saved holds the copies made on press
-        nlohmann::json cloneCall;  // the duplicate call that made them, run again on release
+        std::string cloneCommand;  // what made them: duplicate for objects, polyExtrude for faces and edges
+        nlohmann::json cloneCall;  // the call that made them, run again on release
         QPointF linearDir;
         double linearSign = 1.0;
         Tool tool = Tool::Move;
@@ -141,6 +142,8 @@ private:
         std::vector<scene::NodeId> conformTo;
         /** Per saved object: the world rotation that turns its up axis to the surface normal, when aligning. */
         std::vector<glm::dquat> alignRotations;
+        /** An extension's snapping for the dragged objects (tools::selectionSnap), taken at the press. */
+        std::optional<SelectionSnap> selectionSnap;
         double startAngle = 0.0;
         glm::dvec3 startHit{0.0};
         // results of the last update
@@ -170,7 +173,7 @@ private:
     void update(QPointF px, Qt::KeyboardModifiers mods);
     void commit();
     /** Undoes the duplicate a clone drag ran on press. */
-    void dropCloneCopies();
+    void dropCloneCopies(const std::string& command);
     /** World-space transform the current drag applies to components. */
     glm::dmat4 componentXform() const;
     glm::dvec3 snapGrid(const glm::dvec3& p, const glm::dvec3& mask) const;

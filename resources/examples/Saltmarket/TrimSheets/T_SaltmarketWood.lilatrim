@@ -1,0 +1,315 @@
+{
+  "decal": false,
+  "folder": "",
+  "height": 1024,
+  "high": [],
+  "highReplaces": false,
+  "lilatrim": 1,
+  "maps": [
+    "normal",
+    "ao",
+    "curvature",
+    "height",
+    "cavity",
+    "detailNormal",
+    "objectNormal"
+  ],
+  "material": "Trim Wood",
+  "mipLevel": 3,
+  "name": "T_SaltmarketWood",
+  "padding": 4,
+  "palettes": [],
+  "preset": "woodTrims",
+  "pxPerM": 128.0,
+  "scalars": {},
+  "supersampling": 16,
+  "switches": {},
+  "trims": [
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": -1,
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "kind": "stripU",
+      "max": [
+        1024,
+        32
+      ],
+      "min": [
+        0,
+        0
+      ],
+      "name": "Dowel64",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "halfPipe"
+      },
+      "reserved": false,
+      "tags": [
+        "edge"
+      ]
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": -1,
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "kind": "stripU",
+      "max": [
+        1024,
+        64
+      ],
+      "min": [
+        0,
+        32
+      ],
+      "name": "Bead64",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "doubleBevel"
+      },
+      "reserved": false,
+      "tags": [
+        "edge"
+      ]
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": -1,
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "kind": "stripU",
+      "max": [
+        1024,
+        128
+      ],
+      "min": [
+        0,
+        64
+      ],
+      "name": "Batten128",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": -1,
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "kind": "stripU",
+      "max": [
+        1024,
+        192
+      ],
+      "min": [
+        0,
+        128
+      ],
+      "name": "Board128",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 256.0,
+        "style": "planks"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": -1,
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "kind": "stripU",
+      "max": [
+        1024,
+        320
+      ],
+      "min": [
+        0,
+        192
+      ],
+      "name": "Board256",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 384.0,
+        "style": "planks"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": -1,
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "kind": "stripU",
+      "max": [
+        1024,
+        448
+      ],
+      "min": [
+        0,
+        320
+      ],
+      "name": "Board256b",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 320.0,
+        "style": "planks"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": -1,
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "kind": "stripU",
+      "max": [
+        1024,
+        576
+      ],
+      "min": [
+        0,
+        448
+      ],
+      "name": "Beam256",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": -1,
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "kind": "stripU",
+      "max": [
+        1024,
+        832
+      ],
+      "min": [
+        0,
+        576
+      ],
+      "name": "Floor512",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 512.0,
+        "style": "planks"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": -1,
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "kind": "stripU",
+      "max": [
+        1024,
+        960
+      ],
+      "min": [
+        0,
+        832
+      ],
+      "name": "Skirting256",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "step"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": -1,
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "kind": "stripU",
+      "max": [
+        1024,
+        1024
+      ],
+      "min": [
+        0,
+        960
+      ],
+      "name": "Moulding128",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "halfPipe"
+      },
+      "reserved": false,
+      "tags": []
+    }
+  ],
+  "vectors": {},
+  "width": 1024
+}

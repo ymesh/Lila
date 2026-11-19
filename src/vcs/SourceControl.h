@@ -33,12 +33,13 @@ enum class WriteAccess : uint8_t
  * Picks the provider for a path and runs work off the main thread.
  *
  * Settings come from the "sourceControl" prefs file, so <workspace>/.lila/sourceControl.json overrides the user's:
- *   {"provider": "auto" | "perforce" | "git" | "none",
+ *   {"provider": "auto" | "perforce" | "git" | "svn" | "none",
  *    "perforce": {"port": "", "user": "", "client": "", "charset": "", "exe": ""},
  *    "git": {"exe": ""},
+ *    "svn": {"exe": "", "shelfRoot": "^/shelves", "user": ""},
  *    "autoCheckout": "always" | "prompt" | "never",
  *    "autoAdd": true}
- * "auto" uses Perforce when `p4 where` maps the directory, else git when it is inside a work tree.
+ * "auto" uses Perforce when `p4 where` maps the directory, else the nearest git work tree or svn working copy.
  */
 class LILA_SCENE_API SourceControl
 {
@@ -93,6 +94,7 @@ private:
     std::shared_ptr<ProcessRunner> mRunner;
     std::map<std::string, std::shared_ptr<Provider>> mByDir;
     std::map<std::string, std::shared_ptr<Provider>> mGitByRoot;
+    std::map<std::string, std::shared_ptr<Provider>> mSvnByRoot;
     std::shared_ptr<Provider> mPerforce;
     bool mPerforceUnreachable = false;
     int mPrefListener = 0;

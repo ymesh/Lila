@@ -42,8 +42,26 @@ struct Maps
  */
 LILA_UI_API std::optional<Maps> mapsFor(const std::string& material);
 
-/** A set's channel image for a UDIM tile (its format from the channel's bits), null when the set isn't live. Main thread. */
+/**
+ * A set's channel image for a UDIM tile (its format from the channel's bits), null when the set isn't live. A virtual
+ * (paged) set has whole images only for height: asking for it makes a height-only copy capped at the general pref
+ * /texture/displacementPreviewSize (4096), null until its first level has run. Main thread.
+ */
 LILA_UI_API render::GpuImageRef channelImage(const std::string& set, const std::string& channel, int udim = 1001);
+
+/** A virtual set's height copy: its longest tile side, the set's own, and whether it has been evaluated. */
+struct HeightCopy
+{
+    int size = 0;
+    int full = 0;
+    bool ready = false;
+};
+
+/** The height copy of a virtual set, nullopt for a set that isn't live or isn't virtual. Main thread. */
+LILA_UI_API std::optional<HeightCopy> heightCopy(const std::string& set);
+
+/** Whether a set is evaluating for the viewport: some material that uses it has been drawn. Main thread. */
+LILA_UI_API bool isLive(const std::string& set);
 
 /** Listens to the scene and mesh map rebakes. Call once at startup, after the renderer starts. */
 LILA_UI_API void install();

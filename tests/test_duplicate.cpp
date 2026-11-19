@@ -2,8 +2,11 @@
 
 #include "TestUtil.h"
 
+#include "core/PrefStore.h"
+#include "geo/Mesh.h"
 #include "ops/Command.h"
 #include "ops/CommandOptions.h"
+#include "scene/Components.h"
 #include "scene/Duplicate.h"
 #include "scene/Graph.h"
 #include "scene/LastOp.h"
@@ -203,6 +206,73 @@ TEST_CASE("duplicateWithTransform repeats the last pair's live delta")
     run("delete", {{"args", {inst[0]}}});
     CHECK(scene::duplicate::lastPairs().empty());
     CHECK_THROWS_AS(run("duplicateWithTransform"), CommandError);
+}
+
+TEST_CASE("a clone drag on faces extrudes them, and Shift does too when the pref says so")
+{
+    auto topFace = [](const std::string& mesh) {
+        const geo::Mesh m = meshOf(mesh);
+        geo::Index best = geo::kInvalid;
+        for (geo::Index f = 0; f < m.faceCapacity(); ++f)
+            if (m.faceValid(f) && (best == geo::kInvalid || m.faceCentroid(f).y > m.faceCentroid(best).y))
+                best = f;
+        return best;
+    };
+    // Looking down -Z, 1 px per cm, the world origin at pixel (50, 50).
+    ui::ViewInfo view;
+    view.proj = glm::ortho(-50.0, 50.0, -50.0, 50.0, -100.0, 100.0);
+    view.width = view.height = 100.0;
+    view.ortho = true;
+    view.eye = {0.0, 0.0, 50.0};
+    ui::tools::setCurrent(ui::Tool::Move);
+
+    for (const bool shift : {false, true})
+    {
+        CAPTURE(shift);
+        run("newScene");
+        const std::string c = run("polyCube", {{"name", "Block"}})[0];
+        const double top = meshOf(c).bounds().max.y;
+        scene::components::setMode(scene::ComponentMode::Face);
+        run("selectComponents", {{"args", {c}}, {"faces", {topFace(c)}}});
+        PrefStore::get().set("general", "/manipulator/shiftDrag", shift ? "extrude" : "fine");
+        ui::tools::setCloneDrag(!shift);
+        ui::Manipulator m;
+        m.setView(view);
+        REQUIRE(m.visible());
+        const Qt::KeyboardModifiers mods = shift ? Qt::ShiftModifier : Qt::NoModifier;
+        // This view draws world +Y down the screen; the first drag event only starts the drag.
+        const int pivotY = int(std::lround(50.0 + top));
+        REQUIRE(m.press({50, double(pivotY)}, Qt::LeftButton, mods));
+        m.drag({50, double(pivotY + 10)}, mods);
+        m.drag({50, double(pivotY + 20)}, mods);
+        m.release();
+        ui::tools::setCloneDrag(false);
+
+        CHECK(faces(c) == 10);
+        CHECK(meshOf(c).bounds().max.y == doctest::Approx(top + 20.0).epsilon(1e-6));
+        // The extrude and its move are one step.
+        run("undo");
+        CHECK(faces(c) == 6);
+        CHECK(meshOf(c).bounds().max.y == doctest::Approx(top));
+    }
+
+    // With the pref at its default, Shift is fine control: the face moves a tenth as far and nothing extrudes.
+    run("newScene");
+    const std::string c = run("polyCube", {{"name", "Block"}})[0];
+    const double top = meshOf(c).bounds().max.y;
+    scene::components::setMode(scene::ComponentMode::Face);
+    run("selectComponents", {{"args", {c}}, {"faces", {topFace(c)}}});
+    PrefStore::get().set("general", "/manipulator/shiftDrag", "fine");
+    ui::Manipulator m;
+    m.setView(view);
+    const int pivotY = int(std::lround(50.0 + top));
+    REQUIRE(m.press({50, double(pivotY)}, Qt::LeftButton, Qt::ShiftModifier));
+    m.drag({50, double(pivotY + 10)}, Qt::ShiftModifier);
+    m.drag({50, double(pivotY + 20)}, Qt::ShiftModifier);
+    m.release();
+    CHECK(faces(c) == 6);
+    CHECK(meshOf(c).bounds().max.y == doctest::Approx(top + 2.0).epsilon(1e-6));
+    scene::components::setMode(scene::ComponentMode::Object);
 }
 
 TEST_CASE("a clone drag on the manipulator moves copies and leaves the originals")

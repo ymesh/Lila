@@ -57,7 +57,7 @@ protected:
         {
             mLast = e->globalPosition().x();
             // One drag is one undo step, however many values it sets on the way.
-            if (!mChunk)
+            if (!mChunk && !scrubsWithoutUndoStep(this))
             {
                 UndoStack::get().openChunk("Drag " + text().toStdString());
                 mChunk = true;

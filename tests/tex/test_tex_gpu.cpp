@@ -709,7 +709,15 @@ TEST_CASE("tex gpu: compact buffers share memory and match the CPU")
         CHECK(maxDiff(img, b.at(name)) < 5e-3);
         CHECK(maxDiff(img, split.outputs.at(name)) < 5e-3);
     }
-    CHECK_THROWS_AS(texgpu::evaluate(p, o, 4096), texgpu::ArenaTooLarge);
+    // Too small for even one output, each runs on the CPU instead, with a warning saying so.
+    EvalResult tiny = texgpu::evaluate(p, o, 4096);
+    for (const auto& [name, img] : cpu.outputs)
+    {
+        CAPTURE(name);
+        REQUIRE(tiny.outputs.contains(name));
+        CHECK(maxDiff(img, tiny.outputs.at(name)) < 5e-3);
+    }
+    CHECK(std::any_of(tiny.warnings.begin(), tiny.warnings.end(), [](const std::string& w) { return w.find("CPU") != std::string::npos; }));
 }
 
 TEST_CASE("tex gpu: a 4K set with many generator layers and 4K mesh maps evaluates")
@@ -737,5 +745,47 @@ TEST_CASE("tex gpu: a 4K set with many generator layers and 4K mesh maps evaluat
         const double m = meanDiff(downsample(img, 64), cpu.outputs.at(name));
         // Normals come from height slopes, which sharpen with resolution.
         CHECK(m < (name == "normal" ? 0.15 : 0.05));
+    }
+}
+
+TEST_CASE("tex gpu: outputs too large for one GPU buffer evaluate in pages, or on the CPU, and match")
+{
+    if (!graphGpu())
+        return;
+    Graph g;
+    add(g, "B", "bricks", {{"rows", 37}, {"columns", 23}});
+    add(g, "I", "image", {{"file", "external:map"}});
+    // A blur is a whole-size intermediate that the page passes read around each texel.
+    add(g, "S", "blur", {{"radius", 0.02}});
+    link(g, "B.mask", "S.input");
+    PlanRequest r;
+    r.width = r.height = 256;
+    r.outputs = {{"color", "I", "out", PortType::Color, {}}, {"mask", "B", "mask", PortType::Gray, {}}, {"soft", "S", "out", PortType::Gray, {}}};
+    const Plan p = buildPlan(g, r);
+    REQUIRE_MESSAGE(p.error.empty(), p.error);
+
+    EvalOptions o;
+    image::Image map{64, 32, {}, {}};
+    for (int i = 0; i < 64 * 32; ++i)
+        map.rgba.insert(map.rgba.end(), {float(i % 64) / 63.0f, float(i / 64) / 31.0f, 0.5f, 1.0f});
+    o.externals["map"] = map;
+
+    const EvalResult whole = texgpu::evaluate(p, o);
+    // One float output at 256 x 256 is 1 MB: a byte less makes every output go page by page.
+    const EvalResult paged = texgpu::evaluate(p, o, 256 * 256 * 16 - 1);
+    // Fused outputs go page by page; the blur's own output is a whole buffer, so it falls back to the CPU and says so.
+    size_t onCpu = 0;
+    for (const std::string& w : paged.warnings)
+        if (w.find("CPU") != std::string::npos)
+        {
+            ++onCpu;
+            CHECK_MESSAGE(w.find("soft") != std::string::npos, w);
+        }
+    CHECK(onCpu == 1);
+    for (const auto& [name, img] : whole.outputs)
+    {
+        CAPTURE(name);
+        REQUIRE(paged.outputs.contains(name));
+        CHECK(maxDiff(img, paged.outputs.at(name)) < 1e-3);
     }
 }

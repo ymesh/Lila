@@ -25,6 +25,13 @@ namespace lila::ui
  */
 LILA_UI_API void installSpinScrub(QObject* parent);
 
+/**
+ * Marks w and everything inside it as fields whose edits re-run an operation that already makes one undo step of a
+ * drag (Adjust Last Op). Their scrubs then open no undo chunk of their own, which would block the re-run.
+ */
+LILA_UI_API void setScrubsWithoutUndoStep(QWidget* w);
+LILA_UI_API bool scrubsWithoutUndoStep(const QWidget* w);
+
 /** Dynamic property holding a spin box's default value (a double), restored by a middle click on the box. */
 inline constexpr const char* kDefaultProperty = "lilaDefault";
 

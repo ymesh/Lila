@@ -238,6 +238,48 @@ TEST_CASE("hotspot: a wall goes to the strip whose world height matches, up the 
     CHECK(cycled.size() == 3);
 }
 
+TEST_CASE("hotspot: walls round a chamfered corner take one trim and run on round it")
+{
+    // Two strips the same height, so every island has a tie to pick from.
+    uv::HotspotTrim a;
+    a.kind = uv::TrimKind::StripU;
+    a.min = {0.0, 0.0};
+    a.max = {1.0, 0.25};
+    a.worldSize = {200.0, 50.0};
+    uv::HotspotTrim b = a;
+    b.min = {0.0, 0.5};
+    b.max = {1.0, 0.75};
+    const std::vector<uv::HotspotTrim> trims{a, b};
+    // Front, a 45 degree chamfer, right: a block's corner bevelled at 4 cm.
+    const glm::dvec3 pts[] = {{-200, 0, 20}, {196, 0, 20}, {200, 0, 16}, {200, 0, -200},
+                              {-200, 50, 20}, {196, 50, 20}, {200, 50, 16}, {200, 50, -200}};
+    const geo::Index sizes[] = {4, 4, 4};
+    const geo::Index idx[] = {0, 1, 5, 4, 1, 2, 6, 5, 2, 3, 7, 6};
+    for (uint32_t seed = 0; seed < 8; ++seed)
+    {
+        geo::Mesh m = geo::Mesh::fromPolygons(pts, sizes, idx);
+        uv::HotspotOptions o;
+        o.seed = seed;
+        const uv::HotspotResult r = uv::hotspot(m, {}, trims, "uv0", o);
+        REQUIRE(r.islands.size() == 3);
+        CHECK(r.islands[0].trim == r.islands[1].trim);
+        CHECK(r.islands[1].trim == r.islands[2].trim);
+        // Each edge between them carries one uv on both sides, so the strip runs on.
+        std::span<const glm::vec2> uv = m.cornerAttrs().get<glm::vec2>("uv0");
+        for (const glm::dvec3 p : {glm::dvec3(196, 50, 20), glm::dvec3(200, 50, 16)})
+        {
+            std::vector<glm::vec2> at;
+            for (geo::Index c = 0; c < m.cornerCapacity(); ++c)
+                if (m.cornerValid(c) && glm::length(m.position(m.cornerPoint(c)) - p) < 1e-6)
+                    at.push_back(uv[c]);
+            REQUIRE(at.size() == 2);
+            const float du = at[0].x - at[1].x;
+            CHECK(std::abs(du - std::round(du)) < 1e-4f);
+            CHECK(at[0].y == doctest::Approx(at[1].y));
+        }
+    }
+}
+
 TEST_CASE("hotspot: a square panel takes a square hotspot of its size")
 {
     const Sheet s = preset("hotspotGrid");
@@ -253,6 +295,65 @@ TEST_CASE("hotspot: a square panel takes a square hotspot of its size")
     CHECK(hi.x <= s.uvMax(t).x + 1e-9);
     CHECK(lo.y >= s.uvMin(t).y - 1e-9);
     CHECK(hi.y <= s.uvMax(t).y + 1e-9);
+}
+
+TEST_CASE("hotspot: a ramp's side keeps its shape with up running up the trim")
+{
+    const Sheet s = preset("industrialMetal");
+    const std::vector<uv::HotspotTrim> trims = hotspotTrims(s);
+    // A ramp's side: 400 cm along the ground, 50 cm up at one end.
+    const glm::dvec3 pts[] = {{0, 0, 0}, {400, 0, 0}, {0, 50, 0}};
+    const geo::Index sizes[] = {3};
+    const geo::Index idx[] = {0, 1, 2};
+    geo::Mesh m = geo::Mesh::fromPolygons(pts, sizes, idx);
+    const uv::HotspotResult r = uv::hotspot(m, {}, trims, "uv0");
+    REQUIRE(r.islands.size() == 1);
+    REQUIRE(r.islands[0].trim >= 0);
+    const glm::dvec2 a = uvAt(m, pts[0]), b = uvAt(m, pts[1]), c = uvAt(m, pts[2]);
+    const glm::dvec2 ab = b - a, ac = c - a;
+    // The ground edge runs along U and the upright edge up V, not along the slope.
+    CHECK(std::abs(ab.y) < 1e-4 * glm::length(ab));
+    CHECK(std::abs(ac.x) < 1e-4 * glm::length(ac));
+    CHECK(ac.y > 0.0);
+    CHECK(glm::length(ab) / glm::length(ac) == doctest::Approx(8.0).epsilon(0.02));
+}
+
+TEST_CASE("hotspot: a flat wall split into slanted quads is mapped flat, not sheared into a grid")
+{
+    const Sheet s = preset("industrialMetal");
+    const std::vector<uv::HotspotTrim> trims = hotspotTrims(s);
+    // A 400 x 50 wall cut along a slanted line, as a carve leaves it.
+    const glm::dvec3 pts[] = {{0, 0, 0}, {100, 0, 0}, {300, 50, 0}, {0, 50, 0}, {400, 0, 0}, {400, 50, 0}};
+    const geo::Index sizes[] = {4, 4};
+    const geo::Index idx[] = {0, 1, 2, 3, 1, 4, 5, 2};
+    geo::Mesh m = geo::Mesh::fromPolygons(pts, sizes, idx);
+    const uv::HotspotResult r = uv::hotspot(m, {}, trims, "uv0");
+    REQUIRE(r.islands.size() == 1);
+    const glm::dvec2 a = uvAt(m, pts[0]), b = uvAt(m, pts[1]), c = uvAt(m, pts[2]), d = uvAt(m, pts[3]);
+    // The cut's top end sits three quarters along the top edge, as it does in 3D.
+    const glm::dvec2 e = uvAt(m, pts[5]);
+    CHECK(glm::length(c - d) / glm::length(e - d) == doctest::Approx(0.75).epsilon(0.01));
+    CHECK(glm::length(b - a) / glm::length(e - d) == doctest::Approx(0.25).epsilon(0.01));
+}
+
+TEST_CASE("hotspot: an arch's frame keeps its shape instead of being pulled onto a rectangle")
+{
+    const Sheet s = preset("industrialMetal");
+    const std::vector<uv::HotspotTrim> trims = hotspotTrims(s);
+    // A gate's face: 400 wide, 300 tall, with a 200 x 200 opening up from the ground in the middle.
+    const glm::dvec3 pts[] = {{0, 0, 0}, {100, 0, 0}, {100, 200, 0}, {300, 200, 0}, {300, 0, 0}, {400, 0, 0}, {400, 300, 0}, {0, 300, 0}};
+    const geo::Index sizes[] = {8};
+    const geo::Index idx[] = {0, 1, 2, 3, 4, 5, 6, 7};
+    geo::Mesh m = geo::Mesh::fromPolygons(pts, sizes, idx);
+    uv::HotspotOptions opts;
+    opts.sliceOversized = false;
+    const uv::HotspotResult r = uv::hotspot(m, {}, trims, "uv0", opts);
+    REQUIRE(r.islands.size() == 1);
+    // Corners in a straight row in 3D stay in a row in uv: the opening's top is level with nothing pulled out to the box.
+    const glm::dvec2 o = uvAt(m, pts[0]), k = uvAt(m, pts[7]), j = uvAt(m, pts[2]), l = uvAt(m, pts[3]);
+    const glm::dvec2 up = glm::normalize(k - o);
+    CHECK(glm::dot(glm::normalize(l - j), up) == doctest::Approx(0.0).epsilon(0.01));
+    CHECK(glm::dot(j - o, up) / glm::length(k - o) == doctest::Approx(200.0 / 300.0).epsilon(0.01));
 }
 
 TEST_CASE("weighted normals: big faces stay flat beside a chamfer")

@@ -398,10 +398,18 @@ bool VulkanContext::init(bool validation)
     return true;
 }
 
+void VulkanContext::pipelineFailed(const std::string& what, VkResult r)
+{
+    log::error("render: pipeline creation failed ({}): {}", what, vkResultName(r));
+    pipelineCreationFailed = true;
+}
+
 void VulkanContext::savePipelineCache()
 {
     LILA_ZONE();
     size_t size = 0;
+    if (pipelineCreationFailed)
+        return;
     if (!pipelineCache || vkGetPipelineCacheData(device, pipelineCache, &size, nullptr) != VK_SUCCESS || size == 0)
         return;
     std::vector<char> data(size);

@@ -79,6 +79,11 @@ private:
     void restoreLayout();
     void applyDefaultDockSizes();
     void resetLayout();
+    /**
+     * QMainWindow::restoreState with the progress pump held off: a dock shown while Qt applies the state can start work
+     * that pumps events, and those events can delete objects the dock layout is still using.
+     */
+    bool restoreDocks(const QByteArray& state);
     /** Brings a window that a layout grew past its screen back onto it. */
     void fitToScreen();
     /** The menu bar and shelf dock as the /ui/showMenuBar and /ui/showShelf prefs say. */

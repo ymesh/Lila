@@ -296,3 +296,40 @@ TEST_CASE("tex: normalFromHeight shows the normal rebuilt from the height channe
     CHECK(has(types(), "meshHeight"));
     CHECK_THROWS_AS(run("texSetSettings", {{"args", {"Wall", {{"heightSource", "nope"}}}}}), CommandError);
 }
+
+TEST_CASE("tex commands: linking or setting a Material Output input the set has no channel for adds the channel")
+{
+    run("newScene");
+    run("texCreateSet", {{"args", {"Ch"}}, {"resolution", 32}});
+    auto channels = [] {
+        std::map<std::string, json> out;
+        const json settings = run("texSetSettings", {{"args", {"Ch", nlohmann::json::object()}}});
+        for (const json& c : settings["channels"])
+            out[c["name"].get<std::string>()] = c;
+        return out;
+    };
+    REQUIRE_FALSE(channels().contains("opacity"));
+
+    run("texSetValue", {{"args", {"Ch", "Output.opacity", 0.5}}});
+    REQUIRE(channels().contains("opacity"));
+    CHECK(channels().at("opacity")["type"] == "gray");
+    CHECK(channels().at("opacity")["bits"] == 8);
+    const size_t count = channels().size();
+
+    // Already there: nothing more is added.
+    run("texSetValue", {{"args", {"Ch", "Output.opacity", 0.25}}});
+    CHECK(channels().size() == count);
+
+    // Undoing the edits takes the added channel back too.
+    run("undo");
+    run("undo");
+    CHECK_FALSE(channels().contains("opacity"));
+
+    run("texAddNode", {{"args", {"Ch", "color"}}, {"name", "C"}});
+    run("texConnect", {{"args", {"Ch", "C.out", "Output.emissive"}}});
+    CHECK(channels().contains("emissive"));
+    run("texSetSettings", {{"args", {"Ch", json{{"channels", json::array({json{{"name", "baseColor"}, {"type", "color"}}})}}}}});
+    run("texConnect", {{"args", {"Ch", "C.out", "Output.roughness"}}});
+    CHECK(channels().contains("roughness"));
+    CHECK_FALSE(channels().contains("emissive"));
+}

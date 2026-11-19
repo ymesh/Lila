@@ -305,7 +305,7 @@ void MainWindow::arrangeDefaultDocks()
     tools->raise();
     channels->raise();
     // Moving tabbed docks leaves their old tab bars behind, shown over the viewport; a state round trip drops them.
-    restoreState(saveState());
+    restoreDocks(saveState());
 }
 
 void MainWindow::createPanelDock(const panels::Panel& p)

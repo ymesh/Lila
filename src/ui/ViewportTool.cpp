@@ -29,6 +29,7 @@ std::vector<QueuedMessage> gMessages;
 std::vector<ToolStatus> gStatuses;
 /** A tool drew its own key list this frame, so the layout's keys stay out of the corner. */
 bool gCornerKeysDrawn = false;
+std::vector<KeyHint> gExtraKeys;
 std::map<std::string, std::vector<viewportKeys::Provider>>& layoutKeys()
 {
     static std::map<std::string, std::vector<viewportKeys::Provider>> keys;
@@ -259,6 +260,8 @@ void drawSelectionSymmetry(const ToolSymmetry& symmetry) { gSelectionSymmetry = 
 
 void drawToolStatus(OverlayPainter&, const ViewInfo&, const ToolStatus& status) { gStatuses.push_back(status); }
 
+void addCornerKeys(const std::vector<KeyHint>& keys) { gExtraKeys.insert(gExtraKeys.end(), keys.begin(), keys.end()); }
+
 void drawToolMessage(OverlayPainter&, const ViewInfo&, const QString& text, const glm::vec4& color)
 {
     gMessages.push_back({text, color});
@@ -309,9 +312,14 @@ void flushToolMessages(OverlayPainter& p, const ViewInfo& view, const std::vecto
     }
     gMessages.clear();
     if (!gCornerKeysDrawn && keysShown())
-        if (const std::vector<KeyHint> keys = toolActive ? toolKeys : viewportKeys::forLayout(layouts::current()); !keys.empty())
+    {
+        std::vector<KeyHint> keys = toolActive ? toolKeys : viewportKeys::forLayout(layouts::current());
+        keys.insert(keys.end(), gExtraKeys.begin(), gExtraKeys.end());
+        if (!keys.empty())
             drawKeyList(p, QPointF(16.0, view.height - 84.0), keys);
+    }
     gCornerKeysDrawn = false;
+    gExtraKeys.clear();
 }
 
 bool keysShown() { return PrefStore::get().value<bool>("general", kShowKeysPref, true); }

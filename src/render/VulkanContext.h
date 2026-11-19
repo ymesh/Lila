@@ -15,6 +15,7 @@
 #endif
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -29,6 +30,8 @@ public:
     void shutdown();
     /** Writes the pipeline cache to disk, so the next launch skips compiling the pipelines built so far. */
     void savePipelineCache();
+    /** Logs a pipeline that failed to build and keeps this run's pipeline cache off disk. */
+    void pipelineFailed(const std::string& what, VkResult r);
 
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice physical = VK_NULL_HANDLE;
@@ -38,6 +41,11 @@ public:
     VmaAllocator allocator = VK_NULL_HANDLE;
     /** Every pipeline goes through it; persisted under <userConfigDir>/cache, since the driver's own cache can evict them. */
     VkPipelineCache pipelineCache = VK_NULL_HANDLE;
+    /**
+     * Set by pipelineFailed(). The cache is then never saved: some drivers crash serialising a cache that a failed
+     * pipeline creation went through.
+     */
+    std::atomic<bool> pipelineCreationFailed{false};
     VkPhysicalDeviceProperties properties{};
     VkSampleCountFlagBits msaa = VK_SAMPLE_COUNT_4_BIT; // what the viewport targets and pipelines use right now
     VkSampleCountFlags msaaSupported = VK_SAMPLE_COUNT_1_BIT;

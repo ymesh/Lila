@@ -42,6 +42,8 @@ struct Settings
     std::string prefab;
     /** Placed prefabs turn their up to the surface they land on. */
     bool prefabFollowsNormal = true;
+    /** The view flies with the Drone Camera while the tool is on. */
+    bool droneCamera = false;
 };
 
 Settings& settings();
@@ -51,6 +53,8 @@ void startTool(Mode mode);
 void startTool(Shape shape);
 /** Redraws the toolkit after settings change elsewhere. */
 void syncToolkit();
+/** Flies the active view while the tool is on with Drone camera picked, and lands a flight it started once either stops. */
+void syncCamera();
 const char* modeLabel(Mode m);
 const char* shapeLabel(Shape s);
 

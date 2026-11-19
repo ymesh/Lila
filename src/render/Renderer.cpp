@@ -5487,17 +5487,14 @@ struct Renderer::Impl
         pci.pDynamicState = &dy;
         pci.layout = layout;
         VkPipeline p = VK_NULL_HANDLE;
-        if (vkCreateGraphicsPipelines(vk.device, vk.pipelineCache, 1, &pci, nullptr, &p) != VK_SUCCESS)
-            log::error("render: pipeline creation failed ({} / {})", vs, ps);
+        if (VkResult r = vkCreateGraphicsPipelines(vk.device, vk.pipelineCache, 1, &pci, nullptr, &p); r != VK_SUCCESS)
+            vk.pipelineFailed(std::string(vs) + " / " + ps, r);
         return p;
     }
 
     VkPipeline buildCompute(VkPipelineLayout layout, VkShaderModule mod, const char* entry)
     {
-        VkPipeline p = compute::computePipeline(vk, layout, mod, entry);
-        if (!p)
-            log::error("render: compute pipeline creation failed ({})", entry);
-        return p;
+        return compute::computePipeline(vk, layout, mod, entry);
     }
 
     void createPipelines(VkFormat format)

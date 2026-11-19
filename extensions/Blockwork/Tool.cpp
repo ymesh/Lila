@@ -2,7 +2,9 @@
 #include "Entities.h"
 
 #include <lila/Components.h>
+#include <lila/Graph.h>
 #include <lila/Prefs.h>
+#include <lila/Tools.h>
 #include <lila/Transform.h>
 #include <lila/UI.h>
 #include <lila/Undo.h>
@@ -12,6 +14,7 @@
 #include <lila/ViewportRenderers.h>
 
 #include <QKeyEvent>
+#include <QTimer>
 #include <QMouseEvent>
 #include <QWheelEvent>
 
@@ -50,7 +53,8 @@ json toJson(const Settings& s)
             {"material", s.material},
             {"entityClass", s.entityClass},
             {"prefab", s.prefab},
-            {"prefabFollowsNormal", s.prefabFollowsNormal}};
+            {"prefabFollowsNormal", s.prefabFollowsNormal},
+            {"droneCamera", s.droneCamera}};
 }
 
 Settings fromJson(const json& j)
@@ -76,6 +80,7 @@ Settings fromJson(const json& j)
     s.entityClass = j.value("entityClass", std::string("PlayerStart"));
     s.prefab = j.value("prefab", std::string());
     s.prefabFollowsNormal = j.value("prefabFollowsNormal", true);
+    s.droneCamera = j.value("droneCamera", false);
     return s;
 }
 
@@ -223,9 +228,28 @@ public:
     {
         reset();
         panels::show(kToolkitId);
+        syncCamera();
     }
 
-    void deactivate() override { reset(); }
+    void deactivate() override
+    {
+        reset();
+        // Deferred, so switching modes (off and straight back on) keeps the flight.
+        QTimer::singleShot(0, [] { syncCamera(); });
+    }
+
+    bool editsWhileFlying() const override { return true; }
+
+    bool cancelStep() override
+    {
+        if (mStep == Step::Idle && !mDragging && !mPainting)
+            return false;
+        reset();
+        mPainting = false;
+        mStroke.reset();
+        mPainted.clear();
+        return true;
+    }
 
     bool mousePress(QMouseEvent* e, const ViewInfo& view) override
     {
@@ -277,7 +301,7 @@ public:
         const bool dragged = std::hypot(moved.x(), moved.y()) > 6.0;
         // A press-drag-release draws the footprint in one go; clicks work too.
         if (mStep == Step::Footprint && dragged && footprintSize() > 1e-6)
-            mStep = Step::Height, mBase = mCursor;
+            finishOutline(mCursor);
         if (mDragging)
             releaseExtend(e->modifiers());
         if (mPainting)
@@ -307,9 +331,9 @@ public:
         return true;
     }
 
-    bool hotkey(const QKeyEvent& e, std::string_view) override { return alignKey(e.key()) || key(e.key(), e.modifiers()); }
+    bool hotkey(const QKeyEvent& e, std::string_view) override { return anyKey(e.key(), e.modifiers()); }
 
-    bool keyPress(QKeyEvent* e, const ViewInfo&) override { return alignKey(e->key()) || key(e->key(), e->modifiers()); }
+    bool keyPress(QKeyEvent* e, const ViewInfo&) override { return anyKey(e->key(), e->modifiers()); }
 
     void draw(render::FrameState& s, OverlayPainter& p, const ViewInfo& view) override
     {
@@ -352,6 +376,60 @@ private:
         mDragging = false;
         mFixedU = false;
         mClipKeep = 0;
+        mAutoDepth = 0.0;
+    }
+
+    bool anyKey(int k, Qt::KeyboardModifiers mods) { return alignKey(k, mods) || modeKey(k, mods) || key(k, mods); }
+
+    /**
+     * Hammer-style mode letters: B C X G A E F, S leaves the tool. Shapes: 1-3 Box to Cylinder, Ctrl+1-3 Arch to Prism (4 stays wireframe),
+     * Shift+B and Ctrl+B step forward and back.
+     */
+    bool modeKey(int k, Qt::KeyboardModifiers mods)
+    {
+        if (mods & (Qt::AltModifier | Qt::MetaModifier))
+            return false;
+        const bool ctrl = mods & Qt::ControlModifier, shift = mods & Qt::ShiftModifier;
+        Settings& s = settings();
+        const int shapes = int(shapeNames().size());
+        if (k == Qt::Key_B && (ctrl != shift))
+            return pickShape((int(s.shape) + (shift ? 1 : shapes - 1)) % shapes);
+        if (!shift && k >= Qt::Key_1 && k <= Qt::Key_3)
+            return pickShape((k - Qt::Key_1) + (ctrl ? int(Shape::Arch) : int(Shape::Box)));
+        if (ctrl || shift)
+            return false;
+        switch (k)
+        {
+        case Qt::Key_B: switchMode(Mode::Block); return true;
+        case Qt::Key_C: switchMode(Mode::Carve); return true;
+        case Qt::Key_X: switchMode(Mode::Clip); return true;
+        case Qt::Key_G: switchMode(Mode::Extend); return true;
+        case Qt::Key_A: switchMode(s.mode == Mode::Paint ? Mode::Align : Mode::Paint); return true;
+        case Qt::Key_E: switchMode(Mode::Entity); return true;
+        case Qt::Key_F: switchMode(Mode::Prefab); return true;
+        case Qt::Key_S:
+            viewportTools::set(nullptr);
+            viewportTools::requestRedraw();
+            return true;
+        default: return false;
+        }
+    }
+
+    bool pickShape(int shape)
+    {
+        Settings& s = settings();
+        s.shape = Shape(shape);
+        switchMode(s.mode == Mode::Carve ? Mode::Carve : Mode::Block);
+        return true;
+    }
+
+    void switchMode(Mode m)
+    {
+        settings().mode = m;
+        saveSettings();
+        reset();
+        syncToolkit();
+        viewportTools::requestRedraw();
     }
 
     bool key(int k, Qt::KeyboardModifiers mods)
@@ -387,10 +465,7 @@ private:
         case Qt::Key_Return:
         case Qt::Key_Enter:
             if (mStep == Step::Profile && mProfile.size() >= 3)
-            {
-                mStep = Step::Height;
-                mBase = mProfile.back();
-            }
+                finishOutline(mProfile.back());
             else if (mStep == Step::ClipReady)
                 applyClip();
             else
@@ -438,9 +513,11 @@ private:
             if (!(mods & Qt::ControlModifier) || !mHavePlane)
             {
                 mHoverFace = {};
+                mSurface = kNoNode;
                 if (auto hit = surfaceSnap::underCursor(px, view))
                 {
                     mPlane = makePlane(hit->position, hit->normal);
+                    mSurface = hit->node;
                     if (s.mode == Mode::Extend || s.mode == Mode::Paint || s.mode == Mode::Align)
                         pickFace(*hit);
                 }
@@ -453,6 +530,43 @@ private:
             mCursor = snapOnPlane(mPlane, *on, step);
         if (mStep == Step::Footprint && !mFixedU)
             mU = mPlane.u, mV = mPlane.v;
+        mAutoDepth = (mods & Qt::ShiftModifier) ? 0.0 : carveDepth();
+    }
+
+    /** How deep a carve goes to come out the far side of the block it was drawn on, or 0 when it is drawn off a block. */
+    double carveDepth() const
+    {
+        if (settings().mode != Mode::Carve || (mStep != Step::Footprint && mStep != Step::Profile))
+            return 0.0;
+        Node* n = graph().node(mSurface);
+        if (!n || !isBlock(*n))
+            return 0.0;
+        std::vector<glm::dvec3> points = mProfile;
+        if (mStep == Step::Footprint)
+        {
+            const Frame f = frame();
+            points = {f.origin, f.origin + f.u * f.size.x, f.origin + f.u * f.size.x + f.v * f.size.y, f.origin + f.v * f.size.y};
+        }
+        points.push_back(mCursor);
+        glm::dvec3 mid(0.0);
+        for (const glm::dvec3& p : points)
+            mid += p;
+        points.push_back(mid / double(points.size()));
+        const double d = depthThrough(worldOut(mSurface), points, -mPlane.normal);
+        // A little past the far side, so the cut never leaves a skin on it.
+        return d > 0.0 ? d + 0.5 : 0.0;
+    }
+
+    /** The outline is done: carve straight through when the depth is known, else ask for the height. */
+    void finishOutline(const glm::dvec3& base)
+    {
+        mBase = base;
+        mStep = Step::Height;
+        if (mAutoDepth > 0.0)
+        {
+            mHeight = -mAutoDepth;
+            build();
+        }
     }
 
     void pickFace(const surfaceSnap::Hit& hit)
@@ -508,16 +622,14 @@ private:
         case Step::Footprint:
             if (footprintSize() < 1e-6 && !mFixedU)
                 break;
-            mBase = mCursor;
-            mStep = Step::Height;
+            finishOutline(mCursor);
             break;
         case Step::Profile:
             if (mProfile.size() >= 3)
                 if (auto first = mView.project(mProfile.front()), now = mView.project(mCursor); first && now &&
                     std::hypot(first->x() - now->x(), first->y() - now->y()) < 10.0)
                 {
-                    mBase = mProfile.back();
-                    mStep = Step::Height;
+                    finishOutline(mProfile.back());
                     break;
                 }
             if (glm::length(mCursor - mProfile.back()) > 1e-6)
@@ -537,7 +649,7 @@ private:
         f.v = mV;
         f.normal = mPlane.normal;
         const glm::dvec3 d = (mStep == Step::Height ? mBase : mCursor) - mA;
-        f.size = {mFixedU ? mEdgeLength : glm::dot(d, mU), glm::dot(d, mV), mStep == Step::Height ? mHeight : 0.0};
+        f.size = {mFixedU ? mEdgeLength : glm::dot(d, mU), glm::dot(d, mV), mStep == Step::Height ? mHeight : -mAutoDepth};
         return f;
     }
 
@@ -804,20 +916,29 @@ private:
         run("blockworkAlignEdge", {{"args", {mAlignNode}}, {"face", mAlignFace}, {"edge", mAlignEdge}, {"side", sides[mAlignSide]}, {"fit", mAlignFit}});
     }
 
-    /** In Align: W A S D pick the texture side laid on the edge, Q and E fit, R resets. */
-    bool alignKey(int k)
+    /** In Align: arrows pick the texture side laid on the edge, Shift+arrows fit along that axis, Backspace resets. */
+    bool alignKey(int k, Qt::KeyboardModifiers mods)
     {
         if (settings().mode != Mode::Align)
             return false;
+        const bool fit = mods & Qt::ShiftModifier;
         switch (k)
         {
-        case Qt::Key_S: mAlignSide = 0; break;
-        case Qt::Key_A: mAlignSide = 1; break;
-        case Qt::Key_W: mAlignSide = 2; break;
-        case Qt::Key_D: mAlignSide = 3; break;
-        case Qt::Key_Q: mAlignFit = "height"; break;
-        case Qt::Key_E: mAlignFit = "width"; break;
-        case Qt::Key_R:
+        case Qt::Key_Down:
+        case Qt::Key_Up:
+            if (fit)
+                mAlignFit = "height";
+            else
+                mAlignSide = k == Qt::Key_Down ? 0 : 2;
+            break;
+        case Qt::Key_Left:
+        case Qt::Key_Right:
+            if (fit)
+                mAlignFit = "width";
+            else
+                mAlignSide = k == Qt::Key_Left ? 1 : 3;
+            break;
+        case Qt::Key_Backspace:
             if (!mAlignNode.empty() && graph().find(mAlignNode))
                 run("blockworkTexture", {{"args", {mAlignNode}}, {"faces", {mAlignFace}}, {"reset", true}});
             viewportTools::requestRedraw();
@@ -882,7 +1003,7 @@ private:
         if (mStep != Step::Footprint && mStep != Step::Height)
             return;
         const Frame f = frame();
-        if (mStep == Step::Footprint)
+        if (mStep == Step::Footprint && mAutoDepth <= 0.0)
         {
             const glm::dvec3 a = f.origin, b = a + f.u * f.size.x, c = b + f.v * f.size.y, d = a + f.v * f.size.y;
             addLine(s, a, b, ink, ink), addLine(s, b, c, ink, ink), addLine(s, c, d, ink, ink), addLine(s, d, a, ink, ink);
@@ -891,7 +1012,14 @@ private:
         }
         const geo::Mesh m = buildShape(set.shape, f, shapeOptions());
         addEdges(s, m, ink);
-        label(p, view, mBase + f.normal * f.size.z, cm(f.size.x) + " \xc3\x97 " + cm(f.size.y) + " \xc3\x97 " + cm(f.size.z));
+        QString size = cm(f.size.x) + " \xc3\x97 " + cm(f.size.y) + " \xc3\x97 " + cm(f.size.z);
+        if (const ShapeOptions o = shapeOptions(); set.shape == Shape::Arch && !o.opening)
+        {
+            const double t = archFrame(o.direction % 2 ? f.size.y : f.size.x, f.size.z, o.thickness);
+            if (t < o.thickness)
+                size += "  frame " + cm(t);
+        }
+        label(p, view, (mStep == Step::Height ? mBase : mCursor) + f.normal * f.size.z, size);
         if (set.mode == Mode::Carve && !m.empty())
         {
             const glm::vec4 warn = themeLinear("warning", {1.0f, 0.4f, 0.2f, 1.0f});
@@ -975,7 +1103,7 @@ private:
                     st.fields.push_back({"texture", QString::fromStdString(s.material)});
             }
             if (s.mode == Mode::Align)
-                st.keys.insert(st.keys.begin(), {{"W A S D", "side on the edge"}, {"Q E", "fit height, width"}, {"R", "reset"}});
+                st.keys.insert(st.keys.begin(), {{"Arrows", "side on the edge"}, {"Shift+arrows", "fit height, width"}, {"Backspace", "reset"}});
             if (s.mode == Mode::Prefab)
             {
                 st.mode = QString("Prefab %1").arg(QString::fromStdString(std::filesystem::path(s.prefab).stem().string()));
@@ -994,14 +1122,19 @@ private:
                 }
             }
             if (s.mode == Mode::Block || s.mode == Mode::Carve)
-                st.keys.insert(st.keys.begin(), {"Shift+click", "start an angled edge"});
+                st.keys.insert(st.keys.begin(), {{"Shift+click", "start an angled edge"}, {"1-3 Ctrl+1-3", "shape"}});
+            st.keys.push_back({"B C X G A E F", "modes"});
             if (s.mode == Mode::Extend)
                 st.keys.insert(st.keys.begin(), {{"Shift", "extrude"}, {"Ctrl", "copy as a block"}});
             if (!mLastBuilt.empty())
                 st.keys.insert(st.keys.begin(), {"J", "join the last block into what it touches"});
             break;
         case Step::Edge: st.prompt = "click the edge's end"; break;
-        case Step::Footprint: st.prompt = "click the opposite corner"; break;
+        case Step::Footprint:
+            st.prompt = mAutoDepth > 0.0 ? "click the opposite corner to cut through" : "click the opposite corner";
+            if (s.mode == Mode::Carve)
+                st.keys.insert(st.keys.begin(), {"Shift", "set the depth"});
+            break;
         case Step::Height:
             st.prompt = "click the height";
             st.keys.insert(st.keys.begin(), {"Tab", "turn"});
@@ -1043,6 +1176,9 @@ private:
     glm::dvec3 mCursor{0.0}, mA{0.0}, mBase{0.0}, mU{1.0, 0.0, 0.0}, mV{0.0, 0.0, 1.0};
     bool mFixedU = false;
     double mEdgeLength = 0.0, mHeight = 0.0;
+    /** Carve's depth through the block it is drawn on; 0 asks for the depth by hand. */
+    double mAutoDepth = 0.0;
+    NodeId mSurface = kNoNode;
     std::vector<glm::dvec3> mProfile;
     int mClipKeep = 0;
     HoverFace mHoverFace, mDragFace;
@@ -1069,6 +1205,19 @@ Settings& settings()
 }
 
 void saveSettings() { PrefStore::get().set("general", kSettingsPref, toJson(settings())); }
+
+void syncCamera()
+{
+    static bool ours = false;
+    const bool want = settings().droneCamera && viewportTools::activeId() == kToolId;
+    if (want && !drone::activeViewFlying())
+        ours = drone::setActiveViewFlying(true);
+    else if (!want && ours)
+    {
+        ours = false;
+        drone::setActiveViewFlying(false);
+    }
+}
 
 const char* modeLabel(Mode m)
 {
@@ -1103,8 +1252,32 @@ void startTool(Shape shape)
     startTool(s.mode);
 }
 
+/** Move, Rotate and Scale keep a selection of only blocks on the Blockwork grid. */
+static std::optional<SelectionSnap> blockSnap()
+{
+    Graph& g = graph();
+    const std::vector<NodeId>& sel = g.selection();
+    if (sel.empty())
+        return std::nullopt;
+    g.evaluate();
+    geo::Bounds box;
+    for (NodeId id : sel)
+    {
+        const Node* n = g.node(id);
+        if (!n || !isBlock(*n))
+            return std::nullopt;
+        box.extend(worldBounds(g, id));
+    }
+    if (!box.valid())
+        return std::nullopt;
+    const double step = gridStep();
+    return SelectionSnap{.moveStep = step, .absolute = gridAbsolute(), .anchor = box.min, .rotateStep = 15.0, .scaleStep = step, .extent = box.size()};
+}
+
 void registerTool(ext::Context& ctx)
 {
     viewportTools::add(ctx, {.id = kToolId, .label = "Blockwork", .icon = "box", .create = [] { return std::make_unique<BlockworkTool>(); }});
+    const int snap = tools::addSelectionSnap(blockSnap);
+    ctx.track("blockwork selection snap", [snap] { tools::removeSelectionSnap(snap); });
 }
 } // namespace blockwork

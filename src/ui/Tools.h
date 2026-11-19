@@ -2,7 +2,10 @@
 
 #include "core/Export.h"
 
+#include <glm/vec3.hpp>
+
 #include <functional>
+#include <optional>
 #include <string>
 
 class QMouseEvent;
@@ -37,6 +40,23 @@ struct IncrementSnap
     bool absolute = false;
 };
 
+/**
+ * Snapping an extension asks for while the selection is its own kind of object, such as blocks keeping to a level grid.
+ * It replaces the increment snap prefs for object drags with no snap key held; holding J turns it off for the drag.
+ * A zero step leaves that tool to the increment snap prefs.
+ */
+struct SelectionSnap
+{
+    /** Move: the world point anchor (say, a bounding box corner) moves onto a world grid of moveStep; not absolute, it steps by moveStep from the start. */
+    double moveStep = 0.0;
+    bool absolute = true;
+    glm::dvec3 anchor{0.0};
+    double rotateStep = 0.0;
+    /** Scale: each world-axis extent of the selection becomes a whole number of scaleStep. */
+    double scaleStep = 0.0;
+    glm::dvec3 extent{0.0};
+};
+
 /** App-wide tool state. Every viewport reads it; hotkeys and menus change it. */
 namespace tools
 {
@@ -52,7 +72,9 @@ LILA_UI_API void setPivotEdit(bool on);
 
 /**
  * Clone drag: hold Y. A drag on a manipulator handle in object mode duplicates the objects first (in the duplicate
- * option box's mode) and moves the copies, leaving the originals where they were. A tap of Y without a clone drag runs
+ * option box's mode) and moves the copies, leaving the originals where they were; on faces and edges it extrudes them
+ * first (in the extrude option box's mode) and moves the extruded ones. The /manipulator/shiftDrag pref "extrude" makes
+ * Shift-drag on faces and edges do the same, in place of Shift's fine control. A tap of Y without a clone drag runs
  * Repeat Last Tool instead.
  */
 LILA_UI_API bool cloneDrag();
@@ -67,6 +89,12 @@ LILA_UI_API void setSnap(SnapFlags flag, bool on);
 LILA_UI_API IncrementSnap incrementSnap(Tool t);
 /** "move", "rotate" or "scale": the pref key segment for t's increment snap. */
 LILA_UI_API const char* snapKey(Tool t);
+
+/** Adds a SelectionSnap source: it answers for the current object selection or returns nullopt. Returns an id. */
+LILA_UI_API int addSelectionSnap(std::function<std::optional<SelectionSnap>()> fn);
+LILA_UI_API void removeSelectionSnap(int id);
+/** The first source's answer for the current selection, or nullopt (none answers, or J is held). */
+LILA_UI_API std::optional<SelectionSnap> selectionSnap();
 
 /** Called after any change; returns an id for removeListener. */
 LILA_UI_API int addListener(std::function<void()> fn);

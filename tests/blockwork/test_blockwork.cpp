@@ -7,6 +7,7 @@
 #include "scene/MeshNodes.h"
 #include "scene/Modifiers.h"
 #include "scene/Transform.h"
+#include "ui/Tools.h"
 
 #include <doctest/doctest.h>
 
@@ -161,6 +162,121 @@ TEST_CASE("blockwork: shapes are closed")
     geo::Mesh ell = out(l);
     CHECK(closed(ell));
     CHECK(ell.numFaces() == 8);
+}
+
+TEST_CASE("blockwork: a small arch keeps an opening half its width")
+{
+    blockwork::Frame f;
+    f.size = {48, 16, 48};
+    const geo::Mesh m = blockwork::buildShape(blockwork::Shape::Arch, f, {});
+    bool left = false, right = false;
+    for (Index p = 0; p < m.pointCapacity(); ++p)
+        if (m.pointValid(p) && std::abs(m.position(p).y) < 1e-6)
+        {
+            left |= std::abs(m.position(p).x - 12.0) < 1e-6;
+            right |= std::abs(m.position(p).x - 36.0) < 1e-6;
+        }
+    CHECK(left);
+    CHECK(right);
+    CHECK(blockwork::archFrame(16, 32, 25) == Approx(4));
+    CHECK(blockwork::archFrame(400, 300, 25) == Approx(25));
+}
+
+TEST_CASE("blockwork: a selection of blocks snaps to the grid, anything else doesn't")
+{
+    fresh();
+    const std::string b = run("blockworkBlock", {{"origin", {32, 0, 16}}, {"size", {48, 16, 48}}}).get<std::string>();
+    run("select", {{"args", {b}}});
+    std::optional<ui::SelectionSnap> s = ui::tools::selectionSnap();
+    REQUIRE(s);
+    CHECK(s->moveStep == Approx(blockwork::gridStep()));
+    CHECK(s->rotateStep == Approx(15));
+    CHECK(s->anchor.x == Approx(32));
+    CHECK(s->anchor.z == Approx(16));
+    CHECK(s->extent.x == Approx(48));
+    const std::string cube = run("polyCube")[0].get<std::string>();
+    run("select", {{"args", {b, cube}}});
+    CHECK_FALSE(ui::tools::selectionSnap());
+    ui::tools::setSnap(ui::SnapRotateHold, true);
+    run("select", {{"args", {b}}});
+    CHECK_FALSE(ui::tools::selectionSnap());
+    ui::tools::setSnap(ui::SnapRotateHold, false);
+}
+
+TEST_CASE("blockwork: bevel rounds exposed edges and leaves the ones resting on another block square")
+{
+    fresh();
+    run("blockworkBlock", {{"origin", {-256, -32, -256}}, {"size", {512, 512, 32}}, {"name", "slab"}});
+    const std::string b = run("blockworkBlock", {{"size", {128, 128, 128}}, {"name", "box"}}).get<std::string>();
+    // A shutter on the box's side: its back edges lie on the box, the box's own corners don't touch it.
+    run("blockworkBlock", {{"origin", {128, 40, 40}}, {"size", {8, 48, 48}}, {"name", "shutter"}});
+    run("blockworkBevel", {{"args", {b}}, {"width", 4.0}});
+    const geo::Mesh m = out(b);
+    bool bottomEdge = false, topCorner = false, sideCorner = false;
+    for (Index p = 0; p < m.pointCapacity(); ++p)
+    {
+        if (!m.pointValid(p))
+            continue;
+        const glm::dvec3 q = m.position(p);
+        // The edge along the ground on the x = 0 side stays where it was; the top one is cut back.
+        bottomEdge |= std::abs(q.y) < 1e-6 && std::abs(q.x) < 1e-6;
+        topCorner |= std::abs(q.y - 128.0) < 1e-6 && std::abs(q.x) < 1e-6;
+        sideCorner |= glm::length(q - glm::dvec3(128, 0, 0)) < 1e-6;
+    }
+    CHECK(bottomEdge);
+    CHECK_FALSE(topCorner);
+    CHECK_FALSE(sideCorner);
+    CHECK(m.numFaces() > 6);
+
+    run("blockworkBevel", {{"args", {b}}, {"remove", true}});
+    CHECK(out(b).numFaces() == 6);
+}
+
+TEST_CASE("blockwork: an edge another block covers part of stays square only where it is covered")
+{
+    fresh();
+    // A parapet butting the back of another near its end, as at a corner of a roof.
+    const std::string back = box({0, 0, 0}, {800, 24, 64}, "back");
+    box({776, 0, -400}, {24, 400, 64}, "side");
+    run("blockworkBevel", {{"args", {back}}, {"width", 2.0}, {"segments", 2}});
+    const geo::Mesh m = out(back);
+    const glm::dmat4 w = g().find(back)->as<glm::dmat4>(Transform::kWorldMatrix);
+    bool coveredSquare = false, exposedSquare = false;
+    for (Index p = 0; p < m.pointCapacity(); ++p)
+    {
+        if (!m.pointValid(p))
+            continue;
+        const glm::dvec3 q(w * glm::dvec4(m.position(p), 1.0));
+        coveredSquare |= glm::length(q - glm::dvec3(776, 64, 0)) < 1e-3;
+        exposedSquare |= std::abs(q.y - 64) < 1e-3 && std::abs(q.z) < 1e-3 && q.x < 770;
+    }
+    CHECK(coveredSquare);
+    CHECK_FALSE(exposedSquare);
+    CHECK(closed(m));
+}
+
+TEST_CASE("blockwork: a rounded bevel shades smooth through its corners, a chamfer stays faceted")
+{
+    const auto hardCreases = [](const geo::Mesh& m) {
+        const auto hard = m.edgeAttrs().get<bool>(geo::attr::kHard);
+        int n = 0;
+        for (Index e = 0; e < m.edgeCapacity(); ++e)
+        {
+            if (!m.edgeValid(e) || m.edgeFaceCount(e) != 2 || !hard[e])
+                continue;
+            const Index c = m.edgeCorner(e);
+            const double d = glm::dot(m.faceNormal(m.cornerFace(c)), m.faceNormal(m.cornerFace(m.cornerRadial(c))));
+            // Hard edges other than the box's own square corners.
+            n += d > 0.1 ? 1 : 0;
+        }
+        return n;
+    };
+    fresh();
+    const std::string b = run("blockworkBlock", {{"size", {256, 192, 24}}, {"name", "lid"}}).get<std::string>();
+    run("blockworkBevel", {{"args", {b}}, {"width", 2.0}, {"segments", 2}});
+    CHECK(hardCreases(out(b)) == 0);
+    run("blockworkBevel", {{"args", {b}}, {"width", 2.0}, {"segments", 1}});
+    CHECK(hardCreases(out(b)) > 0);
 }
 
 TEST_CASE("blockwork: stairs climb the way direction turns them")
@@ -363,6 +479,26 @@ TEST_CASE("blockwork: carving an arch into a wall cuts a doorway up the wall")
     run("blockworkCarve", {{"args", {door}}});
     CHECK(closed(out(b)));
     CHECK(run("meshCheck", {{"args", {b}}})["shells"] == 1);
+}
+
+TEST_CASE("blockwork: carving goes through a hollowed wall and no further")
+{
+    fresh();
+    const std::string r = box({0, 0, 0}, {256, 256, 256}, "room");
+    run("blockworkHollow", {{"args", {r}}, {"thickness", 16}});
+    const geo::Mesh m = out(r);
+    const geo::Bounds bb = m.bounds();
+    const glm::dvec3 c = (bb.min + bb.max) * 0.5;
+    // From the +X wall's outside, inward: out through its inner face, not across the room.
+    CHECK(blockwork::depthThrough(m, {{bb.max.x, c.y, c.z}, {bb.max.x, c.y + 64, c.z - 64}}, {-1, 0, 0}) == Approx(16));
+    // A ray starting off the block leaves nothing.
+    CHECK(blockwork::depthThrough(m, {{bb.max.x, bb.max.y + 50, c.z}}, {-1, 0, 0}) == Approx(0));
+
+    fresh();
+    const geo::Mesh solid = out(box({0, 0, 0}, {256, 128, 64}));
+    const geo::Bounds sb = solid.bounds();
+    const glm::dvec3 sc = (sb.min + sb.max) * 0.5;
+    CHECK(blockwork::depthThrough(solid, {{sb.min.x, sc.y, sc.z}}, {1, 0, 0}) == Approx(sb.max.x - sb.min.x));
 }
 
 TEST_CASE("blockwork: join merges touching blocks")

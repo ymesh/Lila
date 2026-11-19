@@ -1,0 +1,1571 @@
+{
+  "decal": false,
+  "folder": "",
+  "height": 1024,
+  "high": [],
+  "highReplaces": false,
+  "lilatrim": 1,
+  "maps": [
+    "normal",
+    "ao",
+    "curvature",
+    "height",
+    "cavity",
+    "detailNormal",
+    "position"
+  ],
+  "material": "Beach Sand",
+  "mipLevel": 3,
+  "name": "T_SaltmarketGround",
+  "padding": 4,
+  "palettes": [],
+  "preset": "hotspotGrid",
+  "pxPerM": 32.0,
+  "scalars": {},
+  "supersampling": 16,
+  "switches": {},
+  "trims": [
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 0,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        256,
+        256
+      ],
+      "min": [
+        0,
+        0
+      ],
+      "name": "Sq512_0",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 0,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        512,
+        256
+      ],
+      "min": [
+        256,
+        0
+      ],
+      "name": "Sq512_1",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 0,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        1024,
+        256
+      ],
+      "min": [
+        512,
+        0
+      ],
+      "name": "Sq512_2",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 1,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        128,
+        384
+      ],
+      "min": [
+        0,
+        256
+      ],
+      "name": "R256_0",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 1,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        256,
+        384
+      ],
+      "min": [
+        128,
+        256
+      ],
+      "name": "R256_1",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 1,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        512,
+        384
+      ],
+      "min": [
+        256,
+        256
+      ],
+      "name": "R256_2",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 1,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        1024,
+        384
+      ],
+      "min": [
+        512,
+        256
+      ],
+      "name": "R256_3",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 2,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        1024,
+        512
+      ],
+      "min": [
+        0,
+        384
+      ],
+      "name": "W256_0",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 3,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        64,
+        576
+      ],
+      "min": [
+        0,
+        512
+      ],
+      "name": "R128_0",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 3,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        128,
+        576
+      ],
+      "min": [
+        64,
+        512
+      ],
+      "name": "R128_1",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 3,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        192,
+        576
+      ],
+      "min": [
+        128,
+        512
+      ],
+      "name": "R128_2",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 3,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        256,
+        576
+      ],
+      "min": [
+        192,
+        512
+      ],
+      "name": "R128_3",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 3,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        384,
+        576
+      ],
+      "min": [
+        256,
+        512
+      ],
+      "name": "R128_4",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 3,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        512,
+        576
+      ],
+      "min": [
+        384,
+        512
+      ],
+      "name": "R128_5",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 3,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        1024,
+        576
+      ],
+      "min": [
+        512,
+        512
+      ],
+      "name": "R128_6",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 4,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        512,
+        640
+      ],
+      "min": [
+        0,
+        576
+      ],
+      "name": "W128_0",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 4,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        1024,
+        640
+      ],
+      "min": [
+        512,
+        576
+      ],
+      "name": "W128_1",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 5,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        256,
+        672
+      ],
+      "min": [
+        0,
+        640
+      ],
+      "name": "W64_0",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 5,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        512,
+        672
+      ],
+      "min": [
+        256,
+        640
+      ],
+      "name": "W64_1",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 5,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        768,
+        672
+      ],
+      "min": [
+        512,
+        640
+      ],
+      "name": "W64_2",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 5,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        1024,
+        672
+      ],
+      "min": [
+        768,
+        640
+      ],
+      "name": "W64_3",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 6,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        128,
+        704
+      ],
+      "min": [
+        0,
+        672
+      ],
+      "name": "Q64_0",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 6,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        256,
+        704
+      ],
+      "min": [
+        128,
+        672
+      ],
+      "name": "Q64_1",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 6,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        384,
+        704
+      ],
+      "min": [
+        256,
+        672
+      ],
+      "name": "Q64_2",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 6,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        512,
+        704
+      ],
+      "min": [
+        384,
+        672
+      ],
+      "name": "Q64_3",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 6,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        640,
+        704
+      ],
+      "min": [
+        512,
+        672
+      ],
+      "name": "Q64_4",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 6,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        768,
+        704
+      ],
+      "min": [
+        640,
+        672
+      ],
+      "name": "Q64_5",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 6,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        896,
+        704
+      ],
+      "min": [
+        768,
+        672
+      ],
+      "name": "Q64_6",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 6,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        1024,
+        704
+      ],
+      "min": [
+        896,
+        672
+      ],
+      "name": "Q64_7",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 7,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        128,
+        832
+      ],
+      "min": [
+        0,
+        704
+      ],
+      "name": "Sq256_0",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 7,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        256,
+        832
+      ],
+      "min": [
+        128,
+        704
+      ],
+      "name": "Sq256_1",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 7,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        384,
+        832
+      ],
+      "min": [
+        256,
+        704
+      ],
+      "name": "Sq256_2",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 7,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        512,
+        832
+      ],
+      "min": [
+        384,
+        704
+      ],
+      "name": "Sq256_3",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 7,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        640,
+        832
+      ],
+      "min": [
+        512,
+        704
+      ],
+      "name": "Sq256_4",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 7,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        768,
+        832
+      ],
+      "min": [
+        640,
+        704
+      ],
+      "name": "Sq256_5",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 7,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        896,
+        832
+      ],
+      "min": [
+        768,
+        704
+      ],
+      "name": "Sq256_6",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 7,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        1024,
+        832
+      ],
+      "min": [
+        896,
+        704
+      ],
+      "name": "Sq256_7",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 8,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        512,
+        960
+      ],
+      "min": [
+        0,
+        832
+      ],
+      "name": "W256b_0",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 8,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        1024,
+        960
+      ],
+      "min": [
+        512,
+        832
+      ],
+      "name": "W256b_1",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 9,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        64,
+        1024
+      ],
+      "min": [
+        0,
+        960
+      ],
+      "name": "Sq128_0",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 9,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        128,
+        1024
+      ],
+      "min": [
+        64,
+        960
+      ],
+      "name": "Sq128_1",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 9,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        192,
+        1024
+      ],
+      "min": [
+        128,
+        960
+      ],
+      "name": "Sq128_2",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 9,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        256,
+        1024
+      ],
+      "min": [
+        192,
+        960
+      ],
+      "name": "Sq128_3",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 9,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        320,
+        1024
+      ],
+      "min": [
+        256,
+        960
+      ],
+      "name": "Sq128_4",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 9,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        384,
+        1024
+      ],
+      "min": [
+        320,
+        960
+      ],
+      "name": "Sq128_5",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 9,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        448,
+        1024
+      ],
+      "min": [
+        384,
+        960
+      ],
+      "name": "Sq128_6",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 9,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        512,
+        1024
+      ],
+      "min": [
+        448,
+        960
+      ],
+      "name": "Sq128_7",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 9,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        576,
+        1024
+      ],
+      "min": [
+        512,
+        960
+      ],
+      "name": "Sq128_8",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 9,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        640,
+        1024
+      ],
+      "min": [
+        576,
+        960
+      ],
+      "name": "Sq128_9",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 9,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        704,
+        1024
+      ],
+      "min": [
+        640,
+        960
+      ],
+      "name": "Sq128_10",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 9,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        768,
+        1024
+      ],
+      "min": [
+        704,
+        960
+      ],
+      "name": "Sq128_11",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 9,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        832,
+        1024
+      ],
+      "min": [
+        768,
+        960
+      ],
+      "name": "Sq128_12",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 9,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        896,
+        1024
+      ],
+      "min": [
+        832,
+        960
+      ],
+      "name": "Sq128_13",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 9,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        960,
+        1024
+      ],
+      "min": [
+        896,
+        960
+      ],
+      "name": "Sq128_14",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    },
+    {
+      "allowMirror": false,
+      "allowRotate": true,
+      "altGroup": 9,
+      "fit": "hotspot",
+      "insetPx": 2.0,
+      "kind": "rect",
+      "max": [
+        1024,
+        1024
+      ],
+      "min": [
+        960,
+        960
+      ],
+      "name": "Sq128_15",
+      "profile": {
+        "angle": 45.0,
+        "bevelPx": 4.0,
+        "detailPx": 5.0,
+        "seed": 0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "style": "raised"
+      },
+      "reserved": false,
+      "tags": []
+    }
+  ],
+  "vectors": {},
+  "width": 1024
+}

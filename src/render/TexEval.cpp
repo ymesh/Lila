@@ -355,6 +355,8 @@ namespace
 {
 /** The status bar's progress title while a plan's shaders compile. */
 constexpr const char* kCompilingTitle = "Compiling texture shaders";
+/** Most texels one Image node file keeps on the GPU: 3 GB as floats, leaving room in a 4 GB buffer for the plan's own. */
+constexpr size_t kMaxImageTexels = size_t(3) << 26;
 
 /** Fused passes whose SPIR-V this process has not compiled yet. */
 size_t uncompiledPasses(const Plan& plan, const Prepared& prep)
@@ -552,27 +554,32 @@ std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget
                 const fs::path path = tex::resolveImagePath(b.name, inputs.imageRoot);
                 std::error_code ec;
                 const fs::file_time_type time = fs::last_write_time(path, ec);
-                const std::string key = path.string();
-                std::shared_ptr<const image::Image> cached;
+                // Cached per plan size: each plan keeps only the copy it samples, not the whole file.
+                const std::string key = path.string() + "@" + std::to_string(plan.width) + "x" + std::to_string(plan.height);
+                std::optional<LoadedImage> cached;
                 {
                     std::scoped_lock lock(m->mutex);
                     if (auto it = m->imageCache.find(key); it != m->imageCache.end() && !ec && it->second.time == time)
-                        cached = it->second.image;
+                        cached = it->second;
                 }
-                if (cached)
-                    img = cached;
-                else
+                if (!cached)
                 {
-                    std::string err;
-                    image::Image read = image::read(path, &err);
+                    std::string err, fitted;
+                    image::Image read = tex::fitSourceImage(image::read(path, &err), b.name, plan.width, plan.height, kMaxImageTexels, &fitted);
                     if (read.width > 0)
                     {
-                        img = std::make_shared<const image::Image>(std::move(read));
+                        cached = LoadedImage{time, std::make_shared<const image::Image>(std::move(read)), fitted};
                         std::scoped_lock lock(m->mutex);
-                        m->imageCache[key] = {time, img};
+                        m->imageCache[key] = *cached;
                     }
                     else
                         warnings.push_back("image " + b.name + ": " + (err.empty() ? "can't read" : err));
+                }
+                if (cached)
+                {
+                    img = cached->image;
+                    if (!cached->warning.empty())
+                        warnings.push_back(cached->warning);
                 }
             }
             prep->images[b.id] = img;
@@ -1038,6 +1045,222 @@ Plan outputsOnly(const Plan& plan, std::span<const std::string> names)
     return p;
 }
 
+/** tex_formats.slang's kRGBA32F: float4 texels from the CPU, for tex_decode only. */
+constexpr uint32_t kDecodeRgba32f = 6;
+
+/**
+ * Brings rect (of a levelWidth x levelHeight tile, clamped at its edges) of a CPU image into the arena at dst, as
+ * recordImageRegion does for a GPU image. With no image it writes the uv fill a missing External reads as.
+ */
+void recordCpuRegion(VulkanContext& vk, VkCommandBuffer cmd, const image::Image* img, const float uvOffset[2], int levelWidth, int levelHeight,
+                     const std::array<int, 4>& rect, VkDeviceAddress dst, uint32_t dstStride, std::vector<compute::Buffer>& temps)
+{
+    const int w = rect[2] - rect[0], h = rect[3] - rect[1];
+    if (w <= 0 || h <= 0)
+        return;
+    levelWidth = std::max(levelWidth, 1);
+    levelHeight = std::max(levelHeight, 1);
+    // Each texel as the whole-plan path reads the image: bilinear at the texel's uv, wrapping at the edges.
+    std::vector<float> texels(size_t(w) * size_t(h) * 4);
+    tbb::parallel_for(0, h, [&](int y) {
+        for (int x = 0; x < w; ++x)
+        {
+            float* t = &texels[(size_t(y) * size_t(w) + size_t(x)) * 4];
+            const int lx = rect[0] + x, ly = rect[1] + y;
+            if (!img)
+            {
+                const int cx = std::clamp(lx, 0, levelWidth - 1), cy = std::clamp(ly, 0, levelHeight - 1);
+                t[0] = uvOffset[0] + (float(cx) + 0.5f) / float(levelWidth);
+                t[1] = uvOffset[1] + 1.0f - (float(cy) + 0.5f) / float(levelHeight);
+                t[2] = 0.0f;
+                t[3] = 1.0f;
+                continue;
+            }
+            const float px = (float(lx) + 0.5f) / float(levelWidth) * float(img->width) - 0.5f;
+            const float py = (float(ly) + 0.5f) / float(levelHeight) * float(img->height) - 0.5f;
+            const float fx = std::floor(px), fy = std::floor(py), ax = px - fx, ay = py - fy;
+            auto wrap = [](int v, int n) { return ((v % n) + n) % n; };
+            const int x0 = wrap(int(fx), img->width), x1 = wrap(int(fx) + 1, img->width);
+            const int y0 = wrap(int(fy), img->height), y1 = wrap(int(fy) + 1, img->height);
+            auto at = [&](int xx, int yy, int c) { return img->rgba[(size_t(yy) * size_t(img->width) + size_t(xx)) * 4 + size_t(c)]; };
+            for (int c = 0; c < 4; ++c)
+            {
+                const float top = at(x0, y0, c) + (at(x1, y0, c) - at(x0, y0, c)) * ax;
+                const float bottom = at(x0, y1, c) + (at(x1, y1, c) - at(x0, y1, c)) * ax;
+                t[c] = top + (bottom - top) * ay;
+            }
+        }
+    });
+    compute::Buffer raw = compute::hostBuffer(vk, texels.data(), texels.size() * sizeof(float));
+    temps.push_back(raw);
+    const uint64_t count = uint64_t(w) * uint64_t(h);
+    DecodePush push{raw.address,
+                    dst,
+                    uint32_t(w),
+                    uint32_t(h),
+                    kDecodeRgba32f,
+                    0,
+                    groupsX(count),
+                    dstStride,
+                    uint32_t(w),
+                    uint32_t(h),
+                    {1.0f, 1.0f},
+                    {0.0f, 0.0f},
+                    0,
+                    0};
+    VkPipelineLayout layout;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, kernel(vk, "tex_decode.spv", "texDecodeCS", sizeof(DecodePush), layout));
+    vkCmdPushConstants(cmd, layout, kCompute, 0, sizeof(push), &push);
+    dispatchLinear(cmd, count);
+}
+
+/**
+ * Runs a plan whose outputs don't fit one GPU buffer as virtual texture pages do: everything but the final output passes
+ * at the plan's size, those page by page into host memory. Throws ArenaTooLarge when even that doesn't fit.
+ */
+void evaluatePaged(const Plan& part, const tex::EvalOptions& options, uint64_t maxArenaBytes, tex::EvalResult& result)
+{
+    LILA_ZONE();
+    Renderer& r = Renderer::get();
+    VulkanContext* vkc = r.context();
+    if (!vkc)
+        throw std::runtime_error("no GPU: the renderer isn't running");
+    const uint64_t deviceLimit = vkc->properties.limits.maxStorageBufferRange;
+    const uint64_t limit = maxArenaBytes ? std::min<uint64_t>(maxArenaBytes, deviceLimit) : deviceLimit;
+    std::vector<std::string> names;
+    for (const auto& [name, id] : part.outputs)
+        names.push_back(name);
+    // A batch holds a page per output and per External (with a border); keep it within half of what one buffer holds.
+    size_t perPage = names.size();
+    for (const BufferDesc& b : part.buffers)
+        perPage += b.kind == BufferKind::External ? 1 : 0;
+    int side = 1024;
+    while (side > 16 && uint64_t(Evaluator::kPagesPerBatch) * uint64_t(side + 4) * uint64_t(side + 4) * kTexel * perPage > limit / 2)
+        side /= 2;
+
+    Inputs in;
+    in.pages = true;
+    in.pageSize = side;
+    in.maxArenaBytes = maxArenaBytes;
+    in.imageRoot = options.imageRoot;
+    in.uvOffset[0] = options.uvOffset[0];
+    in.uvOffset[1] = options.uvOffset[1];
+    const std::set<std::string> whole = wholeExternals(part);
+    for (const BufferDesc& b : part.buffers)
+        if (b.kind == BufferKind::External && whole.contains(b.name))
+            if (auto it = options.externals.find(b.name); it != options.externals.end())
+                in.cpuExternals.emplace(b.name, it->second);
+    Evaluator ev;
+    if (std::string err = ev.setPlan(part, std::move(in)); !err.empty())
+        throw std::runtime_error(err);
+    r.runTask([&ev](VulkanContext& vk) { return ev.step(vk) || ev.pagesReady(); }).get();
+
+    const int W = part.width, H = part.height;
+    std::vector<PageLayer> layers;
+    for (const std::string& name : names)
+        for (int c = 0; c < 4; ++c)
+        {
+            PageLayer l;
+            l.channels[0] = {name, c, 0.0f};
+            l.format = TextureFormat::R32F;
+            layers.push_back(l);
+        }
+    std::vector<PageJob> jobs;
+    for (int y = 0; y < H; y += side)
+        for (int x = 0; x < W; x += side)
+        {
+            PageJob j;
+            j.x0 = x;
+            j.y0 = y;
+            j.width = std::min(side, W - x);
+            j.height = std::min(side, H - y);
+            j.levelWidth = W;
+            j.levelHeight = H;
+            jobs.push_back(j);
+        }
+    for (const std::string& name : names)
+        result.outputs[name] = image::Image{W, H, std::vector<float>(size_t(W) * size_t(H) * 4, 0.0f), {}};
+
+    // Unpainted paint channels read as the CPU evaluator reads them: masks 1, the rest 0.
+    static const image::Image kZero{1, 1, {0.0f, 0.0f, 0.0f, 0.0f}, {}}, kOne{1, 1, {1.0f, 1.0f, 1.0f, 1.0f}, {}};
+    std::vector<compute::Buffer>* temps = nullptr;
+    const RegionLoader load = [&](VulkanContext& vk, VkCommandBuffer cmd, const std::string& name, int lw, int lh, const std::array<int, 4>& rect,
+                                  VkDeviceAddress dst, uint32_t stride) {
+        const image::Image* img = nullptr;
+        std::string channel;
+        if (auto it = options.externals.find(name); it != options.externals.end() && it->second.width > 0)
+            img = &it->second;
+        else if (tex::paint::parseExternalName(name, nullptr, &channel))
+            img = channel == tex::paint::kMaskChannel ? &kOne : &kZero;
+        recordCpuRegion(vk, cmd, img, options.uvOffset, lw, lh, rect, dst, stride, *temps);
+        return true;
+    };
+
+    r.runTask([&](VulkanContext& vk) {
+         const size_t L = layers.size();
+         const VkDeviceSize pageBytes = VkDeviceSize(side) * VkDeviceSize(side) * sizeof(float);
+         compute::Buffer out = compute::makeBuffer(vk, VkDeviceSize(Evaluator::kPagesPerBatch) * L * pageBytes, 0, compute::Host::Read);
+         compute::Submitter sub;
+         sub.init(vk);
+         std::vector<compute::Buffer> batchTemps;
+         temps = &batchTemps;
+         auto cleanup = [&] {
+             for (compute::Buffer& t : batchTemps)
+                 compute::destroy(vk, t);
+             batchTemps.clear();
+         };
+         try
+         {
+             for (size_t at = 0; at < jobs.size();)
+             {
+                 std::vector<PageJob> batch(jobs.begin() + std::ptrdiff_t(at),
+                                            jobs.begin() + std::ptrdiff_t(std::min(jobs.size(), at + Evaluator::kPagesPerBatch)));
+                 for (size_t j = 0; j < batch.size(); ++j)
+                     for (size_t l = 0; l < L; ++l)
+                         batch[j].layers.push_back(out.address + VkDeviceAddress((j * L + l) * pageBytes));
+                 size_t n = 0;
+                 sub.run(vk, [&](VkCommandBuffer cmd) { n = ev.recordPages(vk, cmd, batch, layers, load, batchTemps); });
+                 cleanup();
+                 if (n == 0)
+                     throw std::runtime_error("texture graph pages: the plan made no pages");
+                 compute::invalidate(vk, out);
+                 const auto* texels = static_cast<const float*>(out.mapped);
+                 for (size_t j = 0; j < n; ++j)
+                 {
+                     const PageJob& job = batch[j];
+                     for (size_t l = 0; l < L; ++l)
+                     {
+                         image::Image& img = result.outputs[names[l / 4]];
+                         const float* src = texels + (j * L + l) * size_t(side) * size_t(side);
+                         for (int y = 0; y < job.height; ++y)
+                             for (int x = 0; x < job.width; ++x)
+                                 img.rgba[(size_t(job.y0 + y) * size_t(W) + size_t(job.x0 + x)) * 4 + l % 4] =
+                                     src[size_t(y) * size_t(job.width) + size_t(x)];
+                     }
+                 }
+                 at += n;
+             }
+         }
+         catch (...)
+         {
+             cleanup();
+             sub.destroy(vk);
+             compute::destroy(vk, out);
+             throw;
+         }
+         sub.destroy(vk);
+         compute::destroy(vk, out);
+         return true;
+     }).get();
+
+    const Stats s = ev.stats();
+    result.compiled += s.compiled;
+    result.cached += s.cached;
+    for (const std::string& w : s.warnings)
+        if (std::find(result.warnings.begin(), result.warnings.end(), w) == result.warnings.end())
+            result.warnings.push_back(w);
+}
+
 /** Runs the plan for the named outputs into result, halving the group while its buffers don't fit one GPU buffer. */
 void evaluateGroup(const Plan& plan, const tex::EvalOptions& options, std::span<const std::string> names, uint64_t maxArenaBytes, tex::EvalResult& result)
 {
@@ -1072,7 +1295,22 @@ void evaluateGroup(const Plan& plan, const tex::EvalOptions& options, std::span<
     catch (const ArenaTooLarge&)
     {
         if (names.size() < 2)
-            throw;
+        {
+            try
+            {
+                evaluatePaged(part, options, maxArenaBytes, result);
+                return;
+            }
+            catch (const ArenaTooLarge&)
+            {
+            }
+            tex::EvalResult cpu = tex::evaluateCpu(part, options);
+            result.outputs.merge(cpu.outputs);
+            result.warnings.insert(result.warnings.end(), cpu.warnings.begin(), cpu.warnings.end());
+            result.warnings.push_back("texture graph: " + names[0] + " at " + std::to_string(part.width) + " x " + std::to_string(part.height) +
+                                      " needs more than the GPU can hold, so it was evaluated on the CPU (slower)");
+            return;
+        }
         const size_t half = names.size() / 2;
         evaluateGroup(plan, options, names.first(half), maxArenaBytes, result);
         evaluateGroup(plan, options, names.subspan(half), maxArenaBytes, result);

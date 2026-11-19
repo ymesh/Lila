@@ -7,6 +7,7 @@
 #include "core/Workspace.h"
 #include "vcs/GitProvider.h"
 #include "vcs/PerforceProvider.h"
+#include "vcs/SvnProvider.h"
 
 #include <algorithm>
 #include <cctype>
@@ -78,6 +79,7 @@ void SourceControl::refresh()
     std::scoped_lock lock(mMutex);
     mByDir.clear();
     mGitByRoot.clear();
+    mSvnByRoot.clear();
     mPerforce.reset();
     mPerforceUnreachable = false;
 }
@@ -147,18 +149,34 @@ std::shared_ptr<Provider> SourceControl::detect(const fs::path& dir, const json&
         }
     }
 
+    std::optional<fs::path> gitRoot, svnRoot;
+    GitSettings gs = GitSettings::fromJson(prefs.value("git", json::object()));
+    SvnSettings ss = SvnSettings::fromJson(prefs.value("svn", json::object()));
     if (mode == "auto" || mode == "git")
+        gitRoot = GitProvider::findRoot(dir, gs, *run);
+    if (mode == "auto" || mode == "svn")
+        svnRoot = SvnProvider::findRoot(dir);
+    // One can sit inside the other; the nearer root owns the directory.
+    if (gitRoot && svnRoot)
+        (dirKey(*svnRoot).size() > dirKey(*gitRoot).size() ? gitRoot : svnRoot).reset();
+
+    if (gitRoot)
     {
-        GitSettings gs = GitSettings::fromJson(prefs.value("git", json::object()));
-        if (auto root = GitProvider::findRoot(dir, gs, *run))
-        {
-            auto git = std::make_shared<GitProvider>(*root, gs, run);
-            std::scoped_lock lock(mMutex);
-            auto& slot = mGitByRoot[dirKey(git->root())];
-            if (!slot)
-                slot = git;
-            return slot;
-        }
+        auto git = std::make_shared<GitProvider>(*gitRoot, gs, run);
+        std::scoped_lock lock(mMutex);
+        auto& slot = mGitByRoot[dirKey(git->root())];
+        if (!slot)
+            slot = git;
+        return slot;
+    }
+    if (svnRoot)
+    {
+        auto svn = std::make_shared<SvnProvider>(*svnRoot, ss, run);
+        std::scoped_lock lock(mMutex);
+        auto& slot = mSvnByRoot[dirKey(svn->root())];
+        if (!slot)
+            slot = svn;
+        return slot;
     }
     return nullptr;
 }

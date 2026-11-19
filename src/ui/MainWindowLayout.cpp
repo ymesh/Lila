@@ -1,5 +1,7 @@
 #include "ui/MainWindowDetail.h"
 
+#include "core/Progress.h"
+
 #include "ui/MenuContext.h"
 #include "ui/Updater.h"
 
@@ -33,7 +35,7 @@ void MainWindow::restoreLayout()
         // The saved state already has every own-column dock where it was; arranged on first show, they would be placed
         // from geometry the restored layout hasn't applied yet.
         holdOwnColumns(this);
-        restoreState(QByteArray::fromBase64(QByteArray::fromStdString(state)));
+        restoreDocks(QByteArray::fromBase64(QByteArray::fromStdString(state)));
         // The restored arrangement is the current layout's, so its menus (and the texturing 2D View) come back with it.
         if (std::optional<json> layout = layouts::read(layouts::current()))
             menuContext::setLayoutSet(layout->value("menuSet", std::string("Model")));
@@ -185,7 +187,7 @@ void MainWindow::resetLayout()
 {
     mMaximizeHidden.clear();
     mSidebars->expandAll();
-    restoreState(mDefaultState);
+    restoreDocks(mDefaultState);
     toolBox::place(this);
     for (QDockWidget* d : findChildren<QDockWidget*>())
         if (tearoff::parseDockName(d->objectName().toStdString()))
@@ -194,6 +196,12 @@ void MainWindow::resetLayout()
     mSidebars->restoreCollapsed(kDefaultCollapsed);
     fitToScreen();
     scheduleLayoutSave();
+}
+
+bool MainWindow::restoreDocks(const QByteArray& state)
+{
+    const progress::NoPump noPump;
+    return restoreState(state);
 }
 
 void MainWindow::fitToScreen()
@@ -261,7 +269,7 @@ void MainWindow::resizeEvent(QResizeEvent* e)
     // state drops it. The status bar is laid out by the same pass, so a stale width shows the resize was skipped.
     QStatusBar* status = findChild<QStatusBar*>(QString(), Qt::FindDirectChildrenOnly);
     if (status && status->isVisible() && status->width() != width() && QGuiApplication::mouseButtons() == Qt::NoButton)
-        restoreState(saveState());
+        restoreDocks(saveState());
     scheduleLayoutSave();
 }
 

@@ -44,7 +44,7 @@ constexpr std::array<TileDef, 8> kModeTiles = {{
     {"Clip", "slice", "click a line across blocks to cut them along it; Tab picks the side kept"},
     {"Extend", "arrow-bar-up", "drag a block's face to move it in grid steps; Shift extrudes, Ctrl copies it as a new block"},
     {"Paint", "brush", "click or drag over faces to put the picked texture on them; Ctrl+click a face to take its texture"},
-    {"Align", "align-box-bottom-center", "click near a face edge to line the texture up with it; W A S D pick the side, Q and E fit"},
+    {"Align", "align-box-bottom-center", "click near a face edge to line the texture up with it; arrows pick the side, Shift+arrows fit"},
     {"Entity", "map-pin", "place a player start, light, trigger or any class from the entity definitions; volumes are drawn like blocks"},
     {"Prefab", "packages", "click to place the prefab picked in the Prefabs panel, stood on the surface; Tab turns it"},
 }};
@@ -69,6 +69,8 @@ QFormLayout* form(QWidget* w)
 
 constexpr const char* kModeActions[] = {"blockwork.block", "blockwork.carve", "blockwork.clip", "blockwork.extend",
                                         "blockwork.paint", "blockwork.align", "blockwork.entity", "blockwork.prefab"};
+constexpr const char* kModeKeys[] = {"B", "C", "X", "G", "A", "A twice", "E", "F"};
+constexpr const char* kShapeKeys[] = {"1", "2", "3", "Ctrl+1", "Ctrl+2", "Ctrl+3"};
 
 class Toolkit final : public QWidget
 {
@@ -165,9 +167,22 @@ public:
         gridForm->addRow("Snap", mSnap);
         v->addWidget(controls::section("Grid", gridBox, this, kSections));
 
+        auto* viewBox = new QWidget(this);
+        mCamera = new controls::Segmented(viewBox);
+        mCamera->add("Orbit", {}, "Orbit: Alt with the mouse moves the view, as everywhere in Lila", 0);
+        mCamera->add("Drone", {}, "Drone: the view flies while the tool is on. Right drag with WASD, E and Q flies; the left button and keys still build", 1);
+        connect(mCamera, &controls::Segmented::picked, this, [](int id) {
+            settings().droneCamera = id == 1;
+            saveSettings();
+            syncCamera();
+        });
+        form(viewBox)->addRow("Camera", mCamera);
+        v->addWidget(controls::section("View", viewBox, this, kSections));
+
         auto* edit = new QWidget(this);
         vbox(edit)->addWidget(controls::grid({controls::row("blockwork.hollow", "box-multiple", edit), controls::row("blockwork.join", "box", edit, "Join"),
-                                              controls::row("blockwork.flip", "arrows-exchange", edit, "Flip")},
+                                              controls::row("blockwork.flip", "arrows-exchange", edit, "Flip"),
+                                              controls::row("blockwork.bevel", "border-radius", edit, "Bevel")},
                                              kColumns, edit));
         v->addWidget(controls::section("Blocks", edit, this, kSections));
 
@@ -222,6 +237,10 @@ public:
             const QSignalBlocker b(mSnap);
             mSnap->setCurrent(gridAbsolute() ? 1 : 0);
         }
+        {
+            const QSignalBlocker b(mCamera);
+            mCamera->setCurrent(s.droneCamera ? 1 : 0);
+        }
         mCorners->setChecked(s.options.radiusToCorners);
         mCaps->setChecked(!s.options.skipCaps);
         mSuffix->setText(QString::fromStdString(s.suffix));
@@ -238,7 +257,7 @@ public:
 private:
     static constexpr int kColumns = 2;
     std::array<QToolButton*, kModeTiles.size()> mModes{};
-    controls::Segmented *mShapes = nullptr, *mSnap = nullptr;
+    controls::Segmented *mShapes = nullptr, *mSnap = nullptr, *mCamera = nullptr;
     QWidget *mShapeBox = nullptr, *mEntityBox = nullptr;
     QFormLayout* mShapeForm = nullptr;
     QDoubleSpinBox *mGrid = nullptr, *mSides = nullptr, *mSteps = nullptr, *mThickness = nullptr;
@@ -306,7 +325,7 @@ void registerUi(ext::Context& ctx)
                            .label = std::string(m == Mode::Block ? "Block" : modeLabel(m)) + " Tool",
                            .category = "Blockwork",
                            .run = [m] { startTool(m); },
-                           .doc = std::string(kModeTiles[size_t(i)].label) + ": " + kModeTiles[size_t(i)].tip + ".",
+                           .doc = std::string(kModeTiles[size_t(i)].label) + ": " + kModeTiles[size_t(i)].tip + ". Key " + kModeKeys[i] + " in Blockwork.",
                            .checked = [m] { return viewportTools::activeId() == kToolId && settings().mode == m; },
                            .icon = kModeTiles[size_t(i)].icon,
                            .keywords = keywords});
@@ -316,7 +335,7 @@ void registerUi(ext::Context& ctx)
                            .label = std::string(kShapeTiles[size_t(i)].label) + " Block",
                            .category = "Blockwork",
                            .run = [i] { startTool(Shape(i)); },
-                           .doc = std::string("Draw ") + kShapeTiles[size_t(i)].tip + " on the grid.",
+                           .doc = std::string("Draw ") + kShapeTiles[size_t(i)].tip + " on the grid. Key " + kShapeKeys[i] + " in Blockwork.",
                            .icon = kShapeTiles[size_t(i)].icon,
                            .keywords = keywords});
     actions::add(ctx, {.id = "blockwork.hollow",
@@ -346,6 +365,15 @@ void registerUi(ext::Context& ctx)
                        .call = json::object(),
                        .icon = "arrows-exchange",
                        .keywords = {"invert", "reverse normals"}});
+    actions::add(ctx, {.id = "blockwork.bevel",
+                       .label = "Bevel Blocks",
+                       .category = "Blockwork",
+                       .doc = "Round the selected blocks' exposed edges, live; edges where blocks touch stay square so no groove opens.",
+                       .python = "blockworkBevel(width=2)",
+                       .command = "blockworkBevel",
+                       .call = json::object(),
+                       .icon = "border-radius",
+                       .keywords = {"chamfer", "round edges", "soften"}});
     actions::add(ctx, {.id = "blockwork.makeVolume",
                        .label = "Make Volume",
                        .category = "Blockwork",
@@ -408,7 +436,7 @@ void registerUi(ext::Context& ctx)
     for (const std::string& s : shapeNames())
         menus::addItem(ctx, {.id = "blockwork.menu.shape." + s, .menu = "Level/Blockwork", .action = "blockwork.shape." + s});
     menus::addItem(ctx, {.id = "blockwork.menu.sep2", .menu = "Level/Blockwork", .kind = menus::Kind::Separator});
-    for (const char* a : {"blockwork.hollow", "blockwork.join", "blockwork.flip", "blockwork.gridFiner", "blockwork.gridCoarser"})
+    for (const char* a : {"blockwork.hollow", "blockwork.join", "blockwork.flip", "blockwork.bevel", "blockwork.gridFiner", "blockwork.gridCoarser"})
         menus::addItem(ctx, {.id = std::string("blockwork.menu.") + a, .menu = "Level/Blockwork", .action = a});
 }
 } // namespace blockwork

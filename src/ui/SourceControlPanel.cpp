@@ -101,7 +101,7 @@ void SourceControlPanel::refresh()
     {
         json info = ops::execute("scProvider", json::object());
         const std::string provider = info.value("provider", std::string("none"));
-        mProvider->setText("Provider: " + (provider == "none" ? QString("None") : niceName(provider)));
+        mProvider->setText("Provider: " + (provider == "none" ? QString("None") : provider == "svn" ? QString("Subversion") : niceName(provider)));
         json lists = ops::execute("scChangelists", json::object());
         for (const json& cl : lists.is_array() ? lists : json::array())
         {

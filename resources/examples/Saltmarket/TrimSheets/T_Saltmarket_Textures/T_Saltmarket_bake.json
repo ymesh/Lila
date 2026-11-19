@@ -1,0 +1,339 @@
+{
+  "backend": "gpu",
+  "backendMode": "",
+  "dryRun": false,
+  "folder": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_Saltmarket_Textures",
+  "idMap": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_Saltmarket_Textures/T_Saltmarket_trimId.png",
+  "inputHash": "",
+  "lint": null,
+  "manifest": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_Saltmarket_Textures/T_Saltmarket_bake.json",
+  "outputs": [
+    {
+      "bits": 8,
+      "colorSpace": "linear",
+      "file": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_Saltmarket_Textures/T_Saltmarket_normal.png",
+      "format": "png",
+      "groups": [
+        "T_Saltmarket"
+      ],
+      "height": 1024,
+      "layer": "",
+      "map": "normal",
+      "materials": [
+        "Default"
+      ],
+      "meshes": [
+        "T_Saltmarket"
+      ],
+      "meta": {},
+      "normalFormat": "directx",
+      "suffix": "normal",
+      "udim": 1001,
+      "width": 1024
+    },
+    {
+      "bits": 8,
+      "colorSpace": "linear",
+      "file": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_Saltmarket_Textures/T_Saltmarket_ao.png",
+      "format": "png",
+      "groups": [
+        "T_Saltmarket"
+      ],
+      "height": 1024,
+      "layer": "",
+      "map": "ao",
+      "materials": [
+        "Default"
+      ],
+      "meshes": [
+        "T_Saltmarket"
+      ],
+      "meta": {},
+      "normalFormat": "",
+      "suffix": "ao",
+      "udim": 1001,
+      "width": 1024
+    },
+    {
+      "bits": 8,
+      "colorSpace": "linear",
+      "file": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_Saltmarket_Textures/T_Saltmarket_curvature.png",
+      "format": "png",
+      "groups": [
+        "T_Saltmarket"
+      ],
+      "height": 1024,
+      "layer": "",
+      "map": "curvature",
+      "materials": [
+        "Default"
+      ],
+      "meshes": [
+        "T_Saltmarket"
+      ],
+      "meta": {
+        "curvatureAuto": true,
+        "curvatureRange": 0.26626890897750854,
+        "decode": "curvature = (value - 0.5) * 2 * curvatureRange (1/cm mean curvature, convex positive)",
+        "source": "mesh"
+      },
+      "normalFormat": "",
+      "suffix": "curvature",
+      "udim": 1001,
+      "width": 1024
+    },
+    {
+      "bits": 16,
+      "colorSpace": "linear",
+      "file": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_Saltmarket_Textures/T_Saltmarket_height.png",
+      "format": "png",
+      "groups": [
+        "T_Saltmarket"
+      ],
+      "height": 1024,
+      "layer": "",
+      "map": "height",
+      "materials": [
+        "Default"
+      ],
+      "meshes": [
+        "T_Saltmarket"
+      ],
+      "meta": {
+        "decode": "height = (value - 0.5) * 2 * heightRange",
+        "heightAuto": false,
+        "heightMax": 31.249996537395695,
+        "heightMin": -31.249996537395695,
+        "heightRange": 31.249996537395695
+      },
+      "normalFormat": "",
+      "suffix": "height",
+      "udim": 1001,
+      "width": 1024
+    },
+    {
+      "bits": 8,
+      "colorSpace": "linear",
+      "file": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_Saltmarket_Textures/T_Saltmarket_cavity.png",
+      "format": "png",
+      "groups": [
+        "T_Saltmarket"
+      ],
+      "height": 1024,
+      "layer": "",
+      "map": "cavity",
+      "materials": [
+        "Default"
+      ],
+      "meshes": [
+        "T_Saltmarket"
+      ],
+      "meta": {
+        "curvatureAuto": true,
+        "curvatureRange": 0.26626890897750854,
+        "source": "mesh"
+      },
+      "normalFormat": "",
+      "suffix": "cavity",
+      "udim": 1001,
+      "width": 1024
+    },
+    {
+      "bits": 8,
+      "colorSpace": "linear",
+      "file": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_Saltmarket_Textures/T_Saltmarket_detailnormal.png",
+      "format": "png",
+      "groups": [
+        "T_Saltmarket"
+      ],
+      "height": 1024,
+      "layer": "",
+      "map": "detailNormal",
+      "materials": [
+        "Default"
+      ],
+      "meshes": [
+        "T_Saltmarket"
+      ],
+      "meta": {
+        "decode": "normal = reoriented(heightNormal, detail): heightNormal from the height map (depth = 2 * its heightRange) over uvSize cm",
+        "fade": 45.0,
+        "uvSize": [
+          800.0,
+          800.0
+        ],
+        "uvSizeAuto": false
+      },
+      "normalFormat": "",
+      "suffix": "detailnormal",
+      "udim": 1001,
+      "width": 1024
+    },
+    {
+      "bits": 8,
+      "colorSpace": "linear",
+      "file": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_Saltmarket_Textures/T_Saltmarket_normalobj.png",
+      "format": "png",
+      "groups": [
+        "T_Saltmarket"
+      ],
+      "height": 1024,
+      "layer": "",
+      "map": "objectNormal",
+      "materials": [
+        "Default"
+      ],
+      "meshes": [
+        "T_Saltmarket"
+      ],
+      "meta": {},
+      "normalFormat": "",
+      "suffix": "normalobj",
+      "udim": 1001,
+      "width": 1024
+    },
+    {
+      "bits": 16,
+      "colorSpace": "linear",
+      "file": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_Saltmarket_Textures/T_Saltmarket_position.png",
+      "format": "png",
+      "groups": [
+        "T_Saltmarket"
+      ],
+      "height": 1024,
+      "layer": "",
+      "map": "position",
+      "materials": [
+        "Default"
+      ],
+      "meshes": [
+        "T_Saltmarket"
+      ],
+      "meta": {
+        "boundsMax": [
+          1600.0,
+          31.249996185302734,
+          800.0
+        ],
+        "boundsMin": [
+          -800.0,
+          -11.444661140441895,
+          0.0
+        ],
+        "lows": [
+          {
+            "materials": [
+              "Default"
+            ],
+            "node": "T_Saltmarket",
+            "world": [
+              1.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "normalFormat": "",
+      "suffix": "position",
+      "udim": 1001,
+      "width": 1024
+    },
+    {
+      "bits": 32,
+      "colorSpace": "linear",
+      "file": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_Saltmarket_Textures/T_Saltmarket_trimIndex.exr",
+      "format": "exr",
+      "height": 1024,
+      "map": "trimIndex",
+      "udim": 1001,
+      "width": 1024
+    },
+    {
+      "bits": 32,
+      "colorSpace": "linear",
+      "file": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_Saltmarket_Textures/T_Saltmarket_trimRect.exr",
+      "format": "exr",
+      "height": 1024,
+      "map": "trimRect",
+      "udim": 1001,
+      "width": 1024
+    }
+  ],
+  "seamError": 0.003315206391562242,
+  "seconds": 1.2175557,
+  "stats": {
+    "backfaces": 0,
+    "groups": [
+      {
+        "backfaces": 0,
+        "frontal": 31.749996185302734,
+        "frontalAuto": false,
+        "group": "T_Saltmarket",
+        "highTriangles": 1935708,
+        "hits": 16777216,
+        "lowTriangles": 2,
+        "measured": false,
+        "misses": 0,
+        "probed": 0,
+        "reaimed": 0,
+        "rear": 11.944661140441895,
+        "rearAuto": false,
+        "samples": 16777216
+      }
+    ],
+    "hits": 16777216,
+    "misses": 0,
+    "probed": 0,
+    "reaimed": 0,
+    "samples": 16777216
+  },
+  "timings": {
+    "accumulate": 4.850227,
+    "bands": 0.9481296,
+    "dilate": 0.0019021,
+    "finalize": 0.0300854,
+    "finish": 0.0394022,
+    "gpu": 0.1528886,
+    "gpu:accumulate": 0.021170207999999947,
+    "gpu:dilate": 0.0010014720000000009,
+    "gpu:finalize": 0.0001536,
+    "gpu:map:ao": 0.051435296,
+    "gpu:map:cavity": 0.0013148160000000027,
+    "gpu:map:curvature": 0.0013127680000000028,
+    "gpu:map:height": 0.0013106880000000028,
+    "gpu:map:normal": 0.0013189120000000028,
+    "gpu:map:objectNormal": 0.0013107200000000028,
+    "gpu:map:position": 0.0013107200000000028,
+    "gpu:other": 0.00026892799999999977,
+    "gpu:raster": 0.01659744000000005,
+    "gpu:readback": 0.007835648,
+    "gpu:resolve": 0.0001424,
+    "gpu:trace": 0.004472832000000003,
+    "gpuSetup": 0.021864,
+    "map:detailNormal": 2.4405896,
+    "plan": 0.0001326,
+    "prepare:detailNormal": 9e-07,
+    "raster": 12.0390022,
+    "resolve": 0.0094905,
+    "trace": 4.9274519,
+    "write": 0.2120663,
+    "writeWait": 0.0310743
+  },
+  "totalSeconds": 1.6009355,
+  "trims": 10,
+  "warnings": []
+}

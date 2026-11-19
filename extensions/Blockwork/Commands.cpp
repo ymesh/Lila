@@ -2,6 +2,7 @@
 
 #include <lila/Boolean.h>
 #include <lila/Components.h>
+#include <lila/Deformer.h>
 #include <lila/MeshOps.h>
 #include <lila/Prefs.h>
 #include <lila/Transform.h>
@@ -200,6 +201,89 @@ void registerCommands(ext::Context& ctx)
         .adjustable = true,
         .examples = {"blockworkBlock(origin=[0, 0, 0], size=[512, 384, 256])", "blockworkBlock(shape='stairs', size=[128, 256, 128], steps=8)",
                      "blockworkBlock(shape='prism', profile=[[0, 0], [256, 0], [256, 128], [128, 128], [128, 256], [0, 256]], size=[0, 0, 64])"},
+    });
+
+    ctx.registerCommand({
+        .name = "blockworkBevel",
+        .doc = "Bevel blocks' exposed edges with a live Block Bevel modifier: only convex edges, and none lying on another "
+               "block's face (resting on it or butting it), so no groove opens where blocks meet. It sits under a Hotspot "
+               "modifier so the bevels are trimmed too. Run it again after moving blocks to find the touching edges afresh. "
+               "Returns the modifiers.",
+        .positionalDoc = "blocks (default the selection, or every block)",
+        .flags = {{"width", "w", T::Float, 2.0, "cm from each edge to the bevel's edges.", {}, {}, 0.0},
+                  {"segments", "sg", T::Int, 1, "1 is a chamfer; more round it.", {}, {}, 1, 8},
+                  {"angle", "an", T::Float, 30.0, "Only edges whose faces meet sharper than this, degrees.", {}, {}, 0.0, 180.0},
+                  {"remove", "rm", T::Bool, false, "Take the bevel off instead."}},
+        .run = [](const Args& a) -> json {
+            Graph& g = graph();
+            const std::vector<NodeId> ids = blockArgs(a, "blockworkBevel", true);
+            if (ids.empty())
+                throw CommandError("blockworkBevel: no blocks");
+            json out = json::array();
+            for (NodeId id : ids)
+            {
+                NodeId bevel = kNoNode, hotspot = kNoNode;
+                for (NodeId m : modifiers::stack(g, id))
+                    if (const Node* n = g.node(m); n && n->type().name == kBevelType)
+                        bevel = m;
+                    else if (n && n->type().name == "trimHotspotModifier")
+                        hotspot = m;
+                if (a.get<bool>("remove", false))
+                {
+                    if (bevel != kNoNode)
+                        ops::execute("removeModifier", {{"args", json::array({g.fullPath(bevel)})}});
+                    continue;
+                }
+                geo::Mesh mine = worldMesh(g, id);
+                std::vector<geo::Mesh> others;
+                for (NodeId other : overlapping(g, mine.bounds(), {id}, 0.01, false))
+                    others.push_back(worldMesh(g, other));
+                geo::Mesh base = baseMesh(g, id);
+                const glm::dmat4 w = g.node(id)->as<glm::dmat4>(Transform::kWorldMatrix), toLocal = glm::inverse(w);
+                // Split off the stretch of an edge another block covers only part of, so that stretch stays square.
+                for (int guard = 0; guard < 64; ++guard)
+                {
+                    geo::Mesh plain = mine;
+                    plain.edgeAttrs().remove(kContactAttr);
+                    const std::vector<Index> rounded = bevelableEdges(plain, a.get<double>("angle", 30.0));
+                    std::optional<ContactCut> cut;
+                    for (const geo::Mesh& o : others)
+                        if ((cut = partialContactCut(mine, o, rounded)))
+                            break;
+                    if (!cut)
+                        break;
+                    geo::cutAlongPlane(base, glm::dvec3(toLocal * glm::dvec4(cut->point, 1.0)),
+                                       glm::normalize(glm::transpose(glm::dmat3(w)) * cut->normal), 1e-4, {}, cut->faces);
+                    mine = base;
+                    for (Index p = 0; p < mine.pointCapacity(); ++p)
+                        if (mine.pointValid(p))
+                            mine.setPosition(p, glm::dvec3(w * glm::dvec4(mine.position(p), 1.0)));
+                }
+                std::vector<Index> touching;
+                for (const geo::Mesh& o : others)
+                {
+                    const std::vector<Index> f = touchingEdges(mine, o);
+                    touching.insert(touching.end(), f.begin(), f.end());
+                }
+                markContact(base, touching);
+                setBaseMesh(g, id, std::move(base));
+                if (bevel == kNoNode)
+                {
+                    Node* mod = g.createNode(*types::find(kBevelType), {}, kNoNode, true);
+                    // Under the hotspot, so the bevel faces are trimmed with the rest.
+                    const auto* hot = hotspot == kNoNode ? nullptr : dynamic_cast<const ModifierNode*>(g.node(hotspot));
+                    modifiers::insert(g, *mod, id, hot ? PlugRef{hotspot, hot->inAttr, -1} : PlugRef{id, MeshNode::kInMesh, -1});
+                    bevel = mod->id();
+                }
+                const std::string path = g.fullPath(bevel);
+                ops::execute("setAttr", {{"args", {path + ".width", a.get<double>("width", 2.0)}}});
+                ops::execute("setAttr", {{"args", {path + ".segments", a.get<int>("segments", 1)}}});
+                ops::execute("setAttr", {{"args", {path + ".angle", a.get<double>("angle", 30.0)}}});
+                out.push_back(path);
+            }
+            return out;
+        },
+        .examples = {"blockworkBevel(width=2)", "blockworkBevel('arch1', width=4, segments=3)", "blockworkBevel(remove=True)"},
     });
 
     ctx.registerCommand({

@@ -107,6 +107,8 @@ struct LiveSet
     /** Shown through a virtual texture instead of whole images: its pages and what makes them. */
     std::shared_ptr<render::vt::Texture> virtualTexture;
     std::shared_ptr<SetPages> pages;
+    /** Displacement preview asked a virtual set for its height: tiles then holds a capped, height-only copy of it. */
+    bool wantsHeight = false;
 };
 
 struct Job
@@ -141,6 +143,7 @@ bool gInstalled = false;
 int gGraphListener = 0;
 int gMeshListener = 0;
 int gPaintListener = 0;
+int gPrefListener = 0;
 events::SubscriptionId gShutdownSub = 0;
 
 // Worker.
@@ -212,6 +215,19 @@ std::vector<std::pair<int, int>> levelSizes(int w, int h, const std::vector<int>
         }
     out.emplace_back(w, h);
     return out;
+}
+
+/** The longest side of a virtual set's height copy for displacement preview, per tile. */
+int heightPreviewSize()
+{
+    return std::clamp(PrefStore::get().value<int>("general", "/texture/displacementPreviewSize", 4096), 256, 16384);
+}
+
+/** A tile's size scaled so its longest side is at most cap. */
+std::pair<int, int> capped(std::pair<int, int> size, int cap)
+{
+    const double s = std::min(1.0, double(cap) / double(std::max(size.first, size.second)));
+    return {std::max(1, int(std::lround(size.first * s))), std::max(1, int(std::lround(size.second * s)))};
 }
 
 bool colorData(const std::string& channel) { return channel == "baseColor" || channel == "emissive"; }
@@ -717,18 +733,16 @@ std::vector<StoreTarget> storesFor(const TileState& t, const tex::SetSettings& s
     return out;
 }
 
-std::string runJob(const Job& job)
+/** Evaluates the whole-image tiles a job carries, for the channels settings lists. */
+std::string runTiles(const Job& job, const tex::SetSettings& settings)
 {
-    LILA_ZONE();
-    if (job.pages)
-        return runVirtualJob(job);
-    std::vector<tex::OutputRequest> requests = tex::channelRequests(job.graph, job.settings);
+    std::vector<tex::OutputRequest> requests = tex::channelRequests(job.graph, settings);
     if (requests.empty())
         return job.graph.firstOfType(tex::kMaterialOutputType) ? "the set has no channels" : "the graph has no Material Output";
-    const std::string key = job.graph.toJson().dump() + job.settings.toJson().dump();
+    const std::string key = job.graph.toJson().dump() + settings.toJson().dump();
     for (const auto& tile : job.tiles)
     {
-        const std::vector<StoreTarget> stores = storesFor(*tile, job.settings);
+        const std::vector<StoreTarget> stores = storesFor(*tile, settings);
         const auto [u, v] = tex::udimOrigin(tile->udim);
         // Previews write the shown images upsampled, so over sharp ones they flash blurry. When only the inputs moved (a
         // stroke committed or undone, maps rebaked) the full size alone redoes what changed over images already sharp.
@@ -784,6 +798,19 @@ std::string runJob(const Job& job)
             tile->fullShown->store(false);
     }
     return {};
+}
+
+std::string runJob(const Job& job)
+{
+    LILA_ZONE();
+    if (!job.pages)
+        return runTiles(job, job.settings);
+    if (std::string err = runVirtualJob(job); !err.empty() || job.tiles.empty())
+        return err;
+    // A virtual set's tiles are only its height copy for displacement preview.
+    tex::SetSettings height = job.settings;
+    std::erase_if(height.channels, [](const tex::Channel& c) { return c.name != "height"; });
+    return runTiles(job, height);
 }
 
 /**
@@ -908,9 +935,14 @@ render::TexturePtr textureOf(const Tiles& tiles, const std::function<GpuImageRef
     return t;
 }
 
-std::string configKey(const tex::SetSettings& s, const std::vector<int>& previews)
+std::string configKey(const tex::SetSettings& s, const std::vector<int>& previews, bool wantsHeight)
 {
-    json k = {{"tiles", json::array()}, {"channels", json::array()}, {"previews", previews}, {"virtual", wantsVirtual(s)}};
+    const bool virt = wantsVirtual(s);
+    json k = {{"tiles", json::array()},
+              {"channels", json::array()},
+              {"previews", previews},
+              {"virtual", virt},
+              {"heightCopy", virt && wantsHeight && s.channel("height") ? heightPreviewSize() : 0}};
     for (const tex::Tile& t : s.tiles)
         k["tiles"].push_back({t.udim, s.tileSize(t).first, s.tileSize(t).second});
     for (const tex::Channel& c : s.channels)
@@ -954,33 +986,23 @@ void rebuildVirtual(LiveSet& s)
     s.maps.metallic = s.settings.channel("metallic") != nullptr;
 }
 
-void rebuild(LiveSet& s)
+/**
+ * Gives s a whole-image tile per UDIM holding channels (and the packed ORM when orm), each tile's longest side capped
+ * at cap when it is above 0, with an evaluator per level queued for the render task. False, with s.error, when the GPU
+ * can't hold the images.
+ */
+bool addTiles(LiveSet& s, const std::vector<tex::Channel>& channels, bool orm, bool ormFloat, int cap)
 {
-    s.ready = false;
-    dropEntries(s);
-    s.tiles.clear();
-    s.virtualTexture.reset();
-    s.pages.reset();
-    if (wantsVirtual(s.settings))
-    {
-        rebuildVirtual(s);
-        return;
-    }
     const std::vector<int> previews = previewLevels();
-    bool ormFloat = false;
-    for (const char* n : {"ao", "roughness", "metallic"})
-        if (const tex::Channel* c = s.settings.channel(n); c && c->bits > 8)
-            ormFloat = true;
-    const bool orm = s.settings.channel("ao") || s.settings.channel("roughness") || s.settings.channel("metallic");
     for (const tex::Tile& t : s.settings.tiles)
     {
         auto tile = std::make_shared<TileState>();
         tile->udim = t.udim;
-        std::tie(tile->width, tile->height) = s.settings.tileSize(t);
+        std::tie(tile->width, tile->height) = cap > 0 ? capped(s.settings.tileSize(t), cap) : s.settings.tileSize(t);
         const std::string tag = s.name + "." + std::to_string(t.udim) + ".";
         try
         {
-            for (const tex::Channel& c : s.settings.channels)
+            for (const tex::Channel& c : channels)
                 tile->channels[c.name] = GpuImage::create({tile->width, tile->height, channelFormat(c), colorData(c.name), true, tag + c.name});
             if (orm)
                 tile->orm = GpuImage::create({tile->width, tile->height, ormFloat ? TextureFormat::RGBA16F : TextureFormat::RGBA8, false, true, tag + "orm"});
@@ -988,9 +1010,10 @@ void rebuild(LiveSet& s)
         catch (const std::exception& e)
         {
             s.error = e.what();
+            dropEntries(s);
             s.tiles.clear();
             s.maps = {};
-            return;
+            return false;
         }
         tile->levelSizes = levelSizes(tile->width, tile->height, previews);
         tile->plans = std::vector<std::atomic<uint64_t>>(tile->levelSizes.size());
@@ -1011,6 +1034,30 @@ void rebuild(LiveSet& s)
         std::stable_sort(gEntries.begin(), gEntries.end(), [](const Entry& a, const Entry& b) { return a.level < b.level; });
         s.tiles.push_back(std::move(tile));
     }
+    return true;
+}
+
+void rebuild(LiveSet& s)
+{
+    s.ready = false;
+    dropEntries(s);
+    s.tiles.clear();
+    s.virtualTexture.reset();
+    s.pages.reset();
+    if (wantsVirtual(s.settings))
+    {
+        rebuildVirtual(s);
+        if (const tex::Channel* height = s.settings.channel("height"); height && s.wantsHeight && s.virtualTexture)
+            addTiles(s, {*height}, false, false, heightPreviewSize());
+        return;
+    }
+    bool ormFloat = false;
+    for (const char* n : {"ao", "roughness", "metallic"})
+        if (const tex::Channel* c = s.settings.channel(n); c && c->bits > 8)
+            ormFloat = true;
+    const bool orm = s.settings.channel("ao") || s.settings.channel("roughness") || s.settings.channel("metallic");
+    if (!addTiles(s, s.settings.channels, orm, ormFloat, 0))
+        return;
     s.maps = {};
     auto channel = [&](const char* name) {
         return textureOf(s.tiles, [name](const TileState& t) {
@@ -1049,7 +1096,7 @@ void replan(LiveSet& s)
     s.name = n->name();
     s.material = joinMaterials(tex::materialsUsing(g, n->name()));
     s.settings = job.settings;
-    const std::string key = configKey(job.settings, previewLevels());
+    const std::string key = configKey(job.settings, previewLevels(), s.wantsHeight);
     if (key != s.configKey)
     {
         s.configKey = key;
@@ -1252,13 +1299,50 @@ render::GpuImageRef channelImage(const std::string& set, const std::string& chan
 {
     for (const auto& [id, s] : gSets)
         if (s->name == set)
+        {
+            if (s->virtualTexture && channel == "height" && !s->wantsHeight)
+            {
+                s->wantsHeight = true;
+                replan(*s);
+            }
+            // A virtual set's height copy is black until its first level runs; that would sink the whole surface.
+            if (s->virtualTexture && !s->ready)
+                return nullptr;
             for (const auto& t : s->tiles)
                 if (t->udim == udim)
                 {
                     auto it = t->channels.find(channel);
                     return it == t->channels.end() ? nullptr : it->second;
                 }
+        }
     return nullptr;
+}
+
+std::optional<HeightCopy> heightCopy(const std::string& set)
+{
+    for (const auto& [id, s] : gSets)
+        if (s->name == set && s->virtualTexture)
+        {
+            HeightCopy out;
+            for (const tex::Tile& t : s->settings.tiles)
+            {
+                const auto [w, h] = s->settings.tileSize(t);
+                out.full = std::max({out.full, w, h});
+            }
+            for (const auto& t : s->tiles)
+                out.size = std::max({out.size, t->width, t->height});
+            out.ready = s->ready && out.size > 0;
+            return out;
+        }
+    return std::nullopt;
+}
+
+bool isLive(const std::string& set)
+{
+    for (const auto& [id, s] : gSets)
+        if (s->name == set)
+            return true;
+    return false;
 }
 
 void install()
@@ -1275,6 +1359,16 @@ void install()
             .run = [](const Args&) -> nlohmann::json { return {{"idle", idle()}, {"sets", status()}}; },
         });
     gGraphListener = scene::Graph::current().addListener(onChange);
+    // A new height copy size rebuilds the copies made at the old one.
+    gPrefListener = PrefStore::get().onChanged([](const std::string& file) {
+        if (file != "general")
+            return;
+        mainq::post([] {
+            for (auto& [id, s] : gSets)
+                if (s->wantsHeight && configKey(s->settings, previewLevels(), true) != s->configKey)
+                    replan(*s);
+        });
+    });
     gMeshListener = render::texgpu::addMeshMapListener([](const std::string& project) {
         mainq::post([project] {
             for (auto& [id, s] : gSets)
@@ -1317,6 +1411,7 @@ void shutdown()
     scene::Graph::current().removeListener(gGraphListener);
     render::texgpu::removeMeshMapListener(gMeshListener);
     render::paint::removeChangeListener(gPaintListener);
+    PrefStore::get().removeOnChanged(gPrefListener);
     events::unsubscribe(gShutdownSub);
     {
         std::scoped_lock lock(gJobMutex);

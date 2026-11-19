@@ -180,6 +180,7 @@ UTexture* ImportTexture(const FString& File, const FString& Folder, ETextureUse 
 	LilaLink::KeepGrayscale16(Texture);
 	Texture->bFlipGreenChannel = bFlipGreen;
 	Texture->PostEditChange();
+	LilaLink::WarnIfCapped(Texture, OutWarnings);
 	OutCreated.AddUnique(Texture->GetPathName());
 	return Texture;
 }
@@ -1060,6 +1061,21 @@ UMaterialInterface* LilaLink::StylisedParent(const FString& Model, bool bRebuild
 }
 
 const TCHAR* LilaLink::MastersFolderPath() { return MastersFolder; }
+
+void LilaLink::WarnIfCapped(const UTexture* Texture, TArray<FString>& OutWarnings)
+{
+	if (!Texture || Texture->VirtualTextureStreaming || !Texture->Source.IsValid())
+	{
+		return;
+	}
+	const int32 Largest = FMath::Max(Texture->Source.GetSizeX(), Texture->Source.GetSizeY());
+	if (Largest > UTexture::GetMaximumDimensionOfNonVT())
+	{
+		OutWarnings.Add(FString::Printf(TEXT("%s is %d px, over Unreal's %d limit for textures that aren't virtual, so it shows at %d. Turn on Virtual Texture "
+		                                      "Support in Project Settings > Rendering and send it again for full size, or use UDIM tiles."),
+		                                 *Texture->GetName(), Largest, UTexture::GetMaximumDimensionOfNonVT(), UTexture::GetMaximumDimensionOfNonVT()));
+	}
+}
 
 void LilaLink::KeepGrayscale16(UTexture* Texture)
 {

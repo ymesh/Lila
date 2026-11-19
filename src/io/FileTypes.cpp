@@ -10,6 +10,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <set>
+#include <tuple>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -86,7 +87,9 @@ public:
         if (RegGetValueW(HKEY_CURRENT_USER, k.c_str(), n.c_str(), RRF_RT_REG_SZ | RRF_RT_REG_NONE, nullptr, data.data(), &bytes) != ERROR_SUCCESS)
             return std::nullopt;
         data.resize(wcsnlen(data.c_str(), data.size()));
-        return paths::toUtf8(fs::path(data));
+        // Native form: these values hold commands and icon paths, which must read back exactly as they were written.
+        const std::u8string utf8 = fs::path(data).u8string();
+        return std::string(utf8.begin(), utf8.end());
     }
 
     void set(const std::string& key, const std::string& name, const std::string& value) override
@@ -284,16 +287,23 @@ bool disabledByEnv()
 }
 } // namespace
 
-void applyPrefs()
+void applyPrefs(bool force)
 {
     if (disabledByEnv())
+        return;
+    // Most "general" pref writes have nothing to do with file types; only a change to what is registered syncs.
+    static std::optional<std::tuple<fs::path, bool, std::vector<std::string>>> applied;
+    auto wanted = std::make_tuple(guiExe(), scenesPref(), importsPref());
+    if (!force && applied == wanted)
         return;
     std::unique_ptr<Registry> r = userClasses();
     if (!r)
         return;
     try
     {
-        if (sync(*r, guiExe(), scenesPref(), importsPref()))
+        const bool changed = sync(*r, std::get<0>(wanted), std::get<1>(wanted), std::get<2>(wanted));
+        applied = std::move(wanted);
+        if (changed)
         {
             notifyShell();
             log::info("file types updated");
@@ -363,7 +373,7 @@ void registerCommands()
             PrefStore::get().set("general", kImportsPref, imports);
             if (disabledByEnv() || !userClasses())
                 throw CommandError("registerFileTypes: not available here (LILA_NO_FILE_TYPES, or not Windows)");
-            applyPrefs();
+            applyPrefs(true);
             return nullptr;
         },
     });
@@ -376,7 +386,7 @@ void registerCommands()
         .run = [](const Args&) -> json {
             PrefStore::get().set("general", kScenesPref, false);
             PrefStore::get().set("general", kImportsPref, json::array());
-            applyPrefs();
+            applyPrefs(true);
             return nullptr;
         },
     });

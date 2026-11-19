@@ -1,6 +1,7 @@
 #include "Blockwork.h"
 
 #include <lila/Deformer.h>
+#include <lila/MeshOps.h>
 #include <lila/Prefs.h>
 #include <lila/Relocate.h>
 #include <lila/Transform.h>
@@ -43,10 +44,69 @@ public:
         };
     }
 };
+/** Bevels a block's exposed convex edges, never one lying on another block's face. */
+class BevelNode final : public ModifierNode
+{
+public:
+    enum Attr
+    {
+        kInMesh,
+        kEnabled,
+        kExportEnabled,
+        kWidth,
+        kSegments,
+        kAngle,
+        kOutMesh,
+    };
+
+    BevelNode()
+    {
+        inAttr = kInMesh;
+        enabledAttr = kEnabled;
+        outAttr = kOutMesh;
+        apply = [](const geo::Mesh& in, const Node& n) {
+            geo::Mesh m = in;
+            const std::vector<geo::Index> edges = bevelableEdges(m, n.as<double>(kAngle));
+            if (edges.empty() || n.as<double>(kWidth) <= 0.0)
+                return m;
+            geo::BevelOptions o;
+            o.offset = n.as<double>(kWidth);
+            o.segments = std::max(1, int(n.as<int64_t>(kSegments)));
+            // A round shades smooth through its corner patches (about 47 degrees apart at 2 segments); a chamfer stays faceted.
+            o.smoothingAngle = o.segments > 1 ? 60.0 : 30.0;
+            geo::bevelEdges(m, edges, o);
+            return m;
+        };
+    }
+};
 } // namespace
 
 bool registerTypes(ext::Context& ctx)
 {
+    {
+        NodeType t;
+        t.name = kBevelType;
+        t.icon = "border-radius";
+        t.doc = "Block Bevel: rounds a block's exposed edges, the convex ones where faces meet sharper than the angle, and leaves "
+                "every edge lying on another block's face square so no groove opens where blocks meet. "
+                "blockworkBevel adds it and marks the touching edges.";
+        t.ownAttrs = {
+            {.name = "inMesh", .type = PlugType::Mesh, .defaultValue = MeshPtr(), .flags = AttrInput | AttrHidden},
+            {.name = "enabled", .type = PlugType::Bool, .defaultValue = true, .flags = AttrInput | AttrStorable | AttrKeyable, .doc = "Bevel."},
+            {.name = "exportEnabled", .type = PlugType::Bool, .defaultValue = true, .flags = AttrInput | AttrStorable, .doc = "Apply when exporting."},
+            {.name = "width", .type = PlugType::Float, .defaultValue = 2.0, .flags = AttrInput | AttrStorable | AttrKeyable,
+             .doc = "cm from each edge to the bevel's edges; kept under half the shortest neighbouring edge.", .minValue = 0.0},
+            {.name = "segments", .type = PlugType::Int, .defaultValue = 1, .flags = AttrInput | AttrStorable | AttrKeyable,
+             .doc = "1 is a chamfer; more round it.", .minValue = 1, .maxValue = 8},
+            {.name = "angle", .type = PlugType::Float, .defaultValue = 30.0, .flags = AttrInput | AttrStorable | AttrKeyable,
+             .doc = "Only edges whose faces meet sharper than this, degrees.", .minValue = 0.0, .maxValue = 180.0},
+            {.name = "outMesh", .type = PlugType::Mesh, .defaultValue = MeshPtr(), .flags = AttrOutput | AttrHidden},
+        };
+        t.create = [] { return std::make_unique<BevelNode>(); };
+        relocate::registerNeutral(t.name);
+        if (!types::registerType(ctx, std::move(t)))
+            return false;
+    }
     NodeType t;
     t.name = kTextureLockType;
     t.icon = "lock-square";

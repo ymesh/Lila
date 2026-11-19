@@ -26,6 +26,7 @@
 #include "ui/UiCommands.h"
 #include "ui/UiCommon.h"
 #include "ui/ViewportDisplay.h"
+#include "ui/ViewportToast.h"
 #include "ui/ViewportToolMath.h"
 
 #include <QKeyEvent>
@@ -52,6 +53,12 @@ constexpr int kSavedAttrs[] = {Transform::kTranslate,           Transform::kRota
 constexpr int kSavedCount = int(std::size(kSavedAttrs));
 
 const glm::vec4 kTrail(0.95f, 0.95f, 0.95f, 0.8f);
+
+/** The /manipulator/shiftDrag pref: Shift-drag on faces and edges extrudes them instead of slowing the drag down. */
+bool shiftDragExtrudes()
+{
+    return PrefStore::get().value<std::string>("general", "/manipulator/shiftDrag", std::string("fine")) == "extrude";
+}
 const glm::vec4 kLocked(0.42f, 0.42f, 0.42f, 0.55f);
 
 scene::Space spaceFor(Tool t)
@@ -700,16 +707,30 @@ bool Manipulator::press(QPointF px, Qt::MouseButton button, Qt::KeyboardModifier
         return true;
     }
 
-    // Clone drag: the copies are made now and dragged; the originals stay put.
+    // Clone drag: the copies are made now and dragged; the originals stay put. On faces and edges the copy is an
+    // extrude, which leaves the extruded components selected to drag.
+    const scene::ComponentMode componentMode = scene::components::mode();
+    const bool extrudable = componentMode == scene::ComponentMode::Face || componentMode == scene::ComponentMode::Edge;
+    const bool extrudeDrag = mComponents && button == Qt::LeftButton && !tools::pivotEdit() && !surfaceSlide &&
+                             (tools::cloneDrag() || ((mods & Qt::ShiftModifier) && shiftDragExtrudes() && extrudable));
+    const bool clone = !surfaceSlide && !tools::pivotEdit() && (extrudeDrag || (tools::cloneDrag() && !mComponents));
+    std::string cloneCommand;
     json cloneCall;
-    const bool clone = tools::cloneDrag() && !mComponents && !tools::pivotEdit() && !surfaceSlide;
     if (clone)
     {
-        tools::markCloneDragUsed();
-        cloneCall = ops::options::callWith("duplicate", json::object());
+        if (tools::cloneDrag())
+            tools::markCloneDragUsed();
+        if (extrudeDrag && !extrudable)
+        {
+            viewportToast::showActive("Extrude drag works on faces and edges", 2500, viewportToast::Kind::Warning);
+            return true;
+        }
+        cloneCommand = extrudeDrag ? "polyExtrude" : "duplicate";
+        cloneCall = extrudeDrag ? ops::options::callWith("polyExtrude", {{"thickness", 0.0}, {"offset", 0.0}, {"duplicate", false}})
+                                : ops::options::callWith("duplicate", json::object());
         try
         {
-            ops::execute("duplicate", cloneCall, CallSource::Script);
+            ops::execute(cloneCommand, cloneCall, CallSource::Script);
         }
         catch (const CommandError& e)
         {
@@ -727,6 +748,7 @@ bool Manipulator::press(QPointF px, Qt::MouseButton button, Qt::KeyboardModifier
     Graph& g = Graph::current();
     Drag d;
     d.clone = clone;
+    d.cloneCommand = cloneCommand;
     d.cloneCall = cloneCall;
     d.handle = h;
     d.pressPx = d.virtualPx = d.lastPx = px;
@@ -765,6 +787,9 @@ bool Manipulator::press(QPointF px, Qt::MouseButton button, Qt::KeyboardModifier
         }
     }
     else if (!d.componentPivot)
+    {
+        if (!d.pivotEdit)
+            d.selectionSnap = tools::selectionSnap();
         for (NodeId id : mTargets)
         {
             d.saved.push_back(saveTransform(g, id));
@@ -776,6 +801,7 @@ bool Manipulator::press(QPointF px, Qt::MouseButton button, Qt::KeyboardModifier
                     if (dynamic_cast<Transform*>(g.node(c)))
                         d.savedChildren.push_back(saveTransform(g, c));
         }
+    }
     if (pivotTool(d.pivotEdit, d.tool) == Tool::Move && !d.pivotEdit && !d.componentPivot && !d.alongNormal)
     {
         for (const Saved& s : d.saved)
@@ -889,6 +915,28 @@ void Manipulator::pickAxisFromDrag(QPointF px)
     mLastHandle = mHover = d.handle;
 }
 
+/** Scale factors that make each extent a whole number of steps, at least one; uniform keeps one factor from the largest. */
+static glm::dvec3 snapExtents(glm::dvec3 s, const glm::dvec3& extent, double step, bool uniform)
+{
+    auto fit = [step](double f, double size) {
+        if (size < 1e-9)
+            return f;
+        return std::max(1.0, std::round(std::abs(f) * size / step)) * step / size * (f < 0.0 ? -1.0 : 1.0);
+    };
+    if (uniform)
+    {
+        int big = 0;
+        for (int i = 1; i < 3; ++i)
+            if (extent[i] > extent[big])
+                big = i;
+        return glm::dvec3(fit(s[big], extent[big]));
+    }
+    for (int i = 0; i < 3; ++i)
+        if (s[i] != 1.0)
+            s[i] = fit(s[i], extent[i]);
+    return s;
+}
+
 glm::dvec3 Manipulator::snapGrid(const glm::dvec3& p, const glm::dvec3& mask) const
 {
     double step = generalPref("/grid/spacing", 10.0);
@@ -905,7 +953,8 @@ void Manipulator::update(QPointF px, Qt::KeyboardModifiers mods)
     // Shift slows the drag down for precision, except on Shift+MMB where it picks the axis and on a surface slide,
     // which follows the cursor exactly and uses Shift to keep the objects' orientation.
     const bool sliding = d.surfaceSlide || (tools::snaps() & SnapSurface);
-    double factor = (mods & Qt::ShiftModifier) && !d.axisFromDrag && !sliding ? 0.1 : 1.0;
+    const bool shiftExtrudes = d.clone && d.components && shiftDragExtrudes();
+    double factor = (mods & Qt::ShiftModifier) && !d.axisFromDrag && !sliding && !shiftExtrudes ? 0.1 : 1.0;
     d.precise = factor < 1.0;
     d.virtualPx += (px - d.lastPx) * factor;
     d.lastPx = px;
@@ -918,6 +967,7 @@ void Manipulator::update(QPointF px, Qt::KeyboardModifiers mods)
     }
     bool gridSnap = tools::snaps() & SnapGrid;
     IncrementSnap inc = heldSnap() ? IncrementSnap{} : tools::incrementSnap(pivotTool(d.pivotEdit, d.tool));
+    const SelectionSnap* sel = d.selectionSnap && !heldSnap() && !(tools::snaps() & SnapRotateHold) ? &*d.selectionSnap : nullptr;
 
     glm::dvec3 o, dir;
     mView.ray(cur, o, dir);
@@ -959,6 +1009,9 @@ void Manipulator::update(QPointF px, Qt::KeyboardModifiers mods)
                 delta = d.frame * snapGrid(local, glm::dvec3(1.0));
             }
         }
+        else if (sel && sel->moveStep > 0.0 && worldFrame)
+            delta = sel->absolute ? gizmo::snapAbsolute(sel->anchor, delta, d.frame, moveMask(h), sel->moveStep)
+                                  : gizmo::snapRelative(delta, d.frame, moveMask(h), sel->moveStep);
         else if (inc.enabled)
             delta = inc.absolute ? gizmo::snapAbsolute(d.startPivot, delta, d.frame, moveMask(h), inc.step)
                                  : gizmo::snapRelative(delta, d.frame, moveMask(h), inc.step);
@@ -998,7 +1051,12 @@ void Manipulator::update(QPointF px, Qt::KeyboardModifiers mods)
             glm::dquat q = glm::angleAxis(delta.x() * k, camUp) * glm::angleAxis(delta.y() * k, camRight);
             d.angle = glm::degrees(glm::angle(q));
             d.rotateAxis = glm::axis(q);
-            if (inc.enabled)
+            if (sel && sel->rotateStep > 0.0)
+            {
+                d.angle = gizmo::snapAngle(d.angle, sel->rotateStep);
+                q = glm::angleAxis(glm::radians(d.angle), d.rotateAxis);
+            }
+            else if (inc.enabled)
             {
                 d.angle = gizmo::snapAngle(d.angle, inc.step);
                 q = glm::angleAxis(glm::radians(d.angle), d.rotateAxis);
@@ -1046,6 +1104,8 @@ void Manipulator::update(QPointF px, Qt::KeyboardModifiers mods)
                 double step = generalPref("/manipulator/rotateStep", 15.0);
                 deg = std::round(deg / step) * step;
             }
+            else if (sel && sel->rotateStep > 0.0)
+                deg = gizmo::snapAngle(deg, sel->rotateStep);
             else if (inc.enabled)
                 deg = gizmo::snapAngle(deg, inc.step);
             d.angle = deg;
@@ -1086,11 +1146,14 @@ void Manipulator::update(QPointF px, Qt::KeyboardModifiers mods)
             else
                 s[ai] = f;
         }
+        const bool extents = sel && sel->scaleStep > 0.0 && !gridSnap;
+        if (extents)
+            s = snapExtents(s, sel->extent, sel->scaleStep, h == H::Center);
         for (int i = 0; i < 3; ++i)
         {
             if (gridSnap)
                 s[i] = std::round(s[i] * 10.0) / 10.0;
-            else if (inc.enabled)
+            else if (inc.enabled && !extents)
                 s[i] = gizmo::snapScale(s[i], inc.step);
             // Components stop at 0 rather than flipping through, so scaling down an axis flattens them exactly.
             if (d.components)
@@ -1365,16 +1428,19 @@ void Manipulator::commit()
     if (d.clone)
     {
         // The copies made on press go again, and one undo step makes them already placed.
-        dropCloneCopies();
+        dropCloneCopies(d.cloneCommand);
         const bool changed = t == Tool::Move     ? glm::length(d.moveDelta) > 1e-9
                              : t == Tool::Rotate ? std::abs(d.angle) > 1e-9
                                                  : glm::length(d.scale - glm::dvec3(1.0)) > 1e-9;
         if (!changed)
             return;
-        cloneChunk.emplace("Clone");
+        cloneChunk.emplace(d.components ? "Extrude Drag" : "Clone");
         try
         {
-            names = ops::execute("duplicate", d.cloneCall, CallSource::UI);
+            if (d.components)
+                ops::execute(d.cloneCommand, d.cloneCall, CallSource::UI);
+            else
+                names = ops::execute(d.cloneCommand, d.cloneCall, CallSource::UI);
         }
         catch (const CommandError& e)
         {
@@ -1515,15 +1581,16 @@ void Manipulator::cancel()
         return;
     restore();
     const bool clone = mDrag->clone;
+    const std::string command = mDrag->cloneCommand;
     mDrag.reset();
     if (clone)
-        dropCloneCopies();
+        dropCloneCopies(command);
 }
 
-void Manipulator::dropCloneCopies()
+void Manipulator::dropCloneCopies(const std::string& command)
 {
     UndoStack& undo = UndoStack::get();
-    if (undo.undoLabel() != "duplicate")
+    if (undo.undoLabel() != command)
         return;
     undo.undo();
     undo.flushFuture();
@@ -1849,7 +1916,7 @@ QString Manipulator::readout() const
         else
             text = QString::fromUtf8("× %1, %2, %3").arg(s.x, 0, 'f', 3).arg(s.y, 0, 'f', 3).arg(s.z, 0, 'f', 3);
     }
-    if (heldSnap() || tools::incrementSnap(t).enabled)
+    if (heldSnap() || tools::incrementSnap(t).enabled || (d.selectionSnap && !(tools::snaps() & SnapRotateHold)))
         text += "  snap";
     return text;
 }

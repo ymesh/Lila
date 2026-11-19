@@ -12,6 +12,7 @@
 #include <QCheckBox>
 #include <QClipboard>
 #include <QComboBox>
+#include <QCursor>
 #include <QDoubleSpinBox>
 #include <QElapsedTimer>
 #include <QHelpEvent>
@@ -20,11 +21,13 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPointer>
+#include <QScreen>
 #include <QSpinBox>
 #include <QToolTip>
 #include <QVariantAnimation>
 
 #include <cmath>
+#include <utility>
 
 namespace lila::ui
 {
@@ -99,7 +102,9 @@ protected:
             mPresetCarry = 0.0;
             mClick.press(int(m->globalPosition().x()), int(m->globalPosition().y()), steadyNowMs());
             QApplication::setOverrideCursor(Qt::SizeHorCursor);
-            UndoStack::get().openChunk("Drag Value");
+            mChunk = !scrubsWithoutUndoStep(box);
+            if (mChunk)
+                UndoStack::get().openChunk("Drag Value");
             return true;
         }
         case QEvent::MouseMove:
@@ -119,6 +124,7 @@ protected:
             mClick.move(int(x), int(m->globalPosition().y()));
             mCarry += (x - mLastX) / kPixelsPerStep;
             mLastX = x;
+            wrapAtScreenEdge(m->globalPosition());
             double steps = std::trunc(mCarry);
             if (steps != 0.0)
             {
@@ -252,11 +258,29 @@ private:
         flashReset(box);
     }
 
+    /** A drag that reaches the screen's side carries on from the other side, so it never runs out of room. */
+    void wrapAtScreenEdge(const QPointF& at)
+    {
+        QScreen* screen = QGuiApplication::screenAt(at.toPoint());
+        if (!screen)
+            return;
+        const QRect g = screen->geometry();
+        const int y = int(at.y());
+        if (at.x() <= g.left() + 1)
+            mLastX = g.right() - 2;
+        else if (at.x() >= g.right() - 1)
+            mLastX = g.left() + 2;
+        else
+            return;
+        QCursor::setPos(screen, int(mLastX), y);
+    }
+
     void endDrag()
     {
         mBox = nullptr;
         QApplication::restoreOverrideCursor();
-        UndoStack::get().closeChunk();
+        if (std::exchange(mChunk, false))
+            UndoStack::get().closeChunk();
     }
 
     void step(double steps, Qt::KeyboardModifiers mods)
@@ -291,6 +315,7 @@ private:
 
     QPointer<QAbstractSpinBox> mBox;
     Qt::MouseButton mButton = Qt::MiddleButton;
+    bool mChunk = false;
     QPointer<QWidget> mChoice;
     double mLastX = 0.0;
     double mCarry = 0.0;
@@ -383,7 +408,21 @@ private:
     QPointer<QWidget> mFlash;
     valueReset::ClickTracker mClick;
 };
+constexpr const char* kNoUndoStepProperty = "lilaScrubNoUndoStep";
 } // namespace
+
+void setScrubsWithoutUndoStep(QWidget* w)
+{
+    w->setProperty(kNoUndoStepProperty, true);
+}
+
+bool scrubsWithoutUndoStep(const QWidget* w)
+{
+    for (; w; w = w->parentWidget())
+        if (w->property(kNoUndoStepProperty).toBool())
+            return true;
+    return false;
+}
 
 void installSpinScrub(QObject* parent)
 {

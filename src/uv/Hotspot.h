@@ -64,6 +64,9 @@ struct HotspotTrim
     bool reserved = false;
 };
 
+/** Int face attribute: faces with it set keep their own uvs and material under a live hotspot (trimHotspotModifier). */
+inline constexpr const char* kHotspotKeepAttr = "hotspotKeep";
+
 enum class HotspotOrient : uint8_t
 {
     AsIs,     // keep the rectified orientation

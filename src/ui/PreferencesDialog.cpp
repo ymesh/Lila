@@ -849,6 +849,8 @@ void addBuiltIns(Registry<prefPages::Page>& r)
         choiceField(viewport, "LOD groups show by default", lodDisplay::kMode,
                {{"The level for their screen size", "screenSize"}, {"A fixed level", "level"}, {"All levels", "all"}}, "screenSize");
         numberField(viewport, "Fixed level", lodDisplay::kLevel, 0.0, 0.0, double(scene::lod::kMaxLevels - 1), 1.0, 0);
+        sectionHeader(viewport, "Displacement Preview");
+        intChoiceField(viewport, "Height size for paged sets", "/texture/displacementPreviewSize", {{"2048 px", 2048}, {"4096 px", 4096}, {"8192 px", 8192}}, 4096);
         sectionHeader(viewport, "Selection");
         toggleField(viewport, "Marquee selects edges and faces it touches (off: only those whose centre it covers)", "/select/marqueeTouch", true);
         toggleField(viewport, "Camera-based selection (component marquees skip what is hidden behind surfaces)", "/select/cameraBased", false);
@@ -935,6 +937,7 @@ void addBuiltIns(Registry<prefPages::Page>& r)
         choiceField(manip, "Rotate space", "/manipulator/rotateSpace", {{"World", "world"}, {"Object", "object"}, {"Parent", "parent"}, {"Gimbal", "gimbal"}, {"Component", "component"}}, "world");
         choiceField(manip, "Scale space (components)", "/manipulator/scaleSpace", {{"World", "world"}, {"Object", "object"}, {"Component", "component"}}, "world");
         numberField(manip, "Rotate snap (degrees)", "/manipulator/rotateStep", 15.0, 0.1, 180.0, 1.0, 1);
+        choiceField(manip, "Shift-drag on faces and edges", "/manipulator/shiftDrag", {{"Fine control", "fine"}, {"Extrude", "extrude"}}, "fine");
         sectionHeader(manip, "Soft Select");
         toggleField(manip, "Enabled", "/softSelect/enabled", false);
         numberField(manip, "Radius (cm)", "/softSelect/radius", 25.0, 0.01, 100000.0, 1.0);
@@ -1066,7 +1069,7 @@ void addBuiltIns(Registry<prefPages::Page>& r)
 
     builtIn(r, "sourceControl", "Source Control", "sourceControl", [](Page& sc) {
         sectionHeader(sc, "Provider");
-        choiceField(sc, "Provider", "/provider", {{"Automatic", "auto"}, {"Perforce", "perforce"}, {"Git", "git"}, {"None", "none"}}, "auto");
+        choiceField(sc, "Provider", "/provider", {{"Automatic", "auto"}, {"Perforce", "perforce"}, {"Git", "git"}, {"Subversion", "svn"}, {"None", "none"}}, "auto");
         sectionHeader(sc, "Saving");
         choiceField(sc, "Saving a read-only file", "/autoCheckout", {{"Ask first", "prompt"}, {"Check out", "always"}, {"Do nothing", "never"}}, "prompt");
         toggleField(sc, "Mark new files for add", "/autoAdd", true);

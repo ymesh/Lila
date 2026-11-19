@@ -82,6 +82,12 @@ void ApplyStylised(UMaterialInstanceConstant* Instance, const TSharedPtr<FJsonOb
  */
 void KeepGrayscale16(UTexture* Texture);
 
+/**
+ * After PostEditChange: a warning when Unreal capped a texture larger than 16384 to 16384, which it does (with only a
+ * log line) when the texture isn't virtual and the project has virtual texturing off.
+ */
+void WarnIfCapped(const UTexture* Texture, TArray<FString>& OutWarnings);
+
 /** Where the generated master materials live. */
 LILALINK_API const TCHAR* MastersFolderPath();
 

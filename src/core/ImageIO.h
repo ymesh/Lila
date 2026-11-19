@@ -112,6 +112,9 @@ LILA_FOUNDATION_API std::vector<std::pair<std::string, Image>> readPsdLayers(con
 /** By extension; anything not named below reads as PNG or JPEG. */
 LILA_FOUNDATION_API Image read(const fs::path& path, std::string* err = nullptr);
 
+/** image scaled down to at most width x height, each output texel the area average of the texels it covers. Never upsamples. */
+LILA_FOUNDATION_API Image downsampled(const Image& image, int width, int height);
+
 /** The extensions write() takes, lowercase without the dot: png, exr, tga, tif, tiff, psd. */
 LILA_FOUNDATION_API const std::vector<std::string>& writableFormats();
 

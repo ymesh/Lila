@@ -607,7 +607,8 @@ void ViewportWidget::drawHud(OverlayPainter& p)
         });
     }
     // The drone's key list takes the corner before the tool messages fill it with the layout's.
-    drone::draw(p, this);
+    if (const QRectF banner = drone::draw(p, this); !banner.isEmpty())
+        drawn.push_back(banner);
     featureStatus::draw(p, this, width());
     flushToolMessages(p, ctx.view, drawn);
     viewportToast::draw(p, ctx.view, this, drawn);

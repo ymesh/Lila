@@ -8411,7 +8411,7 @@ def scAdd(*objects: Any, changelist: str | None = None) -> Any:
 
     Args:
         objects: files.
-        changelist: Perforce changelist number; default changelist when omitted.
+        changelist: Perforce changelist number or svn changelist name; default changelist when omitted.
     """
 
 def scChangelists(*objects: Any, create: str | None = None, move: str | None = None, shelve: str | None = None, unshelve: str | None = None, path: str | None = None) -> Any:
@@ -8419,19 +8419,19 @@ def scChangelists(*objects: Any, create: str | None = None, move: str | None = N
 
     Args:
         objects: files (for move or shelve).
-        create: Create a changelist with this description; returns its number.
+        create: Create a changelist with this description; returns its number (svn: its name).
         move: Move the given files into this changelist.
-        shelve: Shelve this changelist (Perforce), optionally only the given files.
-        unshelve: Unshelve this changelist into itself (Perforce).
+        shelve: Shelve this changelist (Perforce; svn: to <shelfRoot>/<user>/<name> in the repository), optionally only the given files.
+        unshelve: Unshelve this changelist into itself (Perforce; svn: a shelf name, or user/name for someone else's).
         path: Directory that picks the provider when no files are given. Default: the workspace root.
     """
 
 def scCheckout(*objects: Any, changelist: str | None = None) -> Any:
-    """Check files out for edit. Perforce: p4 edit. Git: git lfs lock for LFS files, otherwise nothing to do. Returns {files, warnings}.
+    """Check files out for edit. Perforce: p4 edit. Git: git lfs lock for LFS files. svn: svn lock for svn:needs-lock files. Otherwise nothing to do. Returns {files, warnings}.
 
     Args:
         objects: files.
-        changelist: Perforce changelist number; default changelist when omitted.
+        changelist: Perforce changelist number or svn changelist name; default changelist when omitted.
     """
 
 def scDelete(*objects: Any, changelist: str | None = None) -> Any:
@@ -8439,7 +8439,7 @@ def scDelete(*objects: Any, changelist: str | None = None) -> Any:
 
     Args:
         objects: files.
-        changelist: Perforce changelist number; default changelist when omitted.
+        changelist: Perforce changelist number or svn changelist name; default changelist when omitted.
     """
 
 def scHistory(*objects: Any, maxCount: int | None = None) -> Any:
@@ -8451,7 +8451,7 @@ def scHistory(*objects: Any, maxCount: int | None = None) -> Any:
     """
 
 def scLock(*objects: Any, unlock: bool | None = None) -> Any:
-    """Lock files so nobody else can submit them (git: git lfs lock). unlock releases.
+    """Lock files so nobody else can submit them (git: git lfs lock, svn: svn lock). unlock releases.
 
     Args:
         objects: files.
@@ -8486,7 +8486,7 @@ def scSubmit(*objects: Any, description: str | None = None, changelist: str | No
     Args:
         objects: files (optional).
         description: Change description / commit message.
-        changelist: Perforce changelist number; default changelist when omitted.
+        changelist: Perforce changelist number or svn changelist name; default changelist when omitted.
         path: Directory that picks the provider when no files are given. Default: the workspace root.
     """
 

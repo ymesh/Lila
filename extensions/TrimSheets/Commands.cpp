@@ -1560,8 +1560,7 @@ void registerCommands(ext::Context& ctx)
                                  {"seed", a.get<int64_t>("seed", 0)},
                                  {"randomOffset", a.get<bool>("randomOffset", true)},
                                  {"randomFlip", a.get<bool>("randomFlip", false)},
-                                 {"sliceOversized", a.get<bool>("sliceOversized", true)},
-                                 {"palette", palette}};
+                                 {"sliceOversized", a.get<bool>("sliceOversized", true)}};
             Graph& g = Graph::current();
             std::vector<std::string> meshes;
             for (scene::NodeId id : g.selection())
@@ -1573,6 +1572,9 @@ void registerCommands(ext::Context& ctx)
             for (const std::string& m : meshes)
             {
                 out[m] = ops::execute("addModifier", {{"args", {m}}, {"kind", "trimHotspot"}, {"params", params}});
+                // After the sheet: params apply in name order, and the palette is checked against the sheet.
+                if (!palette.empty())
+                    ops::execute("setAttr", {{"args", {out[m].get<std::string>() + ".palette", palette}}});
                 tagNode(m, f);
             }
             ensureMaterial(s, f, palette);

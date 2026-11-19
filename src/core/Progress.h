@@ -147,6 +147,18 @@ LILA_FOUNDATION_API void setReporter(std::function<void(const std::vector<Snapsh
 LILA_FOUNDATION_API void pumpNow();
 
 /**
+ * Holds the pump off while it lives, for code that must not re-enter the event loop, such as Qt applying a dock
+ * layout: events run there can delete the objects it is still using.
+ */
+struct LILA_FOUNDATION_API NoPump
+{
+    NoPump();
+    ~NoPump();
+    NoPump(const NoPump&) = delete;
+    NoPump& operator=(const NoPump&) = delete;
+};
+
+/**
  * Runs fn on a worker thread, nested under this thread's current scope, while this thread keeps pumping. Exceptions
  * from fn are rethrown here. Runs fn inline when there is no pump or this isn't the main thread.
  */

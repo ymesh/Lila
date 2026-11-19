@@ -224,6 +224,62 @@ TEST_CASE("virtual texture: pages sample like the whole image")
     setMode("auto");
 }
 
+TEST_CASE("virtual texture: displacement preview gets a capped height copy of a paged set")
+{
+    if (!gpuVt())
+        return;
+    newSceneWithoutLive();
+    run("texCreateSet", {{"args", {"Rock"}}, {"resolution", 1024}, {"materials", {"M_Rock"}}});
+    scene::Node& set = *tex::findSet(sg(), "Rock");
+    tex::Graph g = tex::Graph::makeMaterial("Rock");
+    add(g, "Noise", "perlin", {{"scale", 6}, {"octaves", 4}});
+    link(g, "Noise.out", "Output.baseColor");
+    link(g, "Noise.out", "Output.height");
+    tex::writeGraph(sg(), set, g);
+    PrefStore::get().set("general", "/texture/displacementPreviewSize", 256);
+
+    setMode("on");
+    ui::texLive::install();
+    REQUIRE(ui::texLive::mapsFor("M_Rock"));
+    REQUIRE(ui::texLive::waitIdle(120000));
+    // The first ask starts the copy; until its first level runs there is nothing to displace by.
+    CHECK_FALSE(ui::texLive::channelImage("Rock", "height"));
+    REQUIRE(ui::texLive::waitIdle(120000));
+    mainq::drain();
+    GpuImageRef height = ui::texLive::channelImage("Rock", "height");
+    REQUIRE(height);
+    CHECK(height->width() == 256);
+    CHECK_FALSE(ui::texLive::channelImage("Rock", "baseColor"));
+    std::optional<ui::texLive::HeightCopy> copy = ui::texLive::heightCopy("Rock");
+    REQUIRE(copy);
+    CHECK(copy->size == 256);
+    CHECK(copy->full == 1024);
+    CHECK(copy->ready);
+
+    // A new size rebuilds the copy at it.
+    PrefStore::get().set("general", "/texture/displacementPreviewSize", 512);
+    mainq::drain();
+    REQUIRE(ui::texLive::waitIdle(120000));
+    mainq::drain();
+    height = ui::texLive::channelImage("Rock", "height");
+    REQUIRE(height);
+    CHECK(height->width() == 512);
+    ui::texLive::shutdown();
+
+    // A whole set keeps its full-size height and has no copy.
+    setMode("off");
+    ui::texLive::install();
+    REQUIRE(ui::texLive::mapsFor("M_Rock"));
+    REQUIRE(ui::texLive::waitIdle(120000));
+    height = ui::texLive::channelImage("Rock", "height");
+    REQUIRE(height);
+    CHECK(height->width() == 1024);
+    CHECK_FALSE(ui::texLive::heightCopy("Rock"));
+    ui::texLive::shutdown();
+    setMode("auto");
+    PrefStore::get().set("general", "/texture/displacementPreviewSize", 4096);
+}
+
 TEST_CASE("virtual texture: feedback asks only for visible pages, and memory follows them")
 {
     if (!gpuVt())

@@ -185,6 +185,185 @@ std::vector<unsigned char> readAll(const fs::path& path)
     return d;
 }
 
+/** The PNG's interlace byte, or -1 when the data isn't a PNG. */
+int pngInterlace(const std::vector<unsigned char>& d)
+{
+    static constexpr unsigned char kSig[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+    if (d.size() < 33 || std::memcmp(d.data(), kSig, 8) != 0 || std::memcmp(&d[12], "IHDR", 4) != 0)
+        return -1;
+    return d[28];
+}
+
+/**
+ * A non-interlaced PNG of any colour type and bit depth, inflated row by row so neither the image size nor the file
+ * size is bounded by 32-bit counts (stb_image stops near 2 GB of decoded data).
+ */
+Image readPngStreamed(const std::vector<unsigned char>& d, std::string* err)
+{
+    LILA_ZONE();
+    auto fail = [&](const std::string& why) {
+        if (err)
+            *err = why;
+        return Image{};
+    };
+    const uint32_t w32 = be32(&d[16]), h32 = be32(&d[20]);
+    const int depth = d[24], type = d[25];
+    if (w32 == 0 || h32 == 0 || w32 > uint32_t(INT32_MAX) || h32 > uint32_t(INT32_MAX) || d[26] != 0 || d[27] != 0)
+        return fail("bad PNG header");
+    const int channels = type == 0 ? 1 : type == 2 ? 3 : type == 3 ? 1 : type == 4 ? 2 : type == 6 ? 4 : 0;
+    const bool depthOk = type == 0 ? (depth == 1 || depth == 2 || depth == 4 || depth == 8 || depth == 16)
+                         : type == 3 ? (depth == 1 || depth == 2 || depth == 4 || depth == 8)
+                                     : (depth == 8 || depth == 16);
+    if (!channels || !depthOk)
+        return fail("bad PNG colour type or bit depth");
+    const int w = int(w32), h = int(h32);
+
+    std::array<std::array<float, 4>, 256> palette{};
+    for (auto& p : palette)
+        p = {0.0f, 0.0f, 0.0f, 1.0f};
+    std::array<uint32_t, 3> key{};
+    bool hasKey = false;
+    std::vector<std::pair<const unsigned char*, size_t>> idat;
+    for (size_t at = 8; at + 12 <= d.size();)
+    {
+        const size_t len = be32(&d[at]);
+        if (at + 12 + len > d.size())
+            break;
+        const unsigned char* tag = &d[at + 4];
+        const unsigned char* body = &d[at + 8];
+        if (std::memcmp(tag, "IDAT", 4) == 0)
+            idat.emplace_back(body, len);
+        else if (std::memcmp(tag, "PLTE", 4) == 0)
+            for (size_t i = 0; i < std::min<size_t>(len / 3, 256); ++i)
+                palette[i] = {body[i * 3] / 255.0f, body[i * 3 + 1] / 255.0f, body[i * 3 + 2] / 255.0f, 1.0f};
+        else if (std::memcmp(tag, "tRNS", 4) == 0)
+        {
+            if (type == 3)
+                for (size_t i = 0; i < std::min<size_t>(len, 256); ++i)
+                    palette[i][3] = body[i] / 255.0f;
+            else if ((type == 0 && len >= 2) || (type == 2 && len >= 6))
+            {
+                hasKey = true;
+                for (size_t c = 0; c < size_t(type == 0 ? 1 : 3); ++c)
+                    key[c] = uint32_t(body[c * 2]) << 8 | body[c * 2 + 1];
+            }
+        }
+        else if (std::memcmp(tag, "IEND", 4) == 0)
+            break;
+        at += 12 + len;
+    }
+    if (idat.empty())
+        return fail("PNG has no image data");
+
+    Image img;
+    try
+    {
+        img = Image{w, h, std::vector<float>(size_t(w) * size_t(h) * 4)};
+    }
+    catch (const std::bad_alloc&)
+    {
+        return fail("not enough memory for a " + std::to_string(w) + " x " + std::to_string(h) + " image");
+    }
+
+    const size_t rowBytes = (size_t(w) * size_t(channels) * size_t(depth) + 7) / 8;
+    const size_t bpp = std::max<size_t>(1, size_t(channels) * size_t(depth) / 8);
+    const float maxValue = float((1u << depth) - 1);
+    auto sample = [&](const unsigned char* row, size_t i) -> uint32_t {
+        if (depth == 8)
+            return row[i];
+        if (depth == 16)
+            return uint32_t(row[i * 2]) << 8 | row[i * 2 + 1];
+        const size_t bit = i * size_t(depth);
+        return (row[bit / 8] >> (8 - depth - int(bit % 8))) & ((1u << depth) - 1);
+    };
+    auto convert = [&](const unsigned char* row, float* out) {
+        for (size_t x = 0; x < size_t(w); ++x, out += 4)
+        {
+            const size_t s = x * size_t(channels);
+            if (type == 3)
+            {
+                std::memcpy(out, palette[sample(row, x) & 255].data(), sizeof(float) * 4);
+                continue;
+            }
+            if (type == 0 || type == 4)
+            {
+                const uint32_t g = sample(row, s);
+                out[0] = out[1] = out[2] = float(g) / maxValue;
+                out[3] = type == 4 ? float(sample(row, s + 1)) / maxValue : hasKey && g == key[0] ? 0.0f : 1.0f;
+                continue;
+            }
+            const uint32_t r = sample(row, s), g = sample(row, s + 1), b = sample(row, s + 2);
+            out[0] = float(r) / maxValue;
+            out[1] = float(g) / maxValue;
+            out[2] = float(b) / maxValue;
+            out[3] = type == 6 ? float(sample(row, s + 3)) / maxValue : hasKey && r == key[0] && g == key[1] && b == key[2] ? 0.0f : 1.0f;
+        }
+    };
+
+    mz_stream z{};
+    if (mz_inflateInit(&z) != MZ_OK)
+        return fail("inflate failed");
+    std::unique_ptr<mz_stream, int (*)(mz_stream*)> closer(&z, mz_inflateEnd);
+    size_t chunk = 0;
+    // Rows unfilter in order, then convert to floats in parallel a batch at a time.
+    constexpr size_t kBatch = 64;
+    std::vector<unsigned char> rows((rowBytes + 1) * kBatch);
+    std::vector<unsigned char> prev(rowBytes, 0);
+    for (int y0 = 0; y0 < h; y0 += int(kBatch))
+    {
+        const int count = std::min(int(kBatch), h - y0);
+        for (int r = 0; r < count; ++r)
+        {
+            unsigned char* line = &rows[size_t(r) * (rowBytes + 1)];
+            size_t filled = 0;
+            while (filled < rowBytes + 1)
+            {
+                if (z.avail_in == 0 && chunk < idat.size())
+                {
+                    z.next_in = idat[chunk].first;
+                    z.avail_in = unsigned(idat[chunk].second);
+                    ++chunk;
+                }
+                z.next_out = line + filled;
+                z.avail_out = unsigned(rowBytes + 1 - filled);
+                const int status = mz_inflate(&z, MZ_SYNC_FLUSH);
+                const size_t before = filled;
+                filled = rowBytes + 1 - z.avail_out;
+                if (filled < rowBytes + 1 && (status == MZ_STREAM_END || (filled == before && z.avail_in == 0 && chunk == idat.size())))
+                    return fail("truncated PNG data");
+                if (status != MZ_OK && status != MZ_STREAM_END && !(status == MZ_BUF_ERROR && z.avail_in == 0))
+                    return fail("corrupt PNG data");
+            }
+            const unsigned char filter = line[0];
+            unsigned char* px = line + 1;
+            for (size_t i = 0; i < rowBytes; ++i)
+            {
+                const int a = i >= bpp ? px[i - bpp] : 0, b = prev[i], c = i >= bpp ? prev[i - bpp] : 0;
+                int add = 0;
+                if (filter == 1)
+                    add = a;
+                else if (filter == 2)
+                    add = b;
+                else if (filter == 3)
+                    add = (a + b) / 2;
+                else if (filter == 4)
+                {
+                    const int p = a + b - c, pa = std::abs(p - a), pb = std::abs(p - b), pc = std::abs(p - c);
+                    add = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+                }
+                else if (filter != 0)
+                    return fail("bad PNG filter");
+                px[i] = static_cast<unsigned char>(px[i] + add);
+            }
+            std::memcpy(prev.data(), px, rowBytes);
+        }
+        tbb::parallel_for(0, count, [&](int r) {
+            convert(&rows[size_t(r) * (rowBytes + 1) + 1], img.rgba.data() + size_t(y0 + r) * size_t(w) * 4);
+        });
+    }
+    return img;
+}
+
 /** PNG (any colour type, bit depth or interlacing) and JPEG through stb_image, as RGBA floats. */
 Image readStbImpl(const fs::path& path, std::string* err)
 {
@@ -197,6 +376,14 @@ Image readStbImpl(const fs::path& path, std::string* err)
     const std::vector<unsigned char> data = readAll(path);
     if (data.empty())
         return fail("can't read the file");
+    if (pngInterlace(data) == 0)
+    {
+        std::string why;
+        Image img = readPngStreamed(data, &why);
+        if (img.width == 0)
+            return fail(why);
+        return img;
+    }
     const int size = int(std::min<size_t>(data.size(), size_t(INT32_MAX)));
     int w = 0, h = 0, channels = 0;
     const bool wide = stbi_is_16_bit_from_memory(data.data(), size);
@@ -1433,6 +1620,56 @@ Image read(const fs::path& path, std::string* err)
         return Image{f.width, f.height, dds::decodeFloat(f)};
     }
     return readPng(path, err);
+}
+
+Image downsampled(const Image& src, int width, int height)
+{
+    LILA_ZONE();
+    const int w = std::clamp(width, 1, std::max(src.width, 1)), h = std::clamp(height, 1, std::max(src.height, 1));
+    if (w == src.width && h == src.height)
+        return src;
+    struct Span
+    {
+        int first = 0;
+        std::vector<float> weights;
+    };
+    // Each output texel covers [i * scale, (i + 1) * scale) of the source; a source texel weighs its overlap with that.
+    auto spans = [](int from, int to) {
+        std::vector<Span> out(static_cast<size_t>(to));
+        const double scale = double(from) / double(to);
+        for (int i = 0; i < to; ++i)
+        {
+            const double a = i * scale, b = (i + 1) * scale;
+            Span& s = out[size_t(i)];
+            s.first = int(a);
+            for (int j = s.first; j < std::min(from, int(std::ceil(b))); ++j)
+                s.weights.push_back(float((std::min(b, double(j + 1)) - std::max(a, double(j))) / scale));
+        }
+        return out;
+    };
+    const std::vector<Span> xs = spans(src.width, w), ys = spans(src.height, h);
+    Image out{w, h, std::vector<float>(size_t(w) * size_t(h) * 4, 0.0f), src.icc};
+    tbb::parallel_for(0, h, [&](int y) {
+        float* row = &out.rgba[size_t(y) * size_t(w) * 4];
+        const Span& sy = ys[size_t(y)];
+        for (size_t k = 0; k < sy.weights.size(); ++k)
+        {
+            const float* in = &src.rgba[size_t(sy.first + int(k)) * size_t(src.width) * 4];
+            const float wy = sy.weights[k];
+            for (int x = 0; x < w; ++x)
+            {
+                const Span& sx = xs[size_t(x)];
+                for (size_t m = 0; m < sx.weights.size(); ++m)
+                {
+                    const float wt = wy * sx.weights[m];
+                    const float* t = in + size_t(sx.first + int(m)) * 4;
+                    for (int c = 0; c < 4; ++c)
+                        row[size_t(x) * 4 + size_t(c)] += t[c] * wt;
+                }
+            }
+        }
+    });
+    return out;
 }
 
 const std::vector<std::string>& writableFormats()

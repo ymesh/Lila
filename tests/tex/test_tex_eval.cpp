@@ -475,3 +475,19 @@ TEST_CASE("tex: Image gives the file's alpha and reads colour as linear or sRGB"
         CHECK(texel(evaluateCpu(buildPlan(none, one)).outputs.at("alpha"), 0, 0)[0] == doctest::Approx(1.0));
     }
 }
+
+TEST_CASE("tex eval: an Image file larger than the plan is read at the plan's size")
+{
+    image::Image big{64, 32, std::vector<float>(64 * 32 * 4, 0.25f)};
+    std::string warning;
+    image::Image fit = tex::fitSourceImage(big, "big.png", 16, 16, 0, &warning);
+    CHECK(fit.width == 16);
+    CHECK(fit.height == 16);
+    CHECK(warning.empty());
+    CHECK(fit.rgba[5] == doctest::Approx(0.25f));
+
+    fit = tex::fitSourceImage(big, "big.png", 64, 64, 128, &warning);
+    CHECK(size_t(fit.width) * size_t(fit.height) <= 128);
+    CHECK(fit.width == 2 * fit.height);
+    CHECK(warning.find("UDIM") != std::string::npos);
+}

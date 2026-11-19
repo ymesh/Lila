@@ -54,6 +54,10 @@ float4 texelAt(uint i)
         for (uint c = 0; c < 4; ++c)
             v[c] = f16tof32(halfAt(b + c * 2));
         break;
+    case kRGBA32F:
+        for (uint c = 0; c < 4; ++c)
+            v[c] = asfloat(dcp.src[(b >> 2) + c]);
+        break;
     default: v.x = asfloat(dcp.src[b >> 2]); break;
     }
     if (channelCount(dcp.format) <= 2)

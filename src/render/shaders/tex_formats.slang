@@ -7,6 +7,8 @@ static const uint kRGBA8 = 2;
 static const uint kR16F = 3;
 static const uint kRGBA16F = 4;
 static const uint kR32F = 5;
+// Decode sources only (no TextureFormat): float4 texels from the CPU.
+static const uint kRGBA32F = 6;
 static const uint kConstant = 4;
 
 uint texelBytes(uint f)
@@ -18,6 +20,7 @@ uint texelBytes(uint f)
     case kRGBA8: return 4;
     case kR16F: return 2;
     case kRGBA16F: return 8;
+    case kRGBA32F: return 16;
     default: return 4;
     }
 }
@@ -28,7 +31,8 @@ uint channelCount(uint f)
     {
     case kRG8: return 2;
     case kRGBA8:
-    case kRGBA16F: return 4;
+    case kRGBA16F:
+    case kRGBA32F: return 4;
     default: return 1;
     }
 }

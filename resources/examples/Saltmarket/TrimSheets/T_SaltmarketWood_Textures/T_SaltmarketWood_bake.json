@@ -1,0 +1,278 @@
+{
+  "backend": "gpu",
+  "backendMode": "",
+  "dryRun": false,
+  "folder": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_SaltmarketWood_Textures",
+  "idMap": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_SaltmarketWood_Textures/T_SaltmarketWood_trimId.png",
+  "inputHash": "",
+  "lint": null,
+  "manifest": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_SaltmarketWood_Textures/T_SaltmarketWood_bake.json",
+  "outputs": [
+    {
+      "bits": 8,
+      "colorSpace": "linear",
+      "file": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_SaltmarketWood_Textures/T_SaltmarketWood_normal.png",
+      "format": "png",
+      "groups": [
+        "T_SaltmarketWood"
+      ],
+      "height": 1024,
+      "layer": "",
+      "map": "normal",
+      "materials": [
+        "Default"
+      ],
+      "meshes": [
+        "T_SaltmarketWood"
+      ],
+      "meta": {},
+      "normalFormat": "directx",
+      "suffix": "normal",
+      "udim": 1001,
+      "width": 1024
+    },
+    {
+      "bits": 8,
+      "colorSpace": "linear",
+      "file": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_SaltmarketWood_Textures/T_SaltmarketWood_ao.png",
+      "format": "png",
+      "groups": [
+        "T_SaltmarketWood"
+      ],
+      "height": 1024,
+      "layer": "",
+      "map": "ao",
+      "materials": [
+        "Default"
+      ],
+      "meshes": [
+        "T_SaltmarketWood"
+      ],
+      "meta": {},
+      "normalFormat": "",
+      "suffix": "ao",
+      "udim": 1001,
+      "width": 1024
+    },
+    {
+      "bits": 8,
+      "colorSpace": "linear",
+      "file": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_SaltmarketWood_Textures/T_SaltmarketWood_curvature.png",
+      "format": "png",
+      "groups": [
+        "T_SaltmarketWood"
+      ],
+      "height": 1024,
+      "layer": "",
+      "map": "curvature",
+      "materials": [
+        "Default"
+      ],
+      "meshes": [
+        "T_SaltmarketWood"
+      ],
+      "meta": {
+        "curvatureAuto": true,
+        "curvatureRange": 0.0909762904047966,
+        "decode": "curvature = (value - 0.5) * 2 * curvatureRange (1/cm mean curvature, convex positive)",
+        "source": "mesh"
+      },
+      "normalFormat": "",
+      "suffix": "curvature",
+      "udim": 1001,
+      "width": 1024
+    },
+    {
+      "bits": 16,
+      "colorSpace": "linear",
+      "file": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_SaltmarketWood_Textures/T_SaltmarketWood_height.png",
+      "format": "png",
+      "groups": [
+        "T_SaltmarketWood"
+      ],
+      "height": 1024,
+      "layer": "",
+      "map": "height",
+      "materials": [
+        "Default"
+      ],
+      "meshes": [
+        "T_SaltmarketWood"
+      ],
+      "meta": {
+        "decode": "height = (value - 0.5) * 2 * heightRange",
+        "heightAuto": false,
+        "heightMax": 15.0,
+        "heightMin": -15.0,
+        "heightRange": 15.0
+      },
+      "normalFormat": "",
+      "suffix": "height",
+      "udim": 1001,
+      "width": 1024
+    },
+    {
+      "bits": 8,
+      "colorSpace": "linear",
+      "file": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_SaltmarketWood_Textures/T_SaltmarketWood_cavity.png",
+      "format": "png",
+      "groups": [
+        "T_SaltmarketWood"
+      ],
+      "height": 1024,
+      "layer": "",
+      "map": "cavity",
+      "materials": [
+        "Default"
+      ],
+      "meshes": [
+        "T_SaltmarketWood"
+      ],
+      "meta": {
+        "curvatureAuto": true,
+        "curvatureRange": 0.0909762904047966,
+        "source": "mesh"
+      },
+      "normalFormat": "",
+      "suffix": "cavity",
+      "udim": 1001,
+      "width": 1024
+    },
+    {
+      "bits": 8,
+      "colorSpace": "linear",
+      "file": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_SaltmarketWood_Textures/T_SaltmarketWood_detailnormal.png",
+      "format": "png",
+      "groups": [
+        "T_SaltmarketWood"
+      ],
+      "height": 1024,
+      "layer": "",
+      "map": "detailNormal",
+      "materials": [
+        "Default"
+      ],
+      "meshes": [
+        "T_SaltmarketWood"
+      ],
+      "meta": {
+        "decode": "normal = reoriented(heightNormal, detail): heightNormal from the height map (depth = 2 * its heightRange) over uvSize cm",
+        "fade": 45.0,
+        "uvSize": [
+          800.0,
+          800.0
+        ],
+        "uvSizeAuto": false
+      },
+      "normalFormat": "",
+      "suffix": "detailnormal",
+      "udim": 1001,
+      "width": 1024
+    },
+    {
+      "bits": 8,
+      "colorSpace": "linear",
+      "file": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_SaltmarketWood_Textures/T_SaltmarketWood_normalobj.png",
+      "format": "png",
+      "groups": [
+        "T_SaltmarketWood"
+      ],
+      "height": 1024,
+      "layer": "",
+      "map": "objectNormal",
+      "materials": [
+        "Default"
+      ],
+      "meshes": [
+        "T_SaltmarketWood"
+      ],
+      "meta": {},
+      "normalFormat": "",
+      "suffix": "normalobj",
+      "udim": 1001,
+      "width": 1024
+    },
+    {
+      "bits": 32,
+      "colorSpace": "linear",
+      "file": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_SaltmarketWood_Textures/T_SaltmarketWood_trimIndex.exr",
+      "format": "exr",
+      "height": 1024,
+      "map": "trimIndex",
+      "udim": 1001,
+      "width": 1024
+    },
+    {
+      "bits": 32,
+      "colorSpace": "linear",
+      "file": "X:/Lila/resources/examples/Saltmarket/TrimSheets/T_SaltmarketWood_Textures/T_SaltmarketWood_trimRect.exr",
+      "format": "exr",
+      "height": 1024,
+      "map": "trimRect",
+      "udim": 1001,
+      "width": 1024
+    }
+  ],
+  "seamError": 5.489174509420991e-05,
+  "seconds": 1.1584386,
+  "stats": {
+    "backfaces": 0,
+    "groups": [
+      {
+        "backfaces": 0,
+        "frontal": 15.5,
+        "frontalAuto": false,
+        "group": "T_SaltmarketWood",
+        "highTriangles": 752,
+        "hits": 16777216,
+        "lowTriangles": 2,
+        "measured": false,
+        "misses": 0,
+        "probed": 0,
+        "reaimed": 0,
+        "rear": 0.5,
+        "rearAuto": false,
+        "samples": 16777216
+      }
+    ],
+    "hits": 16777216,
+    "misses": 0,
+    "probed": 0,
+    "reaimed": 0,
+    "samples": 16777216
+  },
+  "timings": {
+    "accumulate": 4.8587227,
+    "bands": 0.9260029,
+    "dilate": 0.0017952,
+    "finalize": 0.0276538,
+    "finish": 0.0301552,
+    "gpu": 0.1372818,
+    "gpu:accumulate": 0.018311199999999892,
+    "gpu:dilate": 0.0008540160000000005,
+    "gpu:finalize": 0.000152544,
+    "gpu:map:ao": 0.041186688,
+    "gpu:map:cavity": 0.0013107200000000028,
+    "gpu:map:curvature": 0.0013127360000000025,
+    "gpu:map:height": 0.0013107200000000028,
+    "gpu:map:normal": 0.0013312000000000027,
+    "gpu:map:objectNormal": 0.0013107200000000028,
+    "gpu:other": 0.0002647039999999999,
+    "gpu:raster": 0.016305664000000046,
+    "gpu:readback": 0.006948864000000001,
+    "gpu:resolve": 0.000113472,
+    "gpu:trace": 0.004560896000000006,
+    "gpuSetup": 0.0231223,
+    "map:detailNormal": 2.4079705000000002,
+    "plan": 0.0001467,
+    "prepare:detailNormal": 1.1e-06,
+    "raster": 11.580547200000002,
+    "resolve": 0.010817,
+    "trace": 4.8717793,
+    "write": 0.14905269999999998,
+    "writeWait": 0.0154048
+  },
+  "totalSeconds": 1.2657464,
+  "trims": 10,
+  "warnings": []
+}

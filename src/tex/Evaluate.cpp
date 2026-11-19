@@ -93,6 +93,25 @@ GpuEvaluator& gpuEvaluator()
 }
 } // namespace
 
+image::Image fitSourceImage(image::Image img, const std::string& name, int planWidth, int planHeight, size_t maxTexels, std::string* warning)
+{
+    if (img.width <= 0 || img.height <= 0)
+        return img;
+    int w = std::min(img.width, std::max(planWidth, 1)), h = std::min(img.height, std::max(planHeight, 1));
+    if (maxTexels > 0 && size_t(w) * size_t(h) > maxTexels)
+    {
+        const double k = std::sqrt(double(maxTexels) / (double(w) * double(h)));
+        w = std::max(1, int(w * k));
+        h = std::max(1, int(h * k));
+        if (warning)
+            *warning = "image " + name + ": " + std::to_string(img.width) + " x " + std::to_string(img.height) + " read at " + std::to_string(w) + " x " +
+                       std::to_string(h) + ", the most one GPU evaluation holds. Split it into UDIM tiles (<UDIM> in the file name) for full detail";
+    }
+    if (w == img.width && h == img.height)
+        return img;
+    return image::downsampled(img, w, h);
+}
+
 fs::path resolveImagePath(const std::string& path, const fs::path& root)
 {
     fs::path p(path);
@@ -155,7 +174,9 @@ EvalResult evaluateCpu(const Plan& plan, const EvalOptions& options)
         if (b.kind == BufferKind::Image)
         {
             std::string err;
-            image::Image img = b.name.empty() ? image::Image{} : image::read(resolveImagePath(b.name, options.imageRoot), &err);
+            image::Image img = b.name.empty() ? image::Image{}
+                                              : fitSourceImage(image::read(resolveImagePath(b.name, options.imageRoot), &err), b.name, plan.width,
+                                                               plan.height, 0, nullptr);
             if (img.width <= 0)
             {
                 if (!b.name.empty())
