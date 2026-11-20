@@ -9,6 +9,7 @@
 #include "ui/Actions.h"
 #include "ui/CameraBookmarks.h"
 #include "ui/CommandPreview.h"
+#include "ui/Editors.h"
 #include "ui/Icons.h"
 #include "ui/OptionBox.h"
 #include "ui/Shelf.h"
@@ -240,7 +241,14 @@ std::string viewportMenuName(const std::string& base, bool overObject, bool comp
 
 MarkingMenu* MarkingMenu::popup(const std::string& name, Trigger trigger, Qt::MouseButton button, std::optional<QPoint> at)
 {
-    return popupDefinition(markingMenus::resolve(name), trigger, button, at);
+    MarkingMenu* mm = popupDefinition(markingMenus::resolve(name), trigger, button, at);
+    if (mm)
+    {
+        std::string inSet = markingMenus::activeSet().empty() ? std::string() : markingMenus::activeSet() + "/" + name;
+        json setDef = inSet.empty() ? json() : PrefStore::get().merged("markingMenus/" + inSet);
+        mm->mName = setDef.is_object() && !setDef.empty() ? inSet : name;
+    }
+    return mm;
 }
 
 MarkingMenu* MarkingMenu::popupDefinition(const json& def, Trigger trigger, Qt::MouseButton button, std::optional<QPoint> at)
@@ -755,6 +763,19 @@ void MarkingMenu::keyPressEvent(QKeyEvent* e)
         }
         return;
     }
+    if (e->key() == Qt::Key_E && (e->modifiers() & Qt::ControlModifier) && !mName.empty())
+    {
+        // Only top-level items map to a slot in the stored menu; deeper levels open the menu as a whole.
+        std::string ptr;
+        if (mLevels.size() == 1 && mSlot >= 0)
+            ptr = std::string("/") + kSlotNames[mSlot];
+        else if (mLevels.size() == 1 && mOverflow >= 0)
+            ptr = "/overflow/" + std::to_string(mOverflow);
+        std::string name = mName;
+        dismiss();
+        QTimer::singleShot(0, [name, ptr] { openMarkingMenuEditor(name, ptr); });
+        return;
+    }
     if (e->key() == Qt::Key_Escape)
         dismiss();
 }
@@ -855,6 +876,8 @@ void MarkingMenu::paintEvent(QPaintEvent*)
         if (code.isEmpty())
             return;
         code += mCopied ? "\n\n# copied" : "\n\n# Ctrl+C to copy";
+        if (!mName.empty())
+            code += "\n# Ctrl+E to edit this menu";
         p.setFont(monoFont());
         QFontMetricsF fm(p.font());
         QRectF codeRect = fm.boundingRect(QRectF(0, 0, 640, 2000), Qt::AlignLeft | Qt::TextWordWrap, code);

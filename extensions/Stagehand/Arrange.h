@@ -135,6 +135,45 @@ struct ScatterOptions
 /** Items over a mesh's faces, no two closer than their footprints, on slopes gentle enough. */
 std::vector<Placed> scatter(const lila::geo::Mesh& surface, std::span<const Item> items, const ScatterOptions& o);
 
+struct BandOptions
+{
+    double width = 80.0;        // cm out from the object's footprint
+    double density = 6.0;       // per square metre where the band is densest
+    double falloff = 1.5;       // how fast it thins out: 0 even across the band, higher keeps it close to the walls
+    double contactHeight = 40.0; // cm above the ground that counts as the object's footprint (eaves above it don't)
+    double spacing = 0.9;       // footprints kept clear, times each item's own
+    double scaleNear = 1.15, scaleFar = 0.6; // scale at the wall and at the band's outer edge
+    double scaleJitter = 0.2;   // 0 to 1, either way
+    double leanChance = 0.6;    // chance a tall, thin item (a plank, a beam) leans on the wall
+    double leanMin = 8.0, leanMax = 24.0; // degrees from upright
+    double turn = 180.0;        // random turn about up, degrees either way, for items that don't lean
+    int maxCount = 400;
+    /** Per item weight (missing ones are 1). */
+    std::vector<double> weights;
+    uint32_t seed = 1;
+};
+
+/** Where a band put each item, beside the placements: distance from the footprint and the outward direction there. */
+struct BandResult
+{
+    std::vector<Placed> placed;
+    std::vector<double> distance;
+    std::vector<glm::dvec3> outward;
+    /** Ground height used: from the ground meshes, or a plane at the objects' lowest point when none were given. */
+    bool groundFromMeshes = false;
+    double cell = 0.0;
+};
+
+/**
+ * Items in a band round objects where they meet the ground (rubble at a wall's foot, planks leaning on a shed): the
+ * objects' footprint is taken from their geometry within contactHeight of the ground, the band runs width out from it,
+ * densest at the wall. Bigger items go near the wall, smaller further out; tall thin items lean on the wall. Works for
+ * any outline (L-shaped, several buildings, round towers). hosts and ground are world-space meshes; with no ground the
+ * ground is a plane at the hosts' lowest point.
+ */
+BandResult band(std::span<const lila::geo::Mesh* const> hosts, std::span<const lila::geo::Mesh* const> ground, std::span<const Item> items,
+                const BandOptions& o, std::span<const lila::geo::Mesh* const> blockers = {});
+
 struct SettleOptions
 {
     double seconds = 10.0;

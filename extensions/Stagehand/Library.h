@@ -63,6 +63,12 @@ struct Root
 std::vector<Root> roots(bool existingOnly = true);
 /** The folder of a writable tier: "workspace" (needs a workspace open), "user", or a studio folder by path. */
 std::filesystem::path tierDir(const std::string& tier);
+/**
+ * Library folders another extension adds for this session (Weathering's placeholder pieces), searched after every other
+ * tier under their own tier name. Adding the same folder again does nothing; remove takes it out.
+ */
+void addExtensionRoot(const std::string& tier, const std::filesystem::path& dir);
+void removeExtensionRoot(const std::filesystem::path& dir);
 /** Where the starter props are built, and whether they are in use. */
 std::filesystem::path starterDir();
 bool starterEnabled();

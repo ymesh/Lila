@@ -44,6 +44,16 @@ namespace
 constexpr const char* kFolderPref = "/blockwork/browser/folder";
 constexpr const char* kFavouritesPref = "/blockwork/browser/favourites";
 constexpr const char* kSceneEntry = "Scene Materials";
+
+/**
+ * Materials worth painting faces with: Weathering's own (its placeholder pieces' PiecePlaceholder_ materials and the
+ * M_Weathering glass, interior and decal ones it makes) are left out.
+ */
+bool paintable(const Node& material)
+{
+    const std::string& n = material.name();
+    return n.rfind("PiecePlaceholder_", 0) != 0 && n.rfind("M_Weathering", 0) != 0;
+}
 constexpr int kThumb = 64;
 
 /** The faces the panel acts on: the selected faces of blocks, else every face of the selected blocks. */
@@ -415,7 +425,8 @@ private:
     {
         std::vector<std::string> out;
         for (Node* m : materials::all(graph()))
-            out.push_back(m->name());
+            if (paintable(*m))
+                out.push_back(m->name());
         return out;
     }
 
@@ -431,6 +442,8 @@ private:
         {
             for (Node* m : materials::all(graph()))
             {
+                if (!paintable(*m))
+                    continue;
                 const QString name = QString::fromStdString(m->name());
                 if (!filter.isEmpty() && !name.contains(filter, Qt::CaseInsensitive))
                     continue;

@@ -78,6 +78,8 @@ void setPivotEdit(bool on)
 
 bool cloneDrag() { return gCloneDrag; }
 
+bool cloneShiftSwapped() { return PrefStore::get().value<bool>("general", "/manipulator/swapCloneShift", false); }
+
 void setCloneDrag(bool on)
 {
     if (on == gCloneDrag)

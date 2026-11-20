@@ -191,25 +191,35 @@ TEST_CASE("crash report upload strips identifying details")
     CHECK(out.find("tool: move") != std::string::npos);
 }
 
-TEST_CASE("crash consent round trip and always-send writes the prefs")
+TEST_CASE("crash consent round trip, and sending without asking writes the prefs")
 {
     fs::path dir = telemetryDir("consent");
     fs::path consent = dir / "crash-consent.json";
     fs::path prefs = dir / "general.json";
     std::ofstream(prefs) << R"({"telemetry": {"usage": true}})";
-    crash::upload::writeConsent(consent, {.send = true, .always = false, .prefsFile = prefs});
+    crash::upload::writeConsent(consent, {.offer = true, .send = false, .prefsFile = prefs});
     crash::upload::Consent c = crash::upload::readConsent(consent);
-    CHECK(c.send);
-    CHECK_FALSE(c.always);
+    CHECK(c.offer);
+    CHECK_FALSE(c.send);
     CHECK(c.prefsFile == prefs);
 
-    crash::upload::setAlways(consent, true);
-    CHECK(crash::upload::readConsent(consent).always);
-    std::ifstream in(prefs);
-    json j = json::parse(in);
-    CHECK(j["telemetry"]["crashAlways"] == true);
-    CHECK(j["telemetry"]["usage"] == true);
+    crash::upload::setSend(consent, true);
+    CHECK(crash::upload::readConsent(consent).send);
+    {
+        std::ifstream in(prefs);
+        json j = json::parse(in);
+        CHECK(j["telemetry"]["crashSend"] == "auto");
+        CHECK(j["telemetry"]["usage"] == true);
+    }
+    CHECK_FALSE(crash::upload::readConsent(dir / "missing.json").offer);
     CHECK_FALSE(crash::upload::readConsent(dir / "missing.json").send);
+
+    // Where sending may not be offered, nothing turns it on.
+    crash::upload::writeConsent(consent, {.offer = false, .send = true, .userOff = true, .prefsFile = prefs});
+    CHECK_FALSE(crash::upload::readConsent(consent).send);
+    CHECK(crash::upload::readConsent(consent).userOff);
+    crash::upload::setSend(consent, true);
+    CHECK_FALSE(crash::upload::readConsent(consent).send);
 }
 
 TEST_CASE("support bundle zips the session and redacts secrets from prefs")

@@ -302,6 +302,10 @@ bool ViewportWidget::event(QEvent* e)
         mTabHeld = false;
         mTabUnder.reset();
     }
+    // Shift drives cursor badges (Shift clone drag when swapped with Y), which redraw only with a frame.
+    if (e->type() == QEvent::KeyPress || e->type() == QEvent::KeyRelease)
+        if (auto* k = static_cast<QKeyEvent*>(e); k->key() == Qt::Key_Shift && !k->isAutoRepeat())
+            requestFrame();
     // Tab is a held modifier for drag selection here, not focus navigation. Viewport tools (Retopo Draw) keep their own Tab.
     if (e->type() == QEvent::ShortcutOverride || e->type() == QEvent::KeyPress || e->type() == QEvent::KeyRelease)
         if (auto* k = static_cast<QKeyEvent*>(e); k->key() == Qt::Key_Tab || k->key() == Qt::Key_Backtab)

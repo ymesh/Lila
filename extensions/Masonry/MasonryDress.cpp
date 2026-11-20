@@ -2,6 +2,8 @@
 
 #include "MasonryRuin.h"
 
+#include <lila/GeometryNodes.h>
+#include <lila/Log.h>
 #include <lila/Profile.h>
 
 #include <algorithm>
@@ -40,25 +42,6 @@ double typical(std::span<const Stone> stones)
         return 10.0;
     std::nth_element(h.begin(), h.begin() + std::ptrdiff_t(h.size() / 2), h.end());
     return std::max(1.0, h[h.size() / 2]);
-}
-
-/** Quads (four points each, any count) as one mesh with uv0 set per quad from the given corners. */
-geo::Mesh quads(const std::vector<glm::dvec3>& pts, const std::vector<glm::vec2>& uvs)
-{
-    std::vector<geo::Index> sizes, idx;
-    for (size_t k = 0; k + 3 < pts.size(); k += 4)
-    {
-        sizes.push_back(4);
-        for (size_t i = 0; i < 4; ++i)
-            idx.push_back(geo::Index(k + i));
-    }
-    geo::Mesh m = geo::Mesh::fromPolygons(pts, sizes, idx);
-    std::span<glm::vec2> uv = m.cornerAttrs().getOrAdd<glm::vec2>(geo::attr::uvName(0));
-    for (geo::Index f = 0; f < m.faceCapacity(); ++f)
-        if (m.faceValid(f))
-            for (geo::Index c : m.faceCorners(f))
-                uv[c] = uvs[size_t(m.cornerPoint(c))];
-    return m;
 }
 } // namespace
 
@@ -112,95 +95,91 @@ geo::Mesh plasterMesh(std::span<const Stone> stones, std::span<const float> heig
 
 geo::Mesh ivyMesh(std::span<const Stone> stones, const AgeParams& p)
 {
+    namespace gn = lila::gn;
+    namespace log = lila::log;
     LILA_ZONE_N("Masonry ivy");
-    std::vector<glm::dvec3> pts;
-    std::vector<glm::vec2> uvs;
+    // Weathering's Ivy geometry node grows it; Masonry lists Weathering as a dependency, so it is there when Masonry loads.
+    const gn::NodeDecl* grower = gn::findDecl("IvyGrowth");
+    if (!grower || !grower->exec)
+    {
+        log::warn("Masonry: no ivy grown: it needs the Weathering extension, which is not loaded");
+        return {};
+    }
     const double unit = typical(stones);
     const double leaf = p.leaf > 0.0 ? p.leaf : unit * 0.66;
-    StoneGrid grid;
-    double big = unit;
     double lo = 1e300, hi = -1e300;
     for (const Stone& s : stones)
     {
-        big = std::max(big, std::max(s.size.x, s.size.y));
         lo = std::min(lo, s.center.y - s.size.y * 0.5);
         hi = std::max(hi, s.center.y + s.size.y * 0.5);
     }
-    grid.cell = std::max(unit * 4.0, big);
-    grid.build(stones, 0.0);
-    const double reachTop = lo + (hi - lo) * std::clamp(p.ivyHeight, 0.0, 1.0);
-
-    // The face stone under a point, and the point moved onto its outer face.
-    auto faceAt = [&](const glm::dvec3& q, glm::dvec3* snapped, glm::dvec3* normal) {
-        Stone probe;
-        probe.center = q;
-        probe.size = glm::dvec3(unit * 0.5);
-        double best = 1e300;
-        for (int o : grid.around(probe, unit))
-        {
-            const Stone& s = stones[size_t(o)];
-            if (!onFace(s))
-                continue;
-            const glm::dvec3 local = glm::transpose(s.frame) * (q - s.center);
-            const glm::dvec3 h = s.size * 0.5;
-            if (std::abs(local.x) > h.x + unit * 0.3 || std::abs(local.y) > h.y + unit * 0.3 || local.z > h.z || local.z < -h.z - unit)
-                continue;
-            const double off = std::abs(local.z + h.z);
-            if (off < best)
-            {
-                best = off;
-                *snapped = s.center + s.frame * glm::dvec3(std::clamp(local.x, -h.x, h.x), std::clamp(local.y, -h.y, h.y), -h.z - 0.3);
-                *normal = -s.frame[2];
-            }
-        }
-        return best < 1e300;
-    };
-    auto addQuad = [&](const glm::dvec3& c, const glm::dvec3& right, const glm::dvec3& up, glm::vec2 uvLo, glm::vec2 uvHi) {
-        pts.insert(pts.end(), {c - right - up, c + right - up, c + right + up, c - right + up});
-        uvs.insert(uvs.end(), {uvLo, {uvHi.x, uvLo.y}, uvHi, {uvLo.x, uvHi.y}});
-    };
-
+    // The surface: every face stone as a box; seeds at the foot of grounded ones.
+    geo::Mesh surface;
+    geo::Mesh seeds;
     for (size_t k = 0; k < stones.size(); ++k)
     {
         const Stone& s = stones[k];
-        if (!onFace(s) || !s.grounded || unitRandom(mixKey(p.seed, 41, k)) > std::clamp(p.ivy, 0.0, 1.0) * 0.35)
+        if (!onFace(s))
             continue;
-        glm::dvec3 at = s.center - s.frame[1] * (s.size.y * 0.5), normal = -s.frame[2];
-        if (!faceAt(at, &at, &normal))
-            continue;
-        const double maxUp = lo + (reachTop - lo) * (0.4 + 0.6 * unitRandom(mixKey(p.seed, 42, k)));
-        glm::dvec3 prev = at;
-        for (int step = 0; step < 400 && at.y < maxUp; ++step)
+        const glm::dvec3 h = s.size * 0.5;
+        geo::Index v[8];
+        for (int i = 0; i < 8; ++i)
+            v[i] = surface.addPoint(s.center + s.frame * glm::dvec3((i & 1) ? h.x : -h.x, (i & 2) ? h.y : -h.y, (i & 4) ? h.z : -h.z));
+        const int faces[6][4] = {{0, 2, 6, 4}, {1, 5, 7, 3}, {0, 4, 5, 1}, {2, 3, 7, 6}, {0, 1, 3, 2}, {4, 6, 7, 5}};
+        for (const auto& f : faces)
         {
-            auto rnd = [&](int n) { return unitRandom(mixKey(p.seed, 43, k, uint64_t(step), uint64_t(n))); };
-            const glm::dvec3 side = glm::normalize(glm::cross(normal, glm::dvec3(0, 1, 0)) + glm::dvec3(1e-9));
-            glm::dvec3 next = at + glm::dvec3(0, unit * 0.9, 0) + side * ((rnd(0) - 0.5) * unit * 1.2);
-            glm::dvec3 n2 = normal;
-            if (!faceAt(next, &next, &n2))
-                break;
-            // Stem: a thin ribbon from the last point.
-            const glm::dvec3 mid = (prev + next) * 0.5, axis = next - prev;
-            const double len = glm::length(axis);
-            if (len > 1e-6)
-                addQuad(mid, side * (leaf * 0.04), axis * 0.5, {0.0f, 0.0f}, {0.05f, 1.0f});
-            for (int l = 0; l < 3; ++l)
-            {
-                const double a = (rnd(1 + l) - 0.5) * 2.0;
-                const glm::dvec3 tilt = glm::normalize(n2 + side * (a * 0.5) + glm::dvec3(0, 0.4, 0));
-                const glm::dvec3 right = glm::normalize(glm::cross(glm::dvec3(0, 1, 0), tilt) + glm::dvec3(1e-9)) * (leaf * 0.5);
-                const glm::dvec3 up = glm::normalize(glm::cross(tilt, right)) * (leaf * 0.5);
-                const double size = 0.7 + 0.6 * rnd(5 + l);
-                const glm::dvec3 c = next + side * ((rnd(8 + l) - 0.5) * leaf) + n2 * (leaf * 0.3) + glm::dvec3(0, (rnd(11 + l) - 0.5) * leaf, 0);
-                addQuad(c, right * size, up * size, {0.1f, 0.0f}, {1.0f, 1.0f});
-            }
-            prev = next;
-            at = next;
-            normal = n2;
+            const geo::Index face = surface.addFace({v[f[0]], v[f[1]], v[f[2]], v[f[3]]});
+            if (face != geo::kInvalid && glm::dot(surface.faceNormal(face), surface.faceCentroid(face) - s.center) < 0.0)
+                surface.flipFace(face);
         }
+        if (s.grounded && unitRandom(mixKey(p.seed, 41, k)) <= std::clamp(p.ivy, 0.0, 1.0) * 0.35)
+            seeds.addPoint(s.center + s.frame * glm::dvec3(0.0, -h.y + 0.5, -h.z));
     }
-    if (pts.empty())
+    if (seeds.numPoints() == 0 || surface.numFaces() == 0)
         return {};
-    geo::Mesh m = quads(pts, uvs);
+    const double reach = (hi - lo) * std::clamp(p.ivyHeight, 0.0, 1.0) * 1.15;
+
+    gn::Group group;
+    gn::GNode node;
+    node.name = "masonryIvy";
+    node.type = grower->type;
+    node.values = {{"seed", int64_t(p.seed % 1000003)}, {"length", std::max(unit, reach)}, {"branchiness", 0.4}, {"climb", 0.85},
+                   {"gravity", 0.2},         {"adhesion", std::max(1.0, unit * 0.1)},       {"smoothness", 0.15},
+                   {"stemRadius", std::max(0.1, leaf * 0.05)}, {"leafDensity", 100.0 / std::max(1.0, leaf * 0.5)},
+                   {"leafSize", leaf},       {"flowerDensity", 0.0}};
+    gn::ExecEnv env;
+    gn::ExecContext c(group, node, *grower, grower->sockets, env);
+    c.inputs.resize(grower->sockets.inputs.size());
+    c.outputs.resize(grower->sockets.outputs.size());
+    for (size_t k = 0; k < grower->sockets.inputs.size(); ++k)
+    {
+        const gn::SocketDecl& sd = grower->sockets.inputs[k];
+        gn::Value v;
+        if (sd.id == "surface")
+            v.geometry = gn::meshGeometry(std::move(surface));
+        else if (sd.id == "seeds")
+            v.geometry = gn::pointGeometry(std::move(seeds));
+        else if (sd.type == gn::SocketType::Geometry)
+            v.geometry = gn::makeGeometry({});
+        else
+            v = gn::valueFromJson(sd.type, node.values.contains(sd.id) ? node.values[sd.id] : sd.defaultValue);
+        c.inputs[k].push_back(std::move(v));
+    }
+    for (size_t k = 0; k < grower->sockets.outputs.size(); ++k)
+        c.outputs[k] = gn::defaultValue(grower->sockets.outputs[k].type);
+    try
+    {
+        grower->exec(c);
+    }
+    catch (const std::exception& e)
+    {
+        log::warn("Masonry: ivy: {}", e.what());
+        return {};
+    }
+    const int out = grower->sockets.outputIndex("geometry");
+    if (out < 0 || !c.outputs[size_t(out)].geometry || !c.outputs[size_t(out)].geometry->mesh)
+        return {};
+    geo::Mesh m = *c.outputs[size_t(out)].geometry->mesh;
     lila::scene::materials::assign(m, kIvySlot, {});
     return m;
 }

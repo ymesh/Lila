@@ -9,6 +9,7 @@
 
 #include <glm/glm.hpp>
 
+#include <string>
 #include <vector>
 
 namespace lila::geo
@@ -23,6 +24,11 @@ struct RenderMeshOptions
     bool wireframe = true;
     /** Group triangles into one section per face "material" id. */
     bool sections = true;
+    /**
+     * More corner layers (float or float4) that split vertices where their values differ, for per-corner data the shader
+     * interpolates that must not leak from one face into the next (grunge distances).
+     */
+    std::vector<std::string> splitLayers;
     /** Used when the mesh has no corner "normal" attribute. */
     CornerNormalOptions normals;
     TriangulateOptions triangulation;

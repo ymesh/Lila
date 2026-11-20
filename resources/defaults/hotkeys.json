@@ -44,6 +44,7 @@
       "Ctrl+Q": "file.exit",
       "Ctrl+Space": "window.toggleMaximizePanel",
       "Ctrl+,": "window.preferences",
+      "Ctrl+Alt+P": "window.preferences",
       "Up": "select.pickWalkUp",
       "Down": "select.pickWalkDown",
       "Left": "select.pickWalkLeft",

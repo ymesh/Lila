@@ -1,0 +1,15 @@
+{
+    "id": "Weathering",
+    "name": "Weathering",
+    "version": "0.1.0",
+    "vendor": "Lila",
+    "description": "Age, damage and overgrow anything: dressing round an object's base, ground presets, live grunge masks, edge decals and chipping, ivy, and roof, window, wire and rooftop generators, in any style, from your own pieces.",
+    "sdk": "1.0",
+    "dependencies": ["Stagehand"],
+    "entry": {
+        "windows": "Weathering.dll",
+        "linux": "Weathering.so",
+        "macos": "Weathering.dylib"
+    },
+    "enabledByDefault": true
+}

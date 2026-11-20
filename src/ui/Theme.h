@@ -58,6 +58,11 @@ inline constexpr const char* kTelemetryCrashPref = "/telemetry/crashReports";
  * way out.
  */
 LILA_UI_API void runFirstRunSetup(QWidget* parent);
+/**
+ * Asks once what to do with crash reports: send automatically (preselected), ask each time, or never. Does nothing
+ * once the user has answered, or where the studio or the environment has decided.
+ */
+LILA_UI_API void askCrashReportsOnce(QWidget* parent);
 /** The first-run dialog's telemetry choice on its own, from Help. */
 LILA_UI_API void showTelemetrySettings(QWidget* parent);
 } // namespace lila::ui

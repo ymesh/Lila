@@ -45,6 +45,12 @@ LILA_SCENE_API bool move(Mesh& mesh, std::string_view set, size_t index);
 LILA_SCENE_API std::string current(const Mesh& mesh);
 LILA_SCENE_API bool setCurrent(Mesh& mesh, std::string_view set);
 
+/** A data set travels with the mesh to export (a material reads it as vertex colour) but the viewport never shows it as colour. */
+LILA_SCENE_API bool isData(const Mesh& mesh, std::string_view set);
+LILA_SCENE_API void setData(Mesh& mesh, std::string_view set, bool data);
+/** The set the viewport shows as colour: the current one unless it is a data set; empty for none. */
+LILA_SCENE_API std::string displayed(const Mesh& mesh);
+
 LILA_SCENE_API bool isHalf(const Mesh& mesh, std::string_view set);
 /** Marks the set half or full precision; going to half rounds its values. */
 LILA_SCENE_API void setHalf(Mesh& mesh, std::string_view set, bool half);

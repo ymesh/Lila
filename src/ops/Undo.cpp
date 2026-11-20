@@ -286,6 +286,13 @@ void UndoStack::record(std::unique_ptr<UndoAction> action)
     push(std::move(c));
 }
 
+std::shared_ptr<void> UndoStack::replayScope(size_t actions) const
+{
+    // Short steps keep their precise per-change notifications; a long one would rebuild its dependants per edit.
+    constexpr size_t kLongStep = 8;
+    return mReplayScope && actions >= kLongStep ? mReplayScope() : nullptr;
+}
+
 bool UndoStack::undo()
 {
     LILA_ZONE();
@@ -295,8 +302,11 @@ bool UndoStack::undo()
     Chunk c = std::move(mDone.back());
     mDone.pop_back();
     mReplaying = true;
-    for (auto& a : std::views::reverse(c.actions))
-        a->undo();
+    {
+        const std::shared_ptr<void> scope = replayScope(c.actions.size());
+        for (auto& a : std::views::reverse(c.actions))
+            a->undo();
+    }
     mReplaying = false;
     std::string label = c.label;
     mUndone.push_back(std::move(c));
@@ -315,8 +325,11 @@ bool UndoStack::redo()
     Chunk c = std::move(mUndone.back());
     mUndone.pop_back();
     mReplaying = true;
-    for (auto& a : c.actions)
-        a->redo();
+    {
+        const std::shared_ptr<void> scope = replayScope(c.actions.size());
+        for (auto& a : c.actions)
+            a->redo();
+    }
     mReplaying = false;
     std::string label = c.label;
     mDone.push_back(std::move(c));

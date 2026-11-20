@@ -5,6 +5,8 @@
 #include "core/PrefStore.h"
 #include "ui/Actions.h"
 #include "ui/Deletion.h"
+#include "ui/HotkeyBindings.h"
+#include "ui/HotkeyEditor.h"
 #include "ui/Theme.h"
 
 #include <QComboBox>
@@ -72,6 +74,28 @@ bool hasDefault(const std::string& name)
 {
     std::error_code ec;
     return fs::exists(defaultsDir() / (name + ".json"), ec);
+}
+
+/** A menu the user made and hasn't saved yet. Set menus ("<set>/<name>") open under their base name's key. */
+bool isNewUserMenu(const std::string& name)
+{
+    if (name.find('/') != std::string::npos || hasDefault(name))
+        return false;
+    std::vector<std::string> contributed = markingMenus::contributedNames();
+    if (std::find(contributed.begin(), contributed.end(), name) != contributed.end())
+        return false;
+    json saved = PrefStore::get().merged("markingMenus/" + name);
+    return !saved.is_object() || saved.empty();
+}
+
+bool hasHotkey(const std::string& menu)
+{
+    const json target = {{"markingMenu", menu}};
+    for (const hotkeys::Binding& b : hotkeys::snapshot().bindings)
+        if (b.press == target || b.hold == target || b.release == target ||
+            std::find(b.buttons.begin(), b.buttons.end(), target) != b.buttons.end())
+            return true;
+    return false;
 }
 
 /** The RFC 7386 patch that turns from into to, so the user layer only holds what differs from the defaults. */
@@ -615,6 +639,20 @@ void MarkingMenuEditor::selectPointer(const std::string& ptr)
     showSelection();
 }
 
+void MarkingMenuEditor::showMenu(const std::string& name, const std::string& ptr)
+{
+    if (name != mName)
+    {
+        if (mDirty && QMessageBox::question(this, "Marking Menu Editor",
+                                            "Discard unsaved changes to " + QString::fromStdString(mName) + "?") != QMessageBox::Yes)
+            return;
+        mSel.clear();
+        openMenu(name);
+    }
+    if (!ptr.empty() && mDoc.contains(json::json_pointer(ptr)))
+        selectPointer(ptr);
+}
+
 void MarkingMenuEditor::setDirty(bool dirty)
 {
     mDirty = dirty;
@@ -629,8 +667,11 @@ void MarkingMenuEditor::save()
     if (mName.empty())
         return;
     json patch = mergePatch(defaultMenu(mName), mDoc);
+    const bool firstSave = isNewUserMenu(mName);
     setDirty(false);
     PrefStore::get().set("markingMenus/" + mName, "", patch);
+    if (firstSave && !hasHotkey(mName))
+        assignMarkingMenuHotkeyDialog(mName, this);
 }
 
 json* MarkingMenuEditor::item()

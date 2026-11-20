@@ -30,6 +30,8 @@ inline constexpr const char* kNodeSheet = "trimSheet";
 /** Mesh node string attribute naming the decal .lilatrim a placed decal quad shows, and its float projection depth, cm. */
 inline constexpr const char* kNodeDecal = "trimDecal";
 inline constexpr const char* kNodeDecalDepth = "decalDepth";
+/** Mesh node string attribute naming the sheet a mesh decal's faces map (edge decal strips): sent as a static mesh on M_LilaDecal. */
+inline constexpr const char* kNodeMeshDecal = "trimDecalMesh";
 
 /** What the generator sweeps across a trim. */
 enum class Style : uint8_t

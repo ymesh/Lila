@@ -76,6 +76,11 @@ public:
 
     bool undo();
     bool redo();
+    /**
+     * Makes the scope a long step is undone or redone inside, so its owner can gather the step's changes into one
+     * notification; the scope ends when the returned pointer is released.
+     */
+    void setReplayScope(std::function<std::shared_ptr<void>()> make) { mReplayScope = std::move(make); }
     void clear();
     /** Drops all undo/redo steps but keeps the scene state id, so an unchanged scene stays saved. */
     void flush();
@@ -158,7 +163,9 @@ private:
     Chunk mOpen;
     int mDepth = 0;
     bool mEnabled = true;
+    std::shared_ptr<void> replayScope(size_t actions) const;
     bool mReplaying = false;
+    std::function<std::shared_ptr<void>()> mReplayScope;
     bool mReopened = false;
     size_t mLimit = 0;
     size_t mBudget = 0;

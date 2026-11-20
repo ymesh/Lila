@@ -451,11 +451,15 @@ QImage render(const Options& o, Timing* timing, int repeat)
         render::MeshDraw d;
         d.mesh = std::move(rm);
         if (textured)
-            d.materials = drawMaterials(*shown);
+        {
+            std::vector<render::Material> materials = drawMaterials(*shown);
+            viewportHooks::decorateMaterials(id, *shown, materials);
+            d.materials = std::move(materials);
+        }
         d.world = n->as<glm::dmat4>(scene::Transform::kWorldMatrix);
         d.node = uint64_t(id);
         d.drawOffset = scene::drawOffset(*n);
-        if (viewportDisplay::vertexColorMode() != render::VertexColorMode::Off && !geo::colors::current(*shown).empty())
+        if (viewportDisplay::vertexColorMode() != render::VertexColorMode::Off && !geo::colors::displayed(*shown).empty())
         {
             d.vertexColors = viewportDisplay::vertexColorMode();
             d.colorChannel = viewportDisplay::colorChannel();

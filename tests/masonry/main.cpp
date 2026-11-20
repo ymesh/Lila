@@ -5,6 +5,7 @@
 #include "core/MainQueue.h"
 #include "extensions/ExtensionManager.h"
 #include "gn/Gn.h"
+#include "io/FileTranslators.h"
 #include "io/SceneFile.h"
 #include "scene/Node.h"
 #include "scene/SceneCommands.h"
@@ -32,6 +33,8 @@ int main(int argc, char** argv)
     lila::io::registerCommands();
     lila::extensions::registerCommands();
     lila::gn::registerCommands();
+    lila::io::translators::registerBuiltins();
+    lila::io::translators::registerCommands();
 
     doctest::Context ctx(argc, argv);
     int result = ctx.run();

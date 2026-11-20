@@ -689,3 +689,13 @@ TEST_CASE("masonry ship: assembly and Nanite are options, custom data carries ag
     CHECK(merged.cornerAttrs().has(geo::attr::uvName(2)));
 }
 
+
+TEST_CASE("masonry commands: a new building can be aged with a weathering preset")
+{
+    loadMasonry();
+    run("newScene");
+    const json b = run("masonryBuilding", {{"spec", chapelSpec(1.0)}, {"name", "AgedChapel"}, {"weather", "Concrete Debris"}});
+    REQUIRE(b.contains("weather"));
+    CHECK(b["weather"]["preset"] == "Concrete Debris");
+    CHECK(!b["weather"]["group"].get<std::string>().empty());
+}

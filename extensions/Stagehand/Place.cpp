@@ -418,17 +418,17 @@ json placedJson(Graph& g, NodeId root, const Asset& a, const std::string& mode)
 }
 
 /**
- * Renders thumb.png for starter props that have none (or all, with force): each model is brought into the scene,
+ * Renders thumb.png for a tier's assets that have none (or all, with force): each model is brought into the scene,
  * captured alone and taken out again with undo recording off, so neither the scene nor undo keeps a trace. Needs
  * captureView, which the app and batch mode have.
  */
-json renderStarterThumbnails(Graph& g, bool force)
+json renderTierThumbnails(Graph& g, bool force, const std::string& tier)
 {
     LILA_ZONE();
 
     std::vector<Asset> todo;
     for (const Asset& a : library::all())
-        if (a.tier == "starter" && !a.model.empty() && (force || a.thumbnail.empty()))
+        if (a.tier == tier && !a.model.empty() && (force || a.thumbnail.empty()))
             todo.push_back(a);
     json out = {{"thumbnails", 0}, {"missing", int64_t(todo.size())}};
     if (todo.empty())
@@ -597,6 +597,45 @@ void registerLibraryCommands(ext::Context& ctx)
     });
 
     ctx.registerCommand({
+        .name = "libraryMaster",
+        .doc = "A library asset's hidden master in the scene, loaded on first use: what instances and arrangements copy. "
+               "For other tools that build from library pieces. Returns root and meshes (paths).",
+        .positionalDoc = "asset id",
+        .run = [](const Args& a) -> json {
+            if (a.positional.size() != 1 || !a.positional[0].is_string())
+                throw CommandError("libraryMaster: give one asset id");
+            Graph& g = Graph::current();
+            const NodeId root = libraryMaster(g, a.positional[0].get<std::string>());
+            json meshes = json::array();
+            for (NodeId m : meshesOf(g, root))
+                meshes.push_back(g.node(m)->path());
+            return {{"root", g.node(root)->path()}, {"meshes", meshes}};
+        },
+        .examples = {"libraryMaster('Debris/StoneChunkM1')['meshes'][0]"},
+    });
+
+    ctx.registerCommand({
+        .name = "libraryRoot",
+        .doc = "Add a library folder for this session under a tier of its own, searched after every other tier: how an "
+               "extension ships placeholder pieces without touching the user's library paths. remove=True takes it out.",
+        .positionalDoc = "folder",
+        .flags = {{"tier", "t", T::String, "placeholder", "Tier name shown on its assets."},
+                  {"remove", "rm", T::Bool, false, "Remove the folder instead."}},
+        .undoable = false,
+        .run = [](const Args& a) -> json {
+            if (a.positional.size() != 1 || !a.positional[0].is_string())
+                throw CommandError("libraryRoot: give one folder");
+            const fs::path dir = library::utf8Path(a.positional[0].get<std::string>());
+            if (a.get<bool>("remove", false))
+                library::removeExtensionRoot(dir);
+            else
+                library::addExtensionRoot(a.get<std::string>("tier", "placeholder"), dir);
+            return dir.generic_string();
+        },
+        .examples = {"libraryRoot('D:/Pieces/Weathering', tier='placeholder')"},
+    });
+
+    ctx.registerCommand({
         .name = "libraryPaths",
         .doc = "The library folders searched, in the order they win, with collections, tags and load errors.\n\n"
                "Workspace <workspace>/Library, then studio folders (pref stagehand /library/paths and env LILA_LIBRARY_PATH), then the "
@@ -648,10 +687,24 @@ void registerLibraryCommands(ext::Context& ctx)
             json out = library::buildStarter(a.get<bool>("rebuild", false));
             library::reload();
             if (a.get<bool>("thumbnails", true))
-                out.update(renderStarterThumbnails(Graph::current(), out.value("built", false)));
+                out.update(renderTierThumbnails(Graph::current(), out.value("built", false), "starter"));
             return out;
         },
         .examples = {"libraryStarter()['assets']", "place('Industrial/Barrel', on='Floor', count=6, spacing=[70, 0, 0])"},
+    });
+
+    ctx.registerCommand({
+        .name = "libraryThumbnails",
+        .doc = "Render thumb.png for a tier's assets that have none (or all, with force): starter, or an extension's tier such as "
+               "placeholder. Each model is brought in, captured alone and taken out again, with no trace in the scene or undo; "
+               "the library panel runs this in a background batch process so the open scene is never touched. Returns "
+               "thumbnails (rendered) and missing.",
+        .flags = {{"tier", "t", T::String, "starter", "Which tier's assets."}, {"force", "f", T::Bool, false, "Render them all again."}},
+        .undoable = false,
+        .run = [](const Args& a) -> json {
+            return renderTierThumbnails(Graph::current(), a.get<bool>("force", false), a.get<std::string>("tier", "starter"));
+        },
+        .examples = {"libraryThumbnails(tier='placeholder')"},
     });
 
     ctx.registerCommand({

@@ -226,6 +226,10 @@ void MainWindow::startup(const std::vector<io::recovery::Session>& stale, bool s
         candidates.clear();
         crashReport.clear();
     }
+    else
+    {
+        askCrashReportsOnce(this);
+    }
     if (!crashReport.empty() && candidates.empty())
     {
         RecoveryDialog dialog(candidates, crashReport, this);

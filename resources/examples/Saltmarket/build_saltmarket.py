@@ -2,8 +2,8 @@
 Blockwork blocks and hotspotted live onto two trim sheets (stone in several palettes, and wood), so every block stays
 textured as you edit it.
 
-Run from the script editor, or `lilabatch --batch build_saltmarket.py [out_dir]`. Writes saltmarket.lila and the sheets
-(TrimSheets/*.lilatrim with their textures) next to this file, or into out_dir. Units are cm, Y up; the attackers start
+Run from the script editor; it needs the window for its cameras and the layout it opens in. Writes saltmarket.lila and
+the sheets (TrimSheets/*.lilatrim with their textures) next to this file. Units are cm, Y up; the attackers start
 in the south (+z), the defenders in the north.
 """
 
@@ -11,7 +11,7 @@ import os
 import random
 import sys
 
-from lila import ops
+from lila import ops, ui
 
 here = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
 out_dir = sys.argv[1] if len(sys.argv) > 1 else here
@@ -279,5 +279,8 @@ for name, eye, look in VIEWS:
 ops.viewCamera(eye=plan(*VIEWS[0][1]), lookAt=plan(*VIEWS[0][2]))
 
 ops.select(clear=True)
+# The scene reopens in the layout and tool it was saved in.
+ops.applyLayout(name="Level")
+ui.run_action("blockwork.block")
 ops.saveScene(os.path.join(out_dir, "saltmarket.lila"))
 print("saltmarket: built", sum(len(b) for b in groups.values()), "blocks")

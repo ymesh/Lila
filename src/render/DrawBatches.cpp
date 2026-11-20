@@ -29,7 +29,7 @@ bool sameMaterial(const Material& a, const Material& b)
            a.specular == b.specular && a.opacityClip == b.opacityClip && a.emissive == b.emissive && a.flags == b.flags &&
            a.baseColorMap == b.baseColorMap && a.normalMap == b.normalMap && a.ormMap == b.ormMap && a.emissiveMap == b.emissiveMap &&
            a.heightMap == b.heightMap && a.displacementDepth == b.displacementDepth && a.displacementMid == b.displacementMid && a.ext == b.ext &&
-           sameStyle(a.style, b.style);
+           sameStyle(a.style, b.style) && (a.grunge == b.grunge || (a.grunge && b.grunge && *a.grunge == *b.grunge));
 }
 
 /** Highlighted placements sort last within a wire batch. */

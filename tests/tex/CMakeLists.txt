@@ -26,6 +26,7 @@ add_executable(lila_tex_tests
     test_tex_variants.cpp
     test_tex_export_presets.cpp
     test_tex_routing.cpp
+    test_tex_sequence.cpp
     test_tex_shading_channels.cpp
     test_tex_material_sets.cpp
     test_tex_snapshots.cpp

@@ -926,6 +926,22 @@ std::filesystem::path decalOf(const Node& n)
     return {};
 }
 
+/** The sheet a mesh decal maps (its trimDecalMesh attribute, resolved), empty for other nodes. */
+std::filesystem::path meshDecalOf(const Node& n)
+{
+    Graph& g = Graph::current();
+    try
+    {
+        const scene::PlugValue v = g.value(g.plug(n.path() + "." + kNodeMeshDecal));
+        if (const std::string* s = std::get_if<std::string>(&v); s && !s->empty())
+            return paths::resolvePath(*s);
+    }
+    catch (const std::exception&)
+    {
+    }
+    return {};
+}
+
 /** Where a placed decal quad sits in the world: its centre, facing, the way its texture's top points and its size, cm. */
 struct DecalFrame
 {
@@ -2571,9 +2587,11 @@ void registerCommands(ext::Context& ctx)
                "and normal when it has one, else the baked ones, and its opacity mask) go to <folder>/Textures, the decal "
                "master M_LilaDecal on MF_LilaDecal is generated (or rebuilt with regenerateMaster), each decal gets an instance "
                "MI_<decal>Decal, and each placement becomes a decal actor at the quad's place, size and facing, projecting its "
-               "decalDepth into the surface. Sending again moves the same actors. Returns what Unreal made; dryRun=True returns "
-               "the plan without connecting.",
-        .positionalDoc = "decal nodes (default every placed decal)",
+               "decalDepth into the surface. Sending again moves the same actors. Mesh decals (meshes whose trimDecalMesh names a "
+               "sheet, such as Weathering's edge decal strips) are sent as static meshes (<folder>/Meshes/SM_<mesh> unless already "
+               "mapped) with the sheet's instance on their slot, rendering as Unreal mesh decals. Returns what Unreal made; "
+               "dryRun=True returns the plan without connecting.",
+        .positionalDoc = "decal nodes or mesh decals (default every placed decal and mesh decal)",
         .flags = {{"folder", "f", AT::String, "/Game/Lila/Decals", "Content folder for the textures and instances."},
                   {"regenerateMaster", "", AT::Bool, false, "Rebuild M_LilaDecal's graph from this version of Lila."},
                   {"wait", "w", AT::Bool, true, "Block until Unreal has placed everything."},
@@ -2588,24 +2606,28 @@ void registerCommands(ext::Context& ctx)
                 if (p.is_string())
                 {
                     Node* n = g.find(p.get<std::string>());
-                    if (!n || decalOf(*n).empty())
-                        throw CommandError("trimDecalSend: " + p.get<std::string>() + " is not a placed decal (trimDecalPlace)");
+                    if (!n || (decalOf(*n).empty() && meshDecalOf(*n).empty()))
+                        throw CommandError("trimDecalSend: " + p.get<std::string>() + " is not a placed decal (trimDecalPlace) or a mesh decal");
                     nodes.push_back(n->id());
                 }
             if (nodes.empty())
                 for (scene::NodeId id : g.nodes())
-                    if (Node* n = g.node(id); n && n->type().isA("mesh") && !decalOf(*n).empty())
+                    if (Node* n = g.node(id); n && n->type().isA("mesh") && (!decalOf(*n).empty() || !meshDecalOf(*n).empty()))
                         nodes.push_back(id);
             if (nodes.empty())
                 throw CommandError("trimDecalSend: no decals placed; use trimDecalPlace");
 
             const std::string root = a.get<std::string>("folder", "/Game/Lila/Decals");
-            json textures = json::array(), decals = json::array();
+            json textures = json::array(), decals = json::array(), meshDecals = json::array(), toMap = json::array();
+            std::vector<std::string> meshNodes;
             std::map<std::filesystem::path, json> instances;
             for (scene::NodeId id : nodes)
             {
                 Node& n = *g.node(id);
-                const std::filesystem::path f = decalOf(n);
+                std::filesystem::path f = decalOf(n);
+                const bool isMeshDecal = f.empty();
+                if (isMeshDecal)
+                    f = meshDecalOf(n);
                 const Sheet s = loadOr(f, "trimDecalSend");
                 if (s.trims.empty())
                     throw CommandError("trimDecalSend: " + f.generic_string() + " has no trim to send");
@@ -2643,6 +2665,20 @@ void registerCommands(ext::Context& ctx)
                         }
                     instances[f] = {{"name", "MI_" + materialName(s).substr(2)}, {"textures", tex}, {"scalars", s.scalars}, {"vectors", s.vectors}};
                 }
+                if (isMeshDecal)
+                {
+                    std::string contentPath;
+                    if (const json m = link::mappingOf(n.path()); m.is_object() && m.contains("contentPath"))
+                        contentPath = m["contentPath"].get<std::string>();
+                    else
+                    {
+                        contentPath = root + "/Meshes/SM_" + n.name();
+                        toMap.push_back({{"node", n.path()}, {"contentPath", contentPath}});
+                    }
+                    meshNodes.push_back(n.path());
+                    meshDecals.push_back({{"mesh", contentPath}, {"slot", materialName(s)}, {"instance", instances[f]}});
+                    continue;
+                }
                 const scene::MeshPtr m = std::get<scene::MeshPtr>(g.value({id, scene::MeshNode::kOutMesh, -1}));
                 const glm::dmat4 world = std::get<glm::dmat4>(g.value({id, scene::Transform::kWorldMatrix, -1}));
                 const std::optional<DecalFrame> frame = m ? decalFrame(*m, world) : std::nullopt;
@@ -2671,9 +2707,10 @@ void registerCommands(ext::Context& ctx)
                                   {"size", {depth, frame->size.x, frame->size.y}}});
             }
             const json importParams = link::textureImportParams({{"outputs", textures}}, {{"folder", root + "/Textures"}, {"materialMode", "none"}});
-            const json request = {{"folder", root + "/Materials"}, {"regenerate", a.get<bool>("regenerateMaster", false)}, {"decals", decals}};
+            const json request = {{"folder", root + "/Materials"}, {"regenerate", a.get<bool>("regenerateMaster", false)}, {"decals", decals},
+                                  {"meshes", meshDecals}};
             if (a.get<bool>("dryRun", false))
-                return {{"request", request}, {"textures", textures}};
+                return {{"request", request}, {"textures", textures}, {"newlyMapped", toMap}};
 
             try
             {
@@ -2686,6 +2723,15 @@ void registerCommands(ext::Context& ctx)
             const json features = link::Link::get().status().value("features", json::array());
             if (!features.is_array() || std::ranges::find(features, json("trimDecals")) == features.end())
                 throw CommandError("trimDecalSend: the LilaLink plugin in this editor is too old for decals; rebuild it from Lila's ue/LilaLink");
+            if (!meshDecals.empty())
+            {
+                if (std::ranges::find(features, json("meshDecals")) == features.end())
+                    throw CommandError("trimDecalSend: the LilaLink plugin in this editor is too old for mesh decals; rebuild it from Lila's ue/LilaLink");
+                for (const json& m : toMap)
+                    ops::execute("unrealMap", {{"args", {m["node"]}}, {"contentPath", m["contentPath"]}, {"kind", "static"}});
+                // Queued on the link's worker ahead of the decal job, so the meshes exist when their slots are set.
+                link::syncMappings(true, meshNodes);
+            }
             auto send = [importParams, request]() -> json {
                 std::shared_ptr<link::RpcClient> client = link::Link::get().client();
                 if (!client)

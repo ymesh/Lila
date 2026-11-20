@@ -105,8 +105,9 @@ Consent readConsent(const fs::path& file)
     json j = readJsonFile(file);
     if (!j.is_object())
         return c;
-    c.send = j.value("send", false);
-    c.always = j.value("always", false);
+    c.offer = j.value("offer", false);
+    c.send = c.offer && j.value("send", false);
+    c.userOff = !c.offer && j.value("userOff", false);
     c.prefsFile = fs::path(std::u8string(reinterpret_cast<const char8_t*>(j.value("prefsFile", std::string()).c_str())));
     return c;
 }
@@ -114,20 +115,20 @@ Consent readConsent(const fs::path& file)
 void writeConsent(const fs::path& file, const Consent& c)
 {
     std::u8string prefs = c.prefsFile.u8string();
-    writeJsonFile(file, {{"send", c.send}, {"always", c.always}, {"prefsFile", std::string(prefs.begin(), prefs.end())}});
+    writeJsonFile(file, {{"offer", c.offer}, {"send", c.send}, {"userOff", c.userOff}, {"prefsFile", std::string(prefs.begin(), prefs.end())}});
 }
 
-void setAlways(const fs::path& consentFile, bool on)
+void setSend(const fs::path& consentFile, bool on)
 {
     Consent c = readConsent(consentFile);
-    c.always = on;
+    c.send = c.offer && on;
     writeConsent(consentFile, c);
     if (c.prefsFile.empty())
         return;
     json prefs = readJsonFile(c.prefsFile);
     if (!prefs.is_object())
         prefs = json::object();
-    prefs["telemetry"]["crashAlways"] = on;
+    prefs["telemetry"]["crashSend"] = c.send ? "auto" : "ask";
     writeJsonFile(c.prefsFile, prefs);
 }
 

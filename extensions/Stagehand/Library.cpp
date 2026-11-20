@@ -228,6 +228,30 @@ json Asset::toJson() const
             {"assembly", assembly}};
 }
 
+namespace
+{
+std::vector<Root>& extensionRoots()
+{
+    static std::vector<Root> list;
+    return list;
+}
+} // namespace
+
+void addExtensionRoot(const std::string& tier, const fs::path& dir)
+{
+    for (const Root& r : extensionRoots())
+        if (r.dir == dir)
+            return;
+    extensionRoots().push_back({tier, dir});
+    reload();
+}
+
+void removeExtensionRoot(const fs::path& dir)
+{
+    std::erase_if(extensionRoots(), [&](const Root& r) { return r.dir == dir; });
+    reload();
+}
+
 std::vector<Root> roots(bool existingOnly)
 {
     std::vector<Root> out;
@@ -252,6 +276,8 @@ std::vector<Root> roots(bool existingOnly)
     add("user", tierDir("user"));
     if (starterEnabled())
         add("starter", starterDir());
+    for (const Root& r : extensionRoots())
+        add(r.tier, r.dir);
     return out;
 }
 

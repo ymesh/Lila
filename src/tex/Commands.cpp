@@ -3,10 +3,12 @@
 #include "core/Log.h"
 #include "core/Profile.h"
 #include "gn/Routing.h"
+#include "link/UnrealLink.h"
 #include "ops/Command.h"
 #include "ops/CommandOptions.h"
 #include "tex/PatchFill.h"
 #include "tex/Ptex.h"
+#include "scene/Anim.h"
 #include "scene/Materials.h"
 #include "scene/Node.h"
 #include "tex/Evaluate.h"
@@ -14,6 +16,7 @@
 #include "tex/Interop.h"
 #include "tex/Layers.h"
 #include "tex/PainterImport.h"
+#include "tex/Sequence.h"
 #include "tex/ShadingChannels.h"
 #include "tex/Snapshots.h"
 #include "tex/SlangRt.h"
@@ -162,7 +165,11 @@ json paramStateJson(const ParamDecl& p, const GNode* n)
 {
     json j = {{"id", p.id}, {"type", paramTypeName(p.type)}, {"default", p.defaultValue}};
     if (n)
+    {
         j["value"] = paramValue(*n, p);
+        if (const std::string attr = sequence::driver(*n, p.id); !attr.empty())
+            j["driver"] = attr;
+    }
     if (!p.options.empty())
         j["options"] = p.options;
     for (auto [key, v] : {std::pair{"min", &p.min}, {"max", &p.max}, {"softMin", &p.softMin}, {"softMax", &p.softMax}, {"step", &p.step}})
@@ -196,7 +203,8 @@ json nodeJson(const GNode& n, const Graph& g, const SetSettings& s)
     for (const PortDecl& d : p.outputs)
         outs.push_back(portStateJson(d, &n, &g, false));
     for (const ParamDecl& d : p.params)
-        prms.push_back(paramStateJson(d, &n));
+        if (!d.hidden)
+            prms.push_back(paramStateJson(d, &n));
     j["inputs"] = ins;
     j["outputs"] = outs;
     j["params"] = prms;
@@ -225,7 +233,8 @@ json defJson(const NodeDef& d, bool detail)
         for (const PortDecl& p : d.outputs)
             outs.push_back(portStateJson(p, nullptr, nullptr, false));
         for (const ParamDecl& p : d.params)
-            prms.push_back(paramStateJson(p, nullptr));
+            if (!p.hidden)
+                prms.push_back(paramStateJson(p, nullptr));
         e["inputs"] = ins;
         e["outputs"] = outs;
         e["params"] = prms;
@@ -696,6 +705,7 @@ void registerCommands()
             if (a.positional.size() < 3)
                 throw CommandError("texSetValue: value required");
             json value = a.positional[2];
+            std::string drivenBy;
             const json result = editGraph(a, "texSetValue", [&](Graph& g, const SetSettings& s) -> json {
                 GNode& n = nodeIn(g, nn, "texSetValue");
                 if (n.type == kGroupInputType)
@@ -709,6 +719,7 @@ void registerCommands()
                 NodePorts p = portsChecked(g, n, s, "texSetValue");
                 if (const ParamDecl* prm = p.param(id))
                 {
+                    drivenBy = sequence::driver(n, id);
                     if (!paramValueValid(prm->type, value, prm->options))
                     {
                         std::string extra;
@@ -743,7 +754,84 @@ void registerCommands()
                 throw CommandError("texSetValue: " + nn + " has no parameter or input '" + id + "'");
             });
             addOutputChannel(a, nn, id, "texSetValue");
+            if (!drivenBy.empty())
+                ops::execute("setAttr", {{"args", {positionalString(a, 0, "texSetValue", "texture set") + "." + drivenBy, value}}});
             return result;
+        },
+    });
+
+    ops::registerCommand({
+        .name = "texDriveValue",
+        .doc = "Make a node's number parameter keyable: texDriveValue(set, 'Sequence.speed') adds a keyable attribute to the texture "
+               "set that drives it from then on, so it keys in the Channel Box and Graph Editor like any channel. remove=True "
+               "deletes the attribute and leaves the parameter at its current value. Returns the attribute's plug.",
+        .positionalDoc = "set node.param",
+        .flags = {{"remove", "", T::Bool, false, "Stop driving the parameter and delete its attribute."}},
+        .run = [](const Args& a) -> json {
+            auto [nn, id] = splitPlug(positionalString(a, 1, "texDriveValue", "node.param"), "texDriveValue");
+            const bool remove = a.get<bool>("remove", false);
+            const std::string setName = positionalString(a, 0, "texDriveValue", "texture set");
+            std::string attr;
+            json current;
+            {
+                Node& set = setNode(setName, "texDriveValue");
+                Graph g = readGraph(set);
+                const GNode& n = nodeIn(g, nn, "texDriveValue");
+                NodePorts p = portsChecked(g, n, readSettings(set), "texDriveValue");
+                const ParamDecl* prm = p.param(id);
+                if (!prm || prm->hidden || (prm->type != ParamType::Float && prm->type != ParamType::Int))
+                    throw CommandError("texDriveValue: " + nn + "." + id + " isn't a number parameter");
+                attr = sequence::driver(n, id);
+                current = paramValue(n, *prm);
+                if (remove && attr.empty())
+                    return nullptr;
+                if (const int at = attr.empty() ? -1 : set.type().attrIndex(attr); at >= 0)
+                {
+                    if (!remove)
+                        return setName + "." + attr;
+                    current = scene::toJson(graph().value({set.id(), at}));
+                    ops::execute("deleteAttr", {{"args", {setName + "." + attr}}});
+                }
+                else if (!remove)
+                {
+                    attr = sequence::driverName(nn, id);
+                    if (set.type().attrIndex(attr) >= 0)
+                        throw CommandError("texDriveValue: " + setName + " already has an attribute named " + attr);
+                    json add = {{"args", {setName}},
+                                {"longName", attr},
+                                {"niceName", nn + " " + ops::options::prettyLabel(id)},
+                                {"attributeType", prm->type == ParamType::Int ? "long" : "double"},
+                                {"defaultValue", current},
+                                {"keyable", true},
+                                {"category", "Texture Graph"}};
+                    if (!prm->doc.empty())
+                        add["doc"] = prm->doc;
+                    for (auto [key, v] : {std::pair{"minValue", &prm->min}, {"maxValue", &prm->max}, {"softMinValue", &prm->softMin},
+                                          {"softMaxValue", &prm->softMax}})
+                        if (*v)
+                            add[key] = **v;
+                    ops::execute("addAttr", add);
+                }
+            }
+            editGraph(a, "texDriveValue", [&](Graph& g, const SetSettings&) -> json {
+                GNode& n = nodeIn(g, nn, "texDriveValue");
+                if (!n.values.is_object())
+                    n.values = json::object();
+                json drivers = n.values.value(sequence::kDriversKey, json::object());
+                if (remove)
+                {
+                    drivers.erase(id);
+                    n.values[id] = current;
+                }
+                else
+                    drivers[id] = attr;
+                if (drivers.empty())
+                    n.values.erase(sequence::kDriversKey);
+                else
+                    n.values[sequence::kDriversKey] = drivers;
+                return nullptr;
+            });
+            return remove ? json(nullptr) : json(setName + "." + attr);
         },
     });
 
@@ -1127,6 +1215,10 @@ void registerCommands()
             for (const GNode& node : g.nodes)
             {
                 nodes.push_back(nodeJson(node, g, s));
+                // A driven parameter shows its attribute's value, which is what evaluates.
+                for (json& prm : nodes.back()["params"])
+                    if (const int at = prm.contains("driver") ? n.type().attrIndex(prm["driver"].get<std::string>()) : -1; at >= 0)
+                        prm["value"] = scene::toJson(graph().value({n.id(), at}));
                 if (auto it = problems.find(node.name); it != problems.end())
                     nodes.back()["problem"] = it->second;
             }
@@ -1221,6 +1313,77 @@ void registerCommands()
             {
                 throw CommandError(std::string("texEvaluate: ") + e.what());
             }
+        },
+    });
+
+    ops::registerCommand({
+        .name = "texExportFlipbook",
+        .doc = "Write an animated texture set as flipbook sheets, one per channel: the set evaluated at each scene frame of the range "
+               "(Image Sequence nodes, keyed parameters), laid out left to right then top to bottom. For engine materials that step "
+               "through a sheet (Unreal's MF_LilaFlipbook, a SubUV texture). Returns the files, columns, rows, frames and fps.",
+        .positionalDoc = "set",
+        .flags = {{"startFrame", "", T::Float, nullptr, "First scene frame; the playback range's start when left out."},
+                  {"endFrame", "", T::Float, nullptr, "Last scene frame; the playback range's end when left out."},
+                  {"step", "", T::Float, 1.0, "Scene frames between cells: 2 writes every other frame.", {}, {}, 0.01},
+                  {"columns", "", T::Int, 0, "Cells per row; 0 makes the sheet as near square as the frames go.", {}, {}, 0.0, 256.0},
+                  presetFlag({"cellSize", "", T::Int, 256, "One frame's width in the sheet.", {}, {}, 4.0}, kTextureSizePresets),
+                  {"channels", "", T::List, nullptr, "Channel names; all when left out."},
+                  {"folder", "", T::String, nullptr, "Output folder; relative ones resolve like bake folders. Default textures/<set>."},
+                  {"format", "", T::String, "png", "png, exr, tga or tif.", {"png", "exr", "tga", "tif"}},
+                  {"bits", "", T::Int, 0, "8, 16 or 32; 0 uses each channel's.", {}, {}, 0.0, 32.0},
+                  {"backend", "", T::String, nullptr, "gpu or cpu; the GPU when left out and the renderer can run.", {"gpu", "cpu"}}},
+        .undoable = false,
+        .run = [](const Args& a) -> json {
+            Node& n = setNode(positionalString(a, 0, "texExportFlipbook", "texture set"), "texExportFlipbook");
+            const scene::anim::Playback& pb = scene::anim::playback();
+            FlipbookOptions o;
+            o.startFrame = a.get<double>("startFrame", std::round(scene::anim::frameOf(pb.minTime)));
+            o.endFrame = a.get<double>("endFrame", std::round(scene::anim::frameOf(pb.maxTime)));
+            o.step = a.get<double>("step", 1.0);
+            o.columns = a.get<int>("columns", 0);
+            o.cellSize = a.get<int>("cellSize", 256);
+            if (a.has("channels"))
+                o.channels = a.flags["channels"].get<std::vector<std::string>>();
+            o.folder = a.get<std::string>("folder", "");
+            o.format = a.get<std::string>("format", "png");
+            o.bits = a.get<int>("bits", 0);
+            o.backend = a.get<std::string>("backend", "");
+            try
+            {
+                return exportFlipbook(n, o);
+            }
+            catch (const std::exception& e)
+            {
+                throw CommandError(std::string("texExportFlipbook: ") + e.what());
+            }
+        },
+    });
+
+    ops::registerCommand({
+        .name = "texFlipbookMaterials",
+        .doc = "Create or update the Unreal assets that play a flipbook sheet from texExportFlipbook, in the connected project: the "
+               "material function MF_LilaFlipbook for your own materials (Columns, Rows, Frames, FPS, FrameOffset, AfterEnd, Blend, "
+               "and Frame to drive the playhead yourself), and the materials M_LilaFlipbook and M_LilaFlipbookTranslucent built on "
+               "it. Returns the asset paths.",
+        .flags = {{"regenerate", "", T::Bool, false, "Rebuild them even when they are up to date."}},
+        .undoable = false,
+        .run = [](const Args& a) -> json {
+            try
+            {
+                link::Link::get().ensureConnected();
+            }
+            catch (const std::exception& e)
+            {
+                throw CommandError(std::string("texFlipbookMaterials: Unreal is not connected (") + e.what() + ")");
+            }
+            const json features = link::Link::get().status().value("features", json::array());
+            if (!features.is_array() || std::find(features.begin(), features.end(), json("flipbook")) == features.end())
+                throw CommandError("texFlipbookMaterials: this LilaLink has no flipbook materials; update the plugin");
+            link::RpcResult r = link::Link::get().client()->call("flipbookMaterials", {{"regenerate", a.get<bool>("regenerate", false)}},
+                                                                link::importCallOptions());
+            if (!r.ok)
+                throw CommandError("texFlipbookMaterials: " + r.error);
+            return r.result;
         },
     });
 

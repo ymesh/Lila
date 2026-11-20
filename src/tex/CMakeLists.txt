@@ -29,6 +29,7 @@ lila_module(lila_tex Scene
     PaintSurface.h
     Plan.cpp
     Ports.cpp
+    Sequence.cpp
     SetOps.cpp
     ShadingChannels.cpp
     Snapshots.cpp

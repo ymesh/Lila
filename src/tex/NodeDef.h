@@ -93,6 +93,8 @@ struct ParamDecl
     std::string panel;
     std::vector<std::string> options;
     std::optional<double> min, max, softMin, softMax, step;
+    /** Filled by the planner rather than the user: left out of the node's fields. */
+    bool hidden = false;
 };
 
 struct LILA_SCENE_API NodeDef

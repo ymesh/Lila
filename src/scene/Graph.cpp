@@ -2191,6 +2191,15 @@ void Graph::forwardEvent(Change c, NodeId id)
     events::send({.type = e, .name = n ? n->name() : std::string(), .node = id});
 }
 
+namespace
+{
+/** Long undo and redo steps notify once, like the batched commands that record them. */
+const bool kUndoBatched = [] {
+    UndoStack::get().setReplayScope([]() -> std::shared_ptr<void> { return std::make_shared<Graph::Batch>(Graph::current()); });
+    return true;
+}();
+} // namespace
+
 Graph::Batch::Batch(Graph& g) : mGraph(g)
 {
     ++mGraph.mBatchDepth;

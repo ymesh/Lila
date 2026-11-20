@@ -1,5 +1,5 @@
 {
-  "updated": "2026-11-18",
+  "updated": "2026-11-20",
   "sections": [
     {
       "id": "alpha",
@@ -159,7 +159,7 @@
         {
           "id": "texturing",
           "title": "Texture painting",
-          "status": "dev",
+          "status": "ready",
           "icon": "reference-images",
           "body": [
             "Paint textures directly on the model in layers, with masks and smart materials built on your baked maps."
@@ -178,7 +178,7 @@
         {
           "id": "rendering",
           "title": "Rendering",
-          "status": "dev",
+          "status": "ready",
           "docs": "rendering",
           "body": [
             "Stills, turntables and video from the real-time renderer you work in: supersampled, with post process, depth of field and motion blur, in seconds."
@@ -365,6 +365,15 @@
           "docs": "stagehand",
           "body": [
             "Push, drop and settle props into place with physics, fill shelves and scatter debris, place assets from a prop library, and snap modular kit pieces together."
+          ]
+        },
+        {
+          "id": "weathering",
+          "title": "Weathering",
+          "status": "dev",
+          "docs": "weathering",
+          "body": [
+            "Age any level, toon or realistic: drag grunge, edge wear and chipping, edge decals, ivy, ground scatter and rubble at the base of walls onto meshes, and generate roofing, windows, wires and rooftop clutter. Everything stays live and sends to Unreal with material functions for your own materials."
           ]
         },
         {

@@ -802,6 +802,9 @@ Index Mesh::append(const Mesh& other)
     for (const std::string& h : other.mColorSetInfo.half)
         if (std::find(mColorSetInfo.half.begin(), mColorSetInfo.half.end(), h) == mColorSetInfo.half.end())
             mColorSetInfo.half.push_back(h);
+    for (const std::string& d : other.mColorSetInfo.data)
+        if (std::find(mColorSetInfo.data.begin(), mColorSetInfo.data.end(), d) == mColorSetInfo.data.end())
+            mColorSetInfo.data.push_back(d);
 
     // Material ids are remapped by name.
     std::vector<int32_t> matMap(other.mMaterialNames.size());

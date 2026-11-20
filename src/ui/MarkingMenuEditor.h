@@ -76,6 +76,8 @@ public:
     void openMenu(const std::string& name);
     /** Selects an item by JSON pointer into the menu ("/N", "/S/children/E", "/overflow/0"). */
     void selectPointer(const std::string& ptr);
+    /** Opens a menu and selects ptr in it (empty keeps the default), asking first when unsaved changes would be lost. */
+    void showMenu(const std::string& name, const std::string& ptr);
 
 private:
     enum class Kind

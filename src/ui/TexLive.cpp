@@ -13,6 +13,7 @@
 #include "scene/Graph.h"
 #include "scene/Materials.h"
 #include "tex/Layers.h"
+#include "tex/Sequence.h"
 #include "tex/TextureSet.h"
 #include "ui/ViewportTool.h"
 
@@ -109,6 +110,8 @@ struct LiveSet
     std::shared_ptr<SetPages> pages;
     /** Displacement preview asked a virtual set for its height: tiles then holds a capped, height-only copy of it. */
     bool wantsHeight = false;
+    /** The graph changes with time (an Image Sequence node, a keyed parameter): replanned on every time change. */
+    bool animated = false;
 };
 
 struct Job
@@ -145,6 +148,7 @@ int gMeshListener = 0;
 int gPaintListener = 0;
 int gPrefListener = 0;
 events::SubscriptionId gShutdownSub = 0;
+events::SubscriptionId gTimeSub = 0;
 
 // Worker.
 std::mutex gJobMutex;
@@ -1087,6 +1091,9 @@ void replan(LiveSet& s)
         job.graph = tex::readGraph(*n);
         job.settings = tex::readSettings(*n);
         tex::followLiveFrame(job.graph, job.settings);
+        s.animated = tex::sequence::animated(job.graph);
+        if (s.animated)
+            tex::sequence::followTime(job.graph, g, *n, g.time());
     }
     catch (const std::exception& e)
     {
@@ -1359,6 +1366,14 @@ void install()
             .run = [](const Args&) -> nlohmann::json { return {{"idle", idle()}, {"sets", status()}}; },
         });
     gGraphListener = scene::Graph::current().addListener(onChange);
+    gTimeSub = events::subscribe(events::Event::TimeChanged, [](const events::EventData&) {
+        std::vector<std::shared_ptr<LiveSet>> sets;
+        for (auto& [id, s] : gSets)
+            if (s->animated)
+                sets.push_back(s);
+        for (auto& s : sets)
+            replan(*s);
+    });
     // A new height copy size rebuilds the copies made at the old one.
     gPrefListener = PrefStore::get().onChanged([](const std::string& file) {
         if (file != "general")
@@ -1413,6 +1428,7 @@ void shutdown()
     render::paint::removeChangeListener(gPaintListener);
     PrefStore::get().removeOnChanged(gPrefListener);
     events::unsubscribe(gShutdownSub);
+    events::unsubscribe(gTimeSub);
     {
         std::scoped_lock lock(gJobMutex);
         gJobQuit = true;

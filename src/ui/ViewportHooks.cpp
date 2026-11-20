@@ -142,6 +142,32 @@ bool hookedMaterials(scene::NodeId id, const geo::Mesh& mesh, std::vector<render
 }
 namespace
 {
+std::map<std::string, MaterialDecorator, std::less<>>& materialDecorators()
+{
+    static std::map<std::string, MaterialDecorator, std::less<>> h;
+    return h;
+}
+} // namespace
+
+void setMaterialDecorator(std::string id, MaterialDecorator fn) { materialDecorators()[std::move(id)] = std::move(fn); }
+
+bool removeMaterialDecorator(std::string_view id)
+{
+    auto it = materialDecorators().find(id);
+    if (it == materialDecorators().end())
+        return false;
+    materialDecorators().erase(it);
+    return true;
+}
+
+void decorateMaterials(scene::NodeId id, const geo::Mesh& mesh, std::vector<render::Material>& materials)
+{
+    for (const auto& [name, fn] : materialDecorators())
+        if (fn)
+            fn(id, mesh, materials);
+}
+namespace
+{
 std::map<std::string, HideHook, std::less<>>& hideHooks()
 {
     static std::map<std::string, HideHook, std::less<>> h;

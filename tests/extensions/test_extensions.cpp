@@ -198,9 +198,11 @@ TEST_CASE("packages: SDK version checks and broken manifests")
     CHECK_FALSE(pm.isLoaded("future"));
     pm.setAutoload("future", false);
     // Extensions shipped next to the test (enabled by default) loaded too; later tests expect only their own.
-    for (const std::string& name : pm.loaded())
-        if (std::find(loadedBefore.begin(), loadedBefore.end(), name) == loadedBefore.end())
-            pm.unload(name);
+    // Newest first, so dependents unload before what they depend on.
+    const std::vector<std::string> loadedAfter = pm.loaded();
+    for (auto name = loadedAfter.rbegin(); name != loadedAfter.rend(); ++name)
+        if (std::find(loadedBefore.begin(), loadedBefore.end(), *name) == loadedBefore.end())
+            pm.unload(*name);
 }
 
 TEST_CASE("python extension: load, call, errors, unload")

@@ -133,6 +133,25 @@ bool enabled()
     return !optedOutByEnvironment() && PrefStore::get().value<bool>("general", ui::kTelemetryUsagePref, false);
 }
 
+std::string crashSendMode()
+{
+    PrefStore& prefs = PrefStore::get();
+    if (prefs.isLocked("general", ui::kTelemetryCrashPref) && !prefs.value<bool>("general", ui::kTelemetryCrashPref, false))
+        return "off";
+    std::string mode = prefs.value<std::string>("general", kCrashSendPref, "");
+    if (mode == "auto" || mode == "ask" || mode == "off")
+        return mode;
+    // An install that ticked the crashReports switch has already said to send.
+    return prefs.value<bool>("general", ui::kTelemetryCrashPref, false) ? "auto" : "";
+}
+
+const std::vector<std::pair<std::string, std::string>>& crashSendChoices()
+{
+    static const std::vector<std::pair<std::string, std::string>> choices = {
+        {"Send automatically", "auto"}, {"Ask me each time", "ask"}, {"Never send", "off"}};
+    return choices;
+}
+
 std::string installId()
 {
     PrefStore& prefs = PrefStore::get();
@@ -532,8 +551,11 @@ void writeCrashConsent()
 {
     PrefStore& prefs = PrefStore::get();
     crash::upload::Consent c;
-    c.send = !optedOutByEnvironment() && prefs.value<bool>("general", ui::kTelemetryCrashPref, false);
-    c.always = prefs.value<bool>("general", kCrashAlwaysPref, false);
+    const std::string mode = crashSendMode();
+    c.offer = !optedOutByEnvironment() && mode != "off";
+    c.send = c.offer && mode == "auto";
+    c.userOff = mode == "off" && !optedOutByEnvironment() && !prefs.isLocked("general", kCrashSendPref) &&
+                !prefs.isLocked("general", ui::kTelemetryCrashPref);
     c.prefsFile = prefs.userDir() / "general.json";
     crash::upload::writeConsent(prefs.userDir() / "telemetry" / crash::upload::kConsentFile, c);
 }

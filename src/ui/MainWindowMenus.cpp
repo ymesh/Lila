@@ -628,9 +628,9 @@ void MainWindow::buildStatusBar()
 
     auto* prefs = new QToolButton(this);
     prefs->setIcon(icon("settings"));
-    prefs->setToolTip("Preferences");
+    prefs->setToolTip(QString::fromStdString(actions::tooltip("window.preferences")));
     prefs->setAutoRaise(true);
-    connect(prefs, &QToolButton::clicked, this, [this] { PreferencesDialog::open(this); });
+    connect(prefs, &QToolButton::clicked, this, [] { actions::run(nlohmann::json("window.preferences")); });
     statusBar()->addPermanentWidget(prefs);
     progressui::install(this);
 }

@@ -5,6 +5,7 @@
     "vendor": "Lila",
     "description": "Brick and stone walls laid course by course along any line or loop, in running, Flemish, English and other bonds, with bonded corners and a mortar core, as instances of a few shared stone meshes ready for Unreal.",
     "sdk": "1.0",
+    "dependencies": ["Weathering"],
     "entry": {
         "windows": "Masonry.dll",
         "linux": "Masonry.so",

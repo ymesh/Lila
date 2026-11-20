@@ -729,6 +729,50 @@ TSharedPtr<FJsonValue> TrimDecals(const TSharedPtr<FJsonObject>& Params, FString
 			}
 		}
 	}
+	// Each instance is made or updated once per call, however many decals and meshes use it.
+	TMap<FString, UMaterialInstanceConstant*> Instances;
+	auto InstanceOf = [&](const TSharedPtr<FJsonObject>& Owner) -> UMaterialInstanceConstant* {
+		const TSharedPtr<FJsonObject>* InstanceJson = nullptr;
+		FString InstanceName;
+		if (!Owner->TryGetObjectField(TEXT("instance"), InstanceJson) || !(*InstanceJson)->TryGetStringField(TEXT("name"), InstanceName))
+		{
+			return nullptr;
+		}
+		if (UMaterialInstanceConstant** Done = Instances.Find(InstanceName))
+		{
+			return *Done;
+		}
+		UMaterialInstanceConstant* Instance = AssetAt<UMaterialInstanceConstant>(Folder, InstanceName);
+		if (!Instance)
+		{
+			UMaterialInstanceConstantFactoryNew* Factory = NewObject<UMaterialInstanceConstantFactoryNew>(GetTransientPackage());
+			Factory->InitialParent = Master;
+			Instance = Cast<UMaterialInstanceConstant>(
+				FAssetToolsModule::GetModule().Get().CreateAsset(InstanceName, Folder, UMaterialInstanceConstant::StaticClass(), Factory));
+			if (Instance)
+			{
+				Created.AddUnique(Instance->GetPathName());
+			}
+		}
+		if (Instance)
+		{
+			Instance->Modify();
+			if (Instance->Parent != Master)
+			{
+				UMaterialEditingLibrary::SetMaterialInstanceParent(Instance, Master);
+			}
+			SetParameters(Instance, *InstanceJson, Warnings);
+			UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
+			Instance->MarkPackageDirty();
+		}
+		else
+		{
+			Warnings.Add(FString::Printf(TEXT("Could not create %s in %s"), *InstanceName, *Folder));
+		}
+		Instances.Add(InstanceName, Instance);
+		return Instance;
+	};
+
 	TArray<TSharedPtr<FJsonValue>> Placed;
 	int32 Spawned = 0, Updated = 0;
 	for (const TSharedPtr<FJsonValue>& V : *Decals)
@@ -741,40 +785,7 @@ TSharedPtr<FJsonValue> TrimDecals(const TSharedPtr<FJsonObject>& Params, FString
 			continue;
 		}
 		D->TryGetStringField(TEXT("name"), Name);
-
-		const TSharedPtr<FJsonObject>* InstanceJson = nullptr;
-		FString InstanceName;
-		UMaterialInstanceConstant* Instance = nullptr;
-		if (D->TryGetObjectField(TEXT("instance"), InstanceJson) && (*InstanceJson)->TryGetStringField(TEXT("name"), InstanceName))
-		{
-			Instance = AssetAt<UMaterialInstanceConstant>(Folder, InstanceName);
-			if (!Instance)
-			{
-				UMaterialInstanceConstantFactoryNew* Factory = NewObject<UMaterialInstanceConstantFactoryNew>(GetTransientPackage());
-				Factory->InitialParent = Master;
-				Instance = Cast<UMaterialInstanceConstant>(
-					FAssetToolsModule::GetModule().Get().CreateAsset(InstanceName, Folder, UMaterialInstanceConstant::StaticClass(), Factory));
-				if (Instance)
-				{
-					Created.AddUnique(Instance->GetPathName());
-				}
-			}
-			if (Instance)
-			{
-				Instance->Modify();
-				if (Instance->Parent != Master)
-				{
-					UMaterialEditingLibrary::SetMaterialInstanceParent(Instance, Master);
-				}
-				SetParameters(Instance, *InstanceJson, Warnings);
-				UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
-				Instance->MarkPackageDirty();
-			}
-			else
-			{
-				Warnings.Add(FString::Printf(TEXT("Could not create %s in %s"), *InstanceName, *Folder));
-			}
-		}
+		UMaterialInstanceConstant* Instance = InstanceOf(D);
 
 		// The actor's X axis projects into the surface; Z is the decal's up.
 		const FVector Forward = DecalVector(D, TEXT("forward"), -FVector::UpVector);
@@ -830,6 +841,63 @@ TSharedPtr<FJsonValue> TrimDecals(const TSharedPtr<FJsonObject>& Params, FString
 		P->SetStringField(TEXT("material"), Instance ? Instance->GetPathName() : FString());
 		Placed.Add(Obj(P));
 	}
+
+	// Mesh decals: the decal instance on the named slot of static meshes, which then render as mesh decals.
+	TArray<TSharedPtr<FJsonValue>> Assigned;
+	const TArray<TSharedPtr<FJsonValue>>* MeshDecals = nullptr;
+	if (Params->TryGetArrayField(TEXT("meshes"), MeshDecals))
+	{
+		for (const TSharedPtr<FJsonValue>& V : *MeshDecals)
+		{
+			const TSharedPtr<FJsonObject> M = V.IsValid() ? V->AsObject() : nullptr;
+			FString Path, Slot;
+			if (!M.IsValid() || !M->TryGetStringField(TEXT("mesh"), Path) || !M->TryGetStringField(TEXT("slot"), Slot))
+			{
+				Warnings.Add(TEXT("a mesh decal without mesh and slot was skipped"));
+				continue;
+			}
+			UStaticMesh* Mesh = Cast<UStaticMesh>(FSoftObjectPath(Path).TryLoad());
+			if (!Mesh)
+			{
+				Warnings.Add(FString::Printf(TEXT("no static mesh %s"), *Path));
+				continue;
+			}
+			UMaterialInstanceConstant* Instance = InstanceOf(M);
+			if (!Instance)
+			{
+				continue;
+			}
+			bool bChanged = false;
+			for (FStaticMaterial& Material : Mesh->GetStaticMaterials())
+			{
+				if (Material.MaterialSlotName != FName(*Slot))
+				{
+					continue;
+				}
+				TSharedRef<FJsonObject> A = MakeShared<FJsonObject>();
+				A->SetStringField(TEXT("mesh"), Mesh->GetPathName());
+				A->SetStringField(TEXT("slot"), Slot);
+				A->SetStringField(TEXT("material"), Instance->GetPathName());
+				A->SetBoolField(TEXT("changed"), Material.MaterialInterface != Instance);
+				Assigned.Add(Obj(A));
+				if (Material.MaterialInterface == Instance)
+				{
+					continue;
+				}
+				if (!bChanged)
+				{
+					Mesh->Modify();
+					bChanged = true;
+				}
+				Material.MaterialInterface = Instance;
+			}
+			if (bChanged)
+			{
+				Mesh->PostEditChange();
+				Mesh->MarkPackageDirty();
+			}
+		}
+	}
 	if (ULevel* Level = World->GetCurrentLevel())
 	{
 		Level->MarkPackageDirty();
@@ -841,6 +909,7 @@ TSharedPtr<FJsonValue> TrimDecals(const TSharedPtr<FJsonObject>& Params, FString
 	Out->SetNumberField(TEXT("spawned"), Spawned);
 	Out->SetNumberField(TEXT("updated"), Updated);
 	Out->SetArrayField(TEXT("decals"), Placed);
+	Out->SetArrayField(TEXT("assigned"), Assigned);
 	TArray<TSharedPtr<FJsonValue>> CreatedJson, WarningsJson;
 	for (const FString& C : Created)
 	{

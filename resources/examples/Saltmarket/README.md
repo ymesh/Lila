@@ -17,4 +17,4 @@ A desert-town blockout for a two-site attack and defend map: three lanes, a rais
 
 ## Tune it
 
-At the top of `build_saltmarket.py`: `HOUSES` and `WALLS` (the layout and each building's palette), `CRATES`, `PLAN` (how far the layout is spread out), `PALETTES`, `WOOD_MATERIAL` and `GROUND_MATERIAL` (the looks), `BEVEL` (cm, 0 for none) and `SEED` (another variation). Run it again from the script editor, or with `lilabatch --batch build_saltmarket.py`.
+At the top of `build_saltmarket.py`: `HOUSES` and `WALLS` (the layout and each building's palette), `CRATES`, `PLAN` (how far the layout is spread out), `PALETTES`, `WOOD_MATERIAL` and `GROUND_MATERIAL` (the looks), `BEVEL` (cm, 0 for none) and `SEED` (another variation). Run it again from the script editor.

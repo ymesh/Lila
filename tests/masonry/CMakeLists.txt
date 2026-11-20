@@ -9,7 +9,7 @@ add_executable(lila_masonry_tests main.cpp test_masonry.cpp test_masonry_build.c
     ${CMAKE_SOURCE_DIR}/extensions/Masonry/MasonryBake.cpp)
 target_include_directories(lila_masonry_tests PRIVATE ${CMAKE_SOURCE_DIR}/extensions/Masonry)
 target_link_libraries(lila_masonry_tests PRIVATE LilaUI lila_physics doctest::doctest)
-add_dependencies(lila_masonry_tests lila_masonry_extension lila_destruction_extension)
+add_dependencies(lila_masonry_tests lila_masonry_extension lila_destruction_extension lila_weathering_extension lila_stagehand_extension)
 target_compile_definitions(lila_masonry_tests PRIVATE
     LILA_TEST_MASONRY_PACKAGE="${CMAKE_BINARY_DIR}/bin/$<CONFIG>/extensions/Masonry.lilaext"
     LILA_TEST_DESTRUCTION_PACKAGE="${CMAKE_BINARY_DIR}/bin/$<CONFIG>/extensions/Destruction.lilaext")

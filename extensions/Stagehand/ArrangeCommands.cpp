@@ -52,17 +52,53 @@ struct ItemSource
     std::string name;
 };
 
+/**
+ * Library ids carrying every tag in "a+b+c". Placeholder pieces an extension ships (tier "placeholder") yield to the
+ * user's own: when any other asset matches, placeholders are left out.
+ */
+std::vector<std::string> taggedAssets(const std::string& query)
+{
+    library::Query q;
+    for (size_t start = 0; start <= query.size();)
+    {
+        const size_t plus = query.find('+', start);
+        const std::string tag = query.substr(start, plus == std::string::npos ? std::string::npos : plus - start);
+        if (!tag.empty())
+            q.tags.push_back(tag);
+        if (plus == std::string::npos)
+            break;
+        start = plus + 1;
+    }
+    std::vector<std::string> own, placeholders;
+    for (const library::Asset& x : library::search(q))
+        (x.tier == "placeholder" ? placeholders : own).push_back(x.id);
+    return own.empty() ? placeholders : own;
+}
+
 std::vector<ItemSource> itemsArg(Graph& g, const Args& a, const char* cmd)
 {
     if (!a.has("items"))
         throw CommandError(std::string(cmd) + ": give items=[...] (library asset ids or meshes)");
     std::vector<ItemSource> out;
     const json& list = a.flags["items"];
+    std::vector<std::string> names;
     for (const json& j : list.is_array() ? list : json::array({list}))
     {
         if (!j.is_string())
             throw CommandError(std::string(cmd) + ": items are names");
         const std::string s = j.get<std::string>();
+        if (s.rfind("tag:", 0) != 0)
+        {
+            names.push_back(s);
+            continue;
+        }
+        const std::vector<std::string> ids = taggedAssets(s.substr(4));
+        if (ids.empty())
+            throw CommandError(std::string(cmd) + ": no library asset is tagged " + s.substr(4));
+        names.insert(names.end(), ids.begin(), ids.end());
+    }
+    for (const std::string& s : names)
+    {
         ItemSource it;
         it.name = s;
         if (Node* n = g.find(s))
@@ -265,7 +301,14 @@ json finishLive(Graph& g, const Args& a, json nodes, json links, json inputs, co
     }
     links.push_back(end + " -> GroupOutput.geometry");
 
-    const json made = ops::execute("createMesh", {{"points", json::array()}, {"faces", json::array()}, {"name", hostName}});
+    // A name no other node has anywhere, so later commands can find the host by it even after it is parented.
+    std::string unique = hostName;
+    auto taken = [&](const std::string& n) {
+        return std::ranges::any_of(g.nodes(), [&](NodeId id) { return g.node(id) && g.node(id)->name() == n; });
+    };
+    for (int k = 2; taken(unique); ++k)
+        unique = hostName + std::to_string(k);
+    const json made = ops::execute("createMesh", {{"points", json::array()}, {"faces", json::array()}, {"name", unique}});
     const std::string host = made.is_string() ? made.get<std::string>() : made.at(0).get<std::string>();
     g.setValue({g.find(host)->id(), scene::MeshNode::kInMesh, -1}, scene::MeshPtr(std::make_shared<geo::Mesh>(std::move(hostMesh))));
     const std::string group = uniqueGroupName(identifier(host, "Set") + "_Arrange");
@@ -298,7 +341,7 @@ arrange::SettleOptions settleOptions(const Args& a)
 std::vector<FlagDef> commonFlags(bool settle, const char* densityFlag = "density")
 {
     return {
-        {"items", "it", T::List, nullptr, "What to place: library asset ids and/or scene meshes; each is picked at random."},
+        {"items", "it", T::List, nullptr, "What to place: library asset ids, scene meshes, or tag:<a+b> (every asset with those tags); each is picked at random."},
         {"realize", "rz", T::Bool, false, "Place scene instances of the items instead of a live geometry-nodes arrangement."},
         {"mode", "m", T::String, "instance", "With realize: instance (shared meshes) or copy.", {"instance", "copy"}},
         {"variants", "va", T::String, "pool", "Live only: pool (a few bowed variants, shared), unique (one each) or none.", {"pool", "unique", "none"}},
@@ -879,6 +922,212 @@ void registerArrangeCommands(ext::Context& ctx)
             return finishRealized(g, a, r, items, a.get<std::string>("name", "Debris"));
         },
         .examples = {"debrisProps('Wall_fractured')", "debrisProps('RuinedArch', amount=12, size=0.08, onto=['Terrain'])"},
+    });
+
+    std::vector<FlagDef> bandFlags;
+    for (FlagDef& f : commonFlags(false, "massDensity"))
+        if (f.name != "items")
+            bandFlags.push_back(std::move(f));
+    const std::vector<FlagDef> bandFlagsExtra = {
+        {"items", "it", T::List, nullptr, "What to place: library asset ids and/or scene meshes (default the starter library's stone chunks)."},
+        {"weights", "wt", T::List, json::array(), "How often each item is picked, in the order of items (missing ones are 1)."},
+        nodeFlag({"ground", "gr", T::List, nullptr, "Ground meshes; default the meshes the objects stand on, or a plane at their lowest point."}, "mesh"),
+        nodeFlag({"blockers", "bl", T::List, nullptr, "Neighbouring objects nothing is put on, though no band grows round them (when dressing a level in parts)."}, "mesh"),
+        {"width", "w", T::Float, 80.0, "How far out from the footprint the band reaches, cm.", {}, {}, 1.0},
+        {"density", "de", T::Float, 6.0, "Per square metre, at the wall.", {}, {}, 0.0},
+        {"falloff", "fo", T::Float, 1.5, "0 even across the band; higher keeps it close to the wall.", {}, {}, 0.0, 8.0},
+        {"contactHeight", "ch", T::Float, 40.0, "Geometry this close above the ground counts as the footprint, cm.", {}, {}, 0.0},
+        {"spacing", "spc", T::Float, 0.9, "Footprints kept clear, times each item's own.", {}, {}, 0.0},
+        {"scaleNear", "sn", T::Float, 1.15, "Scale at the wall.", {}, {}, 0.0},
+        {"scaleFar", "sf", T::Float, 0.6, "Scale at the band's outer edge.", {}, {}, 0.0},
+        {"scaleJitter", "sj", T::Float, 0.2, "Random scale either way, 0 to 1.", {}, {}, 0.0, 0.95},
+        {"leanChance", "lc", T::Float, 0.6, "Chance a tall, thin item (plank, beam, pipe) leans on the wall.", {}, {}, 0.0, 1.0},
+        {"leanMin", "lmn", T::Float, 8.0, "Least lean, degrees.", {}, {}, 0.0, 80.0},
+        {"leanMax", "lmx", T::Float, 24.0, "Most lean, degrees.", {}, {}, 0.0, 80.0},
+        {"turn", "tu", T::Float, 180.0, "Random turn about up for items that stand, degrees either way.", {}, {}, 0.0, 180.0},
+        {"maxCount", "mc", T::Int, int64_t(400), "At most this many.", {}, {}, 0.0}};
+    bandFlags.insert(bandFlags.end(), bandFlagsExtra.begin(), bandFlagsExtra.end());
+    ctx.registerCommand({
+        .name = "baseDressing",
+        .doc = "Dress the foot of things: items in a band round where objects meet the ground (rubble at a wall's foot, planks "
+               "leaning on a shed, weeds round a rock), densest and biggest at the wall, thinning and shrinking outward. Tall, thin "
+               "items lean on the wall. The footprint comes from the objects' own geometry, so any outline works, and the default "
+               "live arrangement follows the objects when they are edited.\n\nLive by default; realize=True places scene "
+               "instances for the Push tool and hand edits; settle=True drops them with physics. Returns the same as fillShelf, "
+               "plus ground (the meshes used, or 'plane').",
+        .positionalDoc = "objects to dress round (default the selection)",
+        .flags = bandFlags,
+        .run = [](const Args& a) -> json {
+            LILA_ZONE();
+
+            Graph& g = Graph::current();
+            std::vector<std::string> names = a.objects();
+            if (names.empty())
+                throw CommandError("baseDressing: give the objects to dress round");
+            std::vector<ItemSource> items;
+            if (a.has("items"))
+                items = itemsArg(g, a, "baseDressing");
+            else
+            {
+                library::Query q;
+                q.tags = {"debris", "stone"};
+                json ids = json::array();
+                for (const library::Asset& x : library::search(q))
+                    if (x.id.find("StoneChunk") != std::string::npos)
+                        ids.push_back(x.id);
+                if (ids.empty())
+                    throw CommandError("baseDressing: no stone chunks in the library (libraryStarter builds them); give items=[...]");
+                Args withItems = a;
+                withItems.flags["items"] = ids;
+                items = itemsArg(g, withItems, "baseDressing");
+            }
+            g.evaluate();
+            std::vector<NodeId> hosts;
+            std::set<NodeId> hostSet;
+            for (const std::string& n : names)
+            {
+                Node* node = g.find(n);
+                if (!node)
+                    throw CommandError("baseDressing: no node named '" + n + "'");
+                for (NodeId m : meshesOf(g, node->id()))
+                    if (hostSet.insert(m).second)
+                        hosts.push_back(m);
+            }
+            if (hosts.empty())
+                throw CommandError("baseDressing: the objects have no meshes");
+            std::vector<geo::Mesh> hostMeshes;
+            glm::dvec3 lo(1e300), hi(-1e300);
+            for (NodeId h : hosts)
+            {
+                hostMeshes.push_back(meshOf(g, h, true));
+                const arrange::Item b = arrange::itemOf(hostMeshes.back());
+                lo = glm::min(lo, b.lo);
+                hi = glm::max(hi, b.hi);
+            }
+            arrange::BandOptions o;
+            o.width = a.get<double>("width", 80.0);
+            o.density = a.get<double>("density", 6.0);
+            o.falloff = a.get<double>("falloff", 1.5);
+            o.contactHeight = a.get<double>("contactHeight", 40.0);
+            o.spacing = a.get<double>("spacing", 0.9);
+            o.scaleNear = a.get<double>("scaleNear", 1.15);
+            o.scaleFar = a.get<double>("scaleFar", 0.6);
+            o.scaleJitter = a.get<double>("scaleJitter", 0.2);
+            o.leanChance = a.get<double>("leanChance", 0.6);
+            o.leanMin = a.get<double>("leanMin", 8.0);
+            o.leanMax = std::max(o.leanMin, a.get<double>("leanMax", 24.0));
+            o.turn = a.get<double>("turn", 180.0);
+            o.maxCount = int(a.get<int64_t>("maxCount", 400));
+            o.seed = uint32_t(a.get<int64_t>("seed", 1));
+            for (const json& w : a.flags.value("weights", json::array()))
+                o.weights.push_back(w.is_number() ? w.get<double>() : 1.0);
+
+            // Ground left out: every visible mesh reaching past the objects' footprint whose top is no higher than their base
+            // plus the contact height.
+            std::vector<NodeId> ground = meshListArg(g, a, "ground", "baseDressing");
+            if (!a.has("ground"))
+                for (NodeId id : g.nodes())
+                {
+                    if (hostSet.contains(id) || !physical(g, id))
+                        continue;
+                    const arrange::Item b = arrange::itemOf(meshOf(g, id, true));
+                    if (b.hi.y > lo.y + o.contactHeight || b.hi.y < lo.y - o.width)
+                        continue;
+                    if (b.lo.x > lo.x || b.hi.x < hi.x || b.lo.z > lo.z || b.hi.z < hi.z)
+                        continue;
+                    ground.push_back(id);
+                }
+            std::vector<geo::Mesh> groundMeshes;
+            for (NodeId id : ground)
+                groundMeshes.push_back(meshOf(g, id, true));
+            std::vector<NodeId> blockers;
+            for (const json& b : a.flags.value("blockers", json::array()))
+            {
+                Node* node = g.find(b.get<std::string>());
+                if (!node)
+                    throw CommandError("baseDressing: no node named '" + b.get<std::string>() + "'");
+                for (NodeId m : meshesOf(g, node->id()))
+                    if (!hostSet.contains(m))
+                        blockers.push_back(m);
+            }
+            std::vector<geo::Mesh> blockerMeshes;
+            for (NodeId id : blockers)
+                blockerMeshes.push_back(meshOf(g, id, true));
+            std::vector<const geo::Mesh*> bp;
+            for (const geo::Mesh& m : blockerMeshes)
+                bp.push_back(&m);
+            std::vector<const geo::Mesh*> hp, gp;
+            for (const geo::Mesh& m : hostMeshes)
+                hp.push_back(&m);
+            for (const geo::Mesh& m : groundMeshes)
+                gp.push_back(&m);
+            std::vector<arrange::Item> bounds;
+            for (const ItemSource& it : items)
+                bounds.push_back(arrange::itemOf(meshOf(g, it.mesh, false)));
+            const arrange::BandResult band = arrange::band(hp, gp, bounds, o, bp);
+            const bool doSettle = a.get<bool>("settle", false);
+            arrange::SettleOptions so = settleOptions(a);
+            so.density = a.get<double>("massDensity", 600.0);
+            so.ground = ground.empty();
+            so.groundHeight = lo.y;
+            std::vector<NodeId> colliders = hosts;
+            colliders.insert(colliders.end(), ground.begin(), ground.end());
+            colliders.insert(colliders.end(), blockers.begin(), blockers.end());
+            const Result r = settleIf(band.placed, g, items, colliders, so, doSettle);
+            json groundOut = json::array();
+            for (NodeId id : ground)
+                groundOut.push_back(g.node(id)->path());
+            const json groundInfo = ground.empty() ? json("plane") : groundOut;
+            const std::string name = a.get<std::string>("name", identifier(g.node(hosts.front())->name(), "Set") + "_Base");
+            if (a.get<bool>("realize", false))
+            {
+                json out = finishRealized(g, a, r, items, name);
+                out["ground"] = groundInfo;
+                return out;
+            }
+
+            std::string weightText;
+            for (double w : o.weights)
+                weightText += (weightText.empty() ? "" : ",") + std::to_string(w);
+            json nodes = json::array({{{"name", "Band"}, {"type", "BaseDressing"}, {"position", json::array({300, 0})},
+                                       {"values", {{"weights", weightText}, {"falloff", o.falloff}, {"contactHeight", o.contactHeight},
+                                                   {"spacing", o.spacing}, {"scaleNear", o.scaleNear}, {"scaleFar", o.scaleFar},
+                                                   {"scaleJitter", o.scaleJitter}, {"leanChance", o.leanChance}, {"leanMin", o.leanMin},
+                                                   {"leanMax", o.leanMax}, {"turn", o.turn}, {"maxCount", o.maxCount}}}}});
+            json links = json::array({"GroupInput.width -> Band.width", "GroupInput.density -> Band.density", "GroupInput.seed -> Band.seed"});
+            json inputs = json::array({input("width", "float", o.width, "How far out the band reaches, cm.", 1.0, 400.0),
+                                       input("density", "float", o.density, "Items per square metre at the wall.", 0.0, 50.0),
+                                       input("seed", "int", int64_t(o.seed), "Another seed gives another band.")});
+            for (size_t k = 0; k < hosts.size(); ++k)
+            {
+                const std::string info = "Host" + std::to_string(k + 1);
+                nodes.push_back({{"name", info}, {"type", "ObjectInfo"}, {"position", json::array({0, -200 - 120 * double(k)})},
+                                 {"props", {{"object", g.node(hosts[k])->path()}, {"transformSpace", "world"}}}});
+                links.push_back(info + ".geometry -> Band.hosts");
+            }
+            for (size_t k = 0; k < blockers.size(); ++k)
+            {
+                const std::string info = "Blocker" + std::to_string(k + 1);
+                nodes.push_back({{"name", info}, {"type", "ObjectInfo"}, {"position", json::array({0, -1000 - 120 * double(k)})},
+                                 {"props", {{"object", g.node(blockers[k])->path()}, {"transformSpace", "world"}}}});
+                links.push_back(info + ".geometry -> Band.blockers");
+            }
+            for (size_t k = 0; k < ground.size(); ++k)
+            {
+                const std::string info = "Ground" + std::to_string(k + 1);
+                nodes.push_back({{"name", info}, {"type", "ObjectInfo"}, {"position", json::array({0, -600 - 120 * double(k)})},
+                                 {"props", {{"object", g.node(ground[k])->path()}, {"transformSpace", "world"}}}});
+                links.push_back(info + ".geometry -> Band.ground");
+            }
+            addItemNodes(nodes, links, g, items, "Band");
+            json out = statsOf(r, items);
+            out.update(finishLive(g, a, nodes, links, inputs, "Band.instances", colliders, so, doSettle, name, geo::Mesh(),
+                                  "Items round the foot of " + g.node(hosts.front())->name() + "."));
+            out["ground"] = groundInfo;
+            return out;
+        },
+        .examples = {"baseDressing('Shed', items=['Weathering/Planks/Plank1', 'Debris/StoneChunkS1'], width=120)",
+                     "baseDressing(['Tower', 'Wall'], items=['Rubble'], weights=[3], realize=True, settle=True)"},
     });
 }
 } // namespace stagehand

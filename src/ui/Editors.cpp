@@ -46,6 +46,12 @@ void openMarkingMenuEditor()
     openSingle(gMarkingMenuEditor);
 }
 
+void openMarkingMenuEditor(const std::string& menu, const std::string& ptr)
+{
+    openSingle(gMarkingMenuEditor);
+    gMarkingMenuEditor->showMenu(menu, ptr);
+}
+
 void registerEditorActions()
 {
     actions::add({"window.hotkeyEditor", "Hotkey Editor...", "Windows", [] {
@@ -55,11 +61,11 @@ void registerEditorActions()
                   "Browse, search and rebind hotkeys"});
     actions::add({"window.importMayaHotkeys", "Import Maya Hotkeys...", "Windows", [] { importMayaHotkeysDialog(nullptr); },
                   nullptr, "A new keymap from a Maya hotkey set"});
-    actions::add({"window.markingMenuEditor", "Marking Menu Editor...", "Windows", [] {
+    actions::add({.id = "window.markingMenuEditor", .label = "Marking Menu Editor...", .category = "Windows", .run = [] {
                       if (!closeShownWindow<MarkingMenuEditor>())
                           openMarkingMenuEditor();
                   },
-                  nullptr, "Edit marking menu slots, labels and targets"});
+                  .doc = "Edit marking menu slots, labels and targets", .keywords = {"pie menu", "radial menu"}});
     actions::add({"window.userMenuEditor", "Menu Editor...", "Windows", [] {
                       if (!closeShownWindow<UserMenuEditor>())
                           openUserMenuEditor();

@@ -28,8 +28,10 @@ namespace LilaLink
  *   size: [depth, width, height], sortOrder?}]}
  * builds MF_LilaDecal and the deferred decal material M_LilaDecal on it (in the masters folder, like the trim master), makes
  * or updates each decal's instance in folder and places a decal actor per entry in the open level (forward is the projection
- * direction, up the decal's top, both in Unreal space), tagged with its id so a resend updates it. Returns {master, built,
- * spawned, updated, decals: [{id, actor, material}], created, warnings}.
+ * direction, up the decal's top, both in Unreal space), tagged with its id so a resend updates it. meshes: [{mesh: static
+ * mesh path, slot, instance}] puts a decal instance on that slot of each mesh, so it renders as a mesh decal (edge decal
+ * strips). Returns {master, built, spawned, updated, decals: [{id, actor, material}], assigned: [{mesh, slot, material,
+ * changed}], created, warnings}.
  */
 void AddTrimMethods(TMap<FString, FLilaLinkMethod>& Methods);
 

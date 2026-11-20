@@ -112,4 +112,49 @@ std::array<uint32_t, kStyleWords> packExtended(const ExtendedShading& e, const s
     }
     return out;
 }
+
+std::array<uint32_t, kGrungeBlockWords> packGrunge(const GrungeLook& g, uint64_t address)
+{
+    std::array<float, kGrungeBlockWords> f{};
+    auto vec = [&](size_t at, glm::vec3 v, float w) {
+        f[at] = v.x;
+        f[at + 1] = v.y;
+        f[at + 2] = v.z;
+        f[at + 3] = w;
+    };
+    uint32_t enabled = 0;
+    vec(4, g.outlineColor, 0.0f);
+    for (size_t k = 0; k < g.layers.size(); ++k)
+    {
+        const GrungeLayer& l = g.layers[k];
+        if (l.enabled && l.strength > 0.0f)
+            enabled |= 1u << k;
+        const size_t b = 8 + k * 16;
+        f[b] = l.level;
+        f[b + 1] = std::max(l.softness, 1e-4f);
+        f[b + 2] = l.breakup;
+        f[b + 3] = 1.0f / std::max(l.noiseScale, 0.01f);
+        // Multiply rides on the bands word's sign: -(bands + 1).
+        f[b + 4] = l.multiply ? -float(std::max(l.bands, 0) + 1) : float(std::max(l.bands, 0));
+        f[b + 5] = l.cut;
+        f[b + 6] = l.outline;
+        f[b + 7] = std::clamp(l.strength, 0.0f, 1.0f);
+        vec(b + 8, l.color, l.roughness);
+        // The seed moves the noise domain, so two seeds read unrelated noise.
+        vec(b + 12, l.low, float(l.seed % 4096u) * 17.31f);
+    }
+    std::array<uint32_t, kGrungeBlockWords> out;
+    for (size_t i = 0; i < out.size(); ++i)
+        out[i] = std::bit_cast<uint32_t>(f[i]);
+    out[0] = uint32_t(address);
+    out[1] = uint32_t(address >> 32);
+    out[2] = enabled;
+    out[3] = std::bit_cast<uint32_t>(std::max(g.edgeWidth, 1e-3f));
+    const size_t reach = 8 + g.layers.size() * 16;
+    out[reach] = std::bit_cast<uint32_t>(std::max(g.cavityWidth, 1e-3f));
+    out[reach + 1] = std::bit_cast<uint32_t>(std::max(g.aoWidth, 1e-3f));
+    out[reach + 2] = std::bit_cast<uint32_t>(std::max(g.fadeHeight, 1e-3f));
+    out[reach + 3] = std::bit_cast<uint32_t>(std::max(g.streakLength, 1e-3f));
+    return out;
+}
 } // namespace lila::render

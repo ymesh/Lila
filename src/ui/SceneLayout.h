@@ -3,8 +3,8 @@
 #include "core/Export.h"
 
 /**
- * The scene's "layout" UI section: the mode, layout and sculpt mesh it was saved in. Opening the scene returns to them,
- * so each scene reopens where its work left off. The "general" pref kRestorePref turns it off.
+ * The scene's "layout" UI section: the mode, layout, sculpt mesh and viewport tool it was saved in. Opening the scene
+ * returns to them, so each scene reopens where its work left off. The "general" pref kRestorePref turns it off.
  */
 namespace lila::ui::sceneLayout
 {

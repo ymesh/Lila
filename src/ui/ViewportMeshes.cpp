@@ -112,7 +112,11 @@ void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const sc
     if (previewed)
         d.materials = std::move(hooked);
     else if (textured && !instanced)
-        d.materials = drawMaterials(*shown);
+    {
+        std::vector<render::Material> materials = drawMaterials(*shown);
+        viewportHooks::decorateMaterials(id, *shown, materials);
+        d.materials = std::move(materials);
+    }
     e.world = shownWorld(n);
     e.shown = shown;
     d.world = e.world;
@@ -120,7 +124,7 @@ void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const sc
     d.lightingChannels = scene::lightingChannels::mask(n);
     if (!set.render)
         d.drawOffset = scene::drawOffset(n);
-    if (set.vertexColors != render::VertexColorMode::Off && shown && !geo::colors::current(*shown).empty())
+    if (set.vertexColors != render::VertexColorMode::Off && shown && !geo::colors::displayed(*shown).empty())
     {
         d.vertexColors = set.vertexColors;
         d.colorChannel = set.colorChannel;

@@ -260,7 +260,8 @@ protected:
     }
     void allocate(int id, std::size_t bytes) override {
         Words& w = buffers_[id];
-        if (!w || w->size() * 4 < bytes) w = ownWords(bytes);
+        // Kernels write it: never into memory shared from the host or borrowed by a sibling.
+        if (!w || w->host || w->ownWords < (bytes + 3) / 4 || w.use_count() > 1) w = ownWords(bytes);
     }
     // The base's points and widths: the strands' own arrays (the engine holds them; never written).
     void share(int id, const void* data, std::size_t bytes) override { buffers_[id] = hostWords(const_cast<void*>(data), bytes); }

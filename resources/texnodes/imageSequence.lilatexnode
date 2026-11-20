@@ -1,0 +1,136 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "imageSequence",
+  "label": "Image Sequence",
+  "category": "Input",
+  "doc": "Numbered image files played over the timeline, for animated textures. Pick any one frame: the last run of digits in its name is the frame number (or write # for each digit, as in fire_####.png), and every file in its folder numbered the same way joins the sequence in order. Sequence frame 0 is the first file on disk. Exports and bakes take the scene's current frame.",
+  "keywords": [
+    "animated",
+    "animation",
+    "flipbook",
+    "frames",
+    "movie",
+    "video",
+    "image sequence",
+    "time"
+  ],
+  "inputs": [
+    {
+      "id": "coord",
+      "type": "vector",
+      "label": "UV",
+      "implicit": "uv",
+      "doc": "Where to read the frames: the mesh's uvs unless linked (Projection, Mapping)."
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    },
+    {
+      "id": "alpha",
+      "type": "gray",
+      "doc": "The frame's alpha; 1 where the files have none."
+    }
+  ],
+  "params": [
+    {
+      "id": "file",
+      "type": "image",
+      "default": "",
+      "doc": "Any frame of the sequence."
+    },
+    {
+      "id": "start",
+      "label": "Start Frame",
+      "type": "float",
+      "default": 1,
+      "step": 1,
+      "doc": "The scene frame the sequence's first frame shows on."
+    },
+    {
+      "id": "offset",
+      "type": "float",
+      "default": 0,
+      "step": 1,
+      "doc": "Frames into the sequence at Start Frame."
+    },
+    {
+      "id": "frames",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "doc": "How many frames play before looping or holding; 0 plays every file found."
+    },
+    {
+      "id": "speed",
+      "type": "float",
+      "default": 1,
+      "softMin": 0,
+      "softMax": 4,
+      "doc": "Sequence frames per scene frame: 0.5 plays at half speed, negative plays backwards. Keyed, the speed accumulates over the frames from Start Frame, so a change of speed never jumps."
+    },
+    {
+      "id": "loop",
+      "label": "After End",
+      "type": "enum",
+      "default": "loop",
+      "options": [
+        "loop",
+        "hold",
+        "pingPong"
+      ],
+      "doc": "loop: starts over. hold: stays on the end frame (the first one before Start Frame). pingPong: plays back and forth."
+    },
+    {
+      "id": "interpolation",
+      "type": "enum",
+      "default": "hold",
+      "options": [
+        "hold",
+        "blend"
+      ],
+      "doc": "Between sequence frames, when Speed isn't a whole number. hold: shows the earlier frame. blend: crossfades into the next."
+    },
+    {
+      "id": "tiles",
+      "type": "int",
+      "default": 1,
+      "min": 1,
+      "softMax": 16,
+      "doc": "Repeats across the texture."
+    },
+    {
+      "id": "colorSpace",
+      "type": "enum",
+      "default": "linear",
+      "options": [
+        "linear",
+        "srgb"
+      ],
+      "doc": "How the files' colour values are read. linear: as stored, for data maps and EXR. srgb: decoded from sRGB to linear, for colour frames saved as 8 or 16-bit PNG, JPEG, TGA or TIFF. Alpha is never decoded."
+    },
+    {
+      "id": "next",
+      "type": "image",
+      "default": "",
+      "hidden": true,
+      "doc": "The frame blended in."
+    },
+    {
+      "id": "mix",
+      "type": "float",
+      "default": 0,
+      "hidden": true,
+      "doc": "How much of next shows."
+    }
+  ],
+  "cost": 4,
+  "code": "float4 sequenceFrame(float4 a, float4 b, float mix, int colorSpace)\n{\n    float4 c = mix > 0.0 ? lerp(a, b, mix) : a;\n    if (colorSpace != 1)\n        return c;\n    float3 lo = c.rgb / 12.92;\n    float3 hi = pow(max((c.rgb + 0.055) / 1.055, float3(0.0)), float3(2.4));\n    return float4(lerp(hi, lo, step(c.rgb, float3(0.04045))), c.a);\n}",
+  "body": {
+    "out": "float2 at = coord.sample(uv).xy * float(p.tiles);\nreturn sequenceFrame(file.sample(at), next.sample(at), p.mix, p.colorSpace);",
+    "alpha": "float2 at = coord.sample(uv).xy * float(p.tiles);\nreturn lerp(file.sample(at).a, next.sample(at).a, p.mix);"
+  }
+}

@@ -217,6 +217,8 @@ TEST_CASE("masonry blockouts: hollow, solid and tapering blockouts become wall f
 
 TEST_CASE("masonry dressing: plaster peels and ivy climbs from the ground")
 {
+    // The ivy is grown by Weathering, which Masonry loads as a dependency.
+    masonrytest::loadMasonry();
     BuildOptions o;
     o.wall.stone = {40.0, 20.0, 25.0, 1.0};
     o.wall.thickness = 60.0;

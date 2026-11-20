@@ -1,6 +1,7 @@
 #include "ui/TexParams.h"
 
 #include "core/Log.h"
+#include "ops/Command.h"
 #include "ops/CommandOptions.h"
 #include "ops/Undo.h"
 #include "scene/Graph.h"
@@ -21,6 +22,8 @@
 #include "ui/Theme.h"
 #include "ui/ViewportWidget.h"
 
+#include <QAction>
+#include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -34,6 +37,7 @@
 #include <QRandomGenerator>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -603,7 +607,40 @@ void addNodeParam(QFormLayout* form, QWidget* parent, const json& p, const json&
 }
 
 /** Adds the editor for one parameter to the form. */
-void addParam(QFormLayout* form, QWidget* parent, const json& p, const SetFn& set)
+/**
+ * Right-click on a number parameter of a set's node: Make Keyable gives the set a keyable attribute that drives it, so it
+ * keys in the Channel Box; Remove Keyable takes it away again.
+ */
+void addKeyableAction(const std::vector<QWidget*>& targets, const json& p, const json& node)
+{
+    const std::string set = node.value("set", ""), name = node.value("name", ""), id = p.value("id", "");
+    if (set.empty() || name.empty() || id.empty())
+        return;
+    const bool driven = p.contains("driver");
+    for (QWidget* target : targets)
+    {
+        if (!target)
+            continue;
+        auto* action = new QAction(driven ? "Remove Keyable" : "Make Keyable", target);
+        QObject::connect(action, &QAction::triggered, qApp, [set, name, id, driven] {
+            // Deferred: the command rebuilds the panel this action lives in.
+            QTimer::singleShot(0, qApp, [set, name, id, driven] {
+                try
+                {
+                    ops::execute("texDriveValue", {{"args", {set, name + "." + id}}, {"remove", driven}}, CallSource::UI);
+                }
+                catch (const std::exception& e)
+                {
+                    log::warn("{}", e.what());
+                }
+            });
+        });
+        target->addAction(action);
+        target->setContextMenuPolicy(Qt::ActionsContextMenu);
+    }
+}
+
+void addParam(QFormLayout* form, QWidget* parent, const json& p, const SetFn& set, const json& node = json())
 {
     const std::string id = p.value("id", "");
     const std::string type = p.value("type", "float");
@@ -614,7 +651,10 @@ void addParam(QFormLayout* form, QWidget* parent, const json& p, const SetFn& se
     if (type == "float" || type == "int")
     {
         FlagFieldWidgets w = makeFlagField(numberField(p, type == "int"), value, changed, parent);
+        if (p.contains("driver"))
+            tip += "\nKeyable: " + qs(node.value("set", "") + "." + p["driver"].get<std::string>());
         w.field->setToolTip(tip);
+        addKeyableAction({w.label, w.field}, p, node);
         form->addRow(w.label, w.field);
         return;
     }
@@ -924,7 +964,7 @@ QWidget* nodePanel(QWidget* parent, const json& node, SetFn set)
             if (p.value("type", "") == "node")
                 addNodeParam(form, w, p, node, set);
             else
-                addParam(form, w, p, set);
+                addParam(form, w, p, set, node);
         v->addLayout(form);
     }
 

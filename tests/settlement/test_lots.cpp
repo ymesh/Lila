@@ -530,8 +530,9 @@ TEST_CASE("settlement lots: commands list, override by id with undo, choose rout
 
     const json massing = run("settlementBuildings", {{"args", {mesh}}, {"route", "massing"}});
     CHECK(massing["envelopes"].get<int>() > 0);
-    CHECK_THROWS_WITH_AS(run("settlementBuildings", {{"args", {mesh}}, {"route", "library"}}), doctest::Contains("librarySearch"), std::exception);
-    // Another suite in this executable may have loaded Masonry already.
+    // Another suite in this executable may have loaded Masonry already, and with it Stagehand.
+    if (!ops::find("librarySearch"))
+        CHECK_THROWS_WITH_AS(run("settlementBuildings", {{"args", {mesh}}, {"route", "library"}}), doctest::Contains("librarySearch"), std::exception);
     if (ops::find("masonryBuilding"))
         CHECK(run("settlementBuildings", {{"args", {mesh}}, {"route", "masonry"}}).dump().find("built") != std::string::npos);
     else

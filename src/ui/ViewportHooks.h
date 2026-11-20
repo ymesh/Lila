@@ -78,6 +78,16 @@ LILA_UI_API bool removeMaterialHook(std::string_view id);
 LILA_UI_API bool hookedMaterials(scene::NodeId id, const geo::Mesh& mesh, std::vector<render::Material>& materials);
 
 /**
+ * Adds to the materials a mesh node draws with, after they are resolved (grunge masks over every slot): change the slots
+ * in place. Every decorator runs, by id, once a frame per textured mesh whose draw is rebuilt.
+ */
+using MaterialDecorator = std::function<void(scene::NodeId id, const geo::Mesh& mesh, std::vector<render::Material>& materials)>;
+/** Adding an id again replaces it. */
+LILA_UI_API void setMaterialDecorator(std::string id, MaterialDecorator fn);
+LILA_UI_API bool removeMaterialDecorator(std::string_view id);
+LILA_UI_API void decorateMaterials(scene::NodeId id, const geo::Mesh& mesh, std::vector<render::Material>& materials);
+
+/**
  * A left click on something a drawer put in the view (a button on a HUD). Return true to take the click, so the viewport
  * neither selects nor starts a drag.
  */

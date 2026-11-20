@@ -10,6 +10,7 @@
 #include "ui/Layouts.h"
 #include "ui/Modes.h"
 #include "ui/SculptTool.h"
+#include "ui/ViewportTool.h"
 
 #include <nlohmann/json.hpp>
 
@@ -27,6 +28,8 @@ json save()
     if (auto s = sculpt::active())
         if (const scene::Node* n = scene::Graph::current().node(s->node))
             j["sculpt"] = n->path();
+    if (const std::string& tool = viewportTools::activeId(); !tool.empty())
+        j["tool"] = tool;
     return j;
 }
 
@@ -76,6 +79,14 @@ void restoreSculpt(const std::string& path)
     startSculptTool();
 }
 
+void restoreTool(const std::string& id)
+{
+    if (id.empty() || id == viewportTools::activeId() || sculpt::active())
+        return;
+    if (!viewportTools::activate(id))
+        log::warn("Scene was saved with tool '{}' on, which isn't loaded", id);
+}
+
 void load(const json& j)
 {
     if (!j.is_object() || !PrefStore::get().value<bool>("general", kRestorePref, true))
@@ -83,6 +94,7 @@ void load(const json& j)
     restoreMode(j.value("mode", std::string()));
     restoreLayout(j.value("layout", std::string()));
     restoreSculpt(j.value("sculpt", std::string()));
+    restoreTool(j.value("tool", std::string()));
 }
 } // namespace
 

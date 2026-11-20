@@ -90,8 +90,10 @@ void registerBuiltins()
     add("extensions.autoload", {"Loaded extensions", "Extensions loaded at startup.", "general", "/extensions/autoload"}, lila);
     add("extensions.paths", {"Extension folders", "Where Lila looks for extensions beyond its own.", "general", "/extensions/paths"}, lila);
     add("telemetry.usage", {"Usage statistics", "Whether anonymous usage statistics are sent. Lock to false to keep them off.", "general", "/telemetry/usage"}, lila);
-    add("telemetry.crashReports", {"Crash reports", "Whether crash reports are offered for sending.", "general", "/telemetry/crashReports"}, lila);
-    add("telemetry.crashAlways", {"Crash reports without asking", "Whether crash reports go without asking first.", "general", "/telemetry/crashAlways"}, lila);
+    add("telemetry.crashSend",
+        {"Crash reports", "\"auto\" sends them, \"ask\" offers Send in the crash dialog, \"off\" never sends. Lock to \"off\" to keep them off.",
+         "general", "/telemetry/crashSend"},
+        lila);
     add("network.updateCheck", {"Update check", "Whether Lila checks GitHub for a newer version at startup.", "general", "/update/check"}, lila);
     add("network.docsUpdate", {"Docs download", "Whether Lila downloads docs updates at startup.", "general", "/docs/autoUpdate"}, lila);
     add("network.news", {"Welcome news", "Whether the welcome dialog downloads news from the Lila site.", "general", "/startup/news"}, lila);

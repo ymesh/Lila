@@ -40,6 +40,8 @@ struct ColorSetInfo
 {
     std::string current;
     std::vector<std::string> half;
+    /** Sets that carry data for export (masks, wind), never drawn as colours in the viewport. */
+    std::vector<std::string> data;
     bool operator==(const ColorSetInfo&) const = default;
 };
 

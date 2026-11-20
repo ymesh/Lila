@@ -8,7 +8,7 @@ static const uint kNone = 0xffffffffu;
 static const uint kSideBit = 0x80000000u; // set on a contact's triangle index when the vertex was behind the triangle
 static const uint kMaxVt = 16u;           // triangles near a vertex
 static const uint kMaxTv = 32u;           // contacts a vertex takes part in as a triangle corner
-static const uint kMaxEe = 16u;           // edge-edge contacts a vertex takes part in
+static const uint kMaxEe = 32u;           // edge-edge contacts a vertex takes part in
 static const uint kSeam = 0u;
 static const uint kMaxColliders = 4u;
 

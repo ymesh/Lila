@@ -742,6 +742,32 @@ void registerTextureGraphUi()
                          "token in the export preset's names (added when the preset has none).",
                   .python = "lila.ops.texExport(\"RockTex\", variants=True)",
                   .keywords = {"variants", "export", "colourways", "skins"}});
+    actions::add({.id = "texture.exportFlipbook",
+                  .label = "Export Flipbook",
+                  .category = "Texture",
+                  .run =
+                      [] {
+                          if (std::string set = currentTextureSet(); !set.empty())
+                              if (json r = runUi("texExportFlipbook", argsCall({set})); r.is_object())
+                                  log::info("exported {} frames, {} x {} at {} fps", r.value("frames", 0), r.value("columns", 0), r.value("rows", 0),
+                                            r.value("fps", 0.0));
+                      },
+                  .doc = "Write the current texture set over the playback range as flipbook sheets, one per channel: its Image Sequence "
+                         "nodes and keyed parameters at every frame, for a game material to play.",
+                  .python = "texExportFlipbook(\"FireTex\", startFrame=1, endFrame=16, cellSize=256)",
+                  .keywords = {"flipbook", "subuv", "sprite sheet", "animated texture", "image sequence", "atlas"}});
+    actions::add({.id = "texture.flipbookMaterials",
+                  .label = "Flipbook Materials in Unreal",
+                  .category = "Texture",
+                  .run =
+                      [] {
+                          if (json r = runUi("texFlipbookMaterials", json::object()); r.is_object())
+                              log::info("flipbook materials: {}", r.value("function", std::string()));
+                      },
+                  .doc = "Create MF_LilaFlipbook in the connected Unreal project, the material function that plays an exported flipbook, "
+                         "with the materials M_LilaFlipbook and M_LilaFlipbookTranslucent built on it.",
+                  .python = "texFlipbookMaterials()",
+                  .keywords = {"flipbook", "subuv", "unreal", "material function", "animated texture"}});
     actions::add({.id = "texture.clearPreview",
                   .label = "Clear Mesh Preview",
                   .category = "Texture",
@@ -751,7 +777,7 @@ void registerTextureGraphUi()
 
     menus::addMenu({.id = "Texture", .title = "Texture", .before = "Rig", .sets = {"Texture"}});
     menus::addActions("Texture", {"texture.newSet", "texture.newSetPerMaterial", "texture.renameSet", "texture.deleteSet", "tex.paint", "tex.stencil", "tex.quickMaskOverlay", "tex.paintAlongCurve", "tex.patchFill", "tex.transferSet", "", "window.textureGraph", "window.texture2d", "", "texture.import", "tex.materialFromMaps", "tex.materialsFromFolder", "texture.importPainterSmart", "tex.importPtex", "tex.exportPtex", "texture.exportMaterial",
-                                  "texture.exportNodes", "texture.exportMaps", "texture.exportVariants", "", "texture.clearPreview", "#View", "viewport.textureView3d",
+                                  "texture.exportNodes", "texture.exportMaps", "texture.exportVariants", "texture.exportFlipbook", "texture.flipbookMaterials", "", "texture.clearPreview", "#View", "viewport.textureView3d",
                                   "viewport.textureViewSplit", "viewport.textureView2d"});
 }
 } // namespace lila::ui

@@ -160,17 +160,17 @@ bool ChordGrabber::eventFilter(QObject*, QEvent* e)
 
 // ------------------------------------------------------------ ChordCaptureDialog
 
-ChordCaptureDialog::ChordCaptureDialog(std::string actionId, std::string context, QWidget* parent)
-    : QDialog(parent), mActionId(std::move(actionId))
+ChordCaptureDialog::ChordCaptureDialog(json target, std::string context, QWidget* parent, hotkeys::Slot slot)
+    : QDialog(parent), mTarget(std::move(target))
 {
     setWindowTitle("Assign Hotkey");
     setMinimumWidth(380);
-    const Action* a = actions::find(mActionId);
+    const std::string id = mTarget.is_string() ? mTarget.get<std::string>() : std::string();
 
     auto* layout = new QVBoxLayout(this);
     auto* title = new QLabel(QString("<b>%1</b>&nbsp;&nbsp;<span>%2</span>")
-                                 .arg(QString::fromStdString(a ? a->label : mActionId).toHtmlEscaped(),
-                                      QString::fromStdString(mActionId).toHtmlEscaped()));
+                                 .arg(QString::fromStdString(actions::labelFor(mTarget)).toHtmlEscaped(),
+                                      QString::fromStdString(id).toHtmlEscaped()));
     layout->addWidget(title);
 
     mChordButton = new QPushButton("Press a key...");
@@ -183,9 +183,13 @@ ChordCaptureDialog::ChordCaptureDialog(std::string actionId, std::string context
 
     auto* form = new QFormLayout;
     mMode = new QComboBox;
-    mMode->addItem("Press (tap)", int(hotkeys::Slot::Press));
-    mMode->addItem("Hold", int(hotkeys::Slot::Hold));
-    mMode->addItem("Release", int(hotkeys::Slot::Release));
+    // A marking menu opens only from key + mouse button.
+    if (!(mTarget.is_object() && mTarget.contains("markingMenu")))
+    {
+        mMode->addItem("Press (tap)", int(hotkeys::Slot::Press));
+        mMode->addItem("Hold", int(hotkeys::Slot::Hold));
+        mMode->addItem("Release", int(hotkeys::Slot::Release));
+    }
     mMode->addItem("Key + Left Click", int(hotkeys::Slot::Lmb));
     mMode->addItem("Key + Middle Click", int(hotkeys::Slot::Mmb));
     mMode->addItem("Key + Right Click", int(hotkeys::Slot::Rmb));
@@ -193,6 +197,7 @@ ChordCaptureDialog::ChordCaptureDialog(std::string actionId, std::string context
                       "Hold runs after holding past the hold delay. Release runs on key up.\n"
                       "Key + Click runs when that mouse button goes down while the key is held; the key's own\n"
                       "press and release then don't run.");
+    mMode->setCurrentIndex(std::max(0, mMode->findData(int(slot))));
     form->addRow("Mode", mMode);
     mContext = new QComboBox;
     for (const std::string& c : hotkeys::snapshot().contexts)
@@ -273,7 +278,7 @@ void ChordCaptureDialog::apply() const
 {
     if (!mChord)
         return;
-    hotkeys::assign(mContext->currentText().toStdString(), *mChord, hotkeys::Slot(mMode->currentData().toInt()), json(mActionId));
+    hotkeys::assign(mContext->currentText().toStdString(), *mChord, hotkeys::Slot(mMode->currentData().toInt()), mTarget);
 }
 
 void importMayaHotkeysDialog(QWidget* parent)
@@ -318,6 +323,15 @@ void assignHotkeyDialog(const std::string& actionId, QWidget* parent)
     ChordCaptureDialog dlg(actionId, "global", parent ? parent : hostWindow());
     if (dlg.exec() == QDialog::Accepted)
         dlg.apply();
+}
+
+bool assignMarkingMenuHotkeyDialog(const std::string& menu, QWidget* parent)
+{
+    ChordCaptureDialog dlg(json{{"markingMenu", menu}}, "global", parent ? parent : hostWindow(), hotkeys::Slot::Lmb);
+    if (dlg.exec() != QDialog::Accepted)
+        return false;
+    dlg.apply();
+    return true;
 }
 
 // --------------------------------------------------------------- KeyboardHeatMap

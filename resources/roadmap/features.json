@@ -18,6 +18,7 @@
   "seamwork": {"extensions": ["Seamwork"]},
   "masonry": {"extensions": ["Masonry"]},
   "stagehand": {"extensions": ["Stagehand"]},
+  "weathering": {"extensions": ["Weathering"]},
   "settlement": {"extensions": ["Settlement"]},
   "terrain": {"extensions": ["Terrain"]},
   "destruction": {"extensions": ["Destruction"]}

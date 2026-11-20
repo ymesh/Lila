@@ -13,6 +13,7 @@
 #include "ui/SurfaceSnap.h"
 #include "ui/Tools.h"
 
+#include <QGuiApplication>
 #include <QPainter>
 #include <QStringList>
 
@@ -198,7 +199,17 @@ void registerDefaults()
     add({"snap.rotateHold", "angle", snap(SnapRotateHold), "Rotate snap toggled", {"snap.rotateHoldOn"}});
     add({"pivotEdit", "target", [](const ViewportState&) { return tools::pivotEdit(); }, "Pivot edit",
          {"tool.pivotEditOn", "tool.pivotEditToggle"}});
-    add({"cloneDrag", "copy", [](const ViewportState&) { return tools::cloneDrag(); }, "Drag a handle to clone (faces and edges: extrude)", {"tool.cloneKeyDown", "tool.cloneDragOn"}});
+    add({"cloneDrag", "copy", [](const ViewportState&) { return tools::cloneDrag() && !tools::cloneShiftSwapped(); }, "Drag a handle to clone (faces and edges: extrude)", {"tool.cloneKeyDown", "tool.cloneDragOn"}});
+    add({"cloneDrag.shift", "copy",
+         [](const ViewportState& v) {
+             auto* m = dynamic_cast<const Manipulator*>(v.gizmo);
+             if (!tools::cloneShiftSwapped() || !m || !v.tool.empty() || v.navigating)
+                 return false;
+             // Over a handle only, since Shift alone is also add-to-selection.
+             return m->cloneDragging() ||
+                    (!m->dragging() && m->hovering() && (QGuiApplication::queryKeyboardModifiers() & Qt::ShiftModifier));
+         },
+         "Drag a handle to clone (faces and edges: extrude)", {}, "Shift"});
     add({"softSelect.adjust", "circle-dotted", [](const ViewportState&) { return tools::softSelectAdjusting(); },
          "Drag to set the soft select radius", {"softSelect.keyDown", "softSelect.adjustOn"}});
     add({"softSelect.on", "ripple",
@@ -211,8 +222,12 @@ void registerDefaults()
     add({"tabSelect.remove", "circle-minus", [](const ViewportState& v) { return v.tabSelects == false; }, "Drag to deselect", {}, "Tab"});
     add({"select.lassoHold", "lasso", [](const ViewportState&) { return paintSelect::lassoHeld(); }, "Drag to lasso select",
          {"select.lassoHoldOn"}});
-    add({"manipulator.precision", "feather", [](const ViewportState& v) { return v.gizmo && v.gizmo->precisionDrag(); },
+    // Only the manipulator trades Shift for Y; other gizmos keep Shift for precision.
+    auto yPrecision = [](const ViewportState& v) { return tools::cloneShiftSwapped() && dynamic_cast<const Manipulator*>(v.gizmo); };
+    add({"manipulator.precision", "feather", [=](const ViewportState& v) { return v.gizmo && v.gizmo->precisionDrag() && !yPrecision(v); },
          "Precision drag", {}, "Shift"});
+    add({"manipulator.precisionY", "feather", [=](const ViewportState& v) { return v.gizmo && v.gizmo->precisionDrag() && yPrecision(v); },
+         "Precision drag", {"tool.cloneKeyDown"}});
     add({"manipulator.ctrlPlane", "perspective",
          [](const ViewportState& v) {
              auto* m = dynamic_cast<const Manipulator*>(v.gizmo);

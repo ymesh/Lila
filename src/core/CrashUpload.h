@@ -11,7 +11,8 @@
  * Sending crash reports to Sentry, from the lilacrash watchdog once Lila has died.
  *
  * Lila keeps <userDir>/telemetry/crash-consent.json up to date with the user's choice; the watchdog reads it at crash
- * time, so a choice made after startup still counts. The minidump goes to Sentry's minidump endpoint (Sentry
+ * time, so a choice made after startup still counts. The crash dialog offers sending unless the environment or the
+ * studio forbids it, and sends by itself once the user has said to. The minidump goes to Sentry's minidump endpoint (Sentry
  * symbolicates it and keeps only the event) with report.txt attached after sanitize() has taken paths, the user and
  * machine names out of it.
  */
@@ -23,15 +24,16 @@ inline constexpr const char* kConsentFile = "crash-consent.json";
 
 struct Consent
 {
-    bool send = false;   // crash reports are on and nothing in the environment opts out
-    bool always = false; // send without asking
-    fs::path prefsFile;  // the user's general.json, where "always" is kept
+    bool offer = false; // the crash dialog may offer sending: no environment opt-out, not locked off by the studio
+    bool send = false;  // send without asking
+    bool userOff = false; // the user chose never to send, and may change it; false where a studio or the environment decided
+    fs::path prefsFile; // the user's general.json, where the choice is kept
 };
 
 LILA_CRASHKIT_API Consent readConsent(const fs::path& file);
 LILA_CRASHKIT_API void writeConsent(const fs::path& file, const Consent& c);
 /** Records "send without asking" in both the consent file and the user's prefs. */
-LILA_CRASHKIT_API void setAlways(const fs::path& consentFile, bool on);
+LILA_CRASHKIT_API void setSend(const fs::path& consentFile, bool on);
 
 /**
  * report.txt as it may leave the machine: identifying fields dropped, every literal in `secrets` (user and machine

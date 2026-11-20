@@ -192,4 +192,29 @@ struct ExportOptions
  * normalFormat}) plus changed. Throws.
  */
 LILA_SCENE_API json exportSet(scene::Node& set, const ExportOptions& options);
+
+struct FlipbookOptions
+{
+    /** Channel names; empty for all. */
+    std::vector<std::string> channels;
+    /** Scene frames, inclusive, every step of them. */
+    double startFrame = 1.0;
+    double endFrame = 24.0;
+    double step = 1.0;
+    /** Cells per row; 0 lays the frames out as near a square as they go. */
+    int columns = 0;
+    /** One frame's width in the sheet; its height keeps the set's proportions. */
+    int cellSize = 256;
+    std::string folder;
+    std::string format = "png";
+    int bits = 0;
+    std::string backend;
+};
+
+/**
+ * Evaluates the set's first tile at each frame and writes one sheet per channel, frames left to right then top to bottom:
+ * <folder>/<set>_<channel>_flipbook_<columns>x<rows>.<ext>. Returns {files: [{file, channel}], columns, rows, frames, fps,
+ * cell: [w, h], warnings, backend}. Throws.
+ */
+LILA_SCENE_API json exportFlipbook(scene::Node& set, const FlipbookOptions& options);
 } // namespace lila::tex

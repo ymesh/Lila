@@ -1,5 +1,6 @@
 // lilacrash.exe: Lila's crash watchdog. Started by Lila with --watch; never shows a window unless Lila crashed.
 // --send <report folder> uploads one report to Sentry and exits.
+// --show <report folder> [--consent <file>] [--restart <exe>] shows the crash dialog for a report already on disk.
 
 #include "core/CrashUpload.h"
 #include "core/CrashWatch.h"
@@ -26,12 +27,12 @@ namespace
 {
 enum Button
 {
-    kOpenReport = 100,
-    kOpenFolder,
-    kCopyReport,
+    kSendRestart = 100,
+    kSendClose,
     kRestart,
-    kSend,
 };
+
+constexpr const wchar_t* kPrivacyUrl = L"https://lila-3d.github.io/docs/#/privacy";
 
 struct DialogState
 {
@@ -42,7 +43,16 @@ struct DialogState
     std::atomic<HWND> hwnd = nullptr; // null once the dialog is gone
     std::thread sender;
     bool sendStarted = false;
+    bool declined = false; // a footer link is closing the dialog through a Send button, which must not send
+
+    // What cfg points at; layOut() fills them.
+    std::wstring summary, content, sendRestart, sendClose;
+    std::vector<TASKDIALOG_BUTTON> buttons;
+    TASKDIALOGCONFIG cfg{};
 };
+
+/** Fills st.cfg for one of the dialog's two pages: `ask` offers to send, the other only restarts or closes. */
+void layOut(DialogState& st, bool ask);
 
 /** Posted, never sent: the sender thread must not wait on a dialog that may be closing. Text must be a literal. */
 void setFooter(DialogState& st, const wchar_t* text)
@@ -57,8 +67,6 @@ void startSend(DialogState& st)
     if (st.sendStarted)
         return;
     st.sendStarted = true;
-    if (HWND h = st.hwnd)
-        PostMessageW(h, TDM_ENABLE_BUTTON, kSend, FALSE);
     setFooter(st, L"Sending the crash report...");
     st.sender = std::thread([&st] {
         bool ok = upload::send(st.dir);
@@ -81,7 +89,21 @@ void copyToClipboard(HWND owner, const std::wstring& text)
     CloseClipboard();
 }
 
-HRESULT CALLBACK dialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM, LONG_PTR ref)
+void restartLila(const DialogState& st)
+{
+    if (st.restart.empty())
+        return;
+    std::wstring cmd = L"\"" + st.restart + L"\"";
+    STARTUPINFOW si{sizeof(si)};
+    PROCESS_INFORMATION pi{};
+    if (CreateProcessW(st.restart.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi))
+    {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+}
+
+HRESULT CALLBACK dialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, LONG_PTR ref)
 {
     auto* st = reinterpret_cast<DialogState*>(ref);
     if (msg == TDN_DESTROYED)
@@ -89,18 +111,10 @@ HRESULT CALLBACK dialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM, LONG_PTR
         st->hwnd = nullptr;
         return S_OK;
     }
-    if (msg == TDN_VERIFICATION_CLICKED)
-    {
-        bool on = wParam != 0;
-        upload::setAlways(st->consentFile, on);
-        if (on)
-            startSend(*st);
-        return S_OK;
-    }
     if (msg == TDN_CREATED)
     {
         st->hwnd = hwnd;
-        if (st->consent.send && st->consent.always && !upload::alreadySent(st->dir))
+        if (st->consent.send && !upload::alreadySent(st->dir))
             startSend(*st);
         // Lila was in front a moment ago; a background process may not take focus, so at least come to the top.
         SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
@@ -108,38 +122,99 @@ HRESULT CALLBACK dialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM, LONG_PTR
         SetForegroundWindow(hwnd);
         return S_OK;
     }
-    if (msg != TDN_BUTTON_CLICKED)
-        return S_OK;
-    switch (int(wParam))
+    if (msg == TDN_HYPERLINK_CLICKED)
     {
-    case kOpenReport:
-        ShellExecuteW(hwnd, L"open", (st->dir / L"report.txt").c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-        return S_FALSE;
-    case kOpenFolder:
-        ShellExecuteW(hwnd, L"open", st->dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-        return S_FALSE;
-    case kCopyReport:
-        copyToClipboard(hwnd, widen(readText(st->dir / L"report.txt")));
-        SendMessageW(hwnd, TDM_SET_ELEMENT_TEXT, TDE_FOOTER, reinterpret_cast<LPARAM>(L"The crash report is on the clipboard."));
-        return S_FALSE;
-    case kSend:
-        startSend(*st);
-        return S_FALSE;
-    case kRestart:
-        if (!st->restart.empty())
+        const std::wstring link = reinterpret_cast<const wchar_t*>(lParam);
+        if (link == L"report")
+            ShellExecuteW(hwnd, L"open", (st->dir / L"report.txt").c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        else if (link == L"folder")
+            ShellExecuteW(hwnd, L"open", st->dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        else if (link == L"privacy")
+            ShellExecuteW(hwnd, L"open", kPrivacyUrl, nullptr, nullptr, SW_SHOWNORMAL);
+        else if (link == L"copy")
         {
-            std::wstring cmd = L"\"" + st->restart + L"\"";
-            STARTUPINFOW si{sizeof(si)};
-            PROCESS_INFORMATION pi{};
-            if (CreateProcessW(st->restart.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi))
-            {
-                CloseHandle(pi.hThread);
-                CloseHandle(pi.hProcess);
-            }
+            copyToClipboard(hwnd, widen(readText(st->dir / L"report.txt")));
+            SendMessageW(hwnd, TDM_SET_ELEMENT_TEXT, TDE_FOOTER, reinterpret_cast<LPARAM>(L"The crash report is on the clipboard."));
+        }
+        else if (link == L"always")
+        {
+            upload::setSend(st->consentFile, true);
+            st->consent.send = true;
+            // Nothing is left to ask, so the Send buttons give way to the page with Restart and Close.
+            layOut(*st, false);
+            st->cfg.pszFooter = L"Sending the crash report...";
+            SendMessageW(hwnd, TDM_NAVIGATE_PAGE, 0, reinterpret_cast<LPARAM>(&st->cfg));
+            startSend(*st);
+        }
+        else if (link == L"restart" || link == L"close")
+        {
+            if (link == L"restart")
+                restartLila(*st);
+            // The dialog has no title bar close, so it ends the way a button ends it.
+            st->declined = true;
+            PostMessageW(hwnd, TDM_CLICK_BUTTON, kSendClose, 0);
         }
         return S_OK;
     }
+    if (msg != TDN_BUTTON_CLICKED)
+        return S_OK;
+    // Every button closes the dialog. A send it started carries on, and the watchdog waits for it before exiting.
+    const int button = int(wParam);
+    if ((button == kSendRestart || button == kSendClose) && !st->declined)
+        startSend(*st);
+    if (button == kSendRestart || button == kRestart)
+        restartLila(*st);
     return S_OK;
+}
+
+void layOut(DialogState& st, bool ask)
+{
+    const bool canRestart = !st.restart.empty();
+    st.content = st.summary + L"\n\n<a href=\"report\">Open report</a>     <a href=\"folder\">Open folder</a>     <a href=\"copy\">Copy report</a>";
+    if (st.consent.offer)
+        st.content += L"     <a href=\"privacy\">What's sent</a>";
+
+    // Sending gets the only large buttons; declining is a text link in the footer.
+    const wchar_t* sendNote = L"The call stack and a memory snapshot go to Lila's developer so this crash gets fixed. "
+                              L"Your name, computer name and file paths are removed.";
+    st.sendRestart = std::wstring(L"Send Report and Restart Lila\n") + sendNote;
+    st.sendClose = canRestart ? std::wstring(L"Send Report and Close") : std::wstring(L"Send Report\n") + sendNote;
+    st.buttons.clear();
+    if (ask && canRestart)
+        st.buttons.push_back({kSendRestart, st.sendRestart.c_str()});
+    if (ask)
+        st.buttons.push_back({kSendClose, st.sendClose.c_str()});
+    if (canRestart && !ask)
+        st.buttons.push_back({kRestart, L"Restart Lila"});
+    TASKDIALOGCONFIG& cfg = st.cfg;
+    cfg = {};
+    cfg.cbSize = sizeof(cfg);
+    // Not cancellable while sending is on offer: no title bar close and no Esc, so leaving without sending is a
+    // deliberate click on a footer link.
+    cfg.dwFlags = TDF_SIZE_TO_CONTENT | TDF_ENABLE_HYPERLINKS | TDF_USE_COMMAND_LINKS | (ask ? 0 : TDF_ALLOW_DIALOG_CANCELLATION);
+    // A Close button only where there is nothing to decide.
+    if (!ask)
+        cfg.dwCommonButtons = TDCBF_CLOSE_BUTTON;
+    cfg.pszWindowTitle = L"Lila";
+    cfg.pszMainIcon = TD_ERROR_ICON;
+    cfg.pszMainInstruction = L"Lila crashed";
+    cfg.pszContent = st.content.c_str();
+    // Asked each time: the footer carries the quieter answers, never being asked again and declining.
+    cfg.pszFooter = ask && canRestart    ? L"Your unsaved work, if any, is offered when Lila starts again.\n"
+                                           L"<a href=\"always\">Always send automatically</a>     <a href=\"restart\">Restart without sending</a>"
+                                           L"     <a href=\"close\">Close without sending</a>"
+                    : ask                ? L"Your unsaved work, if any, is offered when Lila starts again.\n"
+                                           L"<a href=\"always\">Always send automatically</a>     <a href=\"close\">Close without sending</a>"
+                    : st.consent.userOff ? L"Your unsaved work, if any, is offered when Lila starts again.\n"
+                                           L"Crash reports are set to never send. Change it in Preferences > General > Telemetry."
+                                         : L"Your unsaved work, if any, is offered when Lila starts again.";
+    cfg.pszFooterIcon = TD_INFORMATION_ICON;
+    cfg.pButtons = st.buttons.data();
+    cfg.cButtons = UINT(st.buttons.size());
+    if (!st.buttons.empty())
+        cfg.nDefaultButton = st.buttons.front().nButtonID;
+    cfg.pfCallback = dialogProc;
+    cfg.lpCallbackData = reinterpret_cast<LONG_PTR>(&st);
 }
 
 void showDialog(const watch::Result& res, const std::wstring& restart, const fs::path& consentFile, const upload::Consent& consent)
@@ -149,39 +224,12 @@ void showDialog(const watch::Result& res, const std::wstring& restart, const fs:
     st.restart = restart;
     st.consentFile = consentFile;
     st.consent = consent;
-    const bool ask = consent.send && !consent.always;
-    std::wstring summary = widen(res.summary);
+    st.summary = widen(res.summary);
     const std::wstring prefix = L"Lila crashed: ";
-    if (summary.starts_with(prefix))
-        summary = summary.substr(prefix.size());
-    std::wstring footer = L"Saved to " + res.reportDir.wstring() + L"\nYour unsaved work, if any, is offered when Lila starts again.";
-
-    std::vector<TASKDIALOG_BUTTON> buttons;
-    if (ask)
-        buttons.push_back({kSend, L"Send Crash Report"});
-    buttons.push_back({kOpenReport, L"Open Crash Report"});
-    buttons.push_back({kOpenFolder, L"Open Crash Folder"});
-    buttons.push_back({kCopyReport, L"Copy Crash Report"});
-    if (!restart.empty())
-        buttons.push_back({kRestart, L"Restart Lila"});
-    TASKDIALOGCONFIG cfg{};
-    cfg.cbSize = sizeof(cfg);
-    cfg.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
-    cfg.dwCommonButtons = TDCBF_CLOSE_BUTTON;
-    cfg.pszWindowTitle = L"Lila";
-    cfg.pszMainIcon = TD_ERROR_ICON;
-    cfg.pszMainInstruction = L"Lila crashed";
-    cfg.pszContent = summary.c_str();
-    cfg.pszFooter = footer.c_str();
-    cfg.pszFooterIcon = TD_INFORMATION_ICON;
-    cfg.pButtons = buttons.data();
-    cfg.cButtons = UINT(buttons.size());
-    cfg.nDefaultButton = ask ? kSend : kCopyReport;
-    if (ask)
-        cfg.pszVerificationText = L"Always send crash reports without asking";
-    cfg.pfCallback = dialogProc;
-    cfg.lpCallbackData = reinterpret_cast<LONG_PTR>(&st);
-    TaskDialogIndirect(&cfg, nullptr, nullptr, nullptr);
+    if (st.summary.starts_with(prefix))
+        st.summary = st.summary.substr(prefix.size());
+    layOut(st, consent.offer && !consent.send && !upload::alreadySent(res.reportDir));
+    TaskDialogIndirect(&st.cfg, nullptr, nullptr, nullptr);
     // A send still running finishes before the watchdog exits.
     if (st.sender.joinable())
         st.sender.join();
@@ -201,6 +249,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     std::wstring restart;
     fs::path consentFile;
     fs::path sendDir; // --send <report folder>: upload one report and exit
+    fs::path showDir; // --show <report folder>: the crash dialog for a report already on disk
     bool watchMode = false, ui = true;
     for (int i = 1; i < argc; ++i)
     {
@@ -232,10 +281,19 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
             consentFile = argv[++i];
         else if (a == L"--send" && hasValue)
             sendDir = argv[++i];
+        else if (a == L"--show" && hasValue)
+            showDir = argv[++i];
     }
     LocalFree(argv);
     if (!sendDir.empty())
         return upload::send(sendDir) ? 0 : 1;
+    if (!showDir.empty())
+    {
+        SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        watch::Result shown{true, showDir, "Lila crashed: access violation reading 0x0000000000000000"};
+        showDialog(shown, restart, consentFile, consentFile.empty() ? upload::Consent{} : upload::readConsent(consentFile));
+        return 0;
+    }
     if (!watchMode || !o.process || o.sessionsDir.empty() || o.crashesDir.empty())
         return 2;
     if (const char* v = std::getenv("LILA_CRASH_NO_UI"); v && *v && *v != '0')
@@ -258,7 +316,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
         showDialog(res, restart, consentFile, consent);
         writeTextAtomic(res.reportDir / L".acknowledged", "");
     }
-    else if (consent.send && consent.always)
+    else if (consent.send)
     {
         upload::send(res.reportDir);
     }

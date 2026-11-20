@@ -139,6 +139,26 @@ bool setCurrent(Mesh& mesh, std::string_view set)
     return true;
 }
 
+bool isData(const Mesh& mesh, std::string_view set)
+{
+    const auto& d = mesh.colorSetInfo().data;
+    return std::find(d.begin(), d.end(), set) != d.end();
+}
+
+void setData(Mesh& mesh, std::string_view set, bool data)
+{
+    auto& d = mesh.colorSetInfo().data;
+    std::erase(d, std::string(set));
+    if (data)
+        d.emplace_back(set);
+}
+
+std::string displayed(const Mesh& mesh)
+{
+    const std::string c = current(mesh);
+    return c.empty() || isData(mesh, c) ? std::string() : c;
+}
+
 bool isHalf(const Mesh& mesh, std::string_view set)
 {
     const auto& h = mesh.colorSetInfo().half;

@@ -24,6 +24,10 @@
 #include <format>
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <optional>
+#include <sstream>
 #include <unordered_set>
 #include <format>
 
@@ -229,6 +233,84 @@ json vecToJson(const glm::dvec3& v) { return json::array({v.x, v.y, v.z}); }
 
 uint64_t gNextPointsToken = 1;
 std::pair<uint64_t, std::vector<glm::dvec3>> gStashedPoints;
+
+/**
+ * Materials an OBJ's .mtl files define (Kd as base colour, map_Kd as its texture), made for the usemtl slot names the
+ * faces carry, so an OBJ comes in coloured. A material of the same name already in the scene is kept as it is.
+ */
+void importObjMaterials(const std::string& objPath, const std::vector<std::string>& mtllibs)
+{
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::path(objPath).parent_path();
+    for (const std::string& lib : mtllibs)
+    {
+        std::ifstream in(dir / lib);
+        if (!in)
+        {
+            log::write(LogLevel::Warning, "importObj: material library " + (dir / lib).generic_string() + " not found; faces keep plain slots");
+            continue;
+        }
+        std::string name, map;
+        std::optional<glm::dvec3> kd;
+        auto flush = [&] {
+            if (name.empty() || (!kd && map.empty()))
+                return;
+            try
+            {
+                ops::execute("materialInfo", {{"args", {name}}});
+                return;
+            }
+            catch (const std::exception&)
+            {
+            }
+            json call = {{"args", {name}}};
+            if (kd)
+            {
+                // mtl colours are display (sRGB) values; materials take linear ones.
+                const glm::dvec3 lin = glm::pow(glm::clamp(*kd, 0.0, 1.0), glm::dvec3(2.2));
+                call["baseColor"] = json::array({lin.x, lin.y, lin.z});
+            }
+            if (!map.empty())
+                call["baseColorMap"] = (dir / map).generic_string();
+            try
+            {
+                ops::execute("createMaterial", call);
+            }
+            catch (const std::exception& e)
+            {
+                log::write(LogLevel::Warning, "importObj: material " + name + ": " + e.what());
+            }
+        };
+        std::string line;
+        while (std::getline(in, line))
+        {
+            std::istringstream ss(line);
+            std::string kw;
+            ss >> kw;
+            if (kw == "newmtl")
+            {
+                flush();
+                name.clear();
+                map.clear();
+                kd.reset();
+                ss >> name;
+            }
+            else if (kw == "Kd")
+            {
+                glm::dvec3 c(0.0);
+                if (ss >> c.x >> c.y >> c.z)
+                    kd = c;
+            }
+            else if (kw == "map_Kd")
+            {
+                std::getline(ss >> std::ws, map);
+                while (!map.empty() && (map.back() == '\r' || map.back() == ' '))
+                    map.pop_back();
+            }
+        }
+        flush();
+    }
+}
 } // namespace
 
 uint64_t stashPoints(std::vector<glm::dvec3> points)
@@ -819,6 +901,7 @@ void registerMeshCommands()
                 names.push_back(n->path());
                 ids.push_back(n->id());
             }
+            importObjMaterials(path, r.mtllibs);
             g.select(ids);
             return names;
         },

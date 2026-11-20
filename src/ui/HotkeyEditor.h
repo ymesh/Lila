@@ -45,13 +45,14 @@ private:
     bool mArmed = false;
 };
 
-/** Press a chord, pick a mode and context, and write it for one action. */
+/** Press a chord, pick a mode and context, and write it for one target (an action id or a {"markingMenu": name}). */
 class LILA_UI_API ChordCaptureDialog : public QDialog
 {
     Q_OBJECT
 
 public:
-    ChordCaptureDialog(std::string actionId, std::string context, QWidget* parent = nullptr);
+    ChordCaptureDialog(nlohmann::json target, std::string context, QWidget* parent = nullptr,
+                       hotkeys::Slot slot = hotkeys::Slot::Press);
 
     /** Writes the binding. Call after exec() returns Accepted. */
     void apply() const;
@@ -60,7 +61,7 @@ private:
     void onCaptured(QKeyCombination chord);
     void refreshInfo();
 
-    std::string mActionId;
+    nlohmann::json mTarget;
     std::optional<QKeyCombination> mChord;
     ChordGrabber* mGrabber = nullptr;
     QPushButton* mChordButton = nullptr;
@@ -158,6 +159,9 @@ private:
 
 /** Capture dialog that binds a chord to actionId; usable from menus, shelves and marking menus. */
 LILA_UI_API void assignHotkeyDialog(const std::string& actionId, QWidget* parent);
+
+/** Capture dialog that binds key + mouse button to open the named marking menu. False when cancelled. */
+LILA_UI_API bool assignMarkingMenuHotkeyDialog(const std::string& menu, QWidget* parent);
 
 /** Picks a Maya hotkey set and imports it into a new keymap, then lists what didn't map. */
 LILA_UI_API void importMayaHotkeysDialog(QWidget* parent);

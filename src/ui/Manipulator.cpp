@@ -53,12 +53,6 @@ constexpr int kSavedAttrs[] = {Transform::kTranslate,           Transform::kRota
 constexpr int kSavedCount = int(std::size(kSavedAttrs));
 
 const glm::vec4 kTrail(0.95f, 0.95f, 0.95f, 0.8f);
-
-/** The /manipulator/shiftDrag pref: Shift-drag on faces and edges extrudes them instead of slowing the drag down. */
-bool shiftDragExtrudes()
-{
-    return PrefStore::get().value<std::string>("general", "/manipulator/shiftDrag", std::string("fine")) == "extrude";
-}
 const glm::vec4 kLocked(0.42f, 0.42f, 0.42f, 0.55f);
 
 scene::Space spaceFor(Tool t)
@@ -711,15 +705,16 @@ bool Manipulator::press(QPointF px, Qt::MouseButton button, Qt::KeyboardModifier
     // extrude, which leaves the extruded components selected to drag.
     const scene::ComponentMode componentMode = scene::components::mode();
     const bool extrudable = componentMode == scene::ComponentMode::Face || componentMode == scene::ComponentMode::Edge;
-    const bool extrudeDrag = mComponents && button == Qt::LeftButton && !tools::pivotEdit() && !surfaceSlide &&
-                             (tools::cloneDrag() || ((mods & Qt::ShiftModifier) && shiftDragExtrudes() && extrudable));
-    const bool clone = !surfaceSlide && !tools::pivotEdit() && (extrudeDrag || (tools::cloneDrag() && !mComponents));
+    const bool cloneHeld = tools::cloneShiftSwapped() ? (mods & Qt::ShiftModifier) && button == Qt::LeftButton : tools::cloneDrag();
+    const bool extrudeDrag = mComponents && button == Qt::LeftButton && !tools::pivotEdit() && !surfaceSlide && cloneHeld;
+    const bool clone = !surfaceSlide && !tools::pivotEdit() && (extrudeDrag || (cloneHeld && !mComponents));
     std::string cloneCommand;
     json cloneCall;
+    // Any drag with Y held, clone or fine control, keeps its release from counting as a tap.
+    if (tools::cloneDrag())
+        tools::markCloneDragUsed();
     if (clone)
     {
-        if (tools::cloneDrag())
-            tools::markCloneDragUsed();
         if (extrudeDrag && !extrudable)
         {
             viewportToast::showActive("Extrude drag works on faces and edges", 2500, viewportToast::Kind::Warning);
@@ -950,11 +945,11 @@ glm::dvec3 Manipulator::snapGrid(const glm::dvec3& p, const glm::dvec3& mask) co
 void Manipulator::update(QPointF px, Qt::KeyboardModifiers mods)
 {
     Drag& d = *mDrag;
-    // Shift slows the drag down for precision, except on Shift+MMB where it picks the axis and on a surface slide,
-    // which follows the cursor exactly and uses Shift to keep the objects' orientation.
+    // Shift (Y when swapped with the clone key) slows the drag down for precision, except on Shift+MMB where Shift picks
+    // the axis and on a surface slide, which follows the cursor exactly and uses Shift to keep the objects' orientation.
     const bool sliding = d.surfaceSlide || (tools::snaps() & SnapSurface);
-    const bool shiftExtrudes = d.clone && d.components && shiftDragExtrudes();
-    double factor = (mods & Qt::ShiftModifier) && !d.axisFromDrag && !sliding && !shiftExtrudes ? 0.1 : 1.0;
+    const bool fineHeld = tools::cloneShiftSwapped() ?tools::cloneDrag() : (mods & Qt::ShiftModifier) && !d.axisFromDrag;
+    double factor = fineHeld && !sliding ? 0.1 : 1.0;
     d.precise = factor < 1.0;
     d.virtualPx += (px - d.lastPx) * factor;
     d.lastPx = px;

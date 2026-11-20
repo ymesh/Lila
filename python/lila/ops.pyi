@@ -10460,6 +10460,14 @@ def texDisconnect(*objects: Any, source: str | None = None) -> Any:
         source: node.socket of the one link to remove.
     """
 
+def texDriveValue(*objects: Any, remove: bool | None = None) -> Any:
+    """Make a node's number parameter keyable: texDriveValue(set, 'Sequence.speed') adds a keyable attribute to the texture set that drives it from then on, so it keys in the Channel Box and Graph Editor like any channel. remove=True deletes the attribute and leaves the parameter at its current value. Returns the attribute's plug.
+
+    Args:
+        objects: set node.param.
+        remove: Stop driving the parameter and delete its attribute. Default False.
+    """
+
 def texDuplicateNodes(*objects: Any, offset: Sequence[Any] | None = None) -> Any:
     """Copy nodes with the links between them. Returns the new names in order.
 
@@ -10531,6 +10539,23 @@ def texExportFlattened(*objects: Any, layers: Sequence[Any] | None = None, folde
         format: png (16 bit, colour as sRGB) or exr (32 bit linear). One of 'png', 'exr'. Default 'png'.
     """
 
+def texExportFlipbook(*objects: Any, startFrame: float | None = None, endFrame: float | None = None, step: float | None = None, columns: int | None = None, cellSize: int | None = None, channels: Sequence[Any] | None = None, folder: str | None = None, format: str | None = None, bits: int | None = None, backend: str | None = None) -> Any:
+    """Write an animated texture set as flipbook sheets, one per channel: the set evaluated at each scene frame of the range (Image Sequence nodes, keyed parameters), laid out left to right then top to bottom. For engine materials that step through a sheet (Unreal's MF_LilaFlipbook, a SubUV texture). Returns the files, columns, rows, frames and fps.
+
+    Args:
+        objects: set.
+        startFrame: First scene frame; the playback range's start when left out.
+        endFrame: Last scene frame; the playback range's end when left out.
+        step: Scene frames between cells: 2 writes every other frame. Default 1.0.
+        columns: Cells per row; 0 makes the sheet as near square as the frames go. Default 0.
+        cellSize: One frame's width in the sheet. Default 256.
+        channels: Channel names; all when left out.
+        folder: Output folder; relative ones resolve like bake folders. Default textures/<set>.
+        format: png, exr, tga or tif. One of 'png', 'exr', 'tga', 'tif'. Default 'png'.
+        bits: 8, 16 or 32; 0 uses each channel's. Default 0.
+        backend: gpu or cpu; the GPU when left out and the renderer can run. One of 'gpu', 'cpu'.
+    """
+
 def texExportGraph(*objects: Any) -> Any:
     """Write a texture set to a file: .lilamat holds its graph and settings (import it to make the set again); .lilatexnodes holds its node groups as graph nodes for the node library. Returns the path.
 
@@ -10600,6 +10625,13 @@ def texFlattenLayers(*objects: Any, layers: Sequence[Any] | None = None, down: b
         keep: Keep the flattened layers, hidden. Default False.
         name: The new layer's name.
         folder: Where its pixels go; textures/<set>/flattened by default.
+    """
+
+def texFlipbookMaterials(regenerate: bool | None = None) -> Any:
+    """Create or update the Unreal assets that play a flipbook sheet from texExportFlipbook, in the connected project: the material function MF_LilaFlipbook for your own materials (Columns, Rows, Frames, FPS, FrameOffset, AfterEnd, Blend, and Frame to drive the playhead yourself), and the materials M_LilaFlipbook and M_LilaFlipbookTranslucent built on it. Returns the asset paths.
+
+    Args:
+        regenerate: Rebuild them even when they are up to date. Default False.
     """
 
 def texGraphInfo(*objects: Any, source: bool | None = None) -> Any:

@@ -777,6 +777,8 @@ void registerCommands(ext::Context& ctx)
         {"spec", "", T::Any, nullptr, "The building: a JSON object (or its text). See the lila://masonry/spec-schema resource; masonrySpec reads one back."},
         {"name", "n", T::String, "MasonryBuilding", "Name of the mesh made to hold a new building."},
         nodeFlag({"node", "", T::String, nullptr, "An existing building (its mesh or modifier) to rebuild with this spec and these flags instead of making one."}, "mesh"),
+        {"weather", "wt", T::String, nullptr, "A weathering preset (weatherPresets lists them) to apply to a new building, such as Concrete Debris, Grunge or Ivy."},
+        {"weatherStyle", "ws", T::String, "realistic", "Style of that preset: realistic or toon.", {"realistic", "toon"}},
     };
     for (FlagDef& f : flagsOf(InputSet::Building, true))
         if (f.name != "spec")
@@ -845,6 +847,10 @@ void registerCommands(ext::Context& ctx)
                 out["mesh"] = host;
                 out["modifier"] = made["modifier"];
                 out["group"] = made["group"];
+                if (a.has("weather"))
+                    out["weather"] = ops::execute("weather", {{"args", {host}},
+                                                              {"preset", a.get<std::string>("weather")},
+                                                              {"style", a.get<std::string>("weatherStyle", "realistic")}});
             }
             out["seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
             return out;

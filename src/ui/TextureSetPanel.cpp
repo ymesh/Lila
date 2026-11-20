@@ -306,6 +306,8 @@ json defNodeJson(const std::string& name, const std::string& type, const json& v
     json prms = json::array();
     for (const tex::ParamDecl& p : d->params)
     {
+        if (p.hidden)
+            continue;
         json e = {{"id", p.id}, {"type", tex::paramTypeName(p.type)}, {"default", p.defaultValue}};
         e["value"] = values.is_object() && values.contains(p.id) ? values[p.id] : p.defaultValue;
         if (!p.options.empty())

@@ -208,7 +208,7 @@ TEST_CASE("duplicateWithTransform repeats the last pair's live delta")
     CHECK_THROWS_AS(run("duplicateWithTransform"), CommandError);
 }
 
-TEST_CASE("a clone drag on faces extrudes them, and Shift does too when the pref says so")
+TEST_CASE("a clone drag on faces extrudes them, and the swap pref moves cloning to Shift and fine control to Y")
 {
     auto topFace = [](const std::string& mesh) {
         const geo::Mesh m = meshOf(mesh);
@@ -226,52 +226,46 @@ TEST_CASE("a clone drag on faces extrudes them, and Shift does too when the pref
     view.eye = {0.0, 0.0, 50.0};
     ui::tools::setCurrent(ui::Tool::Move);
 
-    for (const bool shift : {false, true})
+    for (const bool swapped : {false, true})
     {
-        CAPTURE(shift);
+        CAPTURE(swapped);
+        PrefStore::get().set("general", "/manipulator/swapCloneShift", swapped);
+        const Qt::KeyboardModifiers cloneMods = swapped ? Qt::ShiftModifier : Qt::NoModifier;
+        const Qt::KeyboardModifiers fineMods = swapped ? Qt::NoModifier : Qt::ShiftModifier;
+        // This view draws world +Y down the screen; the first drag event only starts the drag.
+        auto dragTop = [&](double top, Qt::KeyboardModifiers mods, bool yHeld) {
+            ui::tools::setCloneDrag(yHeld);
+            ui::Manipulator m;
+            m.setView(view);
+            REQUIRE(m.visible());
+            const int pivotY = int(std::lround(50.0 + top));
+            REQUIRE(m.press({50, double(pivotY)}, Qt::LeftButton, mods));
+            m.drag({50, double(pivotY + 10)}, mods);
+            m.drag({50, double(pivotY + 20)}, mods);
+            m.release();
+            ui::tools::setCloneDrag(false);
+        };
+
         run("newScene");
         const std::string c = run("polyCube", {{"name", "Block"}})[0];
         const double top = meshOf(c).bounds().max.y;
         scene::components::setMode(scene::ComponentMode::Face);
         run("selectComponents", {{"args", {c}}, {"faces", {topFace(c)}}});
-        PrefStore::get().set("general", "/manipulator/shiftDrag", shift ? "extrude" : "fine");
-        ui::tools::setCloneDrag(!shift);
-        ui::Manipulator m;
-        m.setView(view);
-        REQUIRE(m.visible());
-        const Qt::KeyboardModifiers mods = shift ? Qt::ShiftModifier : Qt::NoModifier;
-        // This view draws world +Y down the screen; the first drag event only starts the drag.
-        const int pivotY = int(std::lround(50.0 + top));
-        REQUIRE(m.press({50, double(pivotY)}, Qt::LeftButton, mods));
-        m.drag({50, double(pivotY + 10)}, mods);
-        m.drag({50, double(pivotY + 20)}, mods);
-        m.release();
-        ui::tools::setCloneDrag(false);
-
+        dragTop(top, cloneMods, !swapped);
         CHECK(faces(c) == 10);
         CHECK(meshOf(c).bounds().max.y == doctest::Approx(top + 20.0).epsilon(1e-6));
         // The extrude and its move are one step.
         run("undo");
         CHECK(faces(c) == 6);
         CHECK(meshOf(c).bounds().max.y == doctest::Approx(top));
-    }
 
-    // With the pref at its default, Shift is fine control: the face moves a tenth as far and nothing extrudes.
-    run("newScene");
-    const std::string c = run("polyCube", {{"name", "Block"}})[0];
-    const double top = meshOf(c).bounds().max.y;
-    scene::components::setMode(scene::ComponentMode::Face);
-    run("selectComponents", {{"args", {c}}, {"faces", {topFace(c)}}});
-    PrefStore::get().set("general", "/manipulator/shiftDrag", "fine");
-    ui::Manipulator m;
-    m.setView(view);
-    const int pivotY = int(std::lround(50.0 + top));
-    REQUIRE(m.press({50, double(pivotY)}, Qt::LeftButton, Qt::ShiftModifier));
-    m.drag({50, double(pivotY + 10)}, Qt::ShiftModifier);
-    m.drag({50, double(pivotY + 20)}, Qt::ShiftModifier);
-    m.release();
-    CHECK(faces(c) == 6);
-    CHECK(meshOf(c).bounds().max.y == doctest::Approx(top + 2.0).epsilon(1e-6));
+        // Fine control: the face moves a tenth as far and nothing extrudes.
+        run("selectComponents", {{"args", {c}}, {"faces", {topFace(c)}}});
+        dragTop(top, fineMods, swapped);
+        CHECK(faces(c) == 6);
+        CHECK(meshOf(c).bounds().max.y == doctest::Approx(top + 2.0).epsilon(1e-6));
+    }
+    PrefStore::get().set("general", "/manipulator/swapCloneShift", false);
     scene::components::setMode(scene::ComponentMode::Object);
 }
 

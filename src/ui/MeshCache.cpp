@@ -12,6 +12,7 @@
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_reduce.h>
 
+#include <algorithm>
 #include <cstring>
 #include <array>
 #include <cmath>
@@ -275,6 +276,54 @@ std::shared_ptr<const geo::RenderMesh> pickFrom(const geo::Mesh& m, const geo::R
 }
 
 /**
+ * The mesh's grunge masks per render vertex (render::kGrungeAttrs), from float corner attributes, else point ones;
+ * left empty when it has neither.
+ */
+void fillGrunge(const geo::Mesh& m, const geo::RenderMesh& layout, render::RenderMesh& out)
+{
+    std::array<std::span<const float>, render::kGrungeMasks> masks;
+    bool corners = false, points = false;
+    for (int k = 0; k < render::kGrungeMasks; ++k)
+        corners = corners || !m.cornerAttrs().get<float>(render::kGrungeAttrs[size_t(k)]).empty();
+    for (int k = 0; k < render::kGrungeMasks && !corners; ++k)
+        points = points || !m.pointAttrs().get<float>(render::kGrungeAttrs[size_t(k)]).empty();
+    out.grunge.clear();
+    if (!corners && !points)
+        return;
+    const auto edgeDistance = m.cornerAttrs().get<glm::vec4>(render::kGrungeEdgeDistanceAttr);
+    const auto contactDistance = m.cornerAttrs().get<glm::vec4>(render::kGrungeContactDistanceAttr);
+    const auto streakLines = m.cornerAttrs().get<glm::vec4>(render::kGrungeStreakLinesAttr);
+    const auto height = m.cornerAttrs().get<float>(render::kGrungeHeightAttr);
+    for (int k = 0; k < render::kGrungeMasks; ++k)
+        masks[size_t(k)] = (corners ? m.cornerAttrs() : m.pointAttrs()).get<float>(render::kGrungeAttrs[size_t(k)]);
+    const auto& source = corners ? layout.vertexCorner : layout.vertexPoint;
+    const size_t n = source.size();
+    out.grunge.assign(n * render::kGrungeWords, 0u);
+    auto unorm = [](float v) { return uint32_t(std::lround(std::clamp(v, 0.0f, 1.0f) * 65535.0f)); };
+    tbb::parallel_for(size_t(0), n, [&](size_t v) {
+        const size_t e = size_t(source[v]);
+        std::array<uint32_t, render::kGrungeMasks> q{};
+        for (size_t k = 0; k < q.size(); ++k)
+            q[k] = e < masks[k].size() ? unorm(masks[k][e]) : 0u;
+        uint32_t* words = &out.grunge[v * render::kGrungeWords];
+        for (size_t w = 0; w < 3; ++w)
+            words[w] = q[w * 2] | (q[w * 2 + 1] << 16);
+        const size_t c = size_t(layout.vertexCorner[v]);
+        const glm::vec4 d = c < edgeDistance.size() ? edgeDistance[c] : glm::vec4(render::kGrungeFarEdge);
+        words[3] = glm::packHalf2x16(glm::vec2(d.x, d.y));
+        words[4] = glm::packHalf2x16(glm::vec2(d.z, d.w));
+        const float far = render::kGrungeFarEdge;
+        const glm::vec4 cd = c < contactDistance.size() ? contactDistance[c] : glm::vec4(far);
+        words[5] = glm::packHalf2x16(glm::vec2(cd.x, cd.y));
+        words[6] = glm::packHalf2x16(glm::vec2(cd.z, cd.w));
+        const glm::vec4 sl = c < streakLines.size() ? streakLines[c] : glm::vec4(far, 0.0f, far, 0.0f);
+        words[7] = glm::packHalf2x16(glm::vec2(sl.x, sl.y));
+        words[8] = glm::packHalf2x16(glm::vec2(sl.z, sl.w));
+        words[9] = glm::packHalf2x16(glm::vec2(c < height.size() ? height[c] : far, 0.0f));
+    });
+}
+
+/**
  * A copy of `from`'s render data for a mesh with the same layout key: new positions, normals and tangents only. With
  * an owner node, the vertices go to that node's GPU copy in place instead of a new upload.
  */
@@ -293,6 +342,10 @@ Entry rebuildPositions(const scene::MeshPtr& source, const Entry& from, scene::N
         fastTangents(layout, pos, nrm, tangents);
 
     auto out = std::make_shared<render::RenderMesh>(*from.built);
+    fillGrunge(m, layout, *out);
+    // The renderer uploads a live buffer's masks once, so meshes carrying them take a new key with their new masks.
+    if (!out->grunge.empty())
+        owner = scene::kNoNode;
     tbb::parallel_for(size_t(0), n, [&](size_t v) {
         render::MeshVertex& mv = out->vertices[v];
         mv.pos = pos[v];
@@ -357,6 +410,7 @@ Entry build(const scene::MeshPtr& source, bool tangents)
     opts.colors = true;
     opts.sections = true;
     opts.tangents = tangents;
+    opts.splitLayers = {render::kGrungeEdgeDistanceAttr, render::kGrungeContactDistanceAttr, render::kGrungeStreakLinesAttr, render::kGrungeHeightAttr};
     auto pick = std::make_shared<geo::RenderMesh>(geo::buildRenderMesh(*source, opts));
     const geo::RenderMesh& rm = *pick;
 
@@ -375,6 +429,7 @@ Entry build(const scene::MeshPtr& source, bool tangents)
         v.uv1 = uvs1 ? rm.uvs[1][i] : v.uv;
         v.color = colors ? rm.colors[i] : glm::vec4(1.0f);
     });
+    fillGrunge(*source, rm, *out);
     out->indices.assign(rm.indices.begin(), rm.indices.end());
     for (const geo::RenderSection& sec : rm.sections)
         out->sections.push_back({uint32_t(std::max(0, sec.material)), sec.firstIndex, sec.indexCount});

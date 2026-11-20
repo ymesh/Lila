@@ -30,7 +30,13 @@
 #include <QListWidget>
 #include <QMenu>
 #include <QMimeData>
+#include <QCoreApplication>
+#include <QFileInfo>
 #include <QPixmap>
+#include <QProcess>
+#include <QStackedWidget>
+#include <QTabBar>
+#include <QPointer>
 #include <QToolButton>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -47,6 +53,7 @@ namespace
 {
 
 constexpr const char* kMime = "application/x-lila-library-asset";
+constexpr const char* kPresetMime = "application/x-lila-arrangement-preset";
 constexpr const char* kPanel = "stagehand.library";
 constexpr int kIdRole = Qt::UserRole + 1;
 
@@ -82,13 +89,300 @@ protected:
     QStringList mimeTypes() const override { return {kMime}; }
 };
 
+class PresetList final : public QListWidget
+{
+public:
+    using QListWidget::QListWidget;
+
+protected:
+    QMimeData* mimeData(const QList<QListWidgetItem*>& items) const override
+    {
+        if (items.isEmpty())
+            return nullptr;
+        auto* m = new QMimeData();
+        m->setData(kPresetMime, items.front()->data(kIdRole).toString().toUtf8());
+        return m;
+    }
+    QStringList mimeTypes() const override { return {kPresetMime}; }
+};
+
+/**
+ * Draws missing thumbnails (starter props, extension tiers such as placeholder pieces, arrangement presets) in a
+ * lilabatch process beside lila, so the open scene and the UI are never touched while they render. One run at a time;
+ * done is called on the UI thread when it finishes.
+ */
+class ThumbnailBatch
+{
+public:
+    static ThumbnailBatch& get()
+    {
+        static ThumbnailBatch b;
+        return b;
+    }
+
+    bool running() const { return mProcess && mProcess->state() != QProcess::NotRunning; }
+
+    /** Starts a run of the Python in script unless one is going; done runs when it ends either way. */
+    void start(const QString& script, std::function<void()> done)
+    {
+        mDone.push_back(std::move(done));
+        if (running())
+            return;
+        const QString exe = QCoreApplication::applicationDirPath() + "/lilabatch" +
+#ifdef Q_OS_WIN
+                            ".exe";
+#else
+                            "";
+#endif
+        if (!QFileInfo::exists(exe))
+        {
+            log::write(LogLevel::Warning, "Library: thumbnails need lilabatch beside lila (" + exe.toStdString() + "); they stay blank");
+            finish();
+            return;
+        }
+        mProcess = std::make_unique<QProcess>();
+#ifdef Q_OS_WIN
+        // No console window flashing up while it runs.
+        mProcess->setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* a) { a->flags |= 0x08000000; });
+#endif
+        QObject::connect(mProcess.get(), &QProcess::finished, [this](int code, QProcess::ExitStatus) {
+            if (code != 0)
+                log::write(LogLevel::Warning, "Library: drawing thumbnails stopped: " + QString::fromUtf8(mProcess->readAllStandardError()).trimmed().toStdString());
+            finish();
+        });
+        mProcess->start(exe, {"-c", script});
+    }
+
+private:
+    void finish()
+    {
+        library::reload();
+        std::vector<std::function<void()>> done;
+        done.swap(mDone);
+        for (auto& f : done)
+            f();
+    }
+
+    std::unique_ptr<QProcess> mProcess;
+    std::vector<std::function<void()>> mDone;
+};
+
+/** Every thumbnail the library shows that is still missing. */
+const char* kAllThumbnails = "libraryStarter()\nlibraryThumbnails(tier='placeholder')\narrangementThumbnails()\n";
+
+/** The preset's spec by name, or null. */
+json presetNamed(const std::string& name)
+{
+    const json all = runUi("arrangementPresets", json::object());
+    for (const json& p : all.is_array() ? all : json::array())
+        if (p.value("name", std::string()) == name)
+            return p;
+    return nullptr;
+}
+
+/**
+ * Runs a preset on objects: weathering presets through weather (every mesh under them), others with the objects in their
+ * first place slot (the floor, the boards, the ground).
+ */
+void applyPreset(const std::string& name, const std::vector<std::string>& targets)
+{
+    if (targets.empty())
+    {
+        log::write(LogLevel::Warning, "Presets: select what to dress, or drag the preset onto it");
+        return;
+    }
+    const json spec = presetNamed(name);
+    if (spec.is_null())
+        return;
+    const json slots = spec.value("slots", json::object());
+    if (spec.value("category", std::string()) == "Weathering" && slots.contains("targets"))
+    {
+        runUi("weather", {{"args", targets}, {"preset", name}});
+        return;
+    }
+    json fill = json::object();
+    for (const auto& [slot, s] : slots.items())
+    {
+        const std::string kind = s.value("kind", std::string());
+        if (kind == "mesh")
+            fill[slot] = targets.front();
+        else if (kind == "meshes")
+            fill[slot] = targets;
+        else
+            continue;
+        break;
+    }
+    runUi("arrangePreset", {{"args", {name}}, {"slots", fill}});
+}
+
+std::vector<std::string> selectedPaths()
+{
+    Graph& g = Graph::current();
+    std::vector<std::string> out;
+    for (NodeId id : g.selection())
+        if (Node* n = g.node(id))
+            out.push_back(n->path());
+    return out;
+}
+
+/** Presets as picture tiles: double-click runs one on the selection, dragging one onto an object runs it there. */
+class PresetsPage final : public QWidget
+{
+public:
+    explicit PresetsPage(QWidget* parent) : QWidget(parent)
+    {
+        auto* v = new QVBoxLayout(this);
+        v->setContentsMargins(0, 0, 0, 0);
+        v->setSpacing(4);
+        auto* top = new QHBoxLayout();
+        top->setSpacing(2);
+        mSearch = new QLineEdit(this);
+        mSearch->setPlaceholderText("Search presets");
+        mSearch->setClearButtonEnabled(true);
+        mKind = new QComboBox(this);
+        mKind->addItems({"All", "Scatter", "Ground", "Surface", "Growth", "Generators", "Set Dressing"});
+        mKind->setToolTip("Kind: Age presets dress round objects, Ground presets dress a ground, Set Dressing fills a place");
+        mStyle = new QComboBox(this);
+        mStyle->addItems({"Any Style", "Realistic", "Toon"});
+        mStyle->setToolTip("Style of the preset's look and placeholder pieces");
+        top->addWidget(mSearch, 1);
+        top->addWidget(mKind);
+        top->addWidget(mStyle);
+        v->addLayout(top);
+        mList = new PresetList(this);
+        mList->setViewMode(QListView::IconMode);
+        mList->setIconSize(QSize(96, 96));
+        mList->setGridSize(QSize(112, 132));
+        mList->setResizeMode(QListView::Adjust);
+        mList->setMovement(QListView::Static);
+        mList->setDragEnabled(true);
+        mList->setDragDropMode(QAbstractItemView::DragOnly);
+        mList->setContextMenuPolicy(Qt::CustomContextMenu);
+        mList->setWordWrap(true);
+        v->addWidget(mList, 1);
+        mStatus = new QLabel(this);
+        mStatus->setWordWrap(true);
+        mStatus->setEnabled(false);
+        v->addWidget(mStatus);
+
+        QObject::connect(mSearch, &QLineEdit::textChanged, this, [this] { fill(); });
+        QObject::connect(mKind, &QComboBox::currentIndexChanged, this, [this] { fill(); });
+        QObject::connect(mStyle, &QComboBox::currentIndexChanged, this, [this] { fill(); });
+        QObject::connect(mList, &QListWidget::itemDoubleClicked, this,
+                         [](QListWidgetItem* it) { applyPreset(it->data(kIdRole).toString().toStdString(), selectedPaths()); });
+        QObject::connect(mList, &QWidget::customContextMenuRequested, this, [this](QPoint pos) { contextMenu(pos); });
+    }
+
+    void showing() { fill(); }
+
+    void fill()
+    {
+        fillList();
+        if (ThumbnailBatch::get().running())
+            mStatus->setText(mStatus->text() + ", drawing thumbnails");
+    }
+
+private:
+    static std::string kindOf(const json& p)
+    {
+        if (p.value("category", std::string()) != "Weathering")
+            return "Set Dressing";
+        const std::string kind = p.value("kind", std::string());
+        return kind == "ground" ? "Ground" : kind == "surface" ? "Surface" : kind == "growth" ? "Growth" : kind == "generator" ? "Generators" : "Scatter";
+    }
+
+    void fillList()
+    {
+        const json all = runUi("arrangementPresets", json::object());
+        const QString words = mSearch->text().trimmed().toLower();
+        const std::string kind = mKind->currentIndex() > 0 ? mKind->currentText().toStdString() : std::string();
+        const std::string style = mStyle->currentIndex() == 1 ? "realistic" : mStyle->currentIndex() == 2 ? "toon" : "";
+        mList->clear();
+        int shown = 0;
+        for (const json& p : all.is_array() ? all : json::array())
+        {
+            const std::string name = p.value("name", std::string());
+            const std::string description = p.value("description", std::string());
+            if (!kind.empty() && kindOf(p) != kind)
+                continue;
+            if (!style.empty() && p.value("style", std::string("realistic")) != style)
+                continue;
+            if (!words.isEmpty() && !qs(name + " " + description).toLower().contains(words))
+                continue;
+            auto* it = new QListWidgetItem(qs(name), mList);
+            it->setData(kIdRole, qs(name));
+            it->setToolTip(qs(description) + "\nDouble-click to dress the selection, or drag onto an object.");
+            if (const std::string t = p.value("thumbnail", std::string()); !t.empty())
+                it->setIcon(QIcon(QPixmap(qs(t))));
+            else
+                it->setIcon(icon("photo"));
+            ++shown;
+        }
+        mStatus->setText(shown ? QString("%1 presets").arg(shown) : QString("No presets match."));
+    }
+
+    void contextMenu(QPoint pos)
+    {
+        QListWidgetItem* it = mList->itemAt(pos);
+        if (!it)
+            return;
+        const std::string name = it->data(kIdRole).toString().toStdString();
+        QMenu m(this);
+        m.addAction("Dress Selection", [name] { applyPreset(name, selectedPaths()); });
+        m.addAction("Redraw Thumbnail", [this, name] {
+            QPointer<PresetsPage> self(this);
+            const QString literal = QString::fromStdString(json(name).dump());
+            ThumbnailBatch::get().start("arrangementThumbnails([" + literal + "], force=True)\n", [self] {
+                if (self)
+                    self->fill();
+            });
+            fill();
+        });
+        m.addSeparator();
+        m.addAction("Copy Name", [name] { QGuiApplication::clipboard()->setText(qs(name)); });
+        m.exec(mList->viewport()->mapToGlobal(pos));
+    }
+
+    QLineEdit* mSearch = nullptr;
+    QComboBox* mKind = nullptr;
+    QComboBox* mStyle = nullptr;
+    PresetList* mList = nullptr;
+    QLabel* mStatus = nullptr;
+};
+
+class LibraryPanel;
+/** The open Library panel, for actions that show one of its tabs. */
+LibraryPanel* gLibraryPanel = nullptr;
+
 class LibraryPanel final : public QWidget
 {
 public:
     explicit LibraryPanel(QWidget* parent) : QWidget(parent)
     {
-        auto* v = new QVBoxLayout(this);
-        v->setContentsMargins(12, 8, 12, 8);
+        auto* outer = new QVBoxLayout(this);
+        outer->setContentsMargins(12, 8, 12, 8);
+        outer->setSpacing(4);
+        gLibraryPanel = this;
+        auto* tabs = new QTabBar(this);
+        mTabs = tabs;
+        tabs->addTab("Props");
+        tabs->addTab("Presets");
+        tabs->setExpanding(false);
+        tabs->setDrawBase(false);
+        outer->addWidget(tabs);
+        auto* pages = new QStackedWidget(this);
+        auto* props = new QWidget(pages);
+        mPresets = new PresetsPage(pages);
+        pages->addWidget(props);
+        pages->addWidget(mPresets);
+        outer->addWidget(pages, 1);
+        QObject::connect(tabs, &QTabBar::currentChanged, this, [this, pages](int i) {
+            pages->setCurrentIndex(i);
+            if (i == 1)
+                mPresets->showing();
+        });
+        auto* v = new QVBoxLayout(props);
+        v->setContentsMargins(0, 0, 0, 0);
         v->setSpacing(4);
         auto* top = new QHBoxLayout();
         top->setSpacing(2);
@@ -142,26 +436,28 @@ public:
         fillCollections();
         fill();
         // The starter props come without thumbnails; the first time the panel shows, they are drawn.
-        QTimer::singleShot(0, this, [this] { drawStarterThumbnails(); });
+        QTimer::singleShot(0, this, [this] { drawThumbnails(); });
     }
 
 private:
-    void drawStarterThumbnails()
+    /** Starts the background run for whatever thumbnails are missing; both tabs refill when it ends. */
+    void drawThumbnails()
     {
-        if (!library::starterEnabled())
+        const bool props = std::ranges::any_of(library::all(), [](const library::Asset& a) {
+            return (a.tier == "starter" || a.tier == "placeholder") && a.thumbnail.empty();
+        });
+        const json presets = runUi("arrangementPresets", json::object());
+        const bool presetsMissing = std::ranges::any_of(presets.is_array() ? presets : json::array(), [](const json& p) { return !p.contains("thumbnail"); });
+        if (!props && !presetsMissing)
             return;
-        const bool missing = std::ranges::any_of(library::all(), [](const library::Asset& a) { return a.tier == "starter" && a.thumbnail.empty(); });
-        if (!missing)
-            return;
-        try
-        {
-            ops::execute("libraryStarter", json::object());
-        }
-        catch (const std::exception& e)
-        {
-            log::write(LogLevel::Warning, std::string("Library: starter thumbnails: ") + e.what());
-        }
-        fill();
+        QPointer<LibraryPanel> self(this);
+        ThumbnailBatch::get().start(kAllThumbnails, [self] {
+            if (!self)
+                return;
+            self->fill();
+            self->mPresets->fill();
+        });
+        mPresets->fill();
     }
 
     void fillCollections()
@@ -182,7 +478,10 @@ private:
         q.text = mSearch->text().toStdString();
         if (mCollection->currentIndex() > 0)
             q.collection = mCollection->currentText().toStdString();
-        const std::vector<library::Asset> found = library::search(q);
+        std::vector<library::Asset> found = library::search(q);
+        // Placeholder pieces are stand-ins presets use; they show when their collection is picked or searched for.
+        if (q.collection.empty() && q.text.empty())
+            std::erase_if(found, [](const library::Asset& a) { return a.tier == "placeholder"; });
         mList->clear();
         for (const library::Asset& a : found)
         {
@@ -261,6 +560,16 @@ private:
     QComboBox* mCollection = nullptr;
     AssetList* mList = nullptr;
     QLabel* mStatus = nullptr;
+    PresetsPage* mPresets = nullptr;
+    QTabBar* mTabs = nullptr;
+
+public:
+    ~LibraryPanel() override
+    {
+        if (gLibraryPanel == this)
+            gLibraryPanel = nullptr;
+    }
+    void showPresets() { mTabs->setCurrentIndex(1); }
 };
 
 /** Where a drag would put an asset: on the surface under the cursor, else on the ground plane. */
@@ -301,6 +610,18 @@ bool onDrop(const QMimeData& mime, const viewportHooks::DropTarget& t, bool comm
         gGhost.active = false;
         viewportTools::requestRedraw();
         return false;
+    }
+    if (mime.hasFormat(kPresetMime))
+    {
+        if (!commit)
+            return true;
+        // Dropped on an object: that object; dropped on empty space: the selection. Applied once the drag has ended, so
+        // the drop itself returns at once.
+        Node* n = t.face != UINT32_MAX ? Graph::current().node(t.node) : nullptr;
+        const std::string name = QString::fromUtf8(mime.data(kPresetMime)).toStdString();
+        const std::vector<std::string> targets = n ? std::vector<std::string>{n->path()} : selectedPaths();
+        QTimer::singleShot(0, qApp, [name, targets] { applyPreset(name, targets); });
+        return true;
     }
     if (!mime.hasFormat(kMime))
         return false;
@@ -378,6 +699,17 @@ void registerLibraryUi(ext::Context& ctx)
                       .open = false,
                       .toggleAction = "window.propLibrary",
                       .docs = "stagehand"});
+    actions::add(ctx, {.id = "window.libraryPresets",
+                       .label = "Library Presets",
+                       .category = "Windows",
+                       .run = [] {
+                           runUi("showPanel", {{"args", {kPanel}}});
+                           if (gLibraryPanel)
+                               gLibraryPanel->showPresets();
+                       },
+                       .doc = "Open the Prop Library on its Presets tab: scatter sets, grunge, edge decals, ivy and generators to drag onto meshes.",
+                       .icon = "photo",
+                       .keywords = {"weathering", "presets", "scatter", "grunge", "asset browser", "drag and drop"}});
     viewportHooks::setDropHandler("stagehand.library", onDrop);
     ctx.track("drop:stagehand.library", [] { viewportHooks::removeDropHandler("stagehand.library"); });
     viewportHooks::addDrawer(ctx, "stagehand.libraryGhost", drawGhost);

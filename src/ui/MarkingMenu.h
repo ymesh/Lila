@@ -172,6 +172,7 @@ private:
     bool mCopied = false;
     nlohmann::json mPreviewTarget; // what the preview shows or is waiting to show
     std::optional<commandPreview::Focus> mPreviewFocus; // the viewport the menu opened over and the pixel it opened at
+    std::string mName; // the stored menu shown (its set version when one applies), empty for one built on the spot
     Trigger mTrigger;
     Qt::MouseButton mButton;
 };

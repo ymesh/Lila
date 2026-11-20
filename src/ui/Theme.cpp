@@ -1014,7 +1014,27 @@ protected:
     void closeEvent(QCloseEvent* e) override { e->ignore(); }
 };
 
-QWidget* makeTelemetryChoice(QWidget* parent)
+/** The three crash report choices. With `live` a pick is stored at once; otherwise the caller reads currentData(). */
+QComboBox* makeCrashSendCombo(QWidget* parent, bool live)
+{
+    auto* combo = new QComboBox(parent);
+    const std::string mode = telemetry::crashSendMode();
+    for (const auto& [shown, value] : telemetry::crashSendChoices())
+    {
+        combo->addItem(QString::fromStdString(shown), QString::fromStdString(value));
+        if (value == mode)
+            combo->setCurrentIndex(combo->count() - 1);
+    }
+    combo->setEnabled(!PrefStore::get().isLocked("general", telemetry::kCrashSendPref) && !PrefStore::get().isLocked("general", kTelemetryCrashPref));
+    if (live)
+        QObject::connect(combo, &QComboBox::currentIndexChanged, combo, [combo](int) {
+            PrefStore::get().set("general", telemetry::kCrashSendPref, combo->currentData().toString().toStdString());
+        });
+    return combo;
+}
+
+/** The usage statistics choice and the optional questions; `crashChoice` adds the crash report setting under it. */
+QWidget* makeTelemetryChoice(QWidget* parent, bool crashChoice)
 {
     auto* box = new QWidget(parent);
     auto* layout = new QVBoxLayout(box);
@@ -1031,13 +1051,17 @@ QWidget* makeTelemetryChoice(QWidget* parent)
     hint->setForegroundRole(QPalette::PlaceholderText);
     hint->setWordWrap(true);
     layout->addWidget(hint);
-    for (auto [label, key] : {std::pair{"Send usage statistics (version, GPU, session length, which commands are used)", kTelemetryUsagePref},
-                              std::pair{"Send crash reports", kTelemetryCrashPref}})
+    auto* usage = new QCheckBox("Send usage statistics (version, GPU, session length, which commands are used)", box);
+    usage->setChecked(PrefStore::get().value<bool>("general", kTelemetryUsagePref, false));
+    QObject::connect(usage, &QCheckBox::toggled, usage, [](bool on) { PrefStore::get().set("general", kTelemetryUsagePref, on); });
+    layout->addWidget(usage);
+    if (crashChoice)
     {
-        auto* check = new QCheckBox(label, box);
-        check->setChecked(PrefStore::get().value<bool>("general", key, false));
-        QObject::connect(check, &QCheckBox::toggled, check, [key](bool on) { PrefStore::get().set("general", key, on); });
-        layout->addWidget(check);
+        auto* row = new QHBoxLayout;
+        row->addWidget(new QLabel("Crash reports", box));
+        row->addWidget(makeCrashSendCombo(box, true));
+        row->addStretch(1);
+        layout->addLayout(row);
     }
 
     auto* about = new QLabel("Optional, sent with usage statistics:", box);
@@ -1090,7 +1114,7 @@ void runFirstRunSetup(QWidget* parent)
     layout->setContentsMargins(20, 16, 20, 14);
     layout->addWidget(makeThemeChooser(&dlg));
     layout->addSpacing(12);
-    layout->addWidget(makeTelemetryChoice(&dlg));
+    layout->addWidget(makeTelemetryChoice(&dlg, false));
     layout->addSpacing(8);
     auto* buttons = new QDialogButtonBox(&dlg);
     QPushButton* go = buttons->addButton("Continue", QDialogButtonBox::AcceptRole);
@@ -1099,6 +1123,51 @@ void runFirstRunSetup(QWidget* parent)
     layout->addWidget(buttons);
     dlg.exec();
     setThemeChooserDone();
+}
+
+void askCrashReportsOnce(QWidget* parent)
+{
+    PrefStore& prefs = PrefStore::get();
+    if (!telemetry::crashSendMode().empty() || prefs.isLocked("general", telemetry::kCrashSendPref) || telemetry::optedOutByEnvironment())
+        return;
+    SetupDialog dlg(parent);
+    dlg.setWindowTitle("Crash Reports");
+    dlg.setWindowFlags(Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint);
+    dlg.setWindowModality(Qt::ApplicationModal);
+    auto* layout = new QVBoxLayout(&dlg);
+    layout->setContentsMargins(20, 16, 20, 14);
+    auto* title = new QLabel("Help fix crashes", &dlg);
+    QFont f = title->font();
+    f.setPointSizeF(f.pointSizeF() * 1.25);
+    title->setFont(f);
+    layout->addWidget(title);
+    auto* hint = new QLabel("Lila is made by one developer, and crash reports are how crashes get found and fixed. A report holds the call "
+                            "stack and a memory snapshot. Your name, computer name and file paths are removed. Change it any time in "
+                            "Preferences > General > Telemetry.",
+                            &dlg);
+    hint->setForegroundRole(QPalette::PlaceholderText);
+    hint->setWordWrap(true);
+    hint->setMinimumWidth(420);
+    layout->addWidget(hint);
+    layout->addSpacing(8);
+    auto* row = new QHBoxLayout;
+    row->addWidget(new QLabel("When Lila crashes", &dlg));
+    // Opens on the first choice, sending automatically, so continuing without changing anything turns reports on.
+    QComboBox* combo = makeCrashSendCombo(&dlg, false);
+    combo->setCurrentIndex(0);
+    row->addWidget(combo, 1);
+    layout->addLayout(row);
+    layout->addSpacing(8);
+    auto* buttons = new QDialogButtonBox(&dlg);
+    auto* details = buttons->addButton("Privacy Details...", QDialogButtonBox::HelpRole);
+    QObject::connect(details, &QPushButton::clicked, details, [] { docs::open("privacy", docs::Route::Browser); });
+    QPushButton* go = buttons->addButton("Continue", QDialogButtonBox::AcceptRole);
+    go->setDefault(true);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    layout->addWidget(buttons);
+    dlg.exec();
+    // Storing the answer is what stops this from asking again.
+    prefs.set("general", telemetry::kCrashSendPref, combo->currentData().toString().toStdString());
 }
 
 void showTelemetrySettings(QWidget* parent)
@@ -1111,7 +1180,7 @@ void showTelemetrySettings(QWidget* parent)
         open->setWindowTitle("Telemetry and Privacy");
         auto* layout = new QVBoxLayout(open);
         layout->setContentsMargins(20, 16, 20, 14);
-        layout->addWidget(makeTelemetryChoice(open));
+        layout->addWidget(makeTelemetryChoice(open, true));
         auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, open);
         QObject::connect(buttons, &QDialogButtonBox::rejected, open, &QDialog::close);
         layout->addWidget(buttons);

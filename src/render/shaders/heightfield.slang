@@ -418,6 +418,12 @@ VSOut hfMeshInput(HfOut i)
     o.uv = i.uv;
     o.color = float4(1.0);
     o.instance = 0;
+    o.grungeA = float4(0.0);
+    o.grungeB = float2(0.0);
+    o.grungeEdge = float4(10000.0);
+    o.grungeContact = float4(10000.0);
+    o.grungeStreak = float4(10000.0, 0.0, 10000.0, 0.0);
+    o.grungeHeight = 10000.0;
     return o;
 }
 

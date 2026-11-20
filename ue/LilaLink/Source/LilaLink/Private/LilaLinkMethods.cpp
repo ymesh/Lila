@@ -6,13 +6,17 @@
 #include "LilaLinkMorphPaths.h"
 #include "LilaLinkMLDeformer.h"
 #include "LilaLinkGeometryCollection.h"
+#include "LilaLinkIvy.h"
 #include "LilaLinkMasonry.h"
 #include "LilaLinkGeoreference.h"
 #include "LilaLinkPlacements.h"
 #include "LilaLinkRender.h"
+#include "LilaLinkFlipbook.h"
 #include "LilaLinkPanels.h"
 #include "LilaLinkGroom.h"
+#include "LilaLinkGrunge.h"
 #include "LilaLinkSeams.h"
+#include "LilaLinkWeatheringGround.h"
 #include "LilaLinkCrowd.h"
 #include "LilaLinkSequence.h"
 #include "LilaLinkImposter.h"
@@ -26,6 +30,7 @@
 #include "LilaLinkTerrainRoads.h"
 #include "LilaLinkTextures.h"
 #include "LilaLinkTrim.h"
+#include "LilaLinkInterior.h"
 #include "LilaLinkVat.h"
 #include "LilaLinkCloth.h"
 
@@ -126,9 +131,9 @@ TSharedPtr<FJsonValue> Hello(const TSharedPtr<FJsonObject>&, FString&)
 	Out->SetArrayField(TEXT("features"), {Str(TEXT("progress")), Str(TEXT("materials")), Str(TEXT("meshSequence")), Str(TEXT("geometryCache")),
 		Str(TEXT("vertexAnimation")), Str(TEXT("textures")), Str(TEXT("materialInstances")),
 		Str(TEXT("stylisedInstances")), Str(TEXT("mlDeformer")), Str(TEXT("splines")), Str(TEXT("placements")), Str(TEXT("landscape")), Str(TEXT("landscapeRegions")), Str(TEXT("terrainWater")), Str(TEXT("landscapeVolume")),
-		Str(TEXT("masonryMaterials")), Str(TEXT("trimMaterials")), Str(TEXT("imposters")), Str(TEXT("components")), Str(TEXT("lights")), Str(TEXT("lightingChannels")),
-		Str(TEXT("geometryCollection")), Str(TEXT("trimDecals")), Str(TEXT("physics")), Str(TEXT("levelInstances")),
-		Str(TEXT("collision")), Str(TEXT("instanceData")), Str(TEXT("expressionRig")), Str(TEXT("morphPaths")), Str(TEXT("terrainRoads")), Str(TEXT("terrainMaterial")), Str(TEXT("render")), Str(TEXT("seams")), Str(TEXT("panelLines")), Str(TEXT("cliffMaterial")), Str(TEXT("cliffTiles")), Str(TEXT("groom")), Str(TEXT("georeference")), Str(TEXT("pointClouds"))});
+		Str(TEXT("masonryMaterials")), Str(TEXT("ivyMaterials")), Str(TEXT("trimMaterials")), Str(TEXT("imposters")), Str(TEXT("components")), Str(TEXT("lights")), Str(TEXT("lightingChannels")),
+		Str(TEXT("geometryCollection")), Str(TEXT("trimDecals")), Str(TEXT("weatheringInteriors")), Str(TEXT("meshDecals")), Str(TEXT("physics")), Str(TEXT("levelInstances")),
+		Str(TEXT("collision")), Str(TEXT("instanceData")), Str(TEXT("expressionRig")), Str(TEXT("morphPaths")), Str(TEXT("terrainRoads")), Str(TEXT("terrainMaterial")), Str(TEXT("render")), Str(TEXT("seams")), Str(TEXT("panelLines")), Str(TEXT("cliffMaterial")), Str(TEXT("cliffTiles")), Str(TEXT("groom")), Str(TEXT("georeference")), Str(TEXT("pointClouds")), Str(TEXT("groundTint")), Str(TEXT("grunge")), Str(TEXT("flipbook"))});
 	// Features of the optional plugins that registered methods, such as LilaLinkSettlement's "settlement".
 	TArray<TSharedPtr<FJsonValue>> Features = Out->GetArrayField(TEXT("features"));
 	for (const FString& Feature : LilaLink::ExternalFeatures())
@@ -453,11 +458,16 @@ TMap<FString, FLilaLinkMethod> LilaLink::MakeMethods()
 	LilaLink::AddPlacementMethods(Methods);
 	LilaLink::AddGeoreferenceMethods(Methods);
 	LilaLink::AddMasonryMethods(Methods);
+	LilaLink::AddIvyMethods(Methods);
 	LilaLink::AddTrimMethods(Methods);
+	LilaLink::AddInteriorMethods(Methods);
 	LilaLink::AddGeometryCollectionMethods(Methods);
 	LilaLink::AddRenderMethods(Methods);
 	LilaLink::AddSeamMethods(Methods);
+	LilaLink::AddWeatheringGroundMethods(Methods);
 	LilaLink::AddPanelMethods(Methods);
+	LilaLink::AddFlipbookMethods(Methods);
 	LilaLink::AddGroomMethods(Methods);
+	LilaLink::AddGrungeMethods(Methods);
 	return Methods;
 }

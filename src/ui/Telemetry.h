@@ -37,7 +37,8 @@ inline constexpr const char* kRolePref = "/telemetry/onboarding/role";
 inline constexpr const char* kTeamSizePref = "/telemetry/onboarding/teamSize";
 inline constexpr const char* kPreviousDccPref = "/telemetry/onboarding/previousDcc";
 inline constexpr const char* kOnboardingSentPref = "/telemetry/onboarding/sent";
-inline constexpr const char* kCrashAlwaysPref = "/telemetry/crashAlways";
+/** "auto" sends crash reports without asking, "ask" offers Send in the crash dialog, "off" never sends. */
+inline constexpr const char* kCrashSendPref = "/telemetry/crashSend";
 inline constexpr int kMaxAttempts = 5;
 inline constexpr size_t kMaxQueued = 500;
 
@@ -48,6 +49,13 @@ LILA_UI_API const std::vector<std::pair<std::string, std::string>>& previousDccC
 
 /** DO_NOT_TRACK or LILA_NO_TELEMETRY set to anything but "" or "0". */
 LILA_UI_API bool optedOutByEnvironment();
+/**
+ * kCrashSendPref's value, or "" while the user has never chosen (which behaves as "ask"). "off" as well where a
+ * studio has locked the crashReports switch off.
+ */
+LILA_UI_API std::string crashSendMode();
+/** (shown text, stored value) for the three crash report choices, the recommended one first. */
+LILA_UI_API const std::vector<std::pair<std::string, std::string>>& crashSendChoices();
 /** The usage pref is on and the environment doesn't opt out. */
 LILA_UI_API bool enabled();
 

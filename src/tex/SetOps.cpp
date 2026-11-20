@@ -13,14 +13,17 @@
 #include "core/Paths.h"
 #include "core/Profile.h"
 #include "core/Workspace.h"
+#include "scene/Anim.h"
 #include "scene/Node.h"
 #include "tex/Evaluate.h"
 #include "tex/Generators.h"
 #include "tex/Layers.h"
+#include "tex/Sequence.h"
 #include "tex/ShadingChannels.h"
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstring>
 #include <format>
 #include <fstream>
@@ -183,6 +186,7 @@ std::vector<TileResult> evaluateTiles(scene::Node& set, const Graph& stored, con
 {
     Graph g = stored;
     followLiveFrame(g, s);
+    sequence::followTime(g, scene::Graph::current(), set, scene::Graph::current().time());
     std::vector<OutputRequest> requests;
     for (const OutputRequest& r : channelRequests(g, s))
         if (channels.empty() || std::find(channels.begin(), channels.end(), r.name) != channels.end())
@@ -346,6 +350,7 @@ std::map<std::string, image::Image> evaluateGraphOutputs(scene::Node& set, const
     SetSettings s = readSettings(set);
     Graph g = stored;
     followLiveFrame(g, s);
+    sequence::followTime(g, scene::Graph::current(), set, scene::Graph::current().time());
     const Tile* tile = &s.tiles.front();
     for (const Tile& t : s.tiles)
         if (t.udim == udim)
@@ -412,12 +417,92 @@ json evaluateSet(scene::Node& set, const EvaluateOptions& options)
     return {{"files", files}, {"passes", passes}, {"milliseconds", ms}, {"compiled", compiled}, {"cached", cached}, {"warnings", warningsOf(tiles)}, {"backend", backend}};
 }
 
+json exportFlipbook(scene::Node& set, const FlipbookOptions& options)
+{
+    LILA_ZONE();
+    const SetSettings s = readSettings(set);
+    const Graph g = readGraph(set);
+    if (!(options.step > 0.0) || options.endFrame < options.startFrame)
+        throw std::invalid_argument("the frame range is empty");
+    std::vector<double> frames;
+    for (double f = options.startFrame; f <= options.endFrame + 1e-6; f += options.step)
+        frames.push_back(f);
+    if (frames.size() > 4096)
+        throw std::invalid_argument(std::to_string(frames.size()) + " frames is more than a sheet holds (4096)");
+    const int count = int(frames.size());
+    const int columns = options.columns > 0 ? std::min(options.columns, count) : int(std::ceil(std::sqrt(double(count))));
+    const int rows = (count + columns - 1) / columns;
+    const auto [tw, th] = s.tileSize(s.tiles.front());
+    const int cw = std::max(4, options.cellSize);
+    const int ch = std::max(4, int(std::lround(double(cw) * th / std::max(tw, 1))));
+    if (size_t(cw) * columns > 16384 || size_t(ch) * rows > 16384)
+        throw std::invalid_argument("the sheet would be " + std::to_string(cw * columns) + " x " + std::to_string(ch * rows) +
+                                    ": use a smaller cell or fewer frames");
+
+    // Time moves without notifying anyone and comes back, so keyed parameters and sequences read each frame.
+    scene::Graph& scene = scene::Graph::current();
+    struct RestoreTime
+    {
+        scene::Graph& g;
+        double seconds;
+        ~RestoreTime() { g.setTime(seconds, false); }
+    } restore{scene, scene.time()};
+
+    std::map<std::string, image::Image> sheets;
+    json warnings = json::array();
+    std::string backend;
+    for (int i = 0; i < count; ++i)
+    {
+        scene.setTime(scene::anim::secondsOf(frames[size_t(i)]), false);
+        std::vector<TileResult> tiles = evaluateTiles(set, g, s, options.channels, cw, ch, options.backend, &backend);
+        if (tiles.empty())
+            throw std::invalid_argument("no channels to export");
+        if (i == 0)
+            warnings = warningsOf(tiles);
+        const int ox = (i % columns) * cw, oy = (i / columns) * ch;
+        for (const auto& [name, img] : tiles.front().eval.outputs)
+        {
+            if (img.width != cw || img.height != ch)
+                continue;
+            image::Image& sheet = sheets[name];
+            if (sheet.rgba.empty())
+                sheet = image::Image{cw * columns, ch * rows, std::vector<float>(size_t(cw) * columns * size_t(ch) * rows * 4, 0.0f)};
+            for (int y = 0; y < ch; ++y)
+                std::memcpy(&sheet.rgba[(size_t(oy + y) * sheet.width + ox) * 4], &img.rgba[size_t(y) * cw * 4], size_t(cw) * 4 * sizeof(float));
+        }
+    }
+
+    const fs::path folder = bake::resolveFolder(options.folder.empty() ? "textures/" + set.name() : options.folder);
+    std::error_code ec;
+    fs::create_directories(folder, ec);
+    json files = json::array();
+    std::vector<fs::path> written;
+    for (auto& [name, sheet] : sheets)
+    {
+        const Channel* channel = s.channel(name);
+        const fs::path file = folder / (bake::fileSafe(set.name()) + "_" + name + "_flipbook_" + std::to_string(columns) + "x" + std::to_string(rows) +
+                                        "." + options.format);
+        image::WriteOptions wo;
+        wo.bits = bitsFor(options.format, options.bits > 0 ? options.bits : (channel ? channel->bits : 8));
+        bake::prepareOutputs({file});
+        if (isColourChannel(name, channel) && encodesSrgb(options.format, wo.bits))
+            encodeSrgb(sheet);
+        image::write(file, sheet, wo);
+        written.push_back(file);
+        files.push_back({{"file", paths::toUtf8(file)}, {"channel", name}});
+    }
+    bake::addOutputs(written);
+    return {{"files", files}, {"columns", columns}, {"rows", rows}, {"frames", count}, {"fps", scene::anim::playback().fps / options.step},
+            {"cell", {cw, ch}}, {"warnings", warnings}, {"backend", backend}};
+}
+
 json exportSet(scene::Node& set, const ExportOptions& options)
 {
     LILA_ZONE();
     SetSettings s = readSettings(set);
     Graph g = readGraph(set);
     followLiveFrame(g, s);
+    sequence::followTime(g, scene::Graph::current(), set, scene::Graph::current().time());
     const std::string presetName = options.preset.empty() ? s.exportPreset : options.preset;
     std::optional<bake::TargetProfile> target = bake::findTarget(presetName);
     if (!target)

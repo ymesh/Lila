@@ -10,6 +10,7 @@
 #include <lila/GeometryNodes.h>
 #include <lila/Profile.h>
 
+#include <cstdlib>
 #include <map>
 
 using namespace lila;
@@ -107,7 +108,7 @@ std::vector<std::vector<glm::dvec3>> linesOf(const Geometry& g)
 }
 
 /** Placements as instances of the items, with item, pose and random attributes. */
-GeometryPtr instancesOf(const Items& items, const std::vector<arrange::Placed>& placed)
+GeometryPtr instancesOf(const Items& items, const std::vector<arrange::Placed>& placed, const std::vector<double>* wallDistance = nullptr)
 {
     auto inst = std::make_shared<gn::Instances>();
     inst->references = items.refs;
@@ -121,6 +122,12 @@ GeometryPtr instancesOf(const Items& items, const std::vector<arrange::Placed>& 
         item[k] = placed[k].item;
         pose[k] = int32_t(placed[k].pose);
         random[k] = placed[k].random;
+    }
+    if (wallDistance)
+    {
+        auto d = inst->attrs.getOrAdd<float>("wallDistance");
+        for (size_t k = 0; k < wallDistance->size() && k < placed.size(); ++k)
+            d[k] = float((*wallDistance)[k]);
     }
     Geometry g;
     g.instances = std::move(inst);
@@ -210,6 +217,65 @@ void scatterExec(ExecContext& c)
     if (surface)
         placed = arrange::scatter(gn::toOutputMesh(*surface), items.bounds, o);
     c.out("instances", instancesOf(items, placed));
+}
+
+std::vector<double> weightsOf(const std::string& text)
+{
+    std::vector<double> out;
+    std::string cur;
+    for (char ch : text + ",")
+        if (ch == ',' || ch == ' ')
+        {
+            if (!cur.empty())
+                out.push_back(std::atof(cur.c_str()));
+            cur.clear();
+        }
+        else
+            cur += ch;
+    return out;
+}
+
+void bandExec(ExecContext& c)
+{
+    LILA_ZONE();
+
+    const Items items = itemsOf(c);
+    arrange::BandOptions o;
+    o.width = c.f("width");
+    o.density = c.f("density");
+    o.falloff = c.f("falloff");
+    o.contactHeight = c.f("contactHeight");
+    o.spacing = c.f("spacing");
+    o.scaleNear = c.f("scaleNear");
+    o.scaleFar = c.f("scaleFar");
+    o.scaleJitter = c.f("scaleJitter");
+    o.leanChance = c.f("leanChance");
+    o.leanMin = c.f("leanMin");
+    o.leanMax = c.f("leanMax");
+    o.turn = c.f("turn");
+    o.maxCount = int(std::max<int64_t>(0, c.i("maxCount")));
+    o.weights = weightsOf(c.s("weights"));
+    o.seed = uint32_t(c.i("seed"));
+    std::vector<geo::Mesh> hosts, ground, blockers;
+    for (const GeometryPtr& g : c.geometries("blockers"))
+        if (g)
+            blockers.push_back(gn::toOutputMesh(*g));
+    for (const GeometryPtr& g : c.geometries("hosts"))
+        if (g)
+            hosts.push_back(gn::toOutputMesh(*g));
+    for (const GeometryPtr& g : c.geometries("ground"))
+        if (g)
+            ground.push_back(gn::toOutputMesh(*g));
+    std::vector<const geo::Mesh*> hp, gp;
+    for (const geo::Mesh& m : hosts)
+        hp.push_back(&m);
+    for (const geo::Mesh& m : ground)
+        gp.push_back(&m);
+    std::vector<const geo::Mesh*> bp;
+    for (const geo::Mesh& m : blockers)
+        bp.push_back(&m);
+    const arrange::BandResult r = arrange::band(hp, gp, items.bounds, o, bp);
+    c.out("instances", instancesOf(items, r.placed, &r.distance));
 }
 
 void settleExec(ExecContext& c)
@@ -354,7 +420,35 @@ bool registerArrangeNodes(ext::Context& ctx)
     for (gn::SocketDecl& s : scaleSockets(0.8, 1.2))
         scatter.push_back(std::move(s));
 
+    std::vector<gn::SocketDecl> band = {geoIn("hosts", "What the band runs round (world space): walls, buildings, rocks, Blockwork blocks.", true),
+                                        geoIn("ground", "The ground (world space); none: a plane at the hosts' lowest point.", true),
+                                        geoIn("blockers", "Neighbours (world space) nothing goes on, though no band grows round them.", true),
+                                        geoIn("items", kItemsDoc, true),
+                                        in("weights", Socket::String, "", "How often each item is picked, in order, comma separated (missing ones are 1)."),
+                                        in("width", Socket::Float, 80.0, "How far out from the footprint the band reaches, cm.", 1.0),
+                                        in("density", Socket::Float, 6.0, "Per square metre, at the wall.", 0.0),
+                                        in("falloff", Socket::Float, 1.5, "0 even across the band; higher keeps it close to the wall.", 0.0, 8.0),
+                                        in("contactHeight", Socket::Float, 40.0, "Geometry this close above the ground is the footprint, cm.", 0.0),
+                                        in("spacing", Socket::Float, 0.9, "Footprints kept clear, as a multiple of each item's own.", 0.0),
+                                        in("scaleNear", Socket::Float, 1.15, "Scale at the wall.", 0.0),
+                                        in("scaleFar", Socket::Float, 0.6, "Scale at the band's outer edge.", 0.0),
+                                        in("scaleJitter", Socket::Float, 0.2, "Random scale either way, 0 to 1.", 0.0, 0.95),
+                                        in("leanChance", Socket::Float, 0.6, "Chance a tall, thin item leans on the wall.", 0.0, 1.0),
+                                        in("leanMin", Socket::Float, 8.0, "Least lean, degrees.", 0.0, 80.0),
+                                        in("leanMax", Socket::Float, 24.0, "Most lean, degrees.", 0.0, 80.0),
+                                        in("turn", Socket::Float, 180.0, "Random turn about up for items that stand, degrees either way.", 0.0, 180.0),
+                                        in("maxCount", Socket::Int, 400, "At most this many.", 0),
+                                        in("seed", Socket::Int, 1, "Another seed gives another band.")};
+
     const gn::NodeDecl decls[] = {
+        {.type = "BaseDressing",
+         .label = "Base Dressing",
+         .category = "Stagehand",
+         .doc = std::string("Items in a band round where things meet the ground: rubble at a wall's foot, planks leaning on a shed, weeds "
+                            "round a rock. Densest and biggest at the wall; tall, thin items lean on it. Any outline works.") +
+                kAttrsDoc + " Also wallDistance (cm from the footprint).",
+         .sockets = {.inputs = band, .outputs = {geoOut("instances", "The band, as instances.")}},
+         .exec = bandExec},
         {.type = "RowAlongLine",
          .label = "Row Along Line",
          .category = "Stagehand",

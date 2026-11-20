@@ -120,6 +120,7 @@ const std::map<Qt::DockWidgetArea, std::pair<Qt::ToolBarArea, const char*>>& str
 
 constexpr const char* kTabMinimum = "lilaTabMinimum";
 constexpr const char* kDrawerButton = "lilaDrawerButton";
+constexpr const char* kDrawerQueued = "lilaDrawerQueued";
 /** Dynamic property on a dock: it was the showing tab when its group collapsed, so it is on top when the edge expands. */
 constexpr const char* kDrawerFront = "lilaDrawerFront";
 
@@ -907,8 +908,16 @@ bool DockSidebars::eventFilter(QObject* obj, QEvent* e)
     auto* mouse = isMouse ? static_cast<QMouseEvent*>(e) : nullptr;
     if (!mouse)
     {
-        if (auto* bar = qobject_cast<QTabBar*>(obj); bar && (e->type() == QEvent::Resize || e->type() == QEvent::Show || e->type() == QEvent::LayoutRequest))
-            placeDrawerButton(bar);
+        // Deferred: these also arrive while Qt deletes another tab bar's children, when walking the window's children reads freed widgets.
+        if (auto* bar = qobject_cast<QTabBar*>(obj); bar && !bar->property(kDrawerQueued).toBool() &&
+            (e->type() == QEvent::Resize || e->type() == QEvent::Show || e->type() == QEvent::LayoutRequest))
+        {
+            bar->setProperty(kDrawerQueued, true);
+            QTimer::singleShot(0, bar, [this, bar] {
+                bar->setProperty(kDrawerQueued, false);
+                placeDrawerButton(bar);
+            });
+        }
         return false;
     }
     if (auto* bar = qobject_cast<QTabBar*>(obj))

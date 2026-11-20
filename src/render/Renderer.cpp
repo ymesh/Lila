@@ -110,6 +110,7 @@ constexpr uint32_t kColorChannelShift = 13;
 constexpr uint32_t kOneSidedLighting = 1u << 16;
 constexpr uint32_t kNormalXY = 1u << 17; // two-channel normal map: Z rebuilt in the shader
 constexpr uint32_t kGreyBase = 1u << 18;  // base colour map supplies opacity only
+constexpr uint32_t kGrunge = 1u << 19;    // a grunge block follows the draw's style block
 
 // Placeholder textures bound where a material has no map; never evicted.
 constexpr uint64_t kWhiteSrgbKey = ~uint64_t(0);
@@ -130,7 +131,7 @@ constexpr uint32_t kMaterialBindings = 5; // base color, normal, ORM, emissive, 
  */
 bool leanPush(uint32_t flags, uint32_t style)
 {
-    return style == kNoStyle && (flags & (MatNormalMap | MatUv1 | kVertexColorShaded | kVertexColorUnlit)) == 0;
+    return style == kNoStyle && (flags & (MatNormalMap | MatUv1 | kVertexColorShaded | kVertexColorUnlit | kGrunge)) == 0;
 }
 
 struct ContactPush
@@ -566,6 +567,7 @@ struct GpuMesh
     uint32_t edgePointCount = 0;
     uint32_t edgeIndexCount = 0; // 0 draws edges as a plain line list
     compute::Buffer edgeMask;    // RenderMesh::edgeMask, read by meshWirePS through its address
+    compute::Buffer grunge;      // RenderMesh::grunge, read by meshVS through its address in the draw's grunge block
     bool sharedVertices = false; // the vertex buffer belongs to the shareVertices mesh's entry
     /** The mesh's bottom-level acceleration structure for ray-traced effects; built the first time one needs it. */
     VkAccelerationStructureKHR blas = VK_NULL_HANDLE;
@@ -1022,6 +1024,10 @@ struct Renderer::Impl
     std::map<std::pair<uint64_t, uint64_t>, uint32_t> frameHandles;
     /** Style block offsets in the frame's table per (draw, material slot), for slots with a stylised shading model. */
     std::map<std::pair<const void*, uint32_t>, uint32_t> frameStyles; // by MeshDraw or HeightfieldDraw, and slot
+    /** (draw, slot) pairs whose style block is followed by a grunge block. */
+    std::set<std::pair<const void*, uint32_t>> frameGrunge;
+    /** Grunge blocks' address words in the frame's table and the RenderMesh key whose buffer they point at, filled once meshes upload. */
+    std::vector<std::pair<uint32_t, uint64_t>> grungePatches;
     VkDeviceAddress frameTableAddress = 0;
     /** The frame's mesh draws grouped for instancing, and the address of their instance buffer (0 if it failed). */
     DrawBatches frameBatches;
@@ -1928,6 +1934,8 @@ struct Renderer::Impl
             g.edgePointCount = uint32_t(mesh->edgePoints.size());
             if (!mesh->edgeMask.empty() && meshWirePipeline)
                 g.edgeMask = maskBuffer(cmd, f, mesh->edgeMask);
+            if (!mesh->grunge.empty())
+                g.grunge = maskBuffer(cmd, f, mesh->grunge);
             if (!mesh->edgeIndices.empty())
             {
                 g.edgeIndices = upload(mesh->edgeIndices.data(), mesh->edgeIndices.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
@@ -1999,6 +2007,7 @@ struct Renderer::Impl
             destroyBuffer(g.edges);
             destroyBuffer(g.edgeIndices);
             compute::destroy(vk, g.edgeMask);
+            compute::destroy(vk, g.grunge);
             dropDisplacement(key);
             meshCache.erase(key);
             ++meshEvictions;
@@ -2081,6 +2090,7 @@ struct Renderer::Impl
             destroyBuffer(g.edges);
             destroyBuffer(g.edgeIndices);
             compute::destroy(vk, g.edgeMask);
+            compute::destroy(vk, g.grunge);
             dropDisplacement(key);
         }
         meshCache.clear();
@@ -2703,6 +2713,8 @@ struct Renderer::Impl
         frameTable.clear();
         frameHandles.clear();
         frameStyles.clear();
+        frameGrunge.clear();
+        grungePatches.clear();
         // The virtual texture feedback header, filled in once the frame knows its feedback buffer.
         frameTable.assign(vt::kTableHeaderWords, 0u);
         if (bindless)
@@ -2950,15 +2962,38 @@ struct Renderer::Impl
         frameTable.insert(frameTable.end(), block.begin(), block.end());
     }
 
+    /** The mesh whose vertex buffer a draw reads and that carries grunge masks for it, or null. */
+    static const RenderMesh* grungeSource(const MeshDraw& d)
+    {
+        if (!d.mesh->grunge.empty())
+            return d.mesh.get();
+        if (d.mesh->shareVertices && !d.mesh->shareVertices->grunge.empty())
+            return d.mesh->shareVertices.get();
+        return nullptr;
+    }
+
     void writeStyles(const FrameState& s)
     {
         for (const MeshDraw& d : s.meshes)
         {
             if (!(d.flags & DrawShaded) || !d.mesh)
                 continue;
+            const RenderMesh* grungeMesh = grungeSource(d);
             for (uint32_t slot = 0; slot < d.materials.size(); ++slot)
-                if (d.materials[slot].style.model != ShadingModel::DefaultLit)
-                    writeStyle(&d, slot, d.materials[slot].style, d.mesh->boundsMin, d.mesh->boundsMax, s.zUp, &d.materials[slot]);
+            {
+                const Material& mat = d.materials[slot];
+                const bool grunge = mat.grunge && grungeMesh;
+                if (mat.style.model != ShadingModel::DefaultLit || grunge)
+                    writeStyle(&d, slot, mat.style, d.mesh->boundsMin, d.mesh->boundsMax, s.zUp, &mat);
+                if (grunge)
+                {
+                    // Right after the style block, where mesh.slang looks for it; the address is filled in once the mesh uploads.
+                    frameGrunge.insert({&d, slot});
+                    grungePatches.push_back({uint32_t(frameTable.size()), grungeMesh->key});
+                    const auto block = packGrunge(*mat.grunge, 0);
+                    frameTable.insert(frameTable.end(), block.begin(), block.end());
+                }
+            }
         }
         // A heightfield shades with slot 0, over bounds in its own space as its mesh's would be.
         for (const HeightfieldDraw& d : s.heightfields)
@@ -2969,6 +3004,22 @@ struct Renderer::Impl
             const glm::vec2 corner = d.origin + glm::vec2(float(std::max(d.nx - 1, 0)), float(std::max(d.nz - 1, 0))) * d.cell;
             writeStyle(&d, 0, d.materials[0].style, glm::vec3(d.origin.x, range.x, d.origin.y), glm::vec3(corner.x, range.y, corner.y), s.zUp);
         }
+    }
+
+    /** Points the frame's grunge blocks at their meshes' mask buffers, uploaded by prepareMeshes after the table was written. */
+    void patchGrunge(Frame& f)
+    {
+        if (grungePatches.empty() || !frameTableAddress || !f.table.mapped)
+            return;
+        for (const auto& [word, key] : grungePatches)
+        {
+            auto it = meshCache.find(key);
+            const VkDeviceAddress a = it != meshCache.end() ? it->second.grunge.address : 0;
+            frameTable[word] = uint32_t(a);
+            frameTable[word + 1] = uint32_t(a >> 32);
+            std::memcpy(static_cast<uint32_t*>(f.table.mapped) + word, &frameTable[word], 2 * sizeof(uint32_t));
+        }
+        vmaFlushAllocation(vk.allocator, f.table.alloc, 0, VK_WHOLE_SIZE);
     }
 
     /** Uploads the meshes this frame draws for the first time into device memory. Runs before rendering begins. */
@@ -6144,6 +6195,7 @@ struct Renderer::Impl
         else if (f.feedback.active())
             f.feedback.destroy(vk);
         prepareMeshes(cmd, f, s, sameMeshes);
+        patchGrunge(f);
         prepareDisplacement(cmd, f, s);
         prepareDynamicMeshes(cmd, f, s, sameMeshes ? &v.keptDynamic : nullptr);
         writeInstances(f, s, v.offscreen ? nullptr : &v.keptBatches, sameMeshes);
@@ -7609,7 +7661,11 @@ struct Renderer::Impl
             p.textureTable = frameTableAddress;
             if (frameTableAddress)
                 if (auto it = frameStyles.find({&d, sec.material}); it != frameStyles.end())
+                {
                     p.style = it->second;
+                    if (frameGrunge.contains({&d, sec.material}))
+                        p.flags |= kGrunge;
+                }
         }
         else
         {

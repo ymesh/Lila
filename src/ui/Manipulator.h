@@ -82,6 +82,7 @@ public:
     bool precisionDrag() const override { return mDrag && mDrag->precise; }
     /** The current drag is Ctrl's plane of the two axes other than the one pressed. */
     bool ctrlPlaneDrag() const { return mDrag && mDrag->ctrlPlane; }
+    bool cloneDragging() const { return mDrag && mDrag->clone; }
     /** The current drag is Ctrl+MMB's slide along the mesh surface under the cursor. */
     bool surfaceSlideDrag() const { return mDrag && mDrag->surfaceSlide; }
     /** Numeric entry while dragging. True when consumed. */

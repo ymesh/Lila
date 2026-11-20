@@ -131,6 +131,7 @@ ParamDecl paramFromJson(const json& j, const std::string& type)
     p.softMin = readOptNumber(j, "softMin");
     p.softMax = readOptNumber(j, "softMax");
     p.step = readOptNumber(j, "step");
+    p.hidden = j.value("hidden", false);
     return p;
 }
 
@@ -145,6 +146,8 @@ json paramJson(const ParamDecl& p)
         o["panel"] = p.panel;
     if (!p.options.empty())
         o["options"] = p.options;
+    if (p.hidden)
+        o["hidden"] = true;
     writeOptNumber(o, "min", p.min);
     writeOptNumber(o, "max", p.max);
     writeOptNumber(o, "softMin", p.softMin);

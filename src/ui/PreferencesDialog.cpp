@@ -670,8 +670,13 @@ void addBuiltIns(Registry<prefPages::Page>& r)
         toggleField(general, "Check for Lila updates at startup", updater::kCheckPref, true);
         sectionHeader(general, "Telemetry");
         toggleField(general, "Send anonymous usage statistics", kTelemetryUsagePref, false);
-        toggleField(general, "Send crash reports", kTelemetryCrashPref, false);
-        toggleField(general, "Send crash reports without asking", telemetry::kCrashAlwaysPref, false);
+        {
+            std::vector<std::pair<QString, std::string>> options;
+            for (const auto& [shown, value] : telemetry::crashSendChoices())
+                options.emplace_back(QString::fromStdString(shown), value);
+            const std::string mode = telemetry::crashSendMode();
+            choiceField(general, "Crash reports", telemetry::kCrashSendPref, std::move(options), mode.empty() ? "ask" : mode);
+        }
         auto onboarding = [&general](const char* label, const char* key, const std::vector<std::pair<std::string, std::string>>& choices) {
             std::vector<std::pair<QString, std::string>> options;
             for (const auto& [shown, value] : choices)
@@ -937,7 +942,7 @@ void addBuiltIns(Registry<prefPages::Page>& r)
         choiceField(manip, "Rotate space", "/manipulator/rotateSpace", {{"World", "world"}, {"Object", "object"}, {"Parent", "parent"}, {"Gimbal", "gimbal"}, {"Component", "component"}}, "world");
         choiceField(manip, "Scale space (components)", "/manipulator/scaleSpace", {{"World", "world"}, {"Object", "object"}, {"Component", "component"}}, "world");
         numberField(manip, "Rotate snap (degrees)", "/manipulator/rotateStep", 15.0, 0.1, 180.0, 1.0, 1);
-        choiceField(manip, "Shift-drag on faces and edges", "/manipulator/shiftDrag", {{"Fine control", "fine"}, {"Extrude", "extrude"}}, "fine");
+        toggleField(manip, "Swap clone (Y) and fine control (Shift)", "/manipulator/swapCloneShift", false);
         sectionHeader(manip, "Soft Select");
         toggleField(manip, "Enabled", "/softSelect/enabled", false);
         numberField(manip, "Radius (cm)", "/softSelect/radius", 25.0, 0.01, 100000.0, 1.0);

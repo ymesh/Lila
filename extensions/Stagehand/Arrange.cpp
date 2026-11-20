@@ -463,6 +463,317 @@ std::vector<Placed> debris(std::span<const std::pair<glm::dvec3, glm::dvec3>> pi
     return out;
 }
 
+namespace
+{
+/** A top-down grid over x, z. */
+struct Raster
+{
+    double x0 = 0.0, z0 = 0.0, cell = 1.0;
+    int nx = 0, nz = 0;
+
+    size_t index(int x, int z) const { return size_t(z) * size_t(nx) + size_t(x); }
+    bool cellOf(double x, double z, int& ix, int& iz) const
+    {
+        ix = int(std::floor((x - x0) / cell));
+        iz = int(std::floor((z - z0) / cell));
+        return ix >= 0 && iz >= 0 && ix < nx && iz < nz;
+    }
+    glm::dvec2 centre(int x, int z) const { return {x0 + (x + 0.5) * cell, z0 + (z + 0.5) * cell}; }
+};
+
+/** Calls f at points spread over a triangle no further apart than step. */
+template <class F> void sampleTriangle(const glm::dvec3& a, const glm::dvec3& b, const glm::dvec3& c, double step, F&& f)
+{
+    const double longest = std::max({glm::length(b - a), glm::length(c - a), glm::length(c - b)});
+    const int n = std::clamp(int(std::ceil(longest / step)), 1, 4000);
+    for (int i = 0; i <= n; ++i)
+        for (int j = 0; i + j <= n; ++j)
+            f(a + (b - a) * (double(i) / n) + (c - a) * (double(j) / n));
+}
+
+template <class F> void forTriangles(const Mesh& m, F&& f)
+{
+    for (Index face = 0; face < m.faceCapacity(); ++face)
+    {
+        if (!m.faceValid(face))
+            continue;
+        const std::vector<Index> p = m.facePoints(face);
+        for (size_t k = 1; k + 1 < p.size(); ++k)
+            f(m.position(p[0]), m.position(p[k]), m.position(p[k + 1]));
+    }
+}
+} // namespace
+
+BandResult band(std::span<const Mesh* const> hosts, std::span<const Mesh* const> ground, std::span<const Item> items, const BandOptions& o,
+                std::span<const Mesh* const> blockers)
+{
+    LILA_ZONE();
+
+    BandResult out;
+    if (hosts.empty() || items.empty() || o.width <= 0.0)
+        return out;
+    glm::dvec3 lo(1e300), hi(-1e300);
+    for (const Mesh* m : hosts)
+        for (Index p = 0; p < m->pointCapacity(); ++p)
+            if (m->pointValid(p))
+            {
+                lo = glm::min(lo, m->position(p));
+                hi = glm::max(hi, m->position(p));
+            }
+    if (lo.x > hi.x)
+        return out;
+    const double margin = o.width + 2.0;
+    Raster r;
+    const double spanX = hi.x - lo.x + 2.0 * margin, spanZ = hi.z - lo.z + 2.0 * margin;
+    // Fine enough to follow a wall's outline, coarse enough to stay within a million cells.
+    r.cell = std::max({std::clamp(o.width / 16.0, 1.0, 25.0), spanX / 1024.0, spanZ / 1024.0});
+    r.x0 = lo.x - margin;
+    r.z0 = lo.z - margin;
+    r.nx = int(std::ceil(spanX / r.cell));
+    r.nz = int(std::ceil(spanZ / r.cell));
+    const size_t cells = r.index(0, r.nz);
+
+    // Ground height per cell: the highest upward-facing ground there, else the hosts' lowest point.
+    std::vector<double> groundY(cells, lo.y);
+    std::vector<uint8_t> hasGround(cells, 0);
+    for (const Mesh* m : ground)
+        forTriangles(*m, [&](const glm::dvec3& a, const glm::dvec3& b, const glm::dvec3& c) {
+            const glm::dvec3 n = glm::cross(b - a, c - a);
+            if (glm::length(n) < 1e-12 || n.y / glm::length(n) < 0.2)
+                return;
+            sampleTriangle(a, b, c, r.cell * 0.5, [&](const glm::dvec3& p) {
+                int ix, iz;
+                if (!r.cellOf(p.x, p.z, ix, iz))
+                    return;
+                const size_t k = r.index(ix, iz);
+                if (!hasGround[k] || p.y > groundY[k])
+                    groundY[k] = p.y;
+                hasGround[k] = 1;
+            });
+        });
+    out.groundFromMeshes = !ground.empty();
+    out.cell = r.cell;
+
+    // The footprint: host geometry within contactHeight of the ground under it.
+    std::vector<int> siteX(cells, -1), siteZ(cells, -1);
+    for (const Mesh* m : hosts)
+        forTriangles(*m, [&](const glm::dvec3& a, const glm::dvec3& b, const glm::dvec3& c) {
+            if (std::min({a.y, b.y, c.y}) > hi.y)
+                return;
+            sampleTriangle(a, b, c, r.cell * 0.5, [&](const glm::dvec3& p) {
+                int ix, iz;
+                if (!r.cellOf(p.x, p.z, ix, iz))
+                    return;
+                const size_t k = r.index(ix, iz);
+                if (p.y <= groundY[k] + o.contactHeight)
+                {
+                    siteX[k] = ix;
+                    siteZ[k] = iz;
+                }
+            });
+        });
+
+    // Neighbours' footprints: nothing goes there, but no band grows round them either (their own dressing does that).
+    std::vector<uint8_t> blocked(cells, 0);
+    for (const Mesh* m : blockers)
+        forTriangles(*m, [&](const glm::dvec3& a, const glm::dvec3& b, const glm::dvec3& c) {
+            sampleTriangle(a, b, c, r.cell * 0.5, [&](const glm::dvec3& p) {
+                int ix, iz;
+                if (r.cellOf(p.x, p.z, ix, iz) && p.y <= groundY[r.index(ix, iz)] + o.contactHeight)
+                    blocked[r.index(ix, iz)] = 1;
+            });
+        });
+    auto isBlocked = [&](const glm::dvec2& p) {
+        int ix, iz;
+        return r.cellOf(p.x, p.y, ix, iz) && blocked[r.index(ix, iz)];
+    };
+
+    // Nearest footprint cell for every cell (two-pass vector propagation).
+    auto d2 = [&](int x, int z, int sx, int sz) { return double(x - sx) * (x - sx) + double(z - sz) * (z - sz); };
+    auto relax = [&](int x, int z, int nx, int nz) {
+        if (nx < 0 || nz < 0 || nx >= r.nx || nz >= r.nz)
+            return;
+        const size_t n = r.index(nx, nz), k = r.index(x, z);
+        if (siteX[n] < 0)
+            return;
+        if (siteX[k] < 0 || d2(x, z, siteX[n], siteZ[n]) < d2(x, z, siteX[k], siteZ[k]))
+        {
+            siteX[k] = siteX[n];
+            siteZ[k] = siteZ[n];
+        }
+    };
+    for (int z = 0; z < r.nz; ++z)
+    {
+        for (int x = 0; x < r.nx; ++x)
+        {
+            relax(x, z, x - 1, z);
+            relax(x, z, x - 1, z - 1);
+            relax(x, z, x, z - 1);
+            relax(x, z, x + 1, z - 1);
+        }
+        for (int x = r.nx - 1; x >= 0; --x)
+            relax(x, z, x + 1, z);
+    }
+    for (int z = r.nz - 1; z >= 0; --z)
+    {
+        for (int x = r.nx - 1; x >= 0; --x)
+        {
+            relax(x, z, x + 1, z);
+            relax(x, z, x + 1, z + 1);
+            relax(x, z, x, z + 1);
+            relax(x, z, x - 1, z + 1);
+        }
+        for (int x = 0; x < r.nx; ++x)
+            relax(x, z, x - 1, z);
+    }
+
+    // Distance from the footprint's edge and outward direction at a point, through its cell's nearest site.
+    auto measure = [&](const glm::dvec2& p, int ix, int iz, double& d, glm::dvec2& dir) {
+        const size_t k = r.index(ix, iz);
+        const glm::dvec2 site = r.centre(siteX[k], siteZ[k]);
+        const glm::dvec2 v = p - site;
+        const double len = glm::length(v);
+        d = std::max(0.0, len - r.cell * 0.5);
+        dir = len > 1e-9 ? v / len : glm::dvec2(1.0, 0.0);
+    };
+
+    std::vector<size_t> bandCells;
+    std::vector<double> cdf;
+    double total = 0.0;
+    for (int z = 0; z < r.nz; ++z)
+        for (int x = 0; x < r.nx; ++x)
+        {
+            const size_t k = r.index(x, z);
+            if (siteX[k] < 0 || (siteX[k] == x && siteZ[k] == z) || blocked[k])
+                continue;
+            double d;
+            glm::dvec2 dir;
+            measure(r.centre(x, z), x, z, d, dir);
+            if (d <= 0.0 || d > o.width)
+                continue;
+            const double w = std::pow(1.0 - d / o.width, std::max(0.0, o.falloff));
+            if (w <= 1e-6)
+                continue;
+            bandCells.push_back(k);
+            cdf.push_back(total += w);
+        }
+    if (bandCells.empty())
+        return out;
+    const int target = std::min(o.maxCount, int(std::ceil(o.density * total * r.cell * r.cell / 10000.0)));
+    std::vector<double> weights(items.size(), 1.0);
+    double weightSum = 0.0;
+    for (size_t k = 0; k < items.size(); ++k)
+        weightSum += weights[k] = k < o.weights.size() ? std::max(0.0, o.weights[k]) : 1.0;
+    if (weightSum <= 0.0)
+        return out;
+
+    Rng rng(o.seed);
+    double maxR = 1.0;
+    for (const Item& it : items)
+        maxR = std::max(maxR, std::max(it.size().x, it.size().z) * 0.5 * std::max(o.scaleNear, o.scaleFar) * (1.0 + o.scaleJitter) * o.spacing);
+    const double gridCell = 2.0 * maxR;
+    std::unordered_map<int64_t, std::vector<std::pair<glm::dvec2, double>>> taken;
+    auto key = [&](int64_t x, int64_t z) { return (x << 32) ^ (z & 0xffffffff); };
+
+    for (int attempt = 0; attempt < target * 30 && int(out.placed.size()) < target; ++attempt)
+    {
+        const size_t c = bandCells[size_t(std::lower_bound(cdf.begin(), cdf.end(), rng.u() * total) - cdf.begin()) % bandCells.size()];
+        const int cx = int(c % size_t(r.nx)), cz = int(c / size_t(r.nx));
+        const glm::dvec2 centre = r.centre(cx, cz);
+        glm::dvec2 p(centre.x + rng.signedUnit() * r.cell * 0.5, centre.y + rng.signedUnit() * r.cell * 0.5);
+        double d;
+        glm::dvec2 dir;
+        measure(p, cx, cz, d, dir);
+        const glm::dvec2 wallPoint = p - dir * d;
+
+        double pick = rng.u() * weightSum;
+        int k = 0;
+        while (k + 1 < int(items.size()) && (pick -= weights[size_t(k)]) >= 0.0)
+            ++k;
+        const Item& it = items[size_t(k)];
+        const glm::dvec3 size = it.size();
+        const double t = std::clamp(d / o.width, 0.0, 1.0);
+        const double scale = std::max(0.01, (o.scaleNear + (o.scaleFar - o.scaleNear) * t) * (1.0 + rng.signedUnit() * std::clamp(o.scaleJitter, 0.0, 0.95)));
+        const bool tall = size.y > 2.5 * std::max(size.x, size.z);
+        const bool lean = tall && rng.u() < o.leanChance;
+        const double angle = rng.range(o.leanMin, o.leanMax);
+        const double thickness = std::min(size.x, size.z) * scale;
+        double radius;
+        if (lean)
+        {
+            // Bottom out from the wall so the top rests on it.
+            const double h = size.y * scale;
+            const double reach = h * std::sin(glm::radians(angle)) + thickness * 0.5 * std::cos(glm::radians(angle));
+            p = wallPoint + dir * reach;
+            d = reach;
+            radius = std::max(size.x * scale * 0.5, reach * 0.5) * o.spacing;
+        }
+        else
+        {
+            radius = std::max(size.x, size.z) * 0.5 * scale * o.spacing;
+            if (d < radius)
+            {
+                p = wallPoint + dir * radius;
+                d = radius;
+            }
+        }
+        if (d > o.width + radius)
+            continue;
+        if (!blockers.empty())
+        {
+            const glm::dvec2 side(-dir.y, dir.x);
+            if (isBlocked(p) || isBlocked(p + dir * radius) || isBlocked(p - dir * radius) || isBlocked(p + side * radius) || isBlocked(p - side * radius))
+                continue;
+        }
+        const int64_t gx = int64_t(std::floor(p.x / gridCell)), gz = int64_t(std::floor(p.y / gridCell));
+        bool clear = true;
+        for (int64_t dx = -1; dx <= 1 && clear; ++dx)
+            for (int64_t dz = -1; dz <= 1 && clear; ++dz)
+                if (auto g = taken.find(key(gx + dx, gz + dz)); g != taken.end())
+                    for (const auto& [q, rq] : g->second)
+                        if (glm::length(q - p) < radius + rq)
+                        {
+                            clear = false;
+                            break;
+                        }
+        if (!clear)
+            continue;
+        int ix, iz;
+        double y = lo.y;
+        if (r.cellOf(p.x, p.y, ix, iz))
+            y = groundY[r.index(ix, iz)];
+        taken[key(gx, gz)].push_back({p, radius});
+
+        const glm::dvec3 c0 = (it.lo + it.hi) * 0.5;
+        const glm::dvec3 bottom(c0.x, it.lo.y, c0.z);
+        const glm::dvec3 at(p.x, y, p.y);
+        glm::dmat4 xf;
+        if (lean)
+        {
+            // X along the wall, Z outward; tilting about X by -angle leans the top toward the wall.
+            const glm::dvec3 outward(dir.x, 0.0, dir.y);
+            const glm::dvec3 along = glm::normalize(glm::cross(glm::dvec3(0, 1, 0), outward));
+            glm::dmat4 frame(1.0);
+            frame[0] = glm::dvec4(along, 0);
+            frame[1] = glm::dvec4(0, 1, 0, 0);
+            frame[2] = glm::dvec4(outward, 0);
+            frame[3] = glm::dvec4(at, 1);
+            const glm::dmat4 tilt = glm::rotate(glm::dmat4(1.0), glm::radians(-angle), glm::dvec3(1, 0, 0));
+            // A plank's thin side faces the wall whichever way it was modelled.
+            const glm::dmat4 face = size.x < size.z ? glm::rotate(glm::dmat4(1.0), kPi * 0.5, glm::dvec3(0, 1, 0)) : glm::dmat4(1.0);
+            xf = frame * tilt * glm::dmat4(rotY(rng.signedUnit() * 6.0)) * face * glm::scale(glm::dmat4(1.0), glm::dvec3(scale)) *
+                 glm::translate(glm::dmat4(1.0), -bottom);
+        }
+        else
+            xf = glm::translate(glm::dmat4(1.0), at) * glm::dmat4(rotY(rng.signedUnit() * o.turn)) * glm::scale(glm::dmat4(1.0), glm::dvec3(scale)) *
+                 glm::translate(glm::dmat4(1.0), -bottom);
+        out.placed.push_back({xf, k, lean ? Pose::Leaning : Pose::Upright, float(rng.u())});
+        out.distance.push_back(d);
+        out.outward.push_back(glm::dvec3(dir.x, 0.0, dir.y));
+    }
+    return out;
+}
+
 Settled settle(std::span<const glm::dmat4> transforms, std::span<const int> items, std::span<const Mesh* const> itemMeshes,
                std::span<const Mesh* const> colliders, const SettleOptions& o)
 {

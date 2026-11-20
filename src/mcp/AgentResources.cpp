@@ -212,6 +212,10 @@ const Doc kDocs[] = {
     {"lila://guide/set-dressing", "setDressing", "guide-set-dressing.md", "Set dressing guide",
      "Dressing scenes with props: library search and placement, physics settle/push/drop, shelf fills, scatters and piles, "
      "modular kit snapping, and dressCheck to verify. Read before placing or arranging props."},
+    {"lila://guide/weathering", "weathering", "guide-weathering.md", "Weathering guide",
+     "Ageing, damaging and overgrowing meshes and levels: age presets in realistic or toon, the user's own pieces before "
+     "placeholders, base and ground dressing, ground tint, grunge, edge decals and chipping, ivy, roof, window and wire "
+     "generators, tiled ageing of Blockwork levels, and the Unreal material functions. Read before weathering anything."},
     {"lila://guide/terrain", "terrain", "guide-terrain.md", "Terrain guide",
      "Building terrain from code: recipes first, one-JSON specs and presets, named places (terrainQuery, region:<name>), wedges, "
      "create, import and erode, sample and route, sculpt strokes, building pads and plaza stamps "
@@ -304,6 +308,18 @@ void registerAgentResources()
         }),
         .get = [](const json& args) {
             return fill(readFile(agentsDir() / "prompts" / "dress_scene.md"), args, {{"brief", "the requested set"}, {"area", "the selection"}});
+        },
+    });
+
+    s.addPrompt({
+        .name = "age_scene",
+        .description = "Age, damage or overgrow objects or a level with Weathering, using the user's own pieces where they exist.",
+        .arguments = json::array({
+            {{"name", "brief"}, {"description", "The look, e.g. \"abandoned for years, toon style\""}, {"required", true}},
+            {{"name", "area"}, {"description", "What: mesh names, a group or a visgroup"}, {"required", false}},
+        }),
+        .get = [](const json& args) {
+            return fill(readFile(agentsDir() / "prompts" / "age_scene.md"), args, {{"brief", "the requested look"}, {"area", "the selection"}});
         },
     });
 

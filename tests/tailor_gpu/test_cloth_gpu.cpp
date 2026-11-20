@@ -130,6 +130,13 @@ TEST_CASE("gpu: tunic drapes on the mannequin without passing through")
     for (const auto& pr : cm.seamPairs)
         maxGap = std::max(maxGap, dist(solver.positions()[size_t(pr[0])], solver.positions()[size_t(pr[1])]));
     CHECK(maxGap < 0.01f);
+
+    ClothGpu again;
+    again.setColliders({&sdf});
+    REQUIRE_MESSAGE(again.reset(cm, g, SolverSettings{}, &err), err);
+    for (int f = 0; f < 90; ++f)
+        REQUIRE_MESSAGE(again.step(&err), err);
+    CHECK(again.positions() == solver.positions());
 }
 
 TEST_CASE("perf: gpu outfit drape" * doctest::skip())

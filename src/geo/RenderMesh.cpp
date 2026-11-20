@@ -23,9 +23,17 @@ struct CornerData
     std::span<const glm::vec4> cornerColor;
     std::span<const glm::vec4> pointColor;
     std::span<const glm::vec4> tangents;
+    std::vector<std::span<const glm::vec4>> splitVec4;
+    std::vector<std::span<const float>> splitFloat;
 
     bool same(Index a, Index b) const
     {
+        for (const std::span<const glm::vec4>& s : splitVec4)
+            if (s[a] != s[b])
+                return false;
+        for (const std::span<const float>& s : splitFloat)
+            if (s[a] != s[b])
+                return false;
         if (normals[a] != normals[b])
             return false;
         for (const std::span<const glm::vec2>& uv : uvs)
@@ -56,6 +64,13 @@ RenderMesh buildRenderMesh(const Mesh& mesh, const RenderMeshOptions& opts)
         computedNormals = cornerNormals(mesh, opts.normals);
         cd.normals = computedNormals;
     }
+    for (const std::string& layer : opts.splitLayers)
+    {
+        if (const auto v = mesh.cornerAttrs().get<glm::vec4>(layer); !v.empty())
+            cd.splitVec4.push_back(v);
+        else if (const auto f = mesh.cornerAttrs().get<float>(layer); !f.empty())
+            cd.splitFloat.push_back(f);
+    }
     for (int i = 0; i < opts.maxUvSets; ++i)
     {
         std::span<const glm::vec2> uv = mesh.cornerAttrs().get<glm::vec2>(attr::uvName(i));
@@ -65,7 +80,7 @@ RenderMesh buildRenderMesh(const Mesh& mesh, const RenderMeshOptions& opts)
     }
     if (opts.colors)
     {
-        cd.cornerColor = mesh.cornerAttrs().get<glm::vec4>(opts.colorLayer.empty() ? colors::layerName(colors::current(mesh)) : opts.colorLayer);
+        cd.cornerColor = mesh.cornerAttrs().get<glm::vec4>(opts.colorLayer.empty() ? colors::layerName(colors::displayed(mesh)) : opts.colorLayer);
         if (cd.cornerColor.empty() && opts.colorLayer.empty())
             cd.pointColor = mesh.pointAttrs().get<glm::vec4>(attr::kColor);
     }
