@@ -148,6 +148,52 @@ vcpkg_cmake_configure(
 vcpkg_cmake_install()
 vcpkg_copy_pdbs()
 
+# PEGTL is header-only, so a USD library never needs a pegtl symbol from elsewhere. One left undefined means that a
+# parser object came out bad. Found on a Rocky host with a faulty CPU core (memtest passed): every compile of
+# sdf/textFileFormatParser.cpp that ran on that core referenced sor<...>::match instances it didn't emit, other cores
+# never did. The library still links (shared libraries may keep undefined symbols), and Lila only fails when it loads
+# OpenUSD. So delete the bad objects of such a library and install again: ninja recompiles only those, which usually
+# lands on a good core, and relinks. Stop the port build if that doesn't help.
+if(NOT VCPKG_TARGET_IS_WINDOWS)
+    find_program(LILA_NM NAMES nm llvm-nm REQUIRED)
+    foreach(_try RANGE 1 4)
+        set(_bad "")
+        foreach(_config rel dbg)
+            set(_lib_dir "${CURRENT_PACKAGES_DIR}/lib")
+            if(_config STREQUAL "dbg")
+                set(_lib_dir "${CURRENT_PACKAGES_DIR}/debug/lib")
+            endif()
+            file(GLOB _libs "${_lib_dir}/libusd_*.so")
+            foreach(_lib IN LISTS _libs)
+                execute_process(COMMAND "${LILA_NM}" -D --undefined-only "${_lib}" OUTPUT_VARIABLE _undefined COMMAND_ERROR_IS_FATAL ANY)
+                if(NOT _undefined MATCHES "pegtl")
+                    continue()
+                endif()
+                list(APPEND _bad "${_lib}")
+                # libusd_<name>.so is built from CMakeFiles/<name>.dir/*.o.
+                get_filename_component(_name "${_lib}" NAME_WE)
+                string(REGEX REPLACE "^libusd_" "" _name "${_name}")
+                file(GLOB_RECURSE _objects "${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-${_config}/*.o")
+                list(FILTER _objects INCLUDE REGEX "/CMakeFiles/${_name}\\.dir/")
+                foreach(_object IN LISTS _objects)
+                    execute_process(COMMAND "${LILA_NM}" --undefined-only "${_object}" OUTPUT_VARIABLE _undefined COMMAND_ERROR_IS_FATAL ANY)
+                    if(_undefined MATCHES "pegtl")
+                        message(STATUS "Miscompiled, building again: ${_object}")
+                        file(REMOVE "${_object}")
+                    endif()
+                endforeach()
+            endforeach()
+        endforeach()
+        if(NOT _bad)
+            break()
+        elseif(_try EQUAL 4)
+            message(FATAL_ERROR "Undefined PEGTL symbols after 3 rebuilds of the bad objects: ${_bad}")
+        endif()
+        message(WARNING "Undefined PEGTL symbols in ${_bad}: a parser object was miscompiled; building it again (${_try}/3)")
+        vcpkg_cmake_install()
+    endforeach()
+endif()
+
 # Handle debug path for USD plugins
 if(NOT DEFINED VCPKG_BUILD_TYPE OR VCPKG_BUILD_TYPE STREQUAL "debug")
     file(GLOB_RECURSE debug_targets
