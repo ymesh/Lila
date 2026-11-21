@@ -17,7 +17,7 @@ endif()
 # Pins the MSVC toolset for dependencies (vcpkg otherwise picks the newest installed Visual Studio).
 set(VCPKG_OVERLAY_TRIPLETS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/triplets")
 
-project(Lila VERSION 0.8.0 LANGUAGES C CXX)
+project(Lila VERSION 0.8.1 LANGUAGES C CXX)
 
 if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/triplets/x64-windows.cmake" _lila_toolset REGEX "VCPKG_PLATFORM_TOOLSET_VERSION")

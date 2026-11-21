@@ -433,15 +433,24 @@ int runBatch(const Options& o, bool pythonOk)
 
 void shutdown()
 {
+    auto step = [](const char* what) { crash::setContext("context", "shutdown", what); };
+    step("events");
     events::send({.type = events::Event::Shutdown});
+    step("batch");
     batch::shutdown();
     // Evaluated values can hold data an extension allocated (a terrain's heightfield in a geometry nodes cache), whose
     // deleter lives in its library; they have to go before the libraries do.
+    step("clear scene");
     scene::Graph::current().clear();
+    step("unload extensions");
     extensions::ExtensionManager::get().unloadAll();
+    step("source control");
     vcs::SourceControl::get().shutdown();
+    step("link");
     link::Link::get().shutdown();
+    step("python");
     python::shutdown();
+    step("prefs");
     PrefStore::get().stop();
     crash::shutdown();
 }

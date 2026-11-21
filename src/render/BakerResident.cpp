@@ -416,7 +416,9 @@ uint64_t GpuResident::materialTable(size_t g, const std::string& map)
         ResidentUploads up{mB};
         needHighSurfaces(g, up);
     }
-    const uint64_t address = table(slots.data(), std::max<size_t>(1, slots.size()) * sizeof(GpuMaterialSlot));
+    // A group with no high meshes still needs a valid table to point at.
+    slots.resize(std::max<size_t>(1, slots.size()));
+    const uint64_t address = table(slots.data(), slots.size() * sizeof(GpuMaterialSlot));
     mMaterialTables[key] = address;
     return address;
 }

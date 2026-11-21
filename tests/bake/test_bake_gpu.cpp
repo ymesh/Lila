@@ -268,6 +268,22 @@ TEST_CASE("GPU bake matches the CPU: exact material IDs, islands and coverage")
         compare(cpu2, bakeWith(p, {"id"}, be), "id", 0.0f, 0.0f, 0.0);
 }
 
+TEST_CASE("GPU bake of material maps survives a group with no highs")
+{
+    if (gpuBackends().empty())
+        return;
+    newScene();
+    const fs::path dir = tempDir("lila_bake_gpu_no_highs");
+    const std::string low = addMesh("lone_low", plane(1));
+    const std::string p = project(dir, 16, 1, "png");
+    ops::execute("bakeGroup", {{"args", {"lone"}}, {"project", p}, {"lows", {low}}, {"highs", json::array()}});
+    for (const std::string& be : gpuBackends())
+    {
+        INFO("backend " << be);
+        CHECK_NOTHROW(ops::execute("bake", {{"project", p}, {"maps", {"baseColor", "roughness"}}, {"backend", be}}));
+    }
+}
+
 TEST_CASE("GPU bake matches the CPU: isolated groups, AO scopes and backfaces")
 {
     if (gpuBackends().empty())

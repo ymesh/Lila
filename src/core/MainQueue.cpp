@@ -1,5 +1,6 @@
 #include "core/MainQueue.h"
 
+#include "core/CrashHandler.h"
 #include "core/Profile.h"
 
 #include <mutex>
@@ -11,7 +12,12 @@ namespace
 {
 std::thread::id gMainId;
 std::mutex gMutex;
-std::vector<std::function<void()>> gQueue;
+struct Task
+{
+    std::function<void()> fn;
+    const char* label = nullptr;
+};
+std::vector<Task> gQueue;
 std::function<void()> gWake;
 int gHolds = 0; // main thread only
 } // namespace
@@ -28,10 +34,15 @@ bool isMainThread()
 
 void post(std::function<void()> fn)
 {
+    post(nullptr, std::move(fn));
+}
+
+void post(const char* label, std::function<void()> fn)
+{
     std::function<void()> wake;
     {
         std::scoped_lock lock(gMutex);
-        gQueue.push_back(std::move(fn));
+        gQueue.push_back({std::move(fn), label});
         wake = gWake;
     }
     if (wake)
@@ -44,13 +55,18 @@ void drain()
 
     if (gHolds > 0)
         return;
-    std::vector<std::function<void()>> work;
+    std::vector<Task> work;
     {
         std::scoped_lock lock(gMutex);
         work.swap(gQueue);
     }
-    for (auto& fn : work)
-        fn();
+    for (Task& t : work)
+    {
+        crash::setContext("context", "mainTask", t.label ? t.label : "unnamed");
+        t.fn();
+    }
+    if (!work.empty())
+        crash::setContext("context", "mainTask", "");
 }
 
 Hold::Hold()

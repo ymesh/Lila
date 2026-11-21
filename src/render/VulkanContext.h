@@ -46,6 +46,8 @@ public:
      * pipeline creation went through.
      */
     std::atomic<bool> pipelineCreationFailed{false};
+    /** Off when this GPU's cache file has crashed the driver, so the cache lives in memory only. */
+    bool diskPipelineCache = true;
     VkPhysicalDeviceProperties properties{};
     VkSampleCountFlagBits msaa = VK_SAMPLE_COUNT_4_BIT; // what the viewport targets and pipelines use right now
     VkSampleCountFlags msaaSupported = VK_SAMPLE_COUNT_1_BIT;

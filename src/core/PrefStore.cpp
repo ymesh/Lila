@@ -283,7 +283,7 @@ struct PrefStore::Impl
 
     void notify(const std::string& file)
     {
-        mainq::post([this, file] {
+        mainq::post("prefs change listeners", [this, file] {
             std::map<int, ChangeFn> copy;
             {
                 std::scoped_lock lock(mutex);

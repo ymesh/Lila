@@ -125,6 +125,12 @@ if(LILA_PYSIDE AND WIN32)
     add_test(NAME lila_pyside_python COMMAND lilabatch --batch ${CMAKE_SOURCE_DIR}/python/tests/test_pyside.py
              CONFIGURATIONS Release RelWithDebInfo)
     set_tests_properties(lila_pyside_python PROPERTIES ENVIRONMENT "LILA_CONFIG_DIR=${CMAKE_CURRENT_BINARY_DIR}/pyside_cfg")
+    # A settings change still queued when the window closes reaches its listeners during extension unload.
+    add_test(NAME lila_quit_with_queued_prefs
+             COMMAND lila -c "import time, lila.prefs as p; from PySide6 import QtCore, QtWidgets; QtCore.QTimer.singleShot(500, lambda: (p.set('general', '/test/quitWithQueuedPrefs', time.time()), QtWidgets.QApplication.quit()))"
+             CONFIGURATIONS Release RelWithDebInfo)
+    set_tests_properties(lila_quit_with_queued_prefs PROPERTIES TIMEOUT 120
+                         ENVIRONMENT "LILA_CONFIG_DIR=${CMAKE_CURRENT_BINARY_DIR}/quit_prefs_cfg;QT_QPA_PLATFORM=offscreen;LILA_CRASH_NO_UI=1")
 endif()
 # The telemetry Worker's credits rules; needs Node 22.5+ for node:sqlite.
 find_program(LILA_NODE node)

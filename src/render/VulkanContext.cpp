@@ -7,12 +7,16 @@
 #include "core/Log.h"
 #include "core/Paths.h"
 #include "core/Profile.h"
+#include "io/Recovery.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <format>
+#ifdef _WIN32
+#include <excpt.h>
+#endif
 #include <fstream>
 #include <iterator>
 
@@ -27,6 +31,71 @@ std::filesystem::path pipelineCachePath(const VkPhysicalDeviceProperties& p)
 
 /** Past this the file is dropped and rebuilt: old shader builds accumulate in it. */
 constexpr size_t kMaxPipelineCacheBytes = size_t(256) << 20;
+
+std::filesystem::path withSuffix(std::filesystem::path p, const char* suffix)
+{
+    p += suffix;
+    return p;
+}
+
+/** Exists from loading the cache file until it is saved back, so a run that dies in between is noticed by the next. */
+std::filesystem::path pendingPath(const std::filesystem::path& cache) { return withSuffix(cache, ".pending"); }
+/** Written when the cache crashed the driver even after being cleared; delete it to try the disk cache again. */
+std::filesystem::path disabledPath(const std::filesystem::path& cache) { return withSuffix(cache, ".disabled"); }
+
+void touch(const std::filesystem::path& p)
+{
+    std::error_code ec;
+    std::filesystem::create_directories(p.parent_path(), ec);
+    std::ofstream(p, std::ios::trunc).put('\n');
+}
+
+void markPending(const std::filesystem::path& cache)
+{
+    std::error_code ec;
+    std::filesystem::create_directories(cache.parent_path(), ec);
+    std::ofstream(pendingPath(cache), std::ios::trunc) << io::recovery::currentPid() << ' ' << io::recovery::nowMs();
+}
+
+/** A marker left by a process that has since died. One from this process or another running Lila is still in use. */
+bool pendingIsStale(const std::filesystem::path& cache)
+{
+    std::ifstream in(pendingPath(cache));
+    if (!in)
+        return false;
+    int64_t pid = 0, startedMs = 0;
+    if (!(in >> pid >> startedMs))
+        return true;
+    return pid != io::recovery::currentPid() && !io::recovery::processAlive(pid, startedMs);
+}
+
+/** Whether data starts with a header this device and driver wrote. Some drivers accept a foreign or stale file and crash later. */
+bool cacheHeaderMatches(const std::vector<char>& data, const VkPhysicalDeviceProperties& p)
+{
+    VkPipelineCacheHeaderVersionOne h{};
+    if (data.size() < sizeof(h))
+        return false;
+    std::memcpy(&h, data.data(), sizeof(h));
+    return h.headerSize >= sizeof(h) && h.headerSize <= data.size() && h.headerVersion == VK_PIPELINE_CACHE_HEADER_VERSION_ONE &&
+           h.vendorID == p.vendorID && h.deviceID == p.deviceID && std::memcmp(h.pipelineCacheUUID, p.pipelineCacheUUID, VK_UUID_SIZE) == 0;
+}
+
+/** vkGetPipelineCacheData, returning VK_ERROR_UNKNOWN where the driver faults instead of taking the process down. */
+VkResult guardedCacheData(VkDevice device, VkPipelineCache cache, size_t* size, void* data)
+{
+#ifdef _WIN32
+    __try
+    {
+        return vkGetPipelineCacheData(device, cache, size, data);
+    }
+    __except (_exception_code() == 0xC0000005 /* EXCEPTION_ACCESS_VIOLATION */ ? 1 : 0)
+    {
+        return VK_ERROR_UNKNOWN;
+    }
+#else
+    return vkGetPipelineCacheData(device, cache, size, data);
+#endif
+}
 
 std::string vkVersion(uint32_t v)
 {
@@ -378,11 +447,30 @@ bool VulkanContext::init(bool validation)
     vmaCreateAllocator(&aci, &allocator);
 
     {
+        const std::filesystem::path path = pipelineCachePath(properties);
+        std::error_code ec;
+        diskPipelineCache = !std::filesystem::exists(disabledPath(path), ec);
+        if (diskPipelineCache && pendingIsStale(path))
+        {
+            if (std::filesystem::remove(path, ec))
+                log::warn("vulkan: the last run stopped while using the pipeline cache, so it was cleared; viewport shaders rebuild this run");
+            else
+            {
+                touch(disabledPath(path));
+                diskPipelineCache = false;
+                log::warn("vulkan: the pipeline cache keeps crashing this graphics driver, so it is off for this GPU. Updating the driver and "
+                          "deleting {} turns it back on",
+                          disabledPath(path).string());
+            }
+            std::filesystem::remove(pendingPath(path), ec);
+        }
         std::vector<char> data;
-        if (std::ifstream in(pipelineCachePath(properties), std::ios::binary); in)
+        if (std::ifstream in(path, std::ios::binary); diskPipelineCache && in)
             data.assign(std::istreambuf_iterator<char>(in), {});
-        if (data.size() > kMaxPipelineCacheBytes)
+        if (data.size() > kMaxPipelineCacheBytes || (!data.empty() && !cacheHeaderMatches(data, properties)))
             data.clear();
+        if (diskPipelineCache)
+            markPending(path);
         VkPipelineCacheCreateInfo pc{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
         pc.initialDataSize = data.size();
         pc.pInitialData = data.empty() ? nullptr : data.data();
@@ -407,17 +495,36 @@ void VulkanContext::pipelineFailed(const std::string& what, VkResult r)
 void VulkanContext::savePipelineCache()
 {
     LILA_ZONE();
-    size_t size = 0;
-    if (pipelineCreationFailed)
-        return;
-    if (!pipelineCache || vkGetPipelineCacheData(device, pipelineCache, &size, nullptr) != VK_SUCCESS || size == 0)
-        return;
-    std::vector<char> data(size);
-    if (vkGetPipelineCacheData(device, pipelineCache, &size, data.data()) != VK_SUCCESS)
+    if (!diskPipelineCache)
         return;
     const std::filesystem::path path = pipelineCachePath(properties);
     std::error_code ec;
-    std::filesystem::create_directories(path.parent_path(), ec);
+    markPending(path);
+    struct ClearPending
+    {
+        const std::filesystem::path& path;
+        ~ClearPending()
+        {
+            std::error_code ec;
+            std::filesystem::remove(pendingPath(path), ec);
+        }
+    } clearPending{path};
+    if (pipelineCreationFailed || !pipelineCache)
+        return;
+    size_t size = 0;
+    VkResult r = guardedCacheData(device, pipelineCache, &size, nullptr);
+    std::vector<char> data(r == VK_SUCCESS ? size : 0);
+    if (r == VK_SUCCESS && size)
+        r = guardedCacheData(device, pipelineCache, &size, data.data());
+    if (r == VK_ERROR_UNKNOWN)
+    {
+        diskPipelineCache = false;
+        std::filesystem::remove(path, ec);
+        log::warn("vulkan: the graphics driver crashed saving the pipeline cache; it was cleared and is off until restart");
+        return;
+    }
+    if (r != VK_SUCCESS || size == 0)
+        return;
     // Another Lila process may be writing the same file.
     std::filesystem::path tmp = path;
     tmp += std::format(".{}.tmp", reinterpret_cast<uintptr_t>(this));

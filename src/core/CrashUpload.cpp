@@ -132,6 +132,21 @@ void setSend(const fs::path& consentFile, bool on)
     writeJsonFile(c.prefsFile, prefs);
 }
 
+/** "12:04:03.342 polyCube(name='x')" to "12:04:03.342 polyCube": the time and the command, never its arguments. */
+static std::string commandNameOnly(std::string_view line)
+{
+    const size_t start = line.find_first_not_of(' ');
+    if (start == std::string_view::npos)
+        return std::string();
+    size_t name = start;
+    if (const size_t gap = line.find(' ', start); gap != std::string_view::npos &&
+        line.substr(start, gap - start).find_first_not_of("0123456789:.") == std::string_view::npos)
+        name = line.find_first_not_of(' ', gap);
+    if (name == std::string_view::npos)
+        return std::string(line);
+    return std::string(line.substr(0, std::min(line.size(), line.find_first_of("( ", name))));
+}
+
 std::string sanitize(std::string_view reportText, const std::vector<std::string>& secrets)
 {
     Report r = parseReport(reportText);
@@ -143,7 +158,7 @@ std::string sanitize(std::string_view reportText, const std::vector<std::string>
     for (Section& s : r.sections)
         if (s.name == "commands")
             for (std::string& line : s.lines)
-                line = line.substr(0, line.find_first_of("( "));
+                line = commandNameOnly(line);
     return redactPaths(replaceSecrets(renderReport(r), secrets));
 }
 

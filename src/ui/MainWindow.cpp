@@ -79,22 +79,24 @@ MainWindow::MainWindow()
         UndoStack::get().setByteBudget(size_t(std::max(0.0, p.value<double>("general", "/undo/memoryMB", 2048.0)) * 1024.0 * 1024.0));
     };
     applyUndoLimit();
-    PrefStore::get().onChanged([this, applyUndoLimit](const std::string& file) {
-        if (file != "general")
+    PrefStore::get().onChanged([self = QPointer<MainWindow>(this), applyUndoLimit](const std::string& file) {
+        if (file != "general" || !self)
             return;
         QMetaObject::invokeMethod(qApp, applyUndoLimit);
-        QMetaObject::invokeMethod(this, [this] { applyChromePrefs(); });
+        QMetaObject::invokeMethod(self, [self] { self->applyChromePrefs(); });
     });
     auto autosaveInterval = [] { return int(std::max(5.0, PrefStore::get().value<double>("general", "/autosave/intervalSeconds", 30.0)) * 1000); };
     mAutosaveTimer->start(autosaveInterval());
-    PrefStore::get().onChanged([this, autosaveInterval](const std::string& file) {
-        if (file == "general" && mAutosaveTimer->interval() != autosaveInterval())
-            QMetaObject::invokeMethod(this, [this, autosaveInterval] { mAutosaveTimer->start(autosaveInterval()); });
+    PrefStore::get().onChanged([self = QPointer<MainWindow>(this), autosaveInterval](const std::string& file) {
+        if (file == "general" && self && self->mAutosaveTimer->interval() != autosaveInterval())
+            QMetaObject::invokeMethod(self, [self, autosaveInterval] { self->mAutosaveTimer->start(autosaveInterval()); });
     });
 
-    Workspace::get().onChanged([this] {
-        refreshWorkspaceLabel();
-        refreshRecentFolders();
+    Workspace::get().onChanged([self = QPointer<MainWindow>(this)] {
+        if (!self)
+            return;
+        self->refreshWorkspaceLabel();
+        self->refreshRecentFolders();
     });
 }
 

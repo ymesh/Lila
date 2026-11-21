@@ -418,13 +418,16 @@ void MainWindow::buildMenus()
     mMenus->rebuild();
 
     menuContext::install(this);
-    menuContext::onChanged([this] {
-        applyMenuSet();
-        raiseToolsFor(menuContext::current());
+    // These registries outlive the window, and a change can still be queued at quit.
+    menuContext::onChanged([self = QPointer<MainWindow>(this)] {
+        if (!self)
+            return;
+        self->applyMenuSet();
+        self->raiseToolsFor(menuContext::current());
     });
-    PrefStore::get().onChanged([this](const std::string& file) {
-        if (file == "general")
-            applyMenuSet();
+    PrefStore::get().onChanged([self = QPointer<MainWindow>(this)](const std::string& file) {
+        if (file == "general" && self)
+            self->applyMenuSet();
     });
     applyMenuSet();
 }

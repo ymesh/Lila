@@ -13,6 +13,8 @@ LILA_FOUNDATION_API bool isMainThread();
 
 /** Queue work for the main thread. Safe from any thread. */
 LILA_FOUNDATION_API void post(std::function<void()> fn);
+/** The same, named in crash reports while it runs. label must outlive the call: a string literal. */
+LILA_FOUNDATION_API void post(const char* label, std::function<void()> fn);
 
 /** Run everything queued so far. Main thread only. Does nothing while held. */
 LILA_FOUNDATION_API void drain();

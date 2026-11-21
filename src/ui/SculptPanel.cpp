@@ -1034,13 +1034,21 @@ void registerSculptUi()
         QTimer::singleShot(0, QCoreApplication::instance(), [ids, command = std::string(command)] { askAboutBrokenLevels(ids, command); });
     });
     addLazyDock(kSculptDock, [] { return sculptDock(true); });
-    // Leaving sculpt mode, however it is left, closes the panel if entering opened it.
+    // The sculpt tool follows the session however it changes, undo and redo included; leaving also closes the panel if
+    // entering opened it.
     sculpt::addListener([] {
         QTimer::singleShot(0, QCoreApplication::instance(), [] {
             static bool wasActive = false;
             const bool active = sculpt::active() != nullptr;
-            if (QDockWidget* d = sculptDock(false); wasActive && !active && gClosesOnExit && d && d->isVisible())
-                d->close();
+            if (wasActive && !active)
+            {
+                if (sculptToolActive())
+                    viewportTools::set(nullptr);
+                if (QDockWidget* d = sculptDock(false); gClosesOnExit && d && d->isVisible())
+                    d->close();
+            }
+            else if (!wasActive && active && !sculptToolActive())
+                startSculptTool();
             wasActive = active;
         });
     });

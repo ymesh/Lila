@@ -178,7 +178,7 @@ TEST_CASE("crash report upload strips identifying details")
                                "\n[stack]\n  lila_scene.dll!lila::Foo::bar (X:/Lila/src/scene/Foo.cpp:12)\n"
                                R"(  opened D:\Projects\Secret\hero.lila for JANE-PC)" "\n"
                                "\n[log]\n  Saved D:/Projects/Secret/hero.lila\n"
-                               "\n[commands]\n  polyCube(name='secretThing')\n";
+                               "\n[commands]\n  polyCube(name='secretThing')\n  11:02:47.515 polySphere(name='hiddenBall')\n  11:02:48.001 undo\n";
     std::string out = crash::upload::sanitize(report, {"Jane Doe", "JANE-PC"});
     CHECK(out.find("Jane") == std::string::npos);
     CHECK(out.find("JANE-PC") == std::string::npos);
@@ -187,6 +187,9 @@ TEST_CASE("crash report upload strips identifying details")
     CHECK(out.find("secretThing") == std::string::npos);
     CHECK(out.find("Foo.cpp:12") != std::string::npos);
     CHECK(out.find("polyCube") != std::string::npos);
+    CHECK(out.find("11:02:47.515 polySphere\n") != std::string::npos);
+    CHECK(out.find("hiddenBall") == std::string::npos);
+    CHECK(out.find("11:02:48.001 undo") != std::string::npos);
     CHECK(out.find("version: 0.1.0") != std::string::npos);
     CHECK(out.find("tool: move") != std::string::npos);
 }
