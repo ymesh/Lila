@@ -44,15 +44,19 @@ if(NOT EXISTS ${_ort_root}/.done)
         file(COPY_FILE ${_ort_root}/ort/LICENSE ${_ort_root}/LICENSE-onnxruntime.txt)
         file(COPY_FILE ${_ort_root}/dml/LICENSE.txt ${_ort_root}/LICENSE-directml.txt)
     else()
-        _lila_fetch_archive(onnxruntime-linux-x64-${LILA_ORT_VERSION}.tgz
-            https://github.com/microsoft/onnxruntime/releases/download/v${LILA_ORT_VERSION}/onnxruntime-linux-x64-${LILA_ORT_VERSION}.tgz
-            3a211fbea252c1e66290658f1b735b772056149f28321e71c308942cdb54b747 _ort)
-        file(ARCHIVE_EXTRACT INPUT ${_ort} DESTINATION ${_ort_root}/ort)
-        set(_src ${_ort_root}/ort/onnxruntime-linux-x64-${LILA_ORT_VERSION})
-        file(COPY ${_src}/include/ DESTINATION ${_ort_root}/include)
-        file(GLOB _bins ${_src}/lib/libonnxruntime*.so*)
-        file(COPY ${_bins} DESTINATION ${_ort_root}/bin)
-        file(COPY_FILE ${_src}/LICENSE ${_ort_root}/LICENSE-onnxruntime.txt)
+        # The CPU package from NuGet, like Windows: github.com/microsoft/onnxruntime (and with it the release tarball
+        # onnxruntime-linux-x64-<version>.tgz) answered 404 on 2026-11-20. The package holds the same CPU build but
+        # only an unversioned libonnxruntime.so; it is copied as its SONAME, libonnxruntime.so.1, which
+        # src/motion/Engine.cpp loads.
+        _lila_fetch_archive(microsoft.ml.onnxruntime.${LILA_ORT_VERSION}.nupkg
+            https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/${LILA_ORT_VERSION}/microsoft.ml.onnxruntime.${LILA_ORT_VERSION}.nupkg
+            4b978d5065b85e7004b6c6f60ca494bd978fbe6836cbf0a0b52d82b61ab99638 _ort)
+        file(ARCHIVE_EXTRACT INPUT ${_ort} DESTINATION ${_ort_root}/ort PATTERNS build/native/include runtimes/linux-x64/native LICENSE)
+        set(_src ${_ort_root}/ort/runtimes/linux-x64/native)
+        file(COPY ${_ort_root}/ort/build/native/include/ DESTINATION ${_ort_root}/include)
+        file(COPY ${_src}/libonnxruntime_providers_shared.so DESTINATION ${_ort_root}/bin)
+        file(COPY_FILE ${_src}/libonnxruntime.so ${_ort_root}/bin/libonnxruntime.so.1)
+        file(COPY_FILE ${_ort_root}/ort/LICENSE ${_ort_root}/LICENSE-onnxruntime.txt)
     endif()
     file(TOUCH ${_ort_root}/.done)
 endif()
