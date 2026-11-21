@@ -5,10 +5,10 @@ Experimental, but it builds and runs: the Lila window, the Vulkan viewport and e
 | Setup | Compiler | C++ library | glibc |
 |---|---|---|---|
 | Rocky Linux 9.8 | GCC 15.2 (gcc-toolset-15) | libstdc++ 15 | 2.34 |
-| Rocky Linux 9.8 | Clang 21.1.8 (`linux-clang` preset) | libstdc++ 15 | 2.34 |
+| Rocky Linux 9.8 | Clang 22.1.8 (`linux-clang` preset; 21.1.8 before) | libstdc++ 15 (gcc-toolset-15) | 2.34 |
 | Ubuntu 22.04 (distrobox container) | GCC 13.4 (ubuntu-toolchain-r PPA) | libstdc++ 13 | 2.35 |
 
-USD is off on Linux (`build.sh` passes `-DLILA_USD=OFF`): the `usd` port only knows the Windows Python layout.
+USD is on (`build.sh` passes `-DLILA_USD=ON`): the OpenUSD extension, MaterialX and the Hydra Storm and Embree viewport renderers work on the Rocky builds. The Ubuntu container build was a proof of concept and hasn't been tried with USD. `build.sh` also passes `-DLILA_BUILD_TESTS=OFF`; configure with `-DLILA_BUILD_TESTS=ON` to get the test suites.
 
 ## What you need
 
@@ -29,7 +29,7 @@ sudo dnf install gcc-toolset-15-gcc-c++ autoconf automake libtool bison flex gpe
   vulkan-loader-devel fontconfig-devel
 ```
 
-Some of these come from the CRB repository (`sudo dnf config-manager --set-enabled crb`). Ninja: `ninja-build` from EPEL, or `pip install ninja`. For the Clang build also `clang` and `llvm` (`llvm-ar` and `llvm-ranlib`, which ThinLTO ports such as Tracy's tools need). The distro Clang already uses gcc-toolset's libstdc++, since `clang-libs` depends on it.
+Some of these come from the CRB repository (`sudo dnf config-manager --set-enabled crb`). Ninja: `ninja-build` from EPEL, or `pip install ninja`. For the Clang build also `clang` and `llvm` (`llvm-ar` and `llvm-ranlib`, which ThinLTO ports such as Tracy's tools need). The distro Clang already uses gcc-toolset's libstdc++, since `clang-libs` depends on it (Clang 22 on Rocky 9.8 selects gcc-toolset-15; `clang++ -v -E -x c++ /dev/null` prints the `Selected GCC installation`). Keep `llvm` at the same version as `clang` when the distro upgrades them.
 
 ### Ubuntu 22.04
 
@@ -66,6 +66,8 @@ build/bin/RelWithDebInfo/lila
 | `LILA_PRESET=linux-clang` | Clang for Lila and every vcpkg port (triplet `x64-linux-clang`, `cmake/toolchains/linux-clang.cmake`), packages in `vcpkg_installed-clang/`. Use with `./build.sh build-clang`. |
 | `LILA_VCPKG_INSTALLED_DIR=<dir>` | Packages in a folder of their own, for another distro or compiler using the same `x64-linux` triplet name, e.g. a container: `./build.sh build-ubuntu` with `vcpkg_installed-ubuntu`. |
 
+A compiler upgrade (e.g. a distro Clang 21 → 22 update) changes vcpkg's ABI hashes, so the next configure rebuilds every port of that triplet (hours) and Lila itself; start it from a clean build folder (`rm -rf build-clang`), keeping `vcpkg_installed-clang`.
+
 Each build needs its own build folder and `vcpkg_installed` folder: packages built with another compiler or glibc must not overwrite each other's. Don't run two builds at the same time either: they share vcpkg's `buildtrees` and `packages` folders under `VCPKG_ROOT`.
 
 ## Run
@@ -97,3 +99,10 @@ The host's files appear under `/run/host` inside the container, but its `/opt` d
 - **A port fails with `Could not find nasm`, or with `CMAKE_C_COMPILER_AR-NOTFOUND` under Clang:** install `nasm`, or the `llvm` tools package matching your Clang.
 - **`could not load ... undefined symbol` when an extension loads:** Linux links shared libraries even with symbols still missing, so a missing dependency only shows when Lila loads the extension. Link that library into the extension.
 - **A crash at startup or exit:** `coredumpctl debug` shows the backtrace. For heap corruption (`corrupted double-linked list`, `double free`), run `valgrind ./lilabatch`, which reports the first bad read or write.
+- **Random build failures that don't come back on a rerun** (an internal compiler error, `symbol ... is already defined`, or a library with undefined symbols such as OpenUSD's `libusd_sdf.so`, while the same file compiles fine on its own): suspect the hardware, and one CPU core in particular. memtest can pass while a single core computes wrong results, and the kernel logs nothing. Find it by compiling one affected file pinned to each core in turn with `taskset -c <cpu> <compile command>` and comparing the outputs: a good core gives the same output every time. `lscpu -e=CPU,CORE` shows which logical CPUs share a physical core. Take both of a bad core's CPUs offline until the next reboot, here CPUs 7 and 15 (physical core 7):
+  ```bash
+  cat /sys/devices/system/cpu/offline                    # CPUs currently offline (empty: none)
+  echo 0 | sudo tee /sys/devices/system/cpu/cpu7/online  # take offline; echo 1 brings it back
+  echo 0 | sudo tee /sys/devices/system/cpu/cpu15/online
+  ```
+  This doesn't survive a reboot. Load the BIOS defaults and test that core again; if it still fails, it's a warranty case. Objects built while the core was in use can be silently wrong and stay in the caches, so clear sccache and vcpkg's binary cache (`~/.cache/vcpkg/archives` by default) before a clean rebuild.
