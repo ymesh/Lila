@@ -50,8 +50,7 @@ PyCall wrap(PyObject* fn)
         PyObject* result = PyObject_CallFunction(held.get(), "s#", text.data(), Py_ssize_t(text.size()));
         if (!result)
         {
-            PyErr_Print();
-            throw std::runtime_error("a Python callback failed (the traceback is in the log)");
+            throw std::runtime_error(python::takeError());
         }
         json out;
         if (PyUnicode_Check(result))

@@ -406,3 +406,71 @@ TEST_CASE("texture graph nodes rename in place and the graph takes notes")
     pump();
     CHECK(rock().frames.empty());
 }
+
+TEST_CASE("texture graph nodes group into a node group that opens, edits its inputs, and ungroups")
+{
+    registerTexGraphUi();
+    run("newScene");
+    run("texCreateSet", {{"args", {"Rock"}}, {"resolution", 64}});
+    run("texAddNode", {{"args", {"Rock", "math"}}, {"name", "m0"}, {"position", {-500, 0}}});
+    run("texAddNode", {{"args", {"Rock", "math"}}, {"name", "m1"}, {"position", {-250, 0}}});
+    run("texConnect", {{"args", {"Rock", "m0.out", "m1.a"}}});
+    run("texConnect", {{"args", {"Rock", "m1.out", "Output.roughness"}}});
+    QMainWindow win;
+    auto* editor = new ui::NodeEditor(&win, ui::kTextureGraphBackend);
+    win.setCentralWidget(editor);
+    win.resize(1000, 700);
+    win.show();
+    editor->setGroup("Rock");
+    pump();
+    auto* view = editor->findChild<QGraphicsView*>();
+    REQUIRE(view);
+    auto selectAt = [&](QPointF at) {
+        view->scene()->clearSelection();
+        for (QGraphicsItem* i : view->scene()->items())
+            if ((i->flags() & QGraphicsItem::ItemIsSelectable) && QLineF(i->pos(), at).length() < 0.5)
+                i->setSelected(true);
+        pump();
+    };
+    auto has = [](const tex::Graph& g, const char* from, const char* to) {
+        return std::any_of(g.links.begin(), g.links.end(), [&](const tex::GLink& l) { return l.fromNode + "." + l.fromSocket == from && l.toNode + "." + l.toSocket == to; });
+    };
+
+    selectAt(QPointF(-250, 0));
+    ui::actions::run(json("nodeEditor.groupNodes"));
+    pump();
+    tex::Graph g = rock();
+    REQUIRE(g.subgroups.contains("NodeGroup"));
+    REQUIRE(g.node("NodeGroup"));
+    CHECK(g.node("NodeGroup")->type == "Group");
+    CHECK_FALSE(g.node("m1"));
+    CHECK(has(g, "m0.out", "NodeGroup.a"));
+    CHECK(has(g, "NodeGroup.out", "Output.roughness"));
+    CHECK_FALSE(run("texGraphInfo", {{"args", {"Rock"}}}).contains("error"));
+
+    selectAt(QPointF(-250, 0));
+    ui::actions::run(json("nodeEditor.openGroup"));
+    pump();
+    CHECK(editor->group() == "Rock/NodeGroup");
+    json inner = run("texGraphInfo", {{"args", {"Rock/NodeGroup"}}});
+    CHECK(inner["nodes"].size() == 3);
+    run("texRenameInput", {{"args", {"Rock/NodeGroup", "a", "amount"}}});
+    CHECK(has(rock(), "m0.out", "NodeGroup.amount"));
+    run("texAddInput", {{"args", {"Rock/NodeGroup", "bias", "float"}}});
+    CHECK(tex::Graph::fromJson(rock().subgroups.at("NodeGroup")).inputs.size() == 2);
+    ui::actions::run(json("nodeEditor.parentGroup"));
+    pump();
+    CHECK(editor->group() == "Rock");
+
+    selectAt(QPointF(-250, 0));
+    ui::actions::run(json("nodeEditor.ungroup"));
+    pump();
+    g = rock();
+    CHECK_FALSE(g.node("NodeGroup"));
+    CHECK(g.subgroups.empty());
+    CHECK(has(g, "m0.out", "m1.a"));
+    CHECK(has(g, "m1.out", "Output.roughness"));
+    run("undo");
+    pump();
+    CHECK(rock().node("NodeGroup"));
+}

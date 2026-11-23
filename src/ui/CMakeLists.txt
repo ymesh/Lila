@@ -100,6 +100,7 @@ lila_module(lila_ui UI
     PythonSdk.cpp
     PythonViewport.cpp
     Owner.h
+    ScrubGesture.cpp ScrubGesture.h
     SpinScrub.cpp SpinScrub.h
     NumberExpr.cpp NumberExpr.h
     PanelFilter.cpp PanelFilter.h
@@ -114,6 +115,7 @@ lila_module(lila_ui UI
     ColorPopup.cpp ColorPopup.h
     ImagePicker.cpp ImagePicker.h
     MaterialDraw.cpp MaterialDraw.h
+    VolumeDisplay.cpp VolumeDisplay.h
     MaterialEditor.cpp MaterialEditor.h
     MeasureTool.cpp MeasureTool.h
     DebugDrawUi.cpp DebugDrawUi.h
@@ -177,6 +179,7 @@ lila_module(lila_ui UI
     Updater.cpp Updater.h
     WelcomeNews.cpp WelcomeNews.h
     FeatureStatus.cpp FeatureStatus.h
+    SceneLights.cpp SceneLights.h
     Credits.cpp Credits.h
     CreditsDialog.cpp CreditsDialog.h
     ProgressOverlay.cpp ProgressOverlay.h
@@ -218,6 +221,7 @@ lila_module(lila_ui UI
     ViewportHooks.cpp ViewportHooks.h
     ViewportRenderers.cpp ViewportRenderers.h
     ViewportDisplay.cpp ViewportDisplay.h
+    RandomColors.cpp
     ViewportHud.cpp ViewportHud.h
     LodDisplay.cpp LodDisplay.h
     ViewportContext.cpp ViewportContext.h

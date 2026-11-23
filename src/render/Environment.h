@@ -8,6 +8,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace lila::render
@@ -30,6 +31,9 @@ LILA_UI_API EnvironmentData buildStudioEnvironment();
 
 /** From a latitude-longitude panorama (top row looks up). */
 LILA_UI_API EnvironmentData buildEnvironment(const HdrImage& equirect);
+
+/** From a radiance function over directions in the environment's axes (+Y up), on a cube of this face size. */
+LILA_UI_API EnvironmentData buildEnvironment(int size, const std::function<glm::vec3(const glm::vec3&)>& radiance);
 
 /** Split-sum GGX lookup: u = n.v, v = roughness, texels are (scale, bias) on F0, RG half floats. */
 LILA_UI_API std::vector<uint16_t> buildBrdfLut(int size);

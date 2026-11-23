@@ -166,6 +166,12 @@ private:
     Tool effectiveTool() const;
     double handleLength() const;
     glm::dvec3 axis(int i) const { return mFrame[i]; }
+    /**
+     * Screen corners of the plane handle normal to axis i, spanning the other two axes stretched by scale; empty when
+     * the plane is seen edge-on or off screen. Move and Scale share it.
+     */
+    std::vector<QPointF> planeQuad(int i, double length, glm::dvec3 scale = glm::dvec3(1.0)) const;
+    void drawPlanes(OverlayPainter& p, glm::dvec3 scale);
     /** Shift+MMB: once the drag is long enough, turns it into a drag on the axis it runs along. */
     void pickAxisFromDrag(QPointF px);
     Handle pick(QPointF px) const;

@@ -927,6 +927,24 @@ bool decodePackBits(const unsigned char* src, size_t n, std::vector<unsigned cha
     return o == out.size();
 }
 
+/** Undoes TIFF predictor 3 on one row: byte differencing, then each sample's bytes regathered from their planes. */
+void undoFloatPredictor(unsigned char* row, size_t samples, size_t stride, size_t bytes, std::vector<unsigned char>& tmp)
+{
+    const size_t n = samples * bytes;
+    for (size_t i = stride; i < n; ++i)
+        row[i] = static_cast<unsigned char>(row[i] + row[i - stride]);
+    tmp.assign(row, row + n);
+    // The planes run most significant byte first; the samples come out little-endian.
+    for (size_t s = 0; s < samples; ++s)
+        for (size_t b = 0; b < bytes; ++b)
+            row[s * bytes + b] = tmp[(bytes - 1 - b) * samples + s];
+}
+
+/**
+ * Baseline TIFF and BigTIFF, strips or tiles, chunky or planar, 1 to 4 samples (grey, grey + alpha, RGB, RGBA; extra
+ * samples past four are skipped). 8 and 16-bit unsigned samples read as 0..1; signed integers, 32-bit unsigned and
+ * floats read as stored, so heights and other data keep their units.
+ */
 Image readTiffImpl(const fs::path& path, std::string* err)
 {
     auto fail = [&](const std::string& why) {
@@ -935,105 +953,176 @@ Image readTiffImpl(const fs::path& path, std::string* err)
         return Image{};
     };
     const std::vector<unsigned char> d = readAll(path);
-    if (d.size() < 8 || !((d[0] == 'I' && d[1] == 'I') || (d[0] == 'M' && d[1] == 'M')))
+    if (d.size() < 16 || !((d[0] == 'I' && d[1] == 'I') || (d[0] == 'M' && d[1] == 'M')))
         return fail("not a TIFF");
     const bool le = d[0] == 'I';
-    auto u16 = [&](size_t at) { return le ? uint16_t(d[at] | d[at + 1] << 8) : be16(&d[at]); };
-    auto u32 = [&](size_t at) { return le ? le32(&d[at]) : be32(&d[at]); };
-    if (u16(2) != 42)
+    auto num = [&](size_t at, int n) {
+        uint64_t v = 0;
+        for (int i = 0; i < n; ++i)
+            v |= uint64_t(d[at + size_t(le ? i : n - 1 - i)]) << (8 * i);
+        return v;
+    };
+    const uint64_t version = num(2, 2);
+    if (version != 42 && version != 43)
         return fail("not a TIFF");
-    const size_t ifd = u32(4);
-    if (ifd + 2 > d.size())
+    const bool big = version == 43;
+    const size_t ifd = size_t(big ? num(8, 8) : num(4, 4));
+    const size_t countSize = big ? 8 : 2, entrySize = big ? 20 : 12, inlineSize = big ? 8 : 4;
+    if (ifd + countSize > d.size())
         return fail("truncated");
-    const size_t n = u16(ifd);
-    if (ifd + 2 + n * 12 > d.size())
+    const size_t n = size_t(num(ifd, int(countSize)));
+    if (ifd + countSize + n * entrySize > d.size())
         return fail("truncated IFD");
-    std::map<uint16_t, std::vector<uint32_t>> tags;
+    std::map<uint16_t, std::vector<uint64_t>> tags;
     std::vector<unsigned char> icc;
     for (size_t e = 0; e < n; ++e)
     {
-        const size_t p = ifd + 2 + e * 12;
-        const uint16_t tag = u16(p), type = u16(p + 2);
-        const uint32_t count = u32(p + 4);
+        const size_t p = ifd + countSize + e * entrySize;
+        const uint16_t tag = uint16_t(num(p, 2)), type = uint16_t(num(p + 2, 2));
+        const uint64_t count = big ? num(p + 4, 8) : num(p + 4, 4);
+        const size_t value = p + (big ? 12 : 8);
         if (tag == 34675 && (type == 7 || type == 1))
         {
-            const size_t base = count <= 4 ? p + 8 : u32(p + 8);
+            const uint64_t base = count <= inlineSize ? value : num(value, int(inlineSize));
             if (base + count <= d.size())
                 icc.assign(d.begin() + std::ptrdiff_t(base), d.begin() + std::ptrdiff_t(base + count));
             continue;
         }
-        const size_t size = type == kTiffShort ? 2 : type == kTiffLong ? 4 : 0;
-        if (!size)
+        // BYTE, SHORT, LONG and LONG8 carry every tag read here.
+        const int size = type == 1 ? 1 : type == kTiffShort ? 2 : type == kTiffLong ? 4 : type == 16 ? 8 : 0;
+        if (!size || count > (uint64_t(1) << 28))
             continue;
-        const size_t base = size * count <= 4 ? p + 8 : u32(p + 8);
-        if (base + size * count > d.size())
+        const uint64_t base = uint64_t(size) * count <= inlineSize ? value : num(value, int(inlineSize));
+        if (base + uint64_t(size) * count > d.size())
             return fail("bad tag offset");
-        std::vector<uint32_t> v(count);
-        for (uint32_t i = 0; i < count; ++i)
-            v[i] = size == 2 ? u16(base + i * 2) : u32(base + i * 4);
+        std::vector<uint64_t> v(static_cast<size_t>(count));
+        for (size_t i = 0; i < v.size(); ++i)
+            v[i] = num(size_t(base) + i * size_t(size), size);
         tags[tag] = std::move(v);
     }
-    auto one = [&](uint16_t tag, uint32_t fallback) { return tags.contains(tag) && !tags[tag].empty() ? tags[tag][0] : fallback; };
+    auto one = [&](uint16_t tag, uint64_t fallback) {
+        auto it = tags.find(tag);
+        return it != tags.end() && !it->second.empty() ? it->second[0] : fallback;
+    };
     const int w = int(one(256, 0)), h = int(one(257, 0));
-    const uint32_t spp = one(277, 1), compression = one(259, 1), predictor = one(317, 1), bits = one(258, 1), format = one(339, 1);
-    if (w <= 0 || h <= 0 || (spp != 3 && spp != 4) || one(262, 2) != 2 || one(284, 1) != 1)
-        return fail("only chunky RGB or RGBA");
-    if (!((bits == 8 || bits == 16) && format == 1) && !(bits == 32 && format == 3))
-        return fail("only 8/16 bit unsigned or 32 bit float samples");
+    const uint64_t spp = one(277, 1), compression = one(259, 1), predictor = one(317, 1), bits = one(258, 1);
+    const uint64_t format = one(339, 1), photometric = one(262, spp >= 3 ? 2 : 1), planar = one(284, 1);
+    if (w <= 0 || h <= 0)
+        return fail("no image size");
+    if (spp < 1 || spp > 16 || photometric > 2 || (photometric == 2 && spp < 3) || (photometric < 2 && spp > 2))
+        return fail("only grey, grey + alpha, RGB or RGBA (no palette, CMYK or YCbCr)");
+    const bool sampleOk = format == 3 ? (bits == 32 || bits == 64) : (format == 1 || format == 2) && (bits == 8 || bits == 16 || bits == 32);
+    if (!sampleOk)
+        return fail(std::to_string(bits) + "-bit " + (format == 2 ? "signed" : format == 3 ? "float" : "unsigned") + " samples");
     if (compression != 1 && compression != 5 && compression != 8 && compression != 32773 && compression != 32946)
         return fail("only uncompressed, LZW, PackBits or deflate");
-    const std::vector<uint32_t>& offsets = tags[273];
-    const std::vector<uint32_t>& counts = tags[279];
-    const int rowsPerStrip = int(std::min<uint32_t>(one(278, uint32_t(h)), uint32_t(h)));
-    if (offsets.empty() || offsets.size() != counts.size() || rowsPerStrip <= 0)
-        return fail("bad strips");
-    const size_t bytes = bits / 8;
-    const size_t rowBytes = size_t(w) * spp * bytes;
+    if (predictor != 1 && predictor != 2 && predictor != 3)
+        return fail("predictor " + std::to_string(predictor));
+
+    const bool tiled = tags.contains(322);
+    const int cw = tiled ? int(one(322, 0)) : w;
+    const int ch = tiled ? int(one(323, 0)) : int(std::clamp<uint64_t>(one(278, uint64_t(h)), 1, uint64_t(h)));
+    const std::vector<uint64_t>& offsets = tags[tiled ? uint16_t(324) : uint16_t(273)];
+    const std::vector<uint64_t>& counts = tags[tiled ? uint16_t(325) : uint16_t(279)];
+    if (cw <= 0 || ch <= 0)
+        return fail("bad tile size");
+    const size_t across = size_t((w + cw - 1) / cw), down = size_t((h + ch - 1) / ch);
+    const size_t chunkSpp = planar == 2 ? 1 : size_t(spp), planes = planar == 2 ? size_t(spp) : 1;
+    if (offsets.size() < across * down * planes || counts.size() < offsets.size())
+        return fail("missing strips or tiles");
+
+    const size_t bytes = size_t(bits / 8);
+    // 8 and 16-bit unsigned are colour; anything wider or signed is data, kept as stored.
+    const bool normalised = format == 1 && bits <= 16;
+    const float scale = bits == 8 ? 1.0f / 255.0f : 1.0f / 65535.0f;
+    auto sampleAt = [&](const unsigned char* q, bool littleEndian) -> float {
+        uint64_t v = 0;
+        for (size_t i = 0; i < bytes; ++i)
+            v |= uint64_t(q[littleEndian ? i : bytes - 1 - i]) << (8 * i);
+        if (format == 3)
+            return bits == 32 ? std::bit_cast<float>(uint32_t(v)) : float(std::bit_cast<double>(v));
+        if (format == 2)
+            return bits == 8 ? float(int8_t(v)) : bits == 16 ? float(int16_t(v)) : float(int32_t(v));
+        if (normalised)
+        {
+            const float f = float(v) * scale;
+            return photometric == 0 ? 1.0f - f : f;
+        }
+        return float(uint32_t(v));
+    };
+    const uint64_t mask = bits >= 32 ? 0xffffffffull : (1ull << bits) - 1;
+    auto getInt = [&](const unsigned char* row, size_t i) {
+        uint64_t v = 0;
+        for (size_t b = 0; b < bytes; ++b)
+            v |= uint64_t(row[i * bytes + (le ? b : bytes - 1 - b)]) << (8 * b);
+        return v;
+    };
+    auto putInt = [&](unsigned char* row, size_t i, uint64_t v) {
+        for (size_t b = 0; b < bytes; ++b)
+            row[i * bytes + (le ? b : bytes - 1 - b)] = static_cast<unsigned char>(v >> (8 * b));
+    };
+
     Image img{w, h, std::vector<float>(size_t(w) * size_t(h) * 4, 1.0f)};
-    for (size_t s = 0; s < offsets.size(); ++s)
-    {
-        const int y0 = int(s) * rowsPerStrip, y1 = std::min(h, y0 + rowsPerStrip);
-        if (y0 >= h)
-            break;
-        if (size_t(offsets[s]) + counts[s] > d.size())
-            return fail("truncated strip");
-        std::vector<unsigned char> raw(size_t(y1 - y0) * rowBytes);
-        if (compression == 1)
-        {
-            if (counts[s] < raw.size())
-                return fail("short strip");
-            std::memcpy(raw.data(), &d[offsets[s]], raw.size());
-        }
-        else if (compression == 5 || compression == 32773)
-        {
-            const bool ok = compression == 5 ? decodeTiffLzw(&d[offsets[s]], counts[s], raw) : decodePackBits(&d[offsets[s]], counts[s], raw);
-            if (!ok)
-                return fail("bad strip data");
-        }
-        else
-        {
-            mz_ulong got = mz_ulong(raw.size());
-            if (mz_uncompress(raw.data(), &got, &d[offsets[s]], mz_ulong(counts[s])) != MZ_OK || got != raw.size())
-                return fail("bad strip data");
-        }
-        for (int y = y0; y < y1; ++y)
-        {
-            const unsigned char* r = raw.data() + size_t(y - y0) * rowBytes;
-            std::vector<uint32_t> v(size_t(w) * spp);
-            for (size_t i = 0; i < v.size(); ++i)
-                v[i] = bytes == 1 ? r[i] : bytes == 2 ? (le ? uint32_t(r[2 * i] | r[2 * i + 1] << 8) : be16(r + 2 * i)) : (le ? le32(r + 4 * i) : be32(r + 4 * i));
-            if (predictor == 2 && bits != 32)
-                for (size_t i = spp; i < v.size(); ++i)
-                    v[i] = (v[i] + v[i - spp]) & (bits == 8 ? 0xffu : 0xffffu);
-            for (int x = 0; x < w; ++x)
-                for (uint32_t c = 0; c < spp; ++c)
+    const size_t rowSamples = size_t(cw) * chunkSpp, rowBytes = rowSamples * bytes;
+    std::vector<unsigned char> raw, tmp;
+    for (size_t plane = 0; plane < planes; ++plane)
+        for (size_t ty = 0; ty < down; ++ty)
+            for (size_t tx = 0; tx < across; ++tx)
+            {
+                const size_t c = (plane * down + ty) * across + tx;
+                const int y0 = int(ty) * ch, x0 = int(tx) * cw;
+                // Strips stop at the image's last row; tiles are always whole.
+                const int rows = tiled ? ch : std::min(ch, h - y0);
+                if (offsets[c] + counts[c] > d.size())
+                    return fail("truncated strip or tile");
+                const unsigned char* src = &d[size_t(offsets[c])];
+                raw.assign(size_t(rows) * rowBytes, 0);
+                bool ok = true;
+                if (compression == 1)
                 {
-                    const uint32_t q = v[size_t(x) * spp + c];
-                    img.rgba[(size_t(y) * size_t(w) + size_t(x)) * 4 + c] =
-                        bits == 32 ? std::bit_cast<float>(q) : bits == 16 ? float(q) / 65535.0f : float(q) / 255.0f;
+                    if (counts[c] < raw.size())
+                        return fail("short strip or tile");
+                    std::memcpy(raw.data(), src, raw.size());
                 }
-        }
-    }
+                else if (compression == 5)
+                    ok = decodeTiffLzw(src, size_t(counts[c]), raw);
+                else if (compression == 32773)
+                    ok = decodePackBits(src, size_t(counts[c]), raw);
+                else
+                {
+                    mz_ulong got = mz_ulong(raw.size());
+                    ok = mz_uncompress(raw.data(), &got, src, mz_ulong(counts[c])) == MZ_OK && got == raw.size();
+                }
+                if (!ok)
+                    return fail("bad strip or tile data");
+                for (int r = 0; r < rows && y0 + r < h; ++r)
+                {
+                    unsigned char* row = raw.data() + size_t(r) * rowBytes;
+                    bool rowLe = le;
+                    if (predictor == 3 && format == 3)
+                    {
+                        undoFloatPredictor(row, rowSamples, chunkSpp, bytes, tmp);
+                        rowLe = true;
+                    }
+                    else if (predictor == 2 && format != 3)
+                        for (size_t i = chunkSpp; i < rowSamples; ++i)
+                            putInt(row, i, (getInt(row, i) + getInt(row, i - chunkSpp)) & mask);
+                    const int y = y0 + r;
+                    for (int x = 0; x < cw && x0 + x < w; ++x)
+                        for (size_t s = 0; s < chunkSpp; ++s)
+                        {
+                            const size_t sample = planar == 2 ? plane : s;
+                            if (sample >= 4 || (spp <= 2 && sample >= 2))
+                                continue;
+                            const float v = sampleAt(row + (size_t(x) * chunkSpp + s) * bytes, rowLe);
+                            float* px = &img.rgba[(size_t(y) * size_t(w) + size_t(x0 + x)) * 4];
+                            if (spp <= 2 && sample == 0)
+                                px[0] = px[1] = px[2] = v;
+                            else
+                                px[spp <= 2 ? 3 : sample] = v;
+                        }
+                }
+            }
     img.icc = std::move(icc);
     return img;
 }

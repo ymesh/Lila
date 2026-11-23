@@ -44,12 +44,13 @@ AttrDef pathAttr(std::string name, std::string doc)
 /** Painterly, Toon and Foliage inputs; each model reads only its own and DefaultLit none of them. */
 void stylisedAttrs(std::vector<AttrDef>& a)
 {
-    a[kShadingModel] = enumAttr("shadingModel", {"defaultLit", "painterly", "toon", "foliage", "unlit", "skin", "cloth", "clearcoat", "hair", "eye"},
+    a[kShadingModel] = enumAttr("shadingModel", {"defaultLit", "painterly", "toon", "foliage", "unlit", "skin", "cloth", "clearcoat", "hair", "eye", "volume"},
                                 "Lighting model: defaultLit (Unreal's default lit), painterly (brush strokes and a colour palette), toon "
                                 "(stepped ramp with tinted light and shadow), foliage (soft gradient shading, lit through), unlit (the "
                                 "base colour as it is, plus emissive, with no lighting), skin (light scattering under the surface), cloth "
                                 "(velvet sheen), clearcoat (a glossy layer on top), hair (stretched strand highlights, for hair cards) or "
-                                "eye (an iris under a glossy cornea; UVs centred on the pupil).");
+                                "eye (an iris under a glossy cornea; UVs centred on the pupil) or volume (fog, smoke or cloud filling the mesh, or its "
+                                "geometry nodes' density grid, in place of a surface).");
 
     a[kPainterlyStrength] = floatAttr("painterlyStrength", 1.0, "Painterly: scales the whole effect; 0 shades exactly like defaultLit.", 0.0);
     a[kStrokeNormal] = floatAttr("strokeNormal", 0.6, "Painterly: how far the stroke sheet bends the shading normal; 0 is the plain surface.", 0.0, 1.0);
@@ -190,6 +191,13 @@ std::vector<AttrDef> materialAttrs()
                           .doc = "Single maps taken from texture sets: {channel: set} JSON, set with setMaterialTexture textureSet=."};
     a[kListOrder] = {.name = "listOrder", .type = PlugType::Int, .defaultValue = int64_t(0), .flags = AttrInput | AttrStorable | AttrHidden,
                      .doc = "Position in the Material Editor's list (reorderMaterials); 0 sorts by name after the placed ones."};
+    a[kVolumeDensity] = floatAttr("volumeDensity", 1.0, "Volume: how thick it is, per metre: 1 dims light to a third over a metre. Scales a density grid's values.", 0.0);
+    a[kVolumeScatterColor] = colorAttr("volumeScatterColor", glm::dvec3(0.8), "Volume: the colour of light it scatters (its albedo); white is cloud, grey is smoke.");
+    a[kVolumeAbsorptionColor] = colorAttr("volumeAbsorptionColor", glm::dvec3(0.0), "Volume: light it swallows by colour on top of what it scatters; dark smoke absorbs.");
+    a[kVolumeAnisotropy] = floatAttr("volumeAnisotropy", 0.0, "Volume: 0 scatters evenly, toward 1 forward (glowing toward the light), toward -1 back.", -0.95, 0.95);
+    a[kVolumeEmissionColor] = colorAttr("volumeEmissionColor", glm::dvec3(1.0, 0.5, 0.1), "Volume: colour of light it gives off, for fire and glowing gas.");
+    a[kVolumeEmissionStrength] = floatAttr("volumeEmissionStrength", 0.0, "Volume: brightness of its own light, scaled by density; 0 gives none.", 0.0);
+    a[kVolumeVoxelSize] = floatAttr("volumeVoxelSize", 0.0, "Volume: voxel size a mesh is filled at, cm; 0 picks one from its size. Density grids keep their own.", 0.0);
     stylisedAttrs(a);
     heightAttrs(a);
     samplingAttrs(a);

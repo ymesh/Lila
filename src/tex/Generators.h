@@ -67,6 +67,8 @@ LILA_SCENE_API std::filesystem::path bakedMapFile(scene::Graph& g, const std::st
  * column-major and materials); null when it has no baked position map.
  */
 LILA_SCENE_API nlohmann::json bakedPositionMeta(scene::Graph& g, const std::string& bakeProject);
+/** The meta of a map from the project's live mesh maps, else its last bake (else its manifest); null when neither has it. */
+LILA_SCENE_API nlohmann::json bakedMapMeta(scene::Graph& g, const std::string& bakeProject, const std::string& map);
 
 /**
  * The frame the position map texture graphs read is in now, as bakedPositionMeta gives it: the live position map's when

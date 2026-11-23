@@ -419,7 +419,7 @@ TEST_CASE("blend import: a deform bone posed by a constraint keeps Blender's pos
     }
 }
 
-TEST_CASE("blend import: emission cards cut out by alpha; transparent and volume-only objects hidden")
+TEST_CASE("blend import: emission cards cut out by alpha; transparent objects hidden; volume-only objects become volumes")
 {
     for (const char* v : kVersions)
     {
@@ -436,8 +436,17 @@ TEST_CASE("blend import: emission cards cut out by alpha; transparent and volume
         CHECK(fs::path(card->as<std::string>(material::kBaseColorMap)).extension() == ".png");
         CHECK(node(g, "Card")->as<bool>(Transform::kVisibility));
         CHECK_FALSE(node(g, "Clear")->as<bool>(Transform::kVisibility));
-        CHECK_FALSE(node(g, "Fog")->as<bool>(Transform::kVisibility));
         CHECK_FALSE(node(g, "EyeHidden")->as<bool>(Transform::kVisibility));
+        // A default Principled Volume: grey, density 1, black absorption colour.
+        CHECK(node(g, "Fog")->as<bool>(Transform::kVisibility));
+        MeshPtr fogMesh = outMesh(g, "Fog");
+        REQUIRE(fogMesh->materialNames().size() == 1);
+        Node* fog = materials::find(g, fogMesh->materialNames()[0]);
+        REQUIRE(fog);
+        CHECK(fog->as<int64_t>(material::kShadingModel) == int64_t(material::ShadingModel::Volume));
+        CHECK(fog->as<double>(material::kVolumeDensity) == doctest::Approx(1.0));
+        checkVec(fog->as<glm::dvec3>(material::kVolumeScatterColor), glm::dvec3(0.5), 1e-3);
+        checkVec(fog->as<glm::dvec3>(material::kVolumeAbsorptionColor), glm::dvec3(0.5), 1e-3);
     }
 }
 

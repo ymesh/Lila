@@ -204,6 +204,8 @@ const std::unordered_map<std::string, std::string>& actionTable()
         {"RotateTool", "tool.rotate"},
         {"RotateToolMarkingMenu", "tool.rotate"},
         {"RotateToolWithSnapMarkingMenu", "tool.rotate"},
+        {"IncreaseManipulatorSize", "manip.sizeUp"},
+        {"DecreaseManipulatorSize", "manip.sizeDown"},
         {"ScaleTool", "tool.scale"},
         {"ScaleToolMarkingMenu", "tool.scale"},
         {"ScaleToolWithSnapMarkingMenu", "tool.scale"},

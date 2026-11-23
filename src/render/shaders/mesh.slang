@@ -4,6 +4,8 @@
 // mesh_bindless.slang compiles this with LILA_BINDLESS: material maps (and UDIM tiles) come from one runtime array.
 // Stylised models (Painterly, Toon, Foliage) read a style block from the frame's table; see render::packStyle.
 
+#include "atmosphere_common.slang"
+
 /** One placement of a draw; matches render::GpuInstance. */
 struct InstanceData
 {
@@ -33,7 +35,14 @@ struct GpuFrame
     float4 shadowing; // one past the light each rtShadowTex channel traces, 0 for none
     float4 worldOffset; // xyz: the render origin wrapped by a large period, for world-space patterns
     float4 reflection;  // x: 1 when reflectTex holds this frame's traced reflections
-    float4 pad[5];
+    GpuAtmosphere* atmosphere; // the sky atmosphere, null without one
+    float4* aerial;            // atmosphere.slang's froxels, null without them
+    float4 aerialParams;       // x depth of the last slice (km), y cells across, z slices
+    float4* volumes;           // volume.slang's half-resolution light (rgb) and transmittance (a), null without volumes
+    uint volumeWidth, volumeHeight;
+    uint64_t volumeParams;     // the path tracer's GpuVolume list
+    uint volumeCount, volumePad;
+    float4 pad[1];
 };
 
 struct MeshPush
@@ -879,11 +888,68 @@ float shadowFactor(GpuLight l, uint index, float3 P, float3 ng)
  * Exponential height fog between the camera and P: the light it lets through, plus its own glow and the sun's, scattered
  * forward with a Henyey-Greenstein lobe.
  */
-float3 applyFog(float3 c, float3 eye, float3 P)
+/** The froxel value at a cell and slice, two float4 apart: scattered light, then transmittance. */
+void aerialAt(GpuFrame fr, int3 cell, out float3 light, out float3 transmit)
+{
+    int cells = int(fr.aerialParams.y);
+    if (cell.z < 0)
+    {
+        light = float3(0.0, 0.0, 0.0);
+        transmit = float3(1.0, 1.0, 1.0);
+        return;
+    }
+    uint i = uint((cell.z * cells + cell.y) * cells + cell.x) * 2;
+    light = fr.aerial[i].rgb;
+    transmit = fr.aerial[i + 1].rgb;
+}
+
+/** The sky's haze between the camera and P: the froxels at P's place on screen and distance, trilinear. */
+float3 applyAerialPerspective(GpuFrame fr, float3 c, float3 eye, float3 P)
+{
+    float4 clip = mul(pc.viewProj, float4(P, 1.0));
+    if (clip.w <= 0.0)
+        return c;
+    const float cells = fr.aerialParams.y, slices = fr.aerialParams.z;
+    float2 uv = clip.xy / clip.w * 0.5 + 0.5;
+    float km = length(P - eye) * 1e-5;
+    float3 at = float3(clamp(uv * cells - 0.5, 0.0, cells - 1.0), min(sqrt(km / max(fr.aerialParams.x, 1e-6)) * slices - 1.0, slices - 1.0));
+    int3 base = int3(floor(at));
+    float3 f = at - float3(base);
+    float3 light = float3(0.0, 0.0, 0.0), transmit = float3(0.0, 0.0, 0.0);
+    for (uint k = 0; k < 8; ++k)
+    {
+        int3 o = int3(k & 1, (k >> 1) & 1, (k >> 2) & 1);
+        float w = (o.x != 0 ? f.x : 1.0 - f.x) * (o.y != 0 ? f.y : 1.0 - f.y) * (o.z != 0 ? f.z : 1.0 - f.z);
+        int3 cell = min(base + o, int3(int(cells) - 1, int(cells) - 1, int(slices) - 1));
+        float3 l, t;
+        aerialAt(fr, cell, l, t);
+        light += l * w;
+        transmit += t * w;
+    }
+    return c * transmit + light;
+}
+
+/** The volumes in front of the opaque surface at screen position uv (0 to 1, as SV_Position runs). */
+float3 applyVolumes(float3 c, float2 uv)
+{
+    if (pc.lights == nullptr)
+        return c;
+    GpuFrame* fr = (GpuFrame*)pc.lights;
+    if (fr->volumes == nullptr)
+        return c;
+    uint2 size = uint2(fr->volumeWidth, fr->volumeHeight);
+    uint2 p = min(uint2(saturate(uv) * float2(size)), size - 1);
+    float4 v = fr->volumes[p.y * size.x + p.x];
+    return c * v.a + v.rgb;
+}
+
+float3 applyFog(float3 c, float3 eye, float3 P, bool aerial = true)
 {
     if (pc.lights == nullptr)
         return c;
     GpuFrame fr = *(GpuFrame*)pc.lights;
+    if (aerial && fr.aerial != nullptr)
+        c = applyAerialPerspective(fr, c, eye, P);
     const float density = fr.fogColor.w;
     if (density <= 0.0)
         return c;
@@ -1354,6 +1420,11 @@ float4 shadeMesh(VSOut i, bool front, Centers center)
     c += emissive;
     if (model != kUnlit && model != kMatcap && !flatLighting())
         c = applyFog(c, pc.eye.xyz, i.worldPos);
+    if ((flags & kTranslucent) == 0)
+    {
+        float4 clip = mul(pc.viewProj, float4(i.worldPos, 1.0));
+        c = applyVolumes(c, clip.xy / clip.w * 0.5 + 0.5);
+    }
     c *= pc.params.x;
     float alpha = (flags & kTranslucent) != 0 ? saturate(opacity) : 1.0;
     // Highlights and the back-face tint mix in display space.
@@ -1459,9 +1530,19 @@ float4 backgroundPS(BgOut i) : SV_Target
     float4 farH = mul(pc.viewProj, float4(i.ndc, 0.001, 1.0));
     float3 rd = normalize(farH.xyz / farH.w - nearH.xyz / nearH.w);
 
-    float3 c = envMap.SampleLevel(toEnv(rd), pc.base.x).rgb * pc.env.z * pc.base.z;
-    float luma = dot(c, float3(0.2126, 0.7152, 0.0722));
-    c = lerp(luma.xxx, c, pc.base.y);
-    c = applyFog(c, pc.eye.xyz, pc.eye.xyz + rd * 1e6);
+    float3 c;
+    GpuAtmosphere* atmosphere = nullptr;
+    if (pc.lights != nullptr)
+        atmosphere = ((GpuFrame*)pc.lights)->atmosphere;
+    if (atmosphere != nullptr)
+        c = atmSkyColor(atmosphere, rd);
+    else
+    {
+        c = envMap.SampleLevel(toEnv(rd), pc.base.x).rgb * pc.env.z * pc.base.z;
+        float luma = dot(c, float3(0.2126, 0.7152, 0.0722));
+        c = lerp(luma.xxx, c, pc.base.y);
+    }
+    c = applyFog(c, pc.eye.xyz, pc.eye.xyz + rd * 1e6, false);
+    c = applyVolumes(c, i.ndc * 0.5 + 0.5);
     return float4(sceneCompress(c * pc.params.x), 1.0);
 }

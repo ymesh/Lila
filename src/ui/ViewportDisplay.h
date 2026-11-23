@@ -7,6 +7,7 @@
 #include "scene/Camera.h"
 
 #include <algorithm>
+#include <string_view>
 
 namespace lila::ui::viewportDisplay
 {
@@ -72,6 +73,12 @@ inline constexpr const char* kCameraMoveSmoothing = "/viewport/camera/moveSmooth
 inline constexpr const char* kDefaultMaterial = "/viewport/defaultMaterial";
 /** Materials keep everything but their base colour, which shades 50% grey. */
 inline constexpr const char* kGreyBaseColor = "/viewport/greyBaseColor";
+/** Shaded meshes draw the default material in a colour of their own, picked from their name. Overrides materials. */
+inline constexpr const char* kRandomColors = "/viewport/randomColors";
+/** "contrast" for strong, varied random colours; "pastel" for soft, light ones. */
+inline constexpr const char* kRandomColorsPalette = "/viewport/randomColorsPalette";
+/** Reshuffles which colour each name gets. */
+inline constexpr const char* kRandomColorsSeed = "/viewport/randomColorsSeed";
 inline constexpr const char* kExposure = "/viewport/exposure"; // stops
 inline constexpr const char* kGamma = "/viewport/gamma";
 inline constexpr const char* kToolbar = "/viewport/toolbar";
@@ -186,6 +193,19 @@ LILA_UI_API double frameInterval();
 
 /** Shaded meshes ignore their materials and draw the plain default one. */
 LILA_UI_API bool defaultMaterial();
+LILA_UI_API bool randomColors();
+enum class RandomPalette
+{
+    Contrast,
+    Pastel,
+};
+LILA_UI_API RandomPalette randomPalette();
+LILA_UI_API void setRandomPalette(RandomPalette palette);
+LILA_UI_API int randomSeed();
+/** The bakeRandomColors command, and the seed saved with the scene (0 in a new one). */
+void registerRandomColors();
+/** A distinct linear colour for randomColors(), the same for the same name and seed in every session. */
+LILA_UI_API glm::vec3 randomColor(std::string_view name, RandomPalette palette = RandomPalette::Contrast, int seed = 0);
 LILA_UI_API bool highlightSelection();
 /** Which selected objects draw in the selected wire colour, per kSelectionOrderColors. */
 struct SelectionOrderColors

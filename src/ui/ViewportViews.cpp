@@ -610,6 +610,8 @@ void ViewportWidget::drawHud(OverlayPainter& p)
     if (const QRectF banner = drone::draw(p, this); !banner.isEmpty())
         drawn.push_back(banner);
     featureStatus::draw(p, this, width());
+    if (const QRectF badge = sceneLights::drawBadge(p, this, width()); !badge.isEmpty())
+        drawn.push_back(badge);
     flushToolMessages(p, ctx.view, drawn);
     viewportToast::draw(p, ctx.view, this, drawn);
 }

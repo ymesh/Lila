@@ -40,6 +40,7 @@
 #include "ui/ViewportHooks.h"
 #include "ui/ViewportRenderers.h"
 #include "ui/ViewportWidget.h"
+#include "ui/VolumeDisplay.h"
 
 #include <QApplication>
 #include <QBuffer>
@@ -412,7 +413,8 @@ QImage render(const Options& o, Timing* timing, int repeat)
         if (const scene::Node* n = scene::Graph::current().find(o.lookThrough); n && n->type().isA("camera"))
             viewportDisplay::applyLens(s, scene::camera::lens(*n));
 
-    bool showMaterials = materialsShown() && !viewportDisplay::defaultMaterial();
+    const bool randomColors = viewportDisplay::randomColors();
+    bool showMaterials = materialsShown() && !viewportDisplay::defaultMaterial() && !randomColors;
     if (showMaterials)
         waitForMaterialMaps(g, nodes);
     const heightfieldDisplay::Settings terrain = heightfieldDisplay::settings();
@@ -456,6 +458,8 @@ QImage render(const Options& o, Timing* timing, int repeat)
             viewportHooks::decorateMaterials(id, *shown, materials);
             d.materials = std::move(materials);
         }
+        else if (randomColors)
+            d.baseColor = viewportDisplay::randomColor(n->name(), viewportDisplay::randomPalette(), viewportDisplay::randomSeed());
         d.world = n->as<glm::dmat4>(scene::Transform::kWorldMatrix);
         d.node = uint64_t(id);
         d.drawOffset = scene::drawOffset(*n);
@@ -465,7 +469,7 @@ QImage render(const Options& o, Timing* timing, int repeat)
             d.colorChannel = viewportDisplay::colorChannel();
         }
         d.flags = 0;
-        if (o.display != "wireframe")
+        if (o.display != "wireframe" && !(shown && volumeDisplay::isVolumeMesh(*shown)))
             d.flags |= render::DrawShaded;
         if (o.display != "shaded")
             d.flags |= render::DrawWire;

@@ -20,6 +20,7 @@
 #include "ui/DockSidebar.h"
 #include "ui/Icons.h"
 #include "ui/NumberExpr.h"
+#include "ui/ScrubGesture.h"
 #include "ui/SpinScrub.h"
 #include "ui/Theme.h"
 #include "ui/UiCommands.h"
@@ -318,18 +319,19 @@ void addKeyActions(QMenu* menu, const PlugRef& ref)
 }
 
 /**
- * A number field bound to a plug. Click to type (expressions like `+=5` work, as in the channel box); drag sideways
- * to scrub (Ctrl slow, Shift fast), with the left or middle button. A middle click restores the default. Its row label
- * does all of this too.
+ * A number field bound to a plug, on the shared number-field drag (ScrubGesture). Click to type (expressions like `+=5`
+ * work, as in the channel box); drag sideways with the left or middle button to scrub. A middle click restores the
+ * default. Its row label drags and resets it too.
  */
-constexpr const char* kScrubHint = "Drag to scrub (Ctrl slow, Shift fast)";
+constexpr const char* kScrubHint = "Drag to scrub (Ctrl slow, Shift fast); middle-drag up or down to pick the step";
 
 class ScrubEdit : public QLineEdit
 {
 public:
     ScrubEdit(PlugRef plug, bool integer, QWidget* parent) : QLineEdit(parent), mPlug(plug), mInt(integer)
     {
-        mClock.start();
+        mGesture = std::make_unique<ScrubGesture>(target(false));
+        mLabelGesture = std::make_unique<ScrubGesture>(target(true));
         setAlignment(Qt::AlignRight);
         setMinimumWidth(40);
         setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
@@ -408,25 +410,16 @@ protected:
         switch (e->type())
         {
         case QEvent::MouseButtonPress:
-            if (me->button() == Qt::LeftButton || me->button() == Qt::MiddleButton)
-            {
-                press(me);
+            if (mLabelGesture->press(me))
                 return true;
-            }
             break;
         case QEvent::MouseMove:
-            if (mPress)
-            {
-                move(me);
+            if (mLabelGesture->move(me))
                 return true;
-            }
             break;
         case QEvent::MouseButtonRelease:
-            if (mPress && me->button() == (mMiddle ? Qt::MiddleButton : Qt::LeftButton))
-            {
-                release(me);
+            if (mLabelGesture->release(me))
                 return true;
-            }
             break;
         default: break;
         }
@@ -435,49 +428,28 @@ protected:
 
     void mousePressEvent(QMouseEvent* e) override
     {
-        if (hasFocus() || (e->button() != Qt::LeftButton && e->button() != Qt::MiddleButton))
-        {
+        if (mGesture->press(e))
+            e->accept();
+        else
             QLineEdit::mousePressEvent(e);
-            return;
-        }
-        press(e);
-        e->accept();
     }
 
     void mouseMoveEvent(QMouseEvent* e) override
     {
-        if (!mPress)
-        {
+        if (!mGesture->move(e))
             QLineEdit::mouseMoveEvent(e);
-            return;
-        }
-        move(e);
     }
 
     void mouseReleaseEvent(QMouseEvent* e) override
     {
-        if (!mPress)
-        {
+        if (!mGesture->release(e))
             QLineEdit::mouseReleaseEvent(e);
-            return;
-        }
-        if (e->button() != (mMiddle ? Qt::MiddleButton : Qt::LeftButton))
-            return;
-        bool middle = mMiddle;
-        if (release(e) || middle || mReadOnly)
-            return;
-        setFocus(Qt::MouseFocusReason);
-        selectAll();
     }
 
     void keyPressEvent(QKeyEvent* e) override
     {
-        if (mScrubbing && e->key() == Qt::Key_Escape)
-        {
-            mPress.reset();
-            endScrub(false);
+        if (mGesture->key(e) || mLabelGesture->key(e))
             return;
-        }
         if (e->key() == Qt::Key_Escape)
         {
             setModified(false);
@@ -504,66 +476,46 @@ protected:
     }
 
 private:
-    void press(QMouseEvent* e)
+    ScrubGesture::Target target(bool label)
     {
-        mPress = e->globalPosition().toPoint();
-        mMiddle = e->button() == Qt::MiddleButton;
-        if (mMiddle)
-            mMidClick.press(mPress->x(), mPress->y(), mClock.elapsed());
-    }
-
-    void move(QMouseEvent* e)
-    {
-        QPoint pos = e->globalPosition().toPoint();
-        if (mMiddle)
-        {
-            mMidClick.move(pos.x(), pos.y());
-            if (!mMidClick.dragging())
-                return;
-        }
-        drag(pos, e->modifiers());
-    }
-
-    /** Ends a press: commits a scrub, or resets on a middle click. True when the press did either. */
-    bool release(QMouseEvent* e)
-    {
-        mPress.reset();
-        QPoint pos = e->globalPosition().toPoint();
-        if (mMiddle && mMidClick.release(pos.x(), pos.y(), mClock.elapsed()) && !mScrubbing)
-        {
-            if (!mReadOnly && resetPlug(mPlug))
-                flashReset(this);
-            return true;
-        }
-        if (!mScrubbing)
-            return false;
-        endScrub(true);
-        return true;
-    }
-
-    void drag(QPoint pos, Qt::KeyboardModifiers mods)
-    {
-        if (mReadOnly)
-            return;
-        if (!mScrubbing)
-        {
-            if (std::abs(pos.x() - mPress->x()) < 3)
-                return;
+        ScrubGesture::Target t;
+        t.field = this;
+        t.step = [] { return 1.0; };
+        t.integer = mInt;
+        t.decimals = 4;
+        t.begin = [this] {
             Graph& g = Graph::current();
-            if (!g.node(mPlug.node))
-                return;
+            if (mReadOnly || !g.node(mPlug.node))
+                return false;
             mScrubbing = true;
             mSaved = g.value(mPlug);
             mAccum = 0.0;
-            mLast = pos;
+            return true;
+        };
+        t.drag = [this](double total, double) { drag(total); };
+        t.end = [this](bool commit) { endScrub(commit); };
+        t.reset = [this] {
+            if (!mReadOnly && resetPlug(mPlug))
+                flashReset(this);
+        };
+        if (!label)
+        {
+            t.click = [this] {
+                if (mReadOnly)
+                    return;
+                setFocus(Qt::MouseFocusReason);
+                selectAll();
+            };
+            t.editing = [this] { return hasFocus(); };
         }
-        double step = (mods & Qt::ControlModifier) ? 0.01 : (mods & Qt::ShiftModifier) ? 1.0 : 0.1;
-        mAccum += (pos.x() - mLast.x()) * step;
-        mLast = pos;
-        // Held at the limits so dragging back moves the value straight away.
+        return t;
+    }
+
+    void drag(double total)
+    {
         const scene::AttrDef& def = Graph::current().attr(mPlug);
-        double base = scalarOf(mSaved);
-        mAccum = std::clamp(base + mAccum, def.minValue.value_or(-HUGE_VAL), def.maxValue.value_or(HUGE_VAL)) - base;
+        const double base = scalarOf(mSaved);
+        mAccum = std::clamp(base + total, def.minValue.value_or(-HUGE_VAL), def.maxValue.value_or(HUGE_VAL)) - base;
         // Live preview without undo; endScrub records the one real setAttr.
         withoutUndo([this](Graph& g) { g.setValue(mPlug, scrubbed()); });
         setText(formatPlugNumber(scalarOf(scrubbed()), mInt));
@@ -628,14 +580,11 @@ private:
     bool mInt = false;
     bool mReadOnly = false;
     PlugState mState = PlugState::Free;
-    std::optional<QPoint> mPress;
-    bool mMiddle = false;
-    valueReset::ClickTracker mMidClick;
-    QElapsedTimer mClock;
     bool mScrubbing = false;
-    QPoint mLast;
     double mAccum = 0.0;
     scene::PlugValue mSaved;
+    std::unique_ptr<ScrubGesture> mGesture;
+    std::unique_ptr<ScrubGesture> mLabelGesture;
 };
 
 /** Starts a drag of the modifier when its grip is pulled. */

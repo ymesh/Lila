@@ -4,6 +4,7 @@
 #include "ui/Controls.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
+#include "ui/ScrubGesture.h"
 #include "ui/ValueReset.h"
 
 #include <QAbstractScrollArea>
@@ -16,24 +17,27 @@
 #include <QDoubleSpinBox>
 #include <QElapsedTimer>
 #include <QHelpEvent>
+#include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPointer>
 #include <QScreen>
 #include <QSpinBox>
+#include <QTimer>
 #include <QToolTip>
 #include <QVariantAnimation>
 
 #include <cmath>
+#include <memory>
 #include <utility>
 
 namespace lila::ui
 {
 namespace
 {
-constexpr double kPixelsPerStep = 6.0;
 constexpr double kStepsPerPreset = 4.0;
 
 int64_t steadyNowMs()
@@ -65,6 +69,28 @@ QString spinText(QAbstractSpinBox* box, double v)
     return QString::number(v);
 }
 
+/** Value of a spin box as a double, whichever kind it is. */
+double spinValue(QAbstractSpinBox* box)
+{
+    if (auto* d = qobject_cast<QDoubleSpinBox*>(box))
+        return d->value();
+    if (auto* i = qobject_cast<QSpinBox*>(box))
+        return i->value();
+    return 0.0;
+}
+
+void setSpinValue(QAbstractSpinBox* box, double v)
+{
+    if (auto* d = qobject_cast<QDoubleSpinBox*>(box))
+        d->setValue(v);
+    else if (auto* i = qobject_cast<QSpinBox*>(box))
+        i->setValue(int(std::lround(v)));
+}
+
+/**
+ * The app-wide filter that gives every spin box the shared number-field drag (ScrubGesture), on the box and on its form
+ * label, and ends typing on Enter, Esc or a click anywhere else.
+ */
 class SpinScrub : public QObject
 {
 public:
@@ -79,59 +105,52 @@ protected:
             return false;
         switch (e->type())
         {
+        case QEvent::Polish:
+            // Qt focuses on press before any filter runs, which would turn every drag into text selection.
+            if (auto* box = qobject_cast<QAbstractSpinBox*>(obj))
+            {
+                box->setFocusPolicy(Qt::TabFocus);
+                for (QLineEdit* edit : box->findChildren<QLineEdit*>(Qt::FindDirectChildrenOnly))
+                    edit->setFocusPolicy(Qt::TabFocus);
+            }
+            return false;
         case QEvent::MouseButtonPress:
         {
             auto* m = static_cast<QMouseEvent*>(e);
-            // A spin box's form label also scrubs it with the left button, as option box labels and channel names do.
-            const bool labelDrag = m->button() == Qt::LeftButton && scrubsBuddy(obj);
-            if (m->button() != Qt::MiddleButton && !labelDrag)
+            endTypingOutside(static_cast<QWidget*>(obj));
+            if (mGesture)
+                return mGesture->press(m);
+            if (m->button() != Qt::LeftButton && m->button() != Qt::MiddleButton)
                 return false;
-            if (QWidget* choice = labelDrag ? nullptr : choiceOf(obj))
+            if (QWidget* choice = choiceOf(obj); choice && m->button() == Qt::MiddleButton)
             {
                 mChoice = choice;
                 mClick.press(int(m->globalPosition().x()), int(m->globalPosition().y()), steadyNowMs());
                 return true;
             }
+            // A plain label only scrubs its buddy; one that set its own cursor handles itself.
+            if (qobject_cast<QLabel*>(obj) && !scrubsBuddy(obj))
+                return false;
             QAbstractSpinBox* box = spinBoxOf(obj);
             if (!box || !box->isEnabled() || box->isReadOnly())
                 return false;
-            mBox = box;
-            mButton = m->button();
-            mLastX = m->globalPosition().x();
-            mCarry = 0.0;
-            mPresetCarry = 0.0;
-            mClick.press(int(m->globalPosition().x()), int(m->globalPosition().y()), steadyNowMs());
-            QApplication::setOverrideCursor(Qt::SizeHorCursor);
-            mChunk = !scrubsWithoutUndoStep(box);
-            if (mChunk)
-                UndoStack::get().openChunk("Drag Value");
-            return true;
+            mGesture = std::make_unique<ScrubGesture>(targetFor(box, qobject_cast<QLabel*>(obj) != nullptr));
+            if (mGesture->press(m))
+                return true;
+            mGesture.reset();
+            return false;
         }
         case QEvent::MouseMove:
         {
-            if (mChoice)
-                mClick.move(int(static_cast<QMouseEvent*>(e)->globalPosition().x()), int(static_cast<QMouseEvent*>(e)->globalPosition().y()));
-            if (!mBox)
-                return false;
             auto* m = static_cast<QMouseEvent*>(e);
-            // The release can go missing when focus moves mid-drag.
-            if (!(m->buttons() & mButton))
-            {
-                endDrag();
+            if (mChoice)
+                mClick.move(int(m->globalPosition().x()), int(m->globalPosition().y()));
+            if (!mGesture)
                 return false;
-            }
-            double x = m->globalPosition().x();
-            mClick.move(int(x), int(m->globalPosition().y()));
-            mCarry += (x - mLastX) / kPixelsPerStep;
-            mLastX = x;
-            wrapAtScreenEdge(m->globalPosition());
-            double steps = std::trunc(mCarry);
-            if (steps != 0.0)
-            {
-                mCarry -= steps;
-                step(steps, m->modifiers());
-            }
-            return true;
+            const bool used = mGesture->move(m);
+            if (!mGesture->pressed())
+                mGesture.reset();
+            return used;
         }
         case QEvent::MouseButtonRelease:
         {
@@ -144,13 +163,37 @@ protected:
                     resetChoice(choice);
                 return true;
             }
-            if (!mBox || m->button() != mButton)
+            if (!mGesture)
                 return false;
-            QPointer<QAbstractSpinBox> box = mBox;
-            endDrag();
-            if (m->button() == Qt::MiddleButton && mClick.release(int(m->globalPosition().x()), int(m->globalPosition().y()), steadyNowMs()))
-                resetToDefault(box);
-            return true;
+            // The gesture may focus the field or reset it; drop it first so nothing re-enters it.
+            std::unique_ptr<ScrubGesture> g = std::move(mGesture);
+            const bool used = g->release(m);
+            if (g->pressed())
+                mGesture = std::move(g);
+            return used;
+        }
+        case QEvent::KeyPress:
+        {
+            auto* k = static_cast<QKeyEvent*>(e);
+            if (mGesture && mGesture->key(k))
+            {
+                mGesture.reset();
+                return true;
+            }
+            QAbstractSpinBox* box = spinBoxOf(obj);
+            if (!box || qobject_cast<QLabel*>(obj) || !box->hasFocus())
+                return false;
+            if (k->key() == Qt::Key_Escape)
+            {
+                // Puts the typed text back to the value, then leaves typing.
+                setSpinValue(box, spinValue(box));
+                box->clearFocus();
+                return true;
+            }
+            if (k->key() == Qt::Key_Return || k->key() == Qt::Key_Enter)
+                // After the box commits and a dialog's default button has its turn.
+                QTimer::singleShot(0, box, [box] { box->clearFocus(); });
+            return false;
         }
         case QEvent::Enter:
             scrubsBuddy(obj);
@@ -177,6 +220,97 @@ protected:
     }
 
 private:
+    ScrubGesture::Target targetFor(QAbstractSpinBox* box, bool fromLabel)
+    {
+        QPointer<QAbstractSpinBox> b = box;
+        auto* d = qobject_cast<QDoubleSpinBox*>(box);
+        ScrubGesture::Target t;
+        t.field = box;
+        t.snap = true;
+        t.decimals = d ? d->decimals() : 0;
+        t.integer = !d || d->decimals() == 0;
+        t.step = [b] {
+            if (auto* d = qobject_cast<QDoubleSpinBox*>(b.data()))
+                return d->singleStep();
+            if (auto* i = qobject_cast<QSpinBox*>(b.data()))
+                return double(i->singleStep());
+            return 1.0;
+        };
+        // A slider field's width covers its range, as its fill shows.
+        t.span = [b] {
+            auto* d = qobject_cast<QDoubleSpinBox*>(b.data());
+            return d && d->property("role").toString() == "slider" ? d->maximum() - d->minimum() : 0.0;
+        };
+        t.begin = [this, b] {
+            if (!b)
+                return false;
+            mStart = spinValue(b);
+            mPresetsApplied = 0;
+            mChunk = !scrubsWithoutUndoStep(b);
+            if (mChunk)
+                UndoStack::get().openChunk("Drag Value");
+            return true;
+        };
+        t.drag = [this, b](double total, double snap) {
+            if (!b)
+                return;
+            // Presets step like a choice: one per few steps of travel, so they can be picked one at a time.
+            if (controls::stepPresets(b, 0))
+            {
+                const double step = std::max(1e-9, snap > 0.0 ? snap : 1.0);
+                const int want = int(total / step / kStepsPerPreset);
+                if (want != mPresetsApplied)
+                {
+                    controls::stepPresets(b, want - mPresetsApplied);
+                    mPresetsApplied = want;
+                }
+                return;
+            }
+            double v = mStart + total;
+            // Land on whole multiples of the step so values stay tidy.
+            if (snap > 0.0)
+                v = std::round(v / snap) * snap;
+            setSpinValue(b, v);
+        };
+        t.end = [this, b](bool commit) {
+            if (!commit && b && !controls::stepPresets(b, 0))
+                setSpinValue(b, mStart);
+            if (std::exchange(mChunk, false))
+                commit ? UndoStack::get().closeChunk() : UndoStack::get().cancelChunk();
+        };
+        if (!fromLabel)
+        {
+            t.click = [b] {
+                if (!b)
+                    return;
+                b->setFocus(Qt::MouseFocusReason);
+                b->selectAll();
+            };
+            t.editing = [b] { return b && b->hasFocus(); };
+        }
+        if (box->property(kDefaultProperty).isValid())
+            t.reset = [b] { resetToDefault(b); };
+        return t;
+    }
+
+    /** A press outside the field being typed in ends the typing, as Enter would. */
+    static void endTypingOutside(QWidget* pressed)
+    {
+        QWidget* focus = QApplication::focusWidget();
+        if (!focus || !isScrubField(focus))
+            return;
+        QWidget* field = spinBoxOf(focus) ? spinBoxOf(focus) : focus;
+        // Popups opened from the field (its context menu) and other windows leave it be.
+        if (pressed == field || field->isAncestorOf(pressed) || pressed->window() != field->window())
+            return;
+        field->clearFocus();
+    }
+
+    static bool isScrubField(QWidget* w)
+    {
+        return spinBoxOf(w) || w->property(kScrubFieldProperty).toBool();
+    }
+
     static QAbstractSpinBox* spinBoxOf(QObject* obj)
     {
         // A form row's label (its buddy is the field) scrubs and resets the field too.
@@ -249,77 +383,15 @@ private:
         QVariant def = box->property(kDefaultProperty);
         if (!def.isValid())
             return;
-        if (auto* d = qobject_cast<QDoubleSpinBox*>(box))
-            d->setValue(def.toDouble());
-        else if (auto* i = qobject_cast<QSpinBox*>(box))
-            i->setValue(int(std::lround(def.toDouble())));
-        else
-            return;
+        setSpinValue(box, def.toDouble());
         flashReset(box);
     }
 
-    /** A drag that reaches the screen's side carries on from the other side, so it never runs out of room. */
-    void wrapAtScreenEdge(const QPointF& at)
-    {
-        QScreen* screen = QGuiApplication::screenAt(at.toPoint());
-        if (!screen)
-            return;
-        const QRect g = screen->geometry();
-        const int y = int(at.y());
-        if (at.x() <= g.left() + 1)
-            mLastX = g.right() - 2;
-        else if (at.x() >= g.right() - 1)
-            mLastX = g.left() + 2;
-        else
-            return;
-        QCursor::setPos(screen, int(mLastX), y);
-    }
-
-    void endDrag()
-    {
-        mBox = nullptr;
-        QApplication::restoreOverrideCursor();
-        if (std::exchange(mChunk, false))
-            UndoStack::get().closeChunk();
-    }
-
-    void step(double steps, Qt::KeyboardModifiers mods)
-    {
-        // Presets step like a choice: one per few steps of travel, so they can be picked one at a time.
-        if (controls::stepPresets(mBox, 0))
-        {
-            mPresetCarry += steps;
-            const int whole = int(mPresetCarry / kStepsPerPreset);
-            if (whole != 0)
-            {
-                mPresetCarry -= whole * kStepsPerPreset;
-                controls::stepPresets(mBox, whole);
-            }
-            return;
-        }
-        double scale = (mods & Qt::ShiftModifier) ? 10.0 : 1.0;
-        if (auto* d = qobject_cast<QDoubleSpinBox*>(mBox.data()))
-        {
-            if (mods & Qt::ControlModifier)
-                scale *= 0.1;
-            double unit = d->singleStep() * scale;
-            // Land on whole multiples of the step so values stay tidy.
-            double v = std::round((d->value() + steps * unit) / unit) * unit;
-            d->setValue(v);
-        }
-        else if (auto* i = qobject_cast<QSpinBox*>(mBox.data()))
-            i->setValue(i->value() + int(steps * scale) * i->singleStep());
-        else
-            mBox->stepBy(int(steps * scale));
-    }
-
-    QPointer<QAbstractSpinBox> mBox;
-    Qt::MouseButton mButton = Qt::MiddleButton;
+    std::unique_ptr<ScrubGesture> mGesture;
+    double mStart = 0.0;
+    int mPresetsApplied = 0;
     bool mChunk = false;
     QPointer<QWidget> mChoice;
-    double mLastX = 0.0;
-    double mCarry = 0.0;
-    double mPresetCarry = 0.0;
     valueReset::ClickTracker mClick;
 };
 

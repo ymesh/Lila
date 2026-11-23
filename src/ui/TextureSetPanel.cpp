@@ -1044,6 +1044,12 @@ struct TextureSetPanel::Impl
         render::paint::wireLayer(*n, id, channels);
     }
 
+    void addIdLayers()
+    {
+        runUi("texAddIdLayers", args({}));
+        self->refresh();
+    }
+
     std::string addMask(const std::string& kind, const std::string& type)
     {
         if (selLayer.empty() || !layer(selLayer))
@@ -2550,6 +2556,7 @@ struct TextureSetPanel::Impl
         menu->addAction(icon("typography"), "Add Text Layer", [this] { addLayer("text", {}); });
         menu->addAction(icon("confetti"), "Add Scatter Layer", [this] { addLayer("scatter", {}); });
         menu->addAction(icon("folder-plus"), "Add Folder", [this] { addLayer("folder", {}); });
+        menu->addAction(icon("color-swatch"), "Add Layers per ID", [this] { addIdLayers(); });
         QMenu* filters = menu->addMenu(icon("filter"), "Add Filter Layer");
         for (const tex::NodeDef* def : filterNodes())
             filters->addAction(qs(def->label.empty() ? def->type : def->label), [this, t = def->type] { addLayer("filter", t); });
@@ -3218,6 +3225,8 @@ std::string TextureSetPanel::addLayer(const std::string& kind, const std::string
 
 std::string TextureSetPanel::addMask(const std::string& kind, const std::string& type) { return d->addMask(kind, type); }
 
+void TextureSetPanel::addIdLayers() { d->addIdLayers(); }
+
 void TextureSetPanel::moveLayer(const std::string& id, const std::string& target, Drop where)
 {
     if (!d->setNode() || id == target)
@@ -3655,6 +3664,13 @@ void registerTextureSetPanel()
                   .run = onPanel([](TextureSetPanel& p) { p.addLayer("folder"); }),
                   .doc = "Add a folder above the selection in the Texture Set panel; drop layers onto it to put them inside.",
                   .python = "lila.ops.texAddLayer(\"RockTex\", \"folder\")"});
+    actions::add({.id = "textureSets.addIdLayers",
+                  .label = "Add Layers per ID",
+                  .category = "Texture",
+                  .run = onPanel([](TextureSetPanel& p) { p.addIdLayers(); }),
+                  .doc = "Add a fill layer per material, object or group in the set's baked ID map, each masked to its own ID.",
+                  .python = "lila.ops.texAddIdLayers(\"RockTex\")",
+                  .keywords = {"id mask", "color selection", "auto mask", "material id"}});
     actions::add({.id = "textureSets.addMask",
                   .label = "Add Black Mask",
                   .category = "Texture",
@@ -3720,7 +3736,7 @@ void registerTextureSetPanel()
                   .doc = "Rebuild the texture set's graph from its layer stack, dropping node edits the stack can't show.",
                   .python = "lila.ops.texRebuildLayers(\"RockTex\")"});
 
-    menus::addActions("Texture", {"", "window.textureSets", "textureSets.addFillLayer", "textureSets.addPaintLayer", "textureSets.addFolder",
+    menus::addActions("Texture", {"", "window.textureSets", "textureSets.addFillLayer", "textureSets.addPaintLayer", "textureSets.addFolder", "textureSets.addIdLayers",
                                   "textureSets.rebuildLayers"});
 }
 } // namespace lila::ui

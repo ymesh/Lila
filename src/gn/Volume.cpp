@@ -3,6 +3,15 @@
 #include "core/Profile.h"
 #include "geo/Bvh.h"
 #include "geo/SurfaceNets.h"
+#include "core/Log.h"
+#include "gn/Gn.h"
+#include "scene/Graph.h"
+#include "scene/Materials.h"
+#include "scene/MeshNodes.h"
+#include "scene/Modifiers.h"
+
+#include <map>
+#include <mutex>
 
 #include <tbb/parallel_for.h>
 
@@ -264,5 +273,74 @@ Volume sdfToFog(const Volume& sdf, double density, double interiorBand, bool fil
         v.values[n] = x < 0.0f && (fill || -x <= band) ? d : 0.0f;
     });
     return v;
+}
+
+std::shared_ptr<const Volume> meshVolume(scene::Graph& g, scene::NodeId id)
+{
+    using namespace scene::material;
+    const scene::Node* n = g.node(id);
+    if (!n || !n->type().isA("mesh"))
+        return nullptr;
+    const scene::MeshPtr mesh = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+    if (!mesh)
+        return nullptr;
+    const scene::Node* material = nullptr;
+    for (const std::string& slot : mesh->materialNames())
+        if (const scene::Node* m = scene::materials::find(g, slot); m && m->as<int64_t>(kShadingModel) == int64_t(ShadingModel::Volume))
+        {
+            material = m;
+            break;
+        }
+    if (!material)
+        return nullptr;
+
+    struct Entry
+    {
+        std::weak_ptr<const void> source;
+        double voxel = 0.0;
+        std::shared_ptr<const Volume> volume;
+    };
+    static std::mutex mutex;
+    static std::map<const void*, Entry> cache;
+    auto cached = [&](const std::shared_ptr<const void>& source, double voxel, auto&& make) -> std::shared_ptr<const Volume> {
+        std::lock_guard lock(mutex);
+        std::erase_if(cache, [](const auto& e) { return e.second.source.expired(); });
+        if (auto it = cache.find(source.get()); it != cache.end() && it->second.voxel == voxel)
+            return it->second.volume;
+        std::shared_ptr<const Volume> v;
+        try
+        {
+            LILA_ZONE_N("Mesh volume");
+            v = std::make_shared<const Volume>(make());
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("volume: {} cannot be filled: {}", n->name(), e.what());
+        }
+        cache[source.get()] = {source, voxel, v};
+        return v;
+    };
+
+    std::vector<scene::NodeId> mods = scene::modifiers::stack(g, id);
+    std::reverse(mods.begin(), mods.end());
+    for (scene::NodeId m : mods)
+        if (const scene::Node* mn = g.node(m); mn && isGnModifier(*mn))
+            if (GeometryPtr geo = modifierGeometry(m); geo && geo->volume && !geo->volume->empty())
+            {
+                const std::shared_ptr<const Volume>& v = geo->volume;
+                if (v->isVector())
+                    return nullptr;
+                if (!v->isSdf())
+                    return v;
+                return cached(v, 0.0, [&] { return sdfToFog(*v, 1.0, 0.0, true); });
+            }
+
+    const double voxelSize = material->as<double>(kVolumeVoxelSize);
+    return cached(mesh, voxelSize, [&] {
+        const geo::Bounds b = mesh->bounds();
+        const double longest = std::max({b.size().x, b.size().y, b.size().z, 1e-3});
+        const double voxel = voxelSize > 0.0 ? std::max(voxelSize, longest / 512.0) : longest / 64.0;
+        return sdfToFog(meshToSdf(*mesh, voxel, 2), 1.0, 0.0, true);
+    });
 }
 } // namespace lila::gn

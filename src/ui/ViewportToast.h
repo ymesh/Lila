@@ -28,11 +28,14 @@ enum class Kind
     Error,   // red accent: something failed
 };
 
-/** Shows text in view, or in every viewport when view is null. A toast with the same text restarts instead of stacking. */
-LILA_UI_API void show(const QString& text, QWidget* view = nullptr, int durationMs = 2000, Kind kind = Kind::Info);
+/**
+ * Shows text in view, or in every viewport when view is null. A toast with the same key (the text when key is empty)
+ * is replaced instead of stacking, so a changing readout stays one toast.
+ */
+LILA_UI_API void show(const QString& text, QWidget* view = nullptr, int durationMs = 2000, Kind kind = Kind::Info, const QString& key = {});
 
 /** Shows text in the active viewport, or in every viewport when there is none. */
-LILA_UI_API void showActive(const QString& text, int durationMs = 2000, Kind kind = Kind::Info);
+LILA_UI_API void showActive(const QString& text, int durationMs = 2000, Kind kind = Kind::Info, const QString& key = {});
 
 /** Sets what showActive() and the viewportToast command target. */
 LILA_UI_API void setActive(std::function<QWidget*()> active);

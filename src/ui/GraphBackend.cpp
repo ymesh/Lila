@@ -84,8 +84,8 @@ QString GraphBackend::hintKey(const char* actionId)
 QString GraphBackend::canvasHint() const
 {
     const QString add = hintKey("nodeEditor.addNode");
-    return QString("Select a node to edit its values.\n\n%1 adds a node under the cursor; while dragging a wire, or letting one go "
-                   "on empty canvas, it lists only nodes that connect. Ctrl+drag cuts links, Alt+click a socket disconnects it, %2 / %3 deletes, %4 / %5 copy "
+    return QString("Select a node to edit its values; Shift+click or Shift+drag adds to the selection.\n\n%1 adds a node under the cursor; while dragging a wire, or letting one go "
+                   "on empty canvas, it lists only nodes that connect. Ctrl+drag cuts links, Shift+right-drag across wires adds reroutes, Alt+click a socket disconnects it, %2 / %3 deletes, %4 / %5 copy "
                    "and paste as text, %6 duplicates, %7 frames the selection, %8 frames all. %9 or a double-click on a title renames a node or note; "
                    "a click on a note's or frame's title selects it. ")
                .arg(add, hintKey("edit.delete"), hintKey("nodeEditor.delete"), hintKey("nodeEditor.copy"), hintKey("nodeEditor.paste"),

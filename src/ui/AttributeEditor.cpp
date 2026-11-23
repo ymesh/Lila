@@ -30,6 +30,8 @@
 #include "ui/CodeEdit.h"
 #include "ui/MultilineEdit.h"
 #include "ui/NumberExpr.h"
+#include "ui/SceneLights.h"
+#include "ui/ScrubGesture.h"
 #include "ui/SpinScrub.h"
 #include "ui/Theme.h"
 #include "ui/UiCommon.h"
@@ -53,6 +55,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QKeyEvent>
 #include <QPointer>
 #include <QRegularExpression>
 #include <QScrollArea>
@@ -63,6 +66,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <memory>
 #include <set>
 #include <cmath>
 #include <filesystem>
@@ -392,10 +396,10 @@ double numberOf(const scene::PlugValue& v, int component)
 }
 
 /**
- * Virtual slider: a drag steps its targets 0.1 per pixel (Shift 10x, Ctrl 0.1x) live, and the release commits them
- * through setAttr as one undo step. The middle button drags anywhere it is installed. On a number field the left button
- * drags too, and a left click without a drag starts typing with the value selected; a ranged field (span) steps its
- * range per field width and stays inside it.
+ * The shared number-field drag (ScrubGesture) on an Attribute Editor field or row label: the drag previews its targets
+ * live and the release commits them through setAttr as one undo step. A step is 1 (Shift 10x, Ctrl 0.1x); a ranged field
+ * (span) covers its range across its width and stays inside it. On a field a left click starts typing with the value
+ * selected; a label drags with either button.
  */
 class NumberScrub final : public QObject
 {
@@ -407,6 +411,27 @@ public:
         : QObject(on), mTargets(std::move(targets)), mCommit(std::move(commit)), mField(field), mSpan(span)
     {
         on->installEventFilter(this);
+        ScrubGesture::Target t;
+        t.field = field ? static_cast<QWidget*>(field) : on;
+        t.step = [] { return 1.0; };
+        t.span = [this] { return mSpan && mField ? mSpan->second - mSpan->first : 0.0; };
+        t.integer = std::all_of(mTargets.begin(), mTargets.end(), [](const ScrubTarget& s) { return s.isInt; });
+        t.decimals = 4;
+        t.begin = [this] { return begin(); };
+        t.drag = [this](double total, double) { drag(total); };
+        t.end = [this](bool commit) { end(commit); };
+        if (field)
+        {
+            QPointer<QLineEdit> f = field;
+            t.click = [f] {
+                if (!f || f->isReadOnly())
+                    return;
+                f->setFocus(Qt::MouseFocusReason);
+                f->selectAll();
+            };
+            t.editing = [f] { return f && f->hasFocus(); };
+        }
+        mGesture = std::make_unique<ScrubGesture>(std::move(t));
     }
 
 protected:
@@ -414,72 +439,32 @@ protected:
     {
         switch (e->type())
         {
-        case QEvent::MouseButtonPress:
-        {
-            auto* me = static_cast<QMouseEvent*>(e);
-            if (me->button() == Qt::MiddleButton)
-            {
-                begin(me->globalPosition().toPoint());
-                // Not consumed: a middle click without a drag still resets.
-                return false;
-            }
-            // A typing field keeps its own clicks.
-            if (me->button() != Qt::LeftButton || !mField || mField->hasFocus())
-                return false;
-            begin(me->globalPosition().toPoint());
-            mLeft = true;
-            return true;
-        }
-        case QEvent::MouseMove:
-            return mActive && move(static_cast<QMouseEvent*>(e));
-        case QEvent::MouseButtonRelease:
-        {
-            if (mLeft && !mMoved)
-            {
-                mActive = mLeft = false;
-                mField->setFocus(Qt::MouseFocusReason);
-                mField->selectAll();
-                return true;
-            }
-            mLeft = false;
-            return mActive && end();
-        }
+        case QEvent::MouseButtonPress: return mGesture->press(static_cast<QMouseEvent*>(e));
+        case QEvent::MouseMove: return mGesture->move(static_cast<QMouseEvent*>(e));
+        case QEvent::MouseButtonRelease: return mGesture->release(static_cast<QMouseEvent*>(e));
+        case QEvent::KeyPress: return mGesture->key(static_cast<QKeyEvent*>(e));
         default: return false;
         }
     }
 
 private:
-    void begin(QPoint at)
+    bool begin()
     {
         Graph& g = Graph::current();
         mSaved.clear();
         for (const ScrubTarget& t : mTargets)
             if (g.node(t.ref.node) && !g.isLocked(t.ref))
                 mSaved.push_back({t, g.value(t.ref)});
-        mActive = !mSaved.empty();
-        mMoved = false;
-        mStart = mLast = at;
+        if (mSaved.empty())
+            return false;
         mAccum = 0.0;
+        UndoStack::get().openChunk("Drag Attribute");
+        return true;
     }
 
-    bool move(QMouseEvent* me)
+    void drag(double total)
     {
-        // The release can go missing (focus stolen mid-drag); a move with no button held ends the drag.
-        if (me->buttons() == Qt::NoButton)
-            return end();
-        const QPoint at = me->globalPosition().toPoint();
-        const int dx = at.x() - mLast.x();
-        mLast = at;
-        if (!mMoved && std::abs(at.x() - mStart.x()) < valueReset::kMaxTravel)
-            return false;
-        if (!mMoved)
-        {
-            UndoStack::get().openChunk("Drag Attribute");
-            mMoved = true;
-        }
-        const Qt::KeyboardModifiers mods = me->modifiers();
-        const double step = mSpan && mField ? (mSpan->second - mSpan->first) / std::max(1, mField->width()) : 0.1;
-        mAccum += dx * step * ((mods & Qt::ControlModifier) ? 0.1 : (mods & Qt::ShiftModifier) ? 10.0 : 1.0);
+        mAccum = total;
         Graph& g = Graph::current();
         UndoStack& u = UndoStack::get();
         const bool was = u.enabled();
@@ -488,14 +473,10 @@ private:
             if (g.node(t.ref.node))
                 g.setValue(t.ref, withComponent(g.value(t.ref), t, valueFor(t, start)));
         u.setEnabled(was);
-        return true;
     }
 
-    bool end()
+    void end(bool commit)
     {
-        mActive = false;
-        if (!mMoved)
-            return false;
         Graph& g = Graph::current();
         UndoStack& u = UndoStack::get();
         const bool was = u.enabled();
@@ -505,14 +486,14 @@ private:
                 g.setValue(t.ref, start);
         u.setEnabled(was);
         // Inside the chunk opened when the drag started, so the drag undoes as one step.
-        for (const auto& [t, start] : mSaved)
-        {
-            const double v = valueFor(t, start);
-            mCommit(t.attr, t.isInt ? json(int64_t(std::llround(v))) : json(std::round(v * 1e4) / 1e4));
-        }
+        if (commit && mAccum != 0.0)
+            for (const auto& [t, start] : mSaved)
+            {
+                const double v = valueFor(t, start);
+                mCommit(t.attr, t.isInt ? json(int64_t(std::llround(v))) : json(std::round(v * 1e4) / 1e4));
+            }
         UndoStack::get().closeChunk();
-        mMoved = false;
-        return true;
+        mSaved.clear();
     }
 
     double valueFor(const ScrubTarget& t, const scene::PlugValue& start) const
@@ -545,11 +526,8 @@ private:
     Commit mCommit;
     QLineEdit* mField = nullptr;
     std::optional<std::pair<double, double>> mSpan;
-    bool mActive = false;
-    bool mMoved = false;
-    bool mLeft = false;
-    QPoint mStart, mLast;
     double mAccum = 0.0;
+    std::unique_ptr<ScrubGesture> mGesture;
 };
 
 /** The Channel Box's channel-state hues, so a state reads the same in both panels. */
@@ -602,6 +580,9 @@ public:
         : mSpan(span), mUnit(std::move(unit)), mAxis(axis)
     {
         setCursor(Qt::SizeHorCursor);
+        // Focus only from a click without a drag (NumberScrub) or Tab, so a press can start a drag.
+        setFocusPolicy(Qt::TabFocus);
+        setProperty(kScrubFieldProperty, true);
         setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         setAttribute(Qt::WA_Hover);
         setMinimumHeight(24);
@@ -642,7 +623,21 @@ protected:
     void focusInEvent(QFocusEvent* e) override
     {
         setCursor(Qt::IBeamCursor);
+        mBefore = text();
         QLineEdit::focusInEvent(e);
+    }
+    void keyPressEvent(QKeyEvent* e) override
+    {
+        if (e->key() == Qt::Key_Escape)
+        {
+            setText(mBefore);
+            setModified(false);
+            clearFocus();
+            return;
+        }
+        QLineEdit::keyPressEvent(e);
+        if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter)
+            clearFocus();
     }
     void focusOutEvent(QFocusEvent* e) override
     {
@@ -731,6 +726,7 @@ private:
     char mAxis = 0;
     double mFill = 0.0;
     uint32_t mState = 0;
+    QString mBefore;
 };
 
 /** The range a field's fill spans: the soft range, else the hard one; none unless both ends are known. */
@@ -1558,6 +1554,8 @@ void AttributeEditor::rebuild()
     }
     if (QWidget* list = issueList())
         mBodyLayout->addWidget(aeSection("Issues", list).box);
+    if (n->type().isA("light"))
+        mBodyLayout->addWidget(sceneLights::attributeNote(mBody));
     /** The issues on a component as a whole: a type, a category or a section by its title. */
     auto componentIssues = [&](std::string_view typeName, std::string_view category, const QString& title) {
         std::vector<const dx::Issue*> out;
@@ -1653,6 +1651,7 @@ void AttributeEditor::rebuild()
             {
                 scrubbed.push_back({ref, component, target, def.minValue, def.maxValue, def.type == PlugType::Int});
                 new NumberScrub(e, {scrubbed.back()}, commit, e, span);
+                setUsageHint(e, "Drag sideways to scrub; Ctrl for fine steps, Shift for coarse; middle-drag up or down to pick the step");
                 if (std::optional<json> d = valueReset::plugDefault(def, component))
                     onMiddleClickReset(e, [this, target, v = *d] { set(target, v); }, QString::fromStdString(valueReset::describe(*d)));
             }
@@ -1958,13 +1957,15 @@ void AttributeEditor::rebuild()
         });
         label->setToolTip(QString::fromStdString(def.name + (def.shortName.empty() ? "" : " (" + def.shortName + ")") +
                                                  (def.doc.empty() ? "" : "\n" + def.doc)));
+        // The scrub goes on first: the reset filter installed after it runs first, so it sees the middle press the
+        // scrub takes, as on the fields.
+        if (!scrubbed.empty())
+            new NumberScrub(label, std::move(scrubbed), commit);
         if (readOnly)
             aeDim(label, "disabled");
         else if (std::optional<json> d = valueReset::plugDefault(def))
             onMiddleClickReset(label, [this, attr, v = *d] { set(attr, v); },
                                QString::fromStdString(valueReset::describe(*d, aeEnumLabels(def))), field);
-        if (!scrubbed.empty())
-            new NumberScrub(label, std::move(scrubbed), commit);
         std::vector<const dx::Issue*> rowIssues;
         for (const dx::Issue* i : nodeIssues)
             if (dx::attrMatches(*i, attr) || (i->attr.empty() && dx::componentMatches(i->component, {}, {}, def.name)))

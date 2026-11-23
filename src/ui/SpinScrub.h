@@ -19,9 +19,9 @@ class QWidget;
 namespace lila::ui
 {
 /**
- * Makes every spin box in the app a virtual slider: middle-drag left/right steps its value by its single step every few
- * pixels (Shift x10, Ctrl x0.1 on decimal fields). Its form label scrubs it the same way with the left button too. A middle click (no drag) restores the box's kDefaultProperty, when it
- * has one. Installed once on the application.
+ * Gives every spin box the shared number-field drag (ScrubGesture): left or middle drag changes it, its form label
+ * drags it too, a left click starts typing, a middle click restores kDefaultProperty when it has one. Enter, Esc or a
+ * click elsewhere ends typing, for spin boxes and for fields carrying kScrubFieldProperty. Installed once on the application.
  */
 LILA_UI_API void installSpinScrub(QObject* parent);
 
@@ -34,6 +34,9 @@ LILA_UI_API bool scrubsWithoutUndoStep(const QWidget* w);
 
 /** Dynamic property holding a spin box's default value (a double), restored by a middle click on the box. */
 inline constexpr const char* kDefaultProperty = "lilaDefault";
+
+/** Dynamic property marking a line edit as a number field: a click elsewhere ends typing in it, as for spin boxes. */
+inline constexpr const char* kScrubFieldProperty = "lilaScrubField";
 
 /** Gives a spin box a default to restore on middle click (on it, or on its buddy label); its tooltip then says so. */
 LILA_UI_API void setSpinDefault(QAbstractSpinBox* box, double value);

@@ -6,8 +6,10 @@
 #include "geo/Primitives.h"
 #include "tex/SlangRt.h"
 
+#include <array>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 
 using namespace textest;
@@ -473,6 +475,51 @@ TEST_CASE("tex: Image gives the file's alpha and reads colour as linear or sRGB"
         one.width = one.height = 4;
         one.outputs = {{"alpha", "I", "alpha", PortType::Gray, {}}};
         CHECK(texel(evaluateCpu(buildPlan(none, one)).outputs.at("alpha"), 0, 0)[0] == doctest::Approx(1.0));
+    }
+}
+
+TEST_CASE("tex: an int16 height TIFF keeps its metres through Image into Colorize's Low and High")
+{
+    // 2 x 2 signed 16-bit grey, one uncompressed strip, every texel the same height.
+    auto writeHeights = [](const fs::path& path, int16_t metres) {
+        std::vector<unsigned char> out = {'I', 'I', 42, 0, 8, 0, 0, 0};
+        const std::vector<std::array<uint32_t, 4>> tags = {{256, 4, 1, 2}, {257, 4, 1, 2}, {258, 3, 1, 16}, {259, 3, 1, 1}, {262, 3, 1, 1},
+                                                           {273, 4, 1, 0}, {277, 3, 1, 1}, {278, 4, 1, 2}, {279, 4, 1, 8}, {339, 3, 1, 2}};
+        const uint32_t pixels = uint32_t(8 + 2 + tags.size() * 12 + 4);
+        auto put = [&](uint32_t v, int n) {
+            for (int i = 0; i < n; ++i)
+                out.push_back(static_cast<unsigned char>(v >> (8 * i)));
+        };
+        put(uint32_t(tags.size()), 2);
+        for (const auto& [tag, type, count, value] : tags)
+        {
+            put(tag, 2);
+            put(type, 2);
+            put(count, 4);
+            put(tag == 273 ? pixels : value, 4);
+        }
+        put(0, 4);
+        for (int i = 0; i < 4; ++i)
+            put(uint16_t(metres), 2);
+        std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char*>(out.data()), std::streamsize(out.size()));
+    };
+    const fs::path file = tempDir("image_int16") / "heights.tif";
+    Graph g;
+    add(g, "I", "image", {{"file", file.string()}});
+    add(g, "Cz", "colorize",
+        {{"low", -11000.0}, {"high", 8848.0},
+         {"gradient", {{"stops", json::array({json::array({0.0, "#000000"}), json::array({1.0, json::array({1.0, 1.0, 1.0, 1.0})})})}}}});
+    link(g, "I.out", "Cz.input");
+    PlanRequest r;
+    r.width = r.height = 4;
+    r.outputs = {{"color", "Cz", "out", PortType::Color, {}}};
+    for (int16_t metres : {int16_t(-11000), int16_t(0), int16_t(8848)})
+    {
+        writeHeights(file, metres);
+        EvalResult res = evaluateCpu(buildPlan(g, r));
+        CAPTURE(metres);
+        CHECK(res.warnings.empty());
+        CHECK(texel(res.outputs.at("color"), 1, 1)[0] == doctest::Approx((metres + 11000.0) / 19848.0).epsilon(1e-3));
     }
 }
 

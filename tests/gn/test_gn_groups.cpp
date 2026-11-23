@@ -502,3 +502,56 @@ TEST_CASE("a group rebuilt under the same name in a new scene gives new modifier
     mod = run("gnApply", args({plane("Sized", 2), "Sized"})).get<std::string>();
     CHECK(run("getAttr", args({mod + ".size"})).get<double>() == doctest::Approx(25.0));
 }
+
+namespace
+{
+/** Moves the mesh up by height; with extra, a second input changes the group's interface. */
+json liftSpec(bool extra)
+{
+    json inputs = json::array({{{"name", "height"}, {"type", "float"}, {"default", 5.0}}});
+    if (extra)
+        inputs.push_back({{"name", "spare"}, {"type", "float"}, {"default", 1.0}});
+    return {{"name", "Lift"},
+            {"inputs", inputs},
+            {"nodes", json::array({{{"name", "Up"}, {"type", "CombineXYZ"}}, {{"name", "Move"}, {"type", "SetPosition"}}})},
+            {"links", json::array({"GroupInput.height -> Up.z", "Up.vector -> Move.offset", "GroupInput.geometry -> Move.geometry",
+                                   "Move.geometry -> GroupOutput.geometry"})}};
+}
+} // namespace
+
+TEST_CASE("replacing a group's interface migrates every modifier of it, wired however they are")
+{
+    run("newScene");
+    const std::string a = plane("LiftA", 2);
+    run("gnBuildGroup", args({liftSpec(false)}));
+    SUBCASE("stacked twice on one mesh")
+    {
+        run("gnApply", args({a, "Lift"}));
+        run("gnApply", args({a, "Lift"}));
+    }
+    SUBCASE("on two meshes")
+    {
+        const std::string b = plane("LiftB", 2);
+        run("gnApply", args({a, "Lift"}));
+        run("gnApply", args({b, "Lift"}));
+    }
+    SUBCASE("a modifier with a user attr")
+    {
+        const std::string mod = run("gnApply", args({a, "Lift"})).get<std::string>();
+        run("addAttr", {{"args", {mod}}, {"longName", "note"}, {"defaultValue", 2.0}});
+        run("spaceLocator", {{"name", "Reader"}});
+        run("connectAttr", args({mod + ".height", "Reader.translateY"}));
+    }
+    SUBCASE("a parameter driven by another node")
+    {
+        const std::string mod = run("gnApply", args({a, "Lift"})).get<std::string>();
+        run("spaceLocator", {{"name", "Driver"}});
+        run("connectAttr", args({"Driver.translateX", mod + ".height"}));
+    }
+    run("gnBuildGroup", args({liftSpec(true)}));
+    CHECK(outMesh(a));
+    run("undo");
+    CHECK(outMesh(a));
+    run("redo");
+    CHECK(outMesh(a));
+}

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "render/Atmosphere.h"
 #include "render/RenderMesh.h"
 
 #include <glm/glm.hpp>
@@ -366,6 +367,27 @@ struct PostSettings
     bool dither = true;
 };
 
+/** The most volumes a frame draws. */
+constexpr size_t kMaxVolumes = 8;
+
+/**
+ * Participating media on a dense density grid: voxel (i, j, k) is values[i + dims.x * (j + dims.y * k)], centred at
+ * indexToWorld * (i, j, k, 1). Coefficients per cm are the value times density times each colour.
+ */
+struct VolumeDraw
+{
+    glm::dmat4 indexToWorld{1.0};
+    glm::ivec3 dims{0};
+    std::shared_ptr<const std::vector<float>> values;
+    float peak = 1.0f;             // the largest value, for the majorant
+    float density = 0.01f;         // per cm at value 1
+    glm::vec3 scatter{0.8f};       // scattering per unit of density
+    glm::vec3 absorption{0.0f};    // absorption per unit of density
+    float anisotropy = 0.0f;       // Henyey-Greenstein g
+    glm::vec3 emission{0.0f};      // radiance per unit of density per cm
+    uint64_t node = 0;
+};
+
 /** A light the viewport shades with: the scene's lights its own provider handles, in world space. */
 struct LightDraw
 {
@@ -495,6 +517,13 @@ struct FrameState
         float sunScatter = 0.5f;           // how much the sun lights the fog
         float anisotropy = 0.6f;           // forward scattering toward the sun, 0 to 0.95
     } fog;
+    /**
+     * A sky atmosphere: the background draws its sky, meshes take its haze by distance, and envPath names its baked sky so
+     * the environment lights with it. The sun light's radiance in lights already carries the air's colour.
+     */
+    std::optional<AtmosphereFrame> atmosphere;
+    /** Fog, smoke and clouds: ray marched against the opaque depth and laid over meshes and the backdrop. */
+    std::vector<VolumeDraw> volumes;
     /**
      * The path-traced viewport (render/PathTracer.h) in place of the shaded meshes, on GPUs with ray queries: samples add
      * up while the view, scene, materials and textures stay the same, and start over when any changes.

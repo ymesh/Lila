@@ -271,7 +271,7 @@ constexpr const char* kBlendFilter = "/materialEditor/blendModes";
 
 const QStringList& shadingModelLabels()
 {
-    static const QStringList labels{"Default Lit", "Painterly", "Toon", "Foliage", "Unlit", "Skin", "Cloth", "Clearcoat", "Hair", "Eye"};
+    static const QStringList labels{"Default Lit", "Painterly", "Toon", "Foliage", "Unlit", "Skin", "Cloth", "Clearcoat", "Hair", "Eye", "Volume"};
     return labels;
 }
 
@@ -951,8 +951,8 @@ void MaterialEditor::rebuild()
             }
         };
         // Column 1 only, so the slider ends where the number sliders' tracks do.
-        grid->addWidget(colorPopup::withEyedropper(b, [this, attr](const glm::dvec3& c) { setAttr(attr, json::array({c.x, c.y, c.z})); }, value),
-                        row++, 1);
+        QWidget* field = colorPopup::withEyedropper(b, [this, attr](const glm::dvec3& c) { setAttr(attr, json::array({c.x, c.y, c.z})); }, value);
+        grid->addWidget(field, row++, 1);
         connect(b, &QToolButton::clicked, this, [this, b, attr, text] {
             scene::Node* m = current();
             if (!m)
@@ -985,6 +985,7 @@ void MaterialEditor::rebuild()
                 value->setColor(c);
             }
         });
+        return field;
     };
 
     // A bounded number as a slider field: live without undo while it moves, one undo step once it settles.
@@ -1212,7 +1213,8 @@ void MaterialEditor::rebuild()
           "Toon: stepped light and shadow with a rim.\nFoliage: soft gradient shading lit through from behind.\n"
           "Unlit: the base colour as it is, plus emissive, with no lighting.\nSkin: light scattering under the surface.\n"
           "Cloth: a velvet sheen at grazing angles.\nClearcoat: a glossy layer over the base.\n"
-          "Hair: highlights stretched across the strands, for hair cards.\nEye: an iris under a glossy cornea (UVs centred on the pupil).");
+          "Hair: highlights stretched across the strands, for hair cards.\nEye: an iris under a glossy cornea (UVs centred on the pupil).\n"
+          "Volume: fog, smoke or cloud filling the mesh (or its geometry nodes' density grid) in place of a surface.");
     mShownModel = int(n->as<int64_t>(kShadingModel));
     // Each model shows only its own inputs, so switching the model rebuilds the panel.
     mUpdaters.push_back([this] {
@@ -1286,6 +1288,32 @@ void MaterialEditor::rebuild()
         slider("Cornea Roughness", kClearcoatRoughness, 0.0, 1.0);
         break;
     default: break;
+    }
+
+    auto finish = [&] {
+        auto* gridHost = new QWidget(mBody);
+        gridHost->setLayout(grid);
+        mBodyLayout->addWidget(gridHost);
+        mBodyLayout->addStretch();
+        updateValues();
+    };
+    // A volume has no surface, so its own inputs replace the surface, emissive and blending sections.
+    if (ShadingModel(mShownModel) == ShadingModel::Volume)
+    {
+        section("Volume");
+        slider("Density", kVolumeDensity, 0.0, 10.0, "/m");
+        color("Scatter Color", kVolumeScatterColor);
+        color("Absorption Color", kVolumeAbsorptionColor);
+        slider("Anisotropy", kVolumeAnisotropy, -0.95, 0.95);
+        slider("Emission Strength", kVolumeEmissionStrength, 0.0, 20.0);
+        QWidget* emission = color("Emission Color", kVolumeEmissionColor);
+        mUpdaters.push_back([this, emission] {
+            if (scene::Node* m = current())
+                emission->setEnabled(m->as<double>(kVolumeEmissionStrength) > 0.0);
+        });
+        slider("Voxel Size", kVolumeVoxelSize, 0.0, 50.0, "cm");
+        finish();
+        return;
     }
 
     section("Surface");
@@ -1392,11 +1420,7 @@ void MaterialEditor::rebuild()
         }
     });
 
-    auto* gridHost = new QWidget(mBody);
-    gridHost->setLayout(grid);
-    mBodyLayout->addWidget(gridHost);
-    mBodyLayout->addStretch();
-    updateValues();
+    finish();
 }
 
 void MaterialEditor::updateValues()

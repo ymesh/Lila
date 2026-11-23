@@ -42,4 +42,6 @@ LILA_SCENE_API uint64_t stashValues(std::vector<glm::vec4> values);
 LILA_SCENE_API std::vector<geo::Index> cornerOrder(const geo::Mesh& mesh);
 
 LILA_SCENE_API void registerCommands();
+/** vertexColorMasks; registerCommands calls it. */
+void registerMaskCommands();
 } // namespace lila::vcolor

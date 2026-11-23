@@ -1,6 +1,7 @@
 #include "pointcloud/PointCloudNode.h"
 #include "scene/Node.h"
 #include "scene/PostProcess.h"
+#include "scene/SkyAtmosphere.h"
 #include "scene/ColorManagement.h"
 #include "media/Media.h"
 #include "media/SoundCues.h"
@@ -249,6 +250,7 @@ void registerBuiltins()
     registerCameraTypes();
     registerLightTypes();
     postProcess::registerTypes();
+    skyAtmosphere::registerTypes();
     colorManagement::registerTypes();
     anim::registerTypes();
     drivers::registerTypes();

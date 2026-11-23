@@ -90,6 +90,8 @@ add_executable(lila_tests
     test_light.cpp
     test_showcase.cpp
     test_post2.cpp
+    test_atmosphere.cpp
+    test_float_precision.cpp
     test_locks.cpp
     test_paths.cpp
     test_project_textures.cpp

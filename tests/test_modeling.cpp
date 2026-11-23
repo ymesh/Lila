@@ -574,3 +574,57 @@ TEST_CASE("deleting an edge joins its faces and leaves every point")
         if (m.pointValid(p))
             CHECK(after.position(p) == m.position(p));
 }
+
+TEST_CASE("bevel faces take the material of the faces beside them")
+{
+    run("newScene");
+    const std::string cube = run("polyCube", {{"width", 100.0}, {"height", 100.0}, {"depth", 100.0}, {"generator", false}})[0];
+    run("createMaterial", {{"args", {"Green"}}});
+    run("assignMaterial", {{"args", {"Green", cube}}, {"faces", json::array({0, 1, 2, 3, 4})}});
+    scene::Graph& g = scene::Graph::current();
+    auto meshOf = [&] { return g.find(cube)->as<scene::MeshPtr>(scene::MeshNode::kInMesh); };
+    // A strip alone (one edge between two Green faces), and strips with a corner patch (the three edges of a corner
+    // whose faces are all Green).
+    scene::MeshPtr m = meshOf();
+    std::vector<geo::Index> edges;
+    auto greenOnly = [&](geo::Index e) {
+        bool ok = true;
+        m->forEachEdgeCorner(e, [&](geo::Index c) { ok = ok && m->cornerFace(c) != 5; });
+        return ok;
+    };
+    SUBCASE("one edge")
+    {
+        for (geo::Index e = 0; e < m->edgeCapacity() && edges.empty(); ++e)
+            if (m->edgeValid(e) && greenOnly(e))
+                edges.push_back(e);
+    }
+    SUBCASE("a corner")
+    {
+        for (geo::Index p = 0; p < m->pointCapacity() && edges.empty(); ++p)
+        {
+            std::vector<geo::Index> around;
+            for (geo::Index e = 0; e < m->edgeCapacity(); ++e)
+                if (m->edgeValid(e) && (m->edgePoint(e, 0) == p || m->edgePoint(e, 1) == p))
+                    around.push_back(e);
+            if (std::ranges::all_of(around, greenOnly))
+                edges = around;
+        }
+    }
+    REQUIRE_FALSE(edges.empty());
+    run("selectMode", {{"args", {"edge"}}});
+    run("selectComponents", {{"args", {cube}}, {"edges", edges}});
+    const json made = run("polyBevel", {{"offset", 5}});
+    m = meshOf();
+    const auto ids = m->faceAttrs().get<int32_t>(geo::attr::kMaterial);
+    const auto& names = m->materialNames();
+    int faces = 0, green = 0;
+    for (geo::Index f = 0; f < m->faceCapacity(); ++f)
+        if (m->faceValid(f))
+        {
+            ++faces;
+            green += names[size_t(ids[f])] == "Green";
+        }
+    CHECK(faces > 6);
+    // Only the one face that was never Green keeps the default.
+    CHECK(green == faces - 1);
+}

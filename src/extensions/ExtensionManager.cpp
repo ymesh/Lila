@@ -577,6 +577,19 @@ void ExtensionManager::loadPython(Loaded& rec, const fs::path& module)
     rec.python = true;
 }
 
+namespace
+{
+/** Whether the node's type belongs to the extension: by its own tag, or through the registry's attribution during the extension's init. */
+bool typeOwnedBy(const scene::Node& n, const std::string& extension)
+{
+    const scene::NodeType& t = n.type().registered();
+    if (t.owner == extension)
+        return true;
+    const std::string* owner = scene::types::registry().ownerOf(t.name);
+    return owner && *owner == extension && scene::types::find(t.name) == &t;
+}
+} // namespace
+
 void ExtensionManager::checkUnloadable(const std::string& name) const
 {
     for (const std::string& other : mOrder)
@@ -590,7 +603,7 @@ void ExtensionManager::checkUnloadable(const std::string& name) const
     scene::Graph& g = scene::Graph::current();
     std::vector<std::string> users;
     for (scene::NodeId id : g.nodes())
-        if (scene::Node* n = g.node(id); n && n->type().owner == name)
+        if (scene::Node* n = g.node(id); n && typeOwnedBy(*n, name))
             users.push_back(n->path());
     if (users.empty())
         return;

@@ -6,6 +6,7 @@ lila_module(lila_tex Scene
     Graph.cpp
     Natives.cpp
     GraphFiles.cpp
+    GraphGroups.cpp
     Interop.cpp
     Interop.h
     LayerCommands.cpp

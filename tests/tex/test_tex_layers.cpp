@@ -395,6 +395,31 @@ TEST_CASE("tex layers: set evaluation reads the bake project's live mesh maps, w
     CHECK(bakeMapName("worldNormal") == "objectNormal");
 }
 
+TEST_CASE("tex layers: texAddIdLayers adds a fill layer per ID map entry, masked to it")
+{
+    run("newScene");
+    run("texCreateSet", {{"args", {"Ids"}}, {"resolution", 8}, {"settings", {{"bakeProject", "Proj"}}}});
+    CHECK_THROWS(run("texAddIdLayers", {{"args", {"Ids"}}}));
+    setLiveMeshMapMetaReader([](const std::string& project, const std::string& map) -> json {
+        if (project == "Proj" && map == "id")
+            return {{"source", "material"}, {"legend", {{"matA", {255, 0, 0}}, {"matB", {0, 255, 0}}}}};
+        return json();
+    });
+    const json r = run("texAddIdLayers", {{"args", {"Ids"}}});
+    CHECK(r.size() == 2);
+    const json again = run("texAddIdLayers", {{"args", {"Ids"}}, {"names", {"matB"}}});
+    CHECK(again.size() == 1);
+    setLiveMeshMapMetaReader({});
+    const json view = stack("Ids");
+    int folders = 0;
+    for (const json& l : view["layers"])
+        folders += l.value("kind", "") == "folder";
+    CHECK(folders == 1);
+    run("undo");
+    checkTexel(evalSet("Ids", 8, {{"id", flat(8, 1, 0, 0)}}).at("baseColor"), {1, 0, 0});
+    checkTexel(evalSet("Ids", 8, {{"id", flat(8, 0, 1, 0)}}).at("baseColor"), {0, 1, 0});
+}
+
 TEST_CASE("tex layers: a procedural layer's tiling repeats its content and its exposed settings reach their nodes")
 {
     run("newScene");

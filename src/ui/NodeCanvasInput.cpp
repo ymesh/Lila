@@ -2,6 +2,18 @@
 
 namespace lila::ui
 {
+namespace
+{
+/** Qt's view extends a selection with Ctrl; the canvas extends it with Shift, as the viewport does, since Ctrl-drag cuts links. */
+QMouseEvent shiftExtends(const QMouseEvent* e)
+{
+    Qt::KeyboardModifiers mods = e->modifiers();
+    if (mods & Qt::ShiftModifier)
+        mods = (mods & ~Qt::ShiftModifier) | Qt::ControlModifier;
+    return QMouseEvent(e->type(), e->position(), e->scenePosition(), e->globalPosition(), e->button(), e->buttons(), mods, e->pointingDevice());
+}
+} // namespace
+
 void NodeCanvas::drawForeground(QPainter* p, const QRectF&)
 {
     drawGhostLines(p);
@@ -169,6 +181,14 @@ void NodeCanvas::mousePressEvent(QMouseEvent* e)
             mTemp = mScene.addPath(QPainterPath(), QPen(gray(220), 1.5, Qt::DashLine));
             return;
         }
+    if (e->button() == Qt::RightButton && (e->modifiers() & Qt::ShiftModifier) && !nodeAt(sp) && tieAt(sp) < 0 &&
+        backend->supports("AddNode"))
+    {
+        mRerouteStroke = true;
+        mTieStart = sp;
+        mTemp = mScene.addPath(QPainterPath(), QPen(gray(220), 1.5, Qt::DashLine));
+        return;
+    }
     if (e->button() == Qt::RightButton && !nodeAt(sp))
     {
         if (int t = tieAt(sp); t >= 0)
@@ -254,6 +274,11 @@ void NodeCanvas::mousePressEvent(QMouseEvent* e)
                 pressField(n, f, e);
                 return;
             }
+            else if (int pr = n->propAt(sp); pr >= 0)
+            {
+                pressProp(n, pr);
+                return;
+            }
     if (e->button() == Qt::LeftButton && !nodeAt(sp) && tieAt(sp) < 0)
         if (int f = frameAt(sp, false); f >= 0)
         {
@@ -290,14 +315,6 @@ void NodeCanvas::mousePressEvent(QMouseEvent* e)
                 return;
             }
         }
-    if (e->button() == Qt::LeftButton && (e->modifiers() & Qt::ShiftModifier) && !nodeAt(sp) && tieAt(sp) < 0 &&
-        backend->supports("AddNode"))
-    {
-        mRerouteStroke = true;
-        mTieStart = sp;
-        mTemp = mScene.addPath(QPainterPath(), QPen(gray(220), 1.5, Qt::DashLine));
-        return;
-    }
     if (e->button() == Qt::LeftButton && !nodeAt(sp))
         if (int t = tieAt(sp); t >= 0)
         {
@@ -308,7 +325,8 @@ void NodeCanvas::mousePressEvent(QMouseEvent* e)
             return;
         }
     mPressPositions.clear();
-    QGraphicsView::mousePressEvent(e);
+    QMouseEvent extend = shiftExtends(e);
+    QGraphicsView::mousePressEvent(&extend);
     for (auto& [name, item] : mNodes)
         mPressPositions[name] = item->pos();
 }
@@ -402,7 +420,8 @@ void NodeCanvas::mouseMoveEvent(QMouseEvent* e)
         mTemp->setPath(path);
         return;
     }
-    QGraphicsView::mouseMoveEvent(e);
+    QMouseEvent extend = shiftExtends(e);
+    QGraphicsView::mouseMoveEvent(&extend);
     if (e->buttons() & Qt::LeftButton)
         findInsertLink();
 }
@@ -438,6 +457,13 @@ void NodeCanvas::mouseReleaseEvent(QMouseEvent* e)
     {
         mRerouteStroke = false;
         removeTemp();
+        // Shift+right-click without a drag is still the context menu.
+        if (e->button() == Qt::RightButton && (mapFromScene(mTieStart) - e->pos()).manhattanLength() < 4)
+        {
+            if (onContextMenu)
+                onContextMenu(e->globalPosition().toPoint());
+            return;
+        }
         std::vector<std::pair<LinkItem*, QPointF>> at;
         QLineF stroke(mTieStart, sp);
         for (LinkItem* l : mLinks)
@@ -482,7 +508,8 @@ void NodeCanvas::mouseReleaseEvent(QMouseEvent* e)
         finishWire(sp);
         return;
     }
-    QGraphicsView::mouseReleaseEvent(e);
+    QMouseEvent extend = shiftExtends(e);
+    QGraphicsView::mouseReleaseEvent(&extend);
     if (LinkItem* l = std::exchange(mInsertLink, nullptr))
     {
         l->setHighlight(false);

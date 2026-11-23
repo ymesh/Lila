@@ -1,4 +1,5 @@
 lila_module(lila_vcolor Scene
+    Masks.cpp
     Paint.cpp
     Paint.h
     VertexColors.cpp

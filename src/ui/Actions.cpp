@@ -5,6 +5,7 @@
 #include "core/ExtensionContext.h"
 #include "core/Log.h"
 #include "core/PrefStore.h"
+#include "io/SceneFile.h"
 #include "python/Python.h"
 #include "scene/ComponentPick.h"
 #include "scene/Duplicate.h"
@@ -14,14 +15,25 @@
 #include "scene/Relocate.h"
 #include "ui/Deletion.h"
 #include "ui/FeatureStatus.h"
+#include "ui/Controls.h"
 #include "ui/Hotkeys.h"
+#include "ui/LocateFlash.h"
 #include "ui/MaterialDraw.h"
 #include "ui/OptionBox.h"
+#include "ui/SpinScrub.h"
+#include "ui/SceneLights.h"
 #include "ui/ViewportDisplay.h"
 #include "ui/ViewportTool.h"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QCursor>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFormLayout>
+#include <QPointer>
+#include <QPushButton>
+#include <QVBoxLayout>
 
 #include <algorithm>
 #include <cctype>
@@ -293,11 +305,22 @@ bool runTarget(const json& target)
             return false;
         // A copy, since running it may remove the action (an extension unloading itself).
         std::function<void()> fn = a->run;
+        const std::string name = a->label.empty() ? a->id : a->label;
         ViewportTool* toolBefore = viewportTools::active();
         static unsigned toolRecords = 0;
         const unsigned recordsBefore = toolRecords;
         if (fn)
-            fn();
+        {
+            try
+            {
+                fn();
+            }
+            catch (const std::exception& e)
+            {
+                log::error("{}: {}", name, e.what());
+                return false;
+            }
+        }
         // The innermost action that started the tool, not one that ran it (Repeat Last Tool, a key's release).
         if (ViewportTool* t = viewportTools::active(); t && t != toolBefore && toolRecords == recordsBefore)
         {
@@ -466,6 +489,60 @@ std::string pythonFor(const json& target)
     return "";
 }
 
+namespace
+{
+void openRandomColorsOptions()
+{
+    namespace vd = viewportDisplay;
+    static QPointer<QDialog> dialog;
+    if (!dialog)
+    {
+        QWidget* parent = nullptr;
+        for (QWidget* w : QApplication::topLevelWidgets())
+            if (w->inherits("QMainWindow") && w->isVisible())
+                parent = w;
+        dialog = new QDialog(parent);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->setWindowTitle("Random Colors Options");
+        auto* layout = new QVBoxLayout(dialog);
+        auto* form = new QFormLayout;
+        auto* palette = new QComboBox(dialog);
+        palette->addItem("High Contrast", int(vd::RandomPalette::Contrast));
+        palette->addItem("Pastel", int(vd::RandomPalette::Pastel));
+        palette->setCurrentIndex(palette->findData(int(vd::randomPalette())));
+        palette->setToolTip("High Contrast: strong colours across every hue. Pastel: soft, light colours.");
+        setComboDefault(palette, 0);
+        QObject::connect(palette, &QComboBox::currentIndexChanged, dialog, [palette](int) {
+            vd::setRandomPalette(vd::RandomPalette(palette->currentData().toInt()));
+            PrefStore::get().set("general", vd::kRandomColors, true);
+        });
+        form->addRow("Palette", palette);
+        QDoubleSpinBox* seed = controls::valueField(0.0, 99999.0, 0, QString(), dialog);
+        seed->setValue(vd::randomSeed());
+        seed->setToolTip("Gives every mesh a different colour from the same palette.");
+        setSpinDefault(seed, 0.0);
+        QObject::connect(seed, &QDoubleSpinBox::valueChanged, dialog, [](double v) {
+            PrefStore::get().set("general", vd::kRandomColorsSeed, int(v));
+            io::uiChanged("randomColors");
+            PrefStore::get().set("general", vd::kRandomColors, true);
+        });
+        form->addRow("Seed", seed);
+        auto* bake = new QPushButton("Bake...", dialog);
+        bake->setToolTip("Keeps these colours as materials or vertex colours.");
+        QObject::connect(bake, &QPushButton::clicked, dialog, [] { optionBox::open("viewport.bakeRandomColors"); });
+        form->addRow(QString(), bake);
+        layout->addLayout(form);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close);
+        layout->addWidget(buttons);
+    }
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
+    flashLocate(dialog);
+}
+} // namespace
+
 void registerBuiltins()
 {
     viewportKeys::registerBuiltins();
@@ -625,6 +702,23 @@ void registerBuiltins()
         "Selects what is unselected and deselects the rest: objects, or components of the current kind.");
     cmd("file.new", "New Scene", "File", "newScene", json::object(), "Clears the scene and starts an empty one.");
     cmd("create.locator", "Locator", "Create", "spaceLocator", json::object(), "Creates a cross-hair transform to mark a spot, snap to or parent under.");
+    {
+        const std::vector<std::string> skyWords = {"atmosphere", "sky", "sun", "planet", "earth", "rayleigh", "mie", "haze", "aerial perspective",
+                                                   "skyatmosphere", "unreal", "nishita", "sky texture", "physical sky"};
+        const json existing = {{"existing", true}};
+        add({.id = "create.skyAtmosphere", .label = "Sky Atmosphere", .category = "Create",
+             .doc = "Selects the scene's sky (creating one, and a sun when there is no directional light): a planet's sky and the haze "
+                    "over distance, from the ground to orbit. Unreal's SkyAtmosphere.",
+             .python = ops::toPython("skyAtmosphere", existing), .command = "skyAtmosphere", .call = existing, .keywords = skyWords});
+        add({.id = "render.skyAtmosphere", .label = "Sky Atmosphere", .category = "Render",
+             .doc = "Selects the scene's sky (creating one, and a sun when there is no directional light). Unreal's SkyAtmosphere.",
+             .python = ops::toPython("skyAtmosphere", existing), .command = "skyAtmosphere", .call = existing, .keywords = skyWords});
+        add({.id = "create.fogVolume", .label = "Fog Volume", .category = "Create",
+             .doc = "Creates a box filled with fog: a cube with a new volume material. Any closed mesh given a volume material fills the same way.",
+             .python = ops::toPython("fogVolume", json::object()), .command = "fogVolume", .call = json::object(),
+             .keywords = {"volume", "fog", "smoke", "cloud", "mist", "participating media", "vdb", "principled volume", "heterogeneous volume",
+                          "volumetric"}});
+    }
     cmd("create.camera", "Camera", "Create", "createNode", {{"args", {"camera"}}},
         "Creates a camera at the origin looking down -Z; look through it from the view's camera menu or by MMB-dragging it from the outliner onto a view.");
     cmd("create.emptyGroup", "Empty Group", "Create", "group", {{"empty", true}}, "Creates an empty transform to group objects under.");
@@ -672,6 +766,10 @@ void registerBuiltins()
     cmd("mesh.subdivide", "Subdivide", "Mesh", "polySubdivide", json::object(), "Splits the selected faces into smaller ones.");
     cmd("mesh.mirror", "Mirror", "Mesh", "polyMirror", json::object(), "Adds a mirrored, welded copy of the mesh, once. The Mirror modifier stays live.");
     cmd("mesh.separate", "Separate", "Mesh", "polySeparate", json::object(), "Splits a mesh into one object per disconnected piece.");
+    add({.id = "mesh.tile", .label = "Split into Tiles", .category = "Mesh",
+         .doc = "Splits a huge mesh into tiles, each with its origin at its centre, so the viewport draws it without jitter.",
+         .python = ops::toPython("tileMesh", json::object()), .command = "tileMesh", .call = json::object(),
+         .keywords = {"tile", "chunk", "grid", "split", "large world", "precision", "jitter", "planet", "terrain"}});
     cmd("mesh.combine", "Combine", "Mesh", "polyCombine", json::object(), "Merges the selected meshes into one object.");
     cmd("mesh.smartJoin", "Smart Join", "Mesh", "smartJoin", json::object(),
         "Joins the two selected meshes (a limb into a body) with a quad bridge, carving a matching hole; the option box previews live and rates the result.");
@@ -737,6 +835,14 @@ void registerBuiltins()
                  {"convex hull", "ucx", "collision", "collision from selection", "hull from selection", "unreal collision", "simple collision"});
     cmd("mesh.multiBoxBounds", "Multi-Box Bounds", "Mesh", "multiBoxBounds", json::object(),
         "Splits the selected meshes into chunks that conform to boxes and creates one box (or hull) per chunk, named and parented as Unreal collision.");
+    add({.id = "unreal.sendSky", .label = "Send Sky to Unreal", .category = "Unreal",
+         .doc = "Sends the sky atmosphere (with a real-time sky light and the sun) and the post process's height fog to the open level.",
+         .python = ops::toPython("unrealSendSky", json::object()), .command = "unrealSendSky", .call = json::object(),
+         .keywords = {"sky atmosphere", "skylight", "height fog", "exponential height fog", "volumetric fog", "sun"}});
+    add({.id = "unreal.sendVolumes", .label = "Send Volumes to Unreal", .category = "Unreal",
+         .doc = "Sends meshes with a volume material (the selection, else all) as Sparse Volume Textures on Heterogeneous Volumes.",
+         .python = ops::toPython("unrealSendVolumes", json::object()), .command = "unrealSendVolumes", .call = json::object(),
+         .keywords = {"vdb", "openvdb", "sparse volume texture", "svt", "heterogeneous volume", "fog", "smoke", "cloud"}});
     cmd("unreal.sendBake", "Send Bake to Unreal", "Unreal", "unrealSendTextures", json::object(),
         "Sends the bake project's textures to the connected Unreal editor, updating them in place, and wires them into the "
         "materials (instances of the unreal pref materialParent when it is set).");
@@ -873,6 +979,12 @@ void registerBuiltins()
     togglePref("viewport.modifierEdges", "Show Modifier Edges", vd::kModifierEdges, false,
                "Editing components on a mesh with modifiers (bevel, subdivide) also draws the edges the modifiers add, faintly.");
     togglePref("viewport.defaultMaterial", "Use Default Material", vd::kDefaultMaterial, false, "Shades every mesh with the plain default material.");
+    togglePref("viewport.randomColors", "Random Colors", vd::kRandomColors, false,
+               "Shades every mesh with the default material in a colour of its own, to tell objects apart.");
+    optionBox::addCustom("viewport.randomColors", openRandomColorsOptions);
+    vd::registerRandomColors();
+    cmd("viewport.bakeRandomColors", "Bake Random Colors", "Display", "bakeRandomColors", json::object(),
+        "Keeps the Random Colors display colours as a material per mesh, or as vertex colours.");
     togglePref("viewport.greyBaseColor", "Grey Base Color", vd::kGreyBaseColor, false,
                "Materials shade with a 50% grey base color, keeping their normal, packed and other maps, opacity and shading model.");
     togglePref("viewport.toggleEnvBackground", "Environment Background", "/viewport/env/background", true, "Shows the HDRI behind the scene.");
@@ -954,12 +1066,7 @@ void registerBuiltins()
                   .doc = "Switches the viewport to sculpt lighting, or back to the lighting it had before.",
                   .python = "lila.ui.run_action(\"viewport.toggleSculptLighting\")",
                   .checked = [] { return PrefStore::get().value<std::string>("general", vd::kLighting, "environment") == "sculpt"; }});
-    actions::add({.id = "viewport.toggleLighting", .label = "Scene Lights", .category = "Display", .run = [] {
-                      PrefStore& p = PrefStore::get();
-                      p.set("general", vd::kSceneLights, !p.value<bool>("general", vd::kSceneLights, true));
-                  },
-                  .doc = "Turns the scene's lights off and on in the viewport, as if hidden. The environment still lights.",
-                  .python = "lila.prefs.set(\"general\", \"/viewport/sceneLights\", False)"});
+    sceneLights::registerActions();
     for (auto [mode, label, doc] : {std::tuple{"off", "Hide Vertex Colors", "Meshes draw without their vertex colors."},
                                     {"shaded", "Vertex Colors (Shaded)", "Multiplies each mesh's current color set into its lit base color."},
                                     {"unlit", "Vertex Colors (Unlit)", "Shows each mesh's current color set flat, without lighting."}})

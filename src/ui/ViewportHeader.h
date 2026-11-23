@@ -108,6 +108,7 @@ private:
     QToolButton* mSoftSelect = nullptr;
     QToolButton* mCamera = nullptr;
     QToolButton* mQuad = nullptr;
+    QToolButton* mLighting = nullptr;
     QToolButton* mChevron = nullptr;
     QTimer* mSymmetryRefresh = nullptr;
     int mPrefListener = 0;

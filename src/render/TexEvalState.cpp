@@ -640,12 +640,12 @@ void Evaluator::State::propagate(const std::set<int>& changed, bool moved)
             if (!srcDirty)
                 continue;
             any = true;
-            const auto near = pass.reach.find(b);
-            if (pass.kind == PassKind::Fused && (near != pass.reach.end() || std::find(pass.local.begin(), pass.local.end(), b) != pass.local.end()))
+            const auto reached = pass.reach.find(b);
+            if (pass.kind == PassKind::Fused && (reached != pass.reach.end() || std::find(pass.local.begin(), pass.local.end(), b) != pass.local.end()))
             {
                 // Bilinear reads reach a texel of the source either side, plus the output texel's own extent and any neighbour taps.
                 const auto [bw, bh] = cur->sizes[size_t(b)];
-                const float taps = near != pass.reach.end() ? float(near->second) : 0.0f;
+                const float taps = reached != pass.reach.end() ? float(reached->second) : 0.0f;
                 r = r.unite(src.grow((1.5f + taps) / float(bw) + 1.0f / float(ow), (1.5f + taps) / float(bh) + 1.0f / float(oh)));
             }
             else

@@ -67,7 +67,7 @@ UMaterialExpressionCustom* Custom(LilaLink::FFunctionGraph& G, const FString& De
 	return E;
 }
 
-FWire Wire(const FString& Name, UMaterialExpression* E, const FString& Output = FString()) { return {Name, {E, Output}}; }
+FWire Wire(const FString& Name, UMaterialExpression* E, const FString& Output = FString()) { return MakeTuple(Name, MakeTuple(E, Output)); }
 
 /** Value noise over world space, two octaves; the same as Lila's viewport, so a seed breaks up the same way in kind. */
 const TCHAR* NoiseCode = TEXT(

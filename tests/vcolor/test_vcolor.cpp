@@ -267,6 +267,42 @@ TEST_CASE("vertexColorStroke is one small undo step")
     CHECK(geo::colors::sets(*outMesh(p)).empty());
 }
 
+TEST_CASE("vertexColorMasks packs a 0/1 mask per object and per material")
+{
+    run("newScene");
+    std::vector<std::string> names;
+    for (const char* n : {"E", "D", "C", "B", "A"})
+        names.push_back(mesh("polyCube", n));
+    json legend = run("vertexColorMasks", {{"args", names}});
+    CHECK(legend["A"] == "mask0.r");
+    CHECK(legend["D"] == "mask0.a");
+    CHECK(legend["E"] == "mask1.r");
+    for (const std::string& n : names)
+    {
+        auto m = outMesh(n);
+        REQUIRE(geo::colors::has(*m, "mask0"));
+        REQUIRE(geo::colors::has(*m, "mask1"));
+        CHECK(geo::colors::isData(*m, "mask0"));
+    }
+    CHECK(allCorners(*outMesh("C"), "mask0", {0, 0, 1, 0}));
+    CHECK(allCorners(*outMesh("C"), "mask1", {0, 0, 0, 0}));
+    CHECK(allCorners(*outMesh("E"), "mask1", {1, 0, 0, 0}));
+    run("undo");
+    CHECK_FALSE(geo::colors::has(*outMesh("A"), "mask0"));
+
+    run("createMaterial", {{"args", {"Red"}}});
+    run("assignMaterial", {{"args", {"Red", "A"}}, {"faces", {0}}});
+    legend = run("vertexColorMasks", {{"args", {"A"}}, {"source", "material"}, {"channels", 3}, {"prefix", "mat"}});
+    CHECK(legend.size() == 2);
+    CHECK(legend["Default"] == "mat0.r");
+    CHECK(legend["Red"] == "mat0.g");
+    auto m = outMesh("A");
+    auto v = geo::colors::values(*m, "mat0");
+    for (Index c = 0; c < m->cornerCapacity(); ++c)
+        if (m->cornerValid(c))
+            CHECK(v[c] == (m->cornerFace(c) == 0 ? glm::vec4(0, 1, 0, 1) : glm::vec4(1, 0, 0, 1)));
+}
+
 TEST_CASE("fill, gradient, adjust, blur and bake commands")
 {
     run("newScene");

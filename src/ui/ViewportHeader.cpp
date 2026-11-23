@@ -20,6 +20,7 @@
 #include "ui/LodDisplay.h"
 #include "ui/OptionBox.h"
 #include "ui/RetopoDrawTool.h"
+#include "ui/SceneLights.h"
 #include "ui/SoftSelectPanel.h"
 #include "ui/SpinScrub.h"
 #include "ui/TearOff.h"
@@ -414,6 +415,8 @@ QString hdrShiftHint(const std::string& action)
         return "Reference Images menu";
     if (action == "view.presenter")
         return "edit the Presenter layout";
+    if (optionBox::available(action))
+        return "options";
     return {};
 }
 
@@ -524,6 +527,11 @@ bool hdrShiftClick(QToolButton* b, const std::string& action)
     if (action == "view.presenter" && actions::find("view.presenterLayout"))
     {
         actions::run("view.presenterLayout");
+        return true;
+    }
+    if (optionBox::available(action))
+    {
+        optionBox::open(action);
         return true;
     }
     return false;
@@ -648,6 +656,7 @@ void ViewportHeader::rebuildItems()
     mSoftSelect = nullptr;
     mCamera = nullptr;
     mQuad = nullptr;
+    mLighting = nullptr;
     buildItems();
     for (Item& item : mItems)
         item.widget->show();
@@ -690,6 +699,7 @@ void ViewportHeader::buildEntry(const json& e)
         else if (id == "lighting")
         {
             QToolButton* lighting = popover("sun", "Lighting", [this](QMenu* m) { fillLightingMenu(m); });
+            mLighting = lighting;
             add(lighting, true, 6, [this](QMenu* m) { hdrSubmenu(m, "Lighting", [this](QMenu* s) { fillLightingMenu(s); }); }, {lighting});
         }
         else if (id == "jointSize")
@@ -1288,6 +1298,7 @@ void ViewportHeader::fillOverlaysMenu(QMenu* m)
     for (const char* id : {"viewport.defaultMaterial", "viewport.greyBaseColor"})
         if (hdrRelevant(vc::Materials, id, mView))
             row(id);
+    row("viewport.randomColors");
     hdrSubmenu(m, "Vertex Colors", [this](QMenu* s) {
         hdrRadioRows(s, {"viewport.vertexColors.off", "viewport.vertexColors.shaded", "viewport.vertexColors.unlit"}, mView, {});
         s->addSeparator();
@@ -1380,6 +1391,7 @@ void ViewportHeader::fillLightingMenu(QMenu* m)
     }
     modes->setEnabled(lilaDraws);
     modeRow->addWidget(modes, 1);
+    actionRow(m, "viewport.toggleLighting");
 
     // One rotation field for whichever light the mode uses: the HDRI turns around the up axis, the rigs around the view.
     QHBoxLayout* rotRow = hdrRow(m, "Rotation", &holder);
@@ -1552,6 +1564,13 @@ void ViewportHeader::refresh()
         mCamera->setText(camera);
         mCamera->setToolTip("Camera: " + camera + "\nRight-click to select it");
         layoutItems();
+    }
+    if (mLighting && mLighting->property("lilaSceneLights").toInt() != int(sceneLights::on()) + 1)
+    {
+        const bool lit = sceneLights::on();
+        mLighting->setProperty("lilaSceneLights", int(lit) + 1);
+        mLighting->setIcon(icon(lit ? "sun" : "sun-off"));
+        mLighting->setToolTip(lit ? "Lighting" : "Lighting\nScene Lights off: lights and domes light nothing in the viewport");
     }
     if (auto* layout = ViewportLayout::of(this); layout && mQuad)
     {

@@ -7,6 +7,7 @@
 #include "link/SplineSend.h"
 #include "link/TextureSend.h"
 #include "link/TextureSetSend.h"
+#include "link/SkySend.h"
 #include "link/UnrealLink.h"
 #include "core/Events.h"
 #include "scene/Graph.h"
@@ -156,6 +157,7 @@ void registerCommands()
     registerSplineCommands();
     registerGroomSendCommands();
     registerPlacementCommands();
+    registerSkySendCommands();
     registerExpressionRigCommands();
     static const events::SubscriptionId adopt =
         events::subscribe(events::Event::SceneOpened, [](const events::EventData&) { adoptWorkspaceMappings(); });

@@ -3,6 +3,7 @@
 #include "scene/LightingChannels.h"
 #include "scene/SceneIndex.h"
 #include "ui/HeightfieldDisplay.h"
+#include "ui/VolumeDisplay.h"
 
 namespace lila::ui
 {
@@ -17,6 +18,9 @@ struct MeshSettings
     heightfieldDisplay::Settings terrain; // terrains drawn from their heights, and how
     bool wireframe = false, wireOnShaded = false, showMaterials = false, smoothSubdivisions = false, inherit = false, maskShown = true;
     bool modifierEdges = false; // component editing draws the modifiers' added edges, faintly
+    bool randomColors = false;
+    viewportDisplay::RandomPalette randomPalette = viewportDisplay::RandomPalette::Contrast;
+    int randomSeed = 0;
     render::VertexColorMode vertexColors = render::VertexColorMode::Off;
     render::ColorChannel colorChannel = render::ColorChannel::Rgb;
     glm::vec4 componentWire{0.0f};
@@ -111,6 +115,8 @@ void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const sc
         d.mesh = std::move(rm);
     if (previewed)
         d.materials = std::move(hooked);
+    else if (set.randomColors)
+        d.baseColor = viewportDisplay::randomColor(n.name(), set.randomPalette, set.randomSeed);
     else if (textured && !instanced)
     {
         std::vector<render::Material> materials = drawMaterials(*shown);
@@ -134,7 +140,9 @@ void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const sc
     const bool wireOnly = n.type().isA("lattice");
     const scene::displayLayers::Display layer = scene::displayLayers::display(g, id);
     const bool templated = layer.type == scene::displayLayers::DisplayType::Template;
-    if (!set.wireframe && !wireOnly && !templated)
+    // A volume's mesh only bounds the medium the volume pass draws.
+    const bool volume = shown && volumeDisplay::isVolumeMesh(*shown);
+    if (!set.wireframe && !wireOnly && !templated && !volume)
         d.flags |= render::DrawShaded;
     const bool showsWire = set.wireframe || set.wireOnShaded || wireOnly || templated;
     if (showsWire || hilite)
@@ -200,7 +208,10 @@ MeshSettings meshSettings(scene::Graph& g, const ViewportWidget::RenderView* rv,
     set.terrain = heightfieldDisplay::settings();
     set.wireframe = !rv && p.value<std::string>("general", "/viewport/displayMode", "shaded") == "wireframe";
     set.wireOnShaded = !rv && p.value<bool>("general", "/viewport/wireOnShaded", false);
-    set.showMaterials = materialsShown() && !viewportDisplay::defaultMaterial();
+    set.randomColors = viewportDisplay::randomColors();
+    set.randomPalette = viewportDisplay::randomPalette();
+    set.randomSeed = viewportDisplay::randomSeed();
+    set.showMaterials = materialsShown() && !viewportDisplay::defaultMaterial() && !set.randomColors;
     set.smoothSubdivisions = p.value<bool>("general", viewportDisplay::kSmoothSubdivisions, false);
     set.modifierEdges = p.value<bool>("general", viewportDisplay::kModifierEdges, false);
     set.inherit = scene::inheritVisibility();

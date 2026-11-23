@@ -48,6 +48,27 @@ UiHooks& uiHooks()
     return h;
 }
 
+std::string takeError()
+{
+    PyObject* exc = PyErr_GetRaisedException();
+    if (!exc)
+        return {};
+    std::string message;
+    if (PyObject* s = PyObject_Str(exc))
+    {
+        if (const char* u = PyUnicode_AsUTF8(s))
+            message = u;
+        Py_DECREF(s);
+    }
+    PyErr_Clear();
+    if (message.empty())
+        message = Py_TYPE(exc)->tp_name;
+    // Restoring steals the reference; PyErr_Print writes the traceback through sys.stderr into the log.
+    PyErr_SetRaisedException(exc);
+    PyErr_Print();
+    return message;
+}
+
 Gil::Gil() : mState(int(PyGILState_Ensure())) {}
 Gil::~Gil() { PyGILState_Release(PyGILState_STATE(mState)); }
 

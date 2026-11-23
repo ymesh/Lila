@@ -68,6 +68,8 @@ std::vector<AttrDef> lightAttrs()
                              .doc = "Draws a lens flare where the light shows on screen (viewport and renders), fading as things hide it."};
     at(Light::kLensFlareIntensity) = floatAttr("lensFlareIntensity", "lfi", 1.0, "Lens flare: brightness on top of what the light's own brightness gives.", 0.0, 20.0);
     at(Light::kLensFlareScale) = floatAttr("lensFlareScale", "lfs", 1.0, "Lens flare: size of its glare and ghosts.", 0.05, 10.0);
+    at(Light::kAtmosphereSun) = {.name = "atmosphereSun", .shortName = "asn", .type = PlugType::Bool, .defaultValue = false, .flags = kStoredFlags,
+                                 .doc = "Directional: the sun of the sky atmosphere. With none set, the first directional light is."};
     return a;
 }
 

@@ -35,79 +35,16 @@ namespace opt = ops::options;
 
 namespace
 {
-/** Label that scrubs a number when dragged sideways, like the channel box's name column. */
-class ScrubLabel : public QLabel
+/** A row label naming its number field as buddy, so it drags and resets the field as the field itself does (SpinScrub). */
+QLabel* scrubLabel(const QString& text, QDoubleSpinBox* spin, QWidget* parent)
 {
-public:
-    ScrubLabel(const QString& text, std::function<void(double)> step, QWidget* parent) : QLabel(text, parent), mStep(std::move(step))
-    {
-        setCursor(Qt::SizeHorCursor);
-        setUsageHint(this, "Drag sideways to scrub; Ctrl for fine steps, Shift for coarse");
-    }
-
-    ~ScrubLabel() override { endDrag(); }
-
-    /** Scrubbing steps follow the field's own single step. */
-    void setStepScale(double s) { mScale = s; }
-
-protected:
-    void mousePressEvent(QMouseEvent* e) override
-    {
-        if (e->button() == Qt::LeftButton || e->button() == Qt::MiddleButton)
-        {
-            mLast = e->globalPosition().x();
-            // One drag is one undo step, however many values it sets on the way.
-            if (!mChunk && !scrubsWithoutUndoStep(this))
-            {
-                UndoStack::get().openChunk("Drag " + text().toStdString());
-                mChunk = true;
-            }
-        }
-        if (e->button() == Qt::MiddleButton)
-            mMiddle.press(int(e->globalPosition().x()), int(e->globalPosition().y()), 0);
-    }
-    void mouseReleaseEvent(QMouseEvent* e) override
-    {
-        if (e->button() == Qt::MiddleButton)
-            mMiddle.cancel();
-        if (!(e->buttons() & (Qt::LeftButton | Qt::MiddleButton)))
-            endDrag();
-    }
-    void mouseMoveEvent(QMouseEvent* e) override
-    {
-        if (!(e->buttons() & (Qt::LeftButton | Qt::MiddleButton)))
-        {
-            endDrag();
-            return;
-        }
-        // A middle press only scrubs once it is clearly a drag; a click resets the value instead.
-        if (mMiddle.down() && !mMiddle.dragging())
-        {
-            mMiddle.move(int(e->globalPosition().x()), int(e->globalPosition().y()));
-            mLast = e->globalPosition().x();
-            if (!mMiddle.dragging())
-                return;
-        }
-        double dx = e->globalPosition().x() - mLast;
-        mLast = e->globalPosition().x();
-        double step = (e->modifiers() & Qt::ControlModifier) ? 0.01 : (e->modifiers() & Qt::ShiftModifier) ? 1.0 : 0.1;
-        if (dx != 0.0)
-            mStep(dx * step * mScale);
-    }
-
-private:
-    void endDrag()
-    {
-        if (std::exchange(mChunk, false))
-            UndoStack::get().closeChunk();
-    }
-
-    std::function<void(double)> mStep;
-    bool mChunk = false;
-    double mScale = 1.0;
-    double mLast = 0.0;
-    valueReset::ClickTracker mMiddle;
-};
+    auto* label = new QLabel(text, parent);
+    label->setBuddy(spin);
+    label->setCursor(Qt::SizeHorCursor);
+    label->setProperty("lilaScrubsBuddy", true);
+    setUsageHint(label, "Drag sideways to scrub; Ctrl for fine steps, Shift for coarse; middle-drag up or down to pick the step");
+    return label;
+}
 
 QString tip(const opt::Field& f)
 {
@@ -210,7 +147,6 @@ FlagFieldWidgets makeFlagField(const opt::Field& f, const json& value, std::func
 {
     FlagFieldWidgets out;
     QString label = QString::fromStdString(f.label);
-    QString defText = QString::fromStdString(valueReset::describe(f.defaultValue));
     switch (f.kind)
     {
     case opt::FieldKind::Check:
@@ -234,21 +170,8 @@ FlagFieldWidgets makeFlagField(const opt::Field& f, const json& value, std::func
         QDoubleSpinBox* spin = flagNumber(f, 0, !std::isnan(f.min) ? f.min : (v < 0 || d < 0) ? -1000000 : 0, std::isnan(f.max) ? 1000000 : f.max, parent);
         spin->setValue(v);
         QObject::connect(spin, &QDoubleSpinBox::valueChanged, spin, [changed](double x) { changed(int(std::lround(x))); });
-        // An int scrubs a step per ten pixels.
-        auto acc = std::make_shared<double>(0.0);
-        auto* scrub = new ScrubLabel(label, [spin, acc](double dx) {
-            *acc += dx;
-            int whole = int(*acc);
-            if (whole != 0)
-            {
-                *acc -= whole;
-                if (!controls::stepPresets(spin, whole))
-                    spin->setValue(spin->value() + whole);
-            }
-        }, parent);
         setSpinDefault(spin, d);
-        onMiddleClickReset(scrub, [spin, d] { spin->setValue(d); }, defText, spin);
-        out.label = scrub;
+        out.label = scrubLabel(label, spin, parent);
         out.field = spin;
         out.set = [spin](const json& x) {
             QSignalBlocker b(spin);
@@ -262,24 +185,9 @@ FlagFieldWidgets makeFlagField(const opt::Field& f, const json& value, std::func
         QDoubleSpinBox* spin = flagNumber(f, 3, std::isnan(f.min) ? -1e6 : f.min, std::isnan(f.max) ? 1e6 : f.max, parent);
         spin->setValue(jsonNumber(value));
         QObject::connect(spin, &QDoubleSpinBox::valueChanged, spin, [changed](double x) { changed(x); });
-        auto acc = std::make_shared<double>(0.0);
-        auto* scrub = new ScrubLabel(label, [spin, acc](double dx) {
-            if (controls::stepPresets(spin, 0))
-            {
-                // dx is pixels times the single step; a preset per 24 pixels keeps each one pickable.
-                *acc += dx / spin->singleStep() / 24.0;
-                const int whole = int(*acc);
-                *acc -= whole;
-                controls::stepPresets(spin, whole);
-                return;
-            }
-            spin->setValue(spin->value() + dx);
-        }, parent);
-        scrub->setStepScale(spin->singleStep() / 0.1);
         double d = jsonNumber(f.defaultValue);
         setSpinDefault(spin, d);
-        onMiddleClickReset(scrub, [spin, d] { spin->setValue(d); }, defText, spin);
-        out.label = scrub;
+        out.label = scrubLabel(label, spin, parent);
         out.field = spin;
         out.set = [spin](const json& x) {
             QSignalBlocker b(spin);

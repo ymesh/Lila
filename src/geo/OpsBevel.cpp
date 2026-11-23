@@ -1213,6 +1213,16 @@ std::vector<Index> bevel(Mesh& mesh, std::span<const Index> edgesIn, const Bevel
         ch.insert(ch.begin() + ptrdiff_t(ins.at) + 1, ins.pts.begin(), ins.pts.end());
     }
 
+    // The faces around each bevelled point, kept for the strips and corner patches to copy: rebuilding removes their corners.
+    std::unordered_map<Index, Index> faceBefore;
+    for (const Vert& v : verts)
+        for (Index c : v.corners)
+            faceBefore[c] = mesh.cornerFace(c);
+    auto sourceFace = [&](Index c) {
+        auto it = faceBefore.find(c);
+        return it == faceBefore.end() ? kInvalid : it->second;
+    };
+
     // Rebuild every face around a bevelled point.
     std::unordered_map<Index, int> cornerLabel;
     const std::vector<Index> oldEdges = edgesOfFaces(mesh, touchedFaces);
@@ -1315,7 +1325,7 @@ std::vector<Index> bevel(Mesh& mesh, std::span<const Index> edgesIn, const Bevel
                 through[s] = {seg, pr.through, Mix::lerp(se.ma, se.mb, (seg + 0.5) / segments)};
             }
             if (s == 0)
-                srcFace = mesh.cornerFace(v.corners[j]);
+                srcFace = sourceFace(v.corners[j]);
         }
         const std::vector<Index>& pa = side[0];
         const std::vector<Index>& pb = side[1];
@@ -1356,7 +1366,7 @@ std::vector<Index> bevel(Mesh& mesh, std::span<const Index> edgesIn, const Bevel
         const VertMesh& vm = vmesh[vi];
         const Hole& h = vm.hole;
         const size_t K = h.nodes.size();
-        const Index srcFace = mesh.cornerFace(v.corners[0]);
+        const Index srcFace = sourceFace(v.corners[0]);
         if (vm.fill == Fill::None || vm.fill == Fill::Merge || K == 0)
             continue;
 

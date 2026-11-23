@@ -502,7 +502,8 @@ NodeEditor::NodeEditor(QWidget* parent, const std::string& backend) : QWidget(pa
     mCanvas->onAddMenu = [this](QPointF scenePos) { openAddMenu(scenePos, nullptr); };
     mCanvas->onWireDropped = [this](QPointF scenePos, const WireDrag& w) { openAddMenu(scenePos, &w); };
     mCanvas->onFocused = [this] { lastFocused() = this; };
-    mCanvas->onOpenGroup = [this](const std::string& g) {
+    mCanvas->onOpenGroup = [this](const std::string& prop) {
+        const std::string g = mBackend->childGroup(mGroup.toStdString(), prop);
         if (mBackend->hasGroup(scene::Graph::current(), g))
             enterGroup(qs(g));
         else
@@ -627,9 +628,10 @@ void NodeEditor::buildToolbar()
     pathLay->setSpacing(0);
     bar->addWidget(mPathBar);
     bar->addWidget(mGroups);
-    connect(mGroups, &QComboBox::currentTextChanged, this, [this](const QString& t) {
-        if (!mRefreshing && t != mGroup)
-            setGroup(t);
+    connect(mGroups, &QComboBox::currentIndexChanged, this, [this] {
+        const QString target = mGroups->currentData().toString();
+        if (!mRefreshing && !target.isEmpty() && target != mGroup)
+            setGroup(target);
     });
     if (std::string action = b.newGroupAction(); !action.empty())
     {
@@ -997,6 +999,8 @@ void NodeEditor::copySelected()
     const std::vector<std::string> names = mCanvas->selectedNames();
     json clip;
     json call = selectionCall(mGroup, names);
+    if (!call.is_null() && !mBackend->supports("CopyNodes"))
+        showError(mBackend->title() + " nodes can't be copied.");
     if (!call.is_null() && mBackend->supports("CopyNodes"))
         if (json text = run("CopyNodes", call); text.is_string())
             clip = clipboardJson(text.get<std::string>());
@@ -1075,6 +1079,8 @@ void NodeEditor::paste()
         addFrameCopies(copies);
         if (!hasNodes && copies.empty())
             showError("Nothing to paste: the clipboard has no nodes or notes.");
+        if (hasNodes && !mBackend->supports("PasteNodes"))
+            showError(mBackend->title() + " graphs don't take pasted nodes.");
         if (hasNodes && mBackend->supports("PasteNodes"))
         {
             json r = ops::execute(mBackend->command("PasteNodes"), {{"args", {mGroup.toStdString(), text.toStdString()}}, {"position", {at.x(), at.y()}}},
@@ -1104,6 +1110,8 @@ void NodeEditor::duplicateSelected()
     }
     addFrameCopies(copies);
     json call = selectionCall(mGroup, names);
+    if (!call.is_null() && !mBackend->supports("DuplicateNodes"))
+        showError(mBackend->title() + " nodes can't be duplicated.");
     if (call.is_null() || !mBackend->supports("DuplicateNodes"))
         return;
     call["offset"] = {40, 40};
@@ -1126,8 +1134,13 @@ std::vector<std::vector<std::array<std::string, 4>>> NodeEditor::shownTies() con
 
 void NodeEditor::groupSelected()
 {
+    if (!mBackend->supports("GroupNodes"))
+    {
+        showError(mBackend->title() + " nodes can't be grouped yet; " + GraphBackend::hintKey("nodeEditor.frameNodes") + " frames them.");
+        return;
+    }
     json call = selectionCall(mGroup, mCanvas->selectedNames());
-    if (call.is_null() || !mBackend->supports("GroupNodes"))
+    if (call.is_null())
         return;
     call["name"] = "NodeGroup";
     try
@@ -1145,8 +1158,11 @@ void NodeEditor::groupSelected()
 void NodeEditor::ungroupSelected()
 {
     std::string sub = mBackend->subgroupNodeType();
-    if (sub.empty())
+    if (sub.empty() || !mBackend->supports("Ungroup"))
+    {
+        showError(mBackend->title() + " nodes can't be grouped or ungrouped.");
         return;
+    }
     std::vector<std::string> names = mCanvas->selectedNames();
     UndoChunk chunk("Ungroup");
     std::vector<std::string> added;
@@ -1178,7 +1194,7 @@ void NodeEditor::openSelectedGroup()
             for (const json& d : info.is_object() ? info["definition"].value("nodes", json::array()) : json::array())
                 if (d.value("name", "") == n && d.contains("values"))
                 {
-                    std::string g = d["values"].value("group", "");
+                    std::string g = mBackend->childGroup(mGroup.toStdString(), d["values"].value("group", ""));
                     if (mBackend->hasGroup(scene::Graph::current(), g))
                         enterGroup(qs(g));
                     return;
@@ -1189,12 +1205,12 @@ void NodeEditor::openSelectedGroup()
 namespace
 {
 /** The node in a GroupInfo definition that runs child, or empty. */
-std::string nodeRunning(const GraphBackend& b, const json& info, const std::string& child)
+std::string nodeRunning(const GraphBackend& b, const std::string& parent, const json& info, const std::string& child)
 {
     if (!info.is_object())
         return {};
     for (const json& d : info["definition"].value("nodes", json::array()))
-        if (b.runsSubgroup(d.value("type", "")) && d.contains("values") && d["values"].value("group", "") == child)
+        if (b.runsSubgroup(d.value("type", "")) && d.contains("values") && b.childGroup(parent, d["values"].value("group", "")) == child)
             return d.value("name", "");
     return {};
 }
@@ -1221,8 +1237,10 @@ QString NodeEditor::parentGroup() const
     if (mGroup.isEmpty())
         return {};
     const std::string child = mGroup.toStdString();
+    if (std::string held = mBackend->parentGroupOf(child); !held.empty())
+        return qs(held);
     for (const std::string& g : mBackend->groupNames(scene::Graph::current()))
-        if (g != child && !nodeRunning(*mBackend, run("GroupInfo", args({g})), child).empty())
+        if (g != child && !nodeRunning(*mBackend, g, run("GroupInfo", args({g})), child).empty())
             return qs(g);
     return {};
 }
@@ -1232,7 +1250,7 @@ void NodeEditor::openParentGroup()
     QString parent = parentGroup();
     if (parent.isEmpty())
         return;
-    std::string node = nodeRunning(*mBackend, run("GroupInfo", args({parent.toStdString()})), mGroup.toStdString());
+    std::string node = nodeRunning(*mBackend, parent.toStdString(), run("GroupInfo", args({parent.toStdString()})), mGroup.toStdString());
     if (node.empty())
         setGroup(parent);
     else
@@ -1271,7 +1289,7 @@ void NodeEditor::startGroupRename()
 {
     if (mGroup.isEmpty() || !mBackend->canRenameGroup())
         return;
-    controls::editInPlace(mGroups, mGroup, [this, from = mGroup](const QString& to) {
+    controls::editInPlace(mGroups, mGroup.section('/', -1), [this, from = mGroup](const QString& to) {
         std::string renamed = mBackend->renameGroup(from.toStdString(), to.toStdString());
         if (renamed.empty())
             return;
@@ -1285,6 +1303,8 @@ void NodeEditor::startGroupRename()
 void NodeEditor::exportGroup()
 {
     std::vector<std::string> suffixes = mBackend->fileSuffixes();
+    if (!mGroup.isEmpty() && (suffixes.empty() || !mBackend->supports("ExportGroup")))
+        showError(mBackend->title() + " graphs don't export to files; Copy Nodes puts nodes on the clipboard as text.");
     if (mGroup.isEmpty() || suffixes.empty() || !mBackend->supports("ExportGroup"))
         return;
     QString suffix = qs(suffixes.front());
@@ -1368,7 +1388,9 @@ void NodeEditor::followOwner(const GraphBackend::Owner& owner)
     QString path = qs(owner.path);
     bool changed = path != mOwner;
     mOwner = path;
-    if (qs(owner.group) != mGroup)
+    // Inside a group the owner's group runs, the editor stays where it is.
+    const bool inside = std::find(mPath.begin(), mPath.end(), qs(owner.group)) != mPath.end();
+    if (qs(owner.group) != mGroup && !inside)
         setGroup(qs(owner.group));
     else if (changed)
         scheduleRefresh();
@@ -1426,16 +1448,20 @@ void NodeEditor::refreshGroups()
     std::vector<std::string> names = mBackend->groupNames(scene::Graph::current());
     mGroups->clear();
     for (const std::string& n : names)
-        mGroups->addItem(qs(n));
+        mGroups->addItem(qs(n), qs(n));
     if (mGroup.isEmpty() && !names.empty())
         mGroup = qs(names.front());
-    if (std::find(names.begin(), names.end(), mGroup.toStdString()) == names.end())
+    scene::Graph& graph = scene::Graph::current();
+    if (!mBackend->hasGroup(graph, mGroup.toStdString()))
     {
         mGroup = names.empty() ? QString() : qs(names.front());
         mPath.clear();
     }
-    mGroups->setCurrentText(mGroup);
-    std::erase_if(mPath, [&names](const QString& p) { return std::find(names.begin(), names.end(), p.toStdString()) == names.end(); });
+    std::erase_if(mPath, [&](const QString& p) { return !mBackend->hasGroup(graph, p.toStdString()); });
+    // A group nested in its set's name isn't one of the picker's groups, so it shows as an extra entry while open.
+    if (!mGroup.isEmpty() && mGroups->findData(mGroup) < 0)
+        mGroups->addItem(mGroup.section('/', -1), mGroup);
+    mGroups->setCurrentIndex(mGroups->findData(mGroup));
     rebuildPathBar();
     mRefreshing = false;
     if (mGroup != mAnnouncedGroup)
@@ -1944,7 +1970,7 @@ void NodeEditor::showCanvasMenu(QPoint global)
         item(&menu, "nodeEditor.openGroup");
     if (!parentGroup().isEmpty())
         item(&menu, "nodeEditor.parentGroup");
-    if (!selected.empty())
+    if (!selected.empty() && mBackend->supports("GroupNodes"))
         item(&menu, "nodeEditor.groupNodes");
     if (groupNode)
         item(&menu, "nodeEditor.ungroup");
@@ -2002,7 +2028,7 @@ void NodeEditor::rebuildSidePanel()
         return;
     }
 
-    if (mBackend->supports("AddInput") || !info["definition"].value("inputs", json::array()).empty())
+    if ((mBackend->supports("AddInput") && mBackend->hasInterface(group)) || !info["definition"].value("inputs", json::array()).empty())
         lay->addWidget(buildInterface(panel, info));
     if (info.contains("owners") || info.contains("modifiers"))
     {
@@ -2042,6 +2068,8 @@ void NodeEditor::rebuildSidePanel()
             std::string cur = p.value("value", "");
             json opts = p.value("options", json::array());
             if (routing && id == "name")
+                continue;
+            if (mBackend->runsSubgroup(node->value("type", "")) && id == "group" && !mBackend->canRetargetSubgroup())
                 continue;
             if (mBackend->runsSubgroup(node->value("type", "")) && id == "group")
             {
@@ -2130,7 +2158,7 @@ void NodeEditor::rebuildSidePanel()
                 h->addWidget(ed, 1);
             }
             auto* expose = new QToolButton(row);
-            if (!mBackend->supports("ExposeInput"))
+            if (!mBackend->supports("ExposeInput") || !mBackend->hasInterface(group))
                 expose->hide();
             expose->setText("Expose");
             expose->setToolTip("Make this a group input: a keyable attr on the " + mBackend->ownerNoun());

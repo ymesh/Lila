@@ -200,9 +200,9 @@ void registerVdbCommands(ext::Context& ctx)
     openvdb::initialize();
     ctx.registerCommand({
         .name = "exportVDB",
-        .doc = "Write the volume a mesh's geometry nodes make (or a geometry-nodes modifier's) to an OpenVDB file: a sparse grid, a "
-               "level set for signed distances, a fog volume for densities and a vec3 grid for vectors, for Unreal's sparse volume textures, Houdini or Blender. "
-               "Returns the file written.",
+        .doc = "Write the volume a mesh's geometry nodes make (or a geometry-nodes modifier's), or the fill of a mesh with a volume "
+               "material, to an OpenVDB file: a sparse grid, a level set for signed distances, a fog volume for densities and a vec3 grid "
+               "for vectors, for Unreal's sparse volume textures, Houdini or Blender. Returns the file written.",
         .positionalDoc = "target path",
         .undoable = false,
         .run = [](const Args& a) -> json {
@@ -214,7 +214,7 @@ void registerVdbCommands(ext::Context& ctx)
                 throw CommandError("exportVDB: no node '" + a.positional[0].get<std::string>() + "'");
             std::shared_ptr<const gn::Volume> v = volumeOf(g, *target);
             if (!v)
-                throw CommandError("exportVDB: " + target->name() + " has no geometry-nodes volume");
+                throw CommandError("exportVDB: " + target->name() + " has no geometry-nodes volume or volume material");
             std::filesystem::path path = paths::fromUtf8(a.positional[1].get<std::string>());
             if (path.extension().empty())
                 path += ".vdb";

@@ -22,6 +22,8 @@ void rebaseOnEye(FrameState& s)
             for (glm::dvec3& c : p.corners)
                 c -= eye;
     s.gridOrigin -= eye;
+    for (VolumeDraw& v : s.volumes)
+        v.indexToWorld = glm::translate(glm::dmat4(1.0), -eye) * v.indexToWorld;
     s.fog.height -= float(s.zUp ? eye.z : eye.y);
 }
 } // namespace lila::render

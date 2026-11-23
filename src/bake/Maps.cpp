@@ -10,6 +10,7 @@
 #include <cmath>
 #include <map>
 #include <mutex>
+#include <set>
 
 namespace lila::bake
 {
@@ -245,6 +246,78 @@ void idLegend(const MapSettings& settings, const BakeInputs& in, TextureBuffer&,
     meta["source"] = source;
     if (source != "vertexColor")
         meta["legend"] = legend;
+}
+
+/** Every name the source gives across the bake, alphabetically: mask n is the n-th of them. */
+std::vector<std::string> maskNames(const std::string& source, const BakeInputs& in)
+{
+    std::set<std::string> names;
+    for (const GroupInputs& g : in.groups)
+    {
+        if (source == "group")
+            names.insert(g.name);
+        for (const HighInput& h : g.highs)
+            if (source == "object")
+                names.insert(h.source);
+            else if (source == "material")
+                for (const std::string& m : h.soup.materialNames)
+                    names.insert(m);
+    }
+    return {names.begin(), names.end()};
+}
+
+struct MaskIndex
+{
+    std::map<std::string, int> index;
+    size_t count = 0;
+};
+
+MapDef masksMap(int pack)
+{
+    const int first = pack * 4 + 1;
+    MapDef d{.id = pack ? "masks" + std::to_string(pack + 1) : std::string("masks"),
+             .label = "Masks " + std::to_string(first) + "-" + std::to_string(first + 3),
+             .suffix = "mask" + std::to_string(pack),
+             .doc = "A 0/1 mask per material (option source: material, object or group) in each channel. Masks are numbered by name, "
+                    "alphabetically, across the bake; Masks 1-4 holds the first four in R, G, B and A, Masks 5-8 the next. meta legend "
+                    "names each channel.",
+             .background = {0.0f, 0.0f, 0.0f, 0.0f}};
+    d.prepare = [](const MapSettings& s, const BakeInputs& in) -> std::shared_ptr<const void> {
+        auto out = std::make_shared<MaskIndex>();
+        const std::vector<std::string> names = maskNames(s.options.value("source", std::string("material")), in);
+        for (const std::string& n : names)
+            out->index.emplace(n, int(out->index.size()));
+        out->count = names.size();
+        return out;
+    };
+    d.cpu = [pack](const MapContext& ctx, std::span<const TexelSample> samples, std::span<const HitRecord> hits, std::span<glm::vec4> out,
+                   std::span<uint8_t> valid) {
+        const std::string source = ctx.settings.options.value("source", std::string("material"));
+        const auto& masks = *static_cast<const MaskIndex*>(ctx.prepared);
+        for (size_t i = 0; i < samples.size(); ++i)
+        {
+            valid[i] = (hits[i].flags & kHitValid) ? 1 : 0;
+            out[i] = glm::vec4(0.0f);
+            if (!valid[i])
+                continue;
+            auto it = masks.index.find(idName(ctx, source, hits[i]));
+            if (it != masks.index.end() && it->second / 4 == pack)
+                out[i][it->second % 4] = 1.0f;
+        }
+    };
+    d.finalize = [pack](const MapSettings& s, const BakeInputs& in, TextureBuffer&, json& meta) {
+        const std::string source = s.options.value("source", std::string("material"));
+        const std::vector<std::string> names = maskNames(source, in);
+        json legend = json::object();
+        for (int c = 0; c < 4; ++c)
+            if (size_t k = size_t(pack * 4 + c); k < names.size())
+                legend[std::string(1, "RGBA"[c])] = names[k];
+        meta["source"] = source;
+        meta["legend"] = legend;
+        meta["masks"] = names.size();
+        meta["mapsNeeded"] = (names.size() + 3) / 4;
+    };
+    return d;
 }
 
 void alphaKernel(const MapContext&, std::span<const TexelSample> samples, std::span<const HitRecord>, std::span<glm::vec4> out,
@@ -507,6 +580,8 @@ void registerBuiltinMaps()
                         "group's high bounds), scope (self, group, all; default the group's aoScope).",
                  .secondaryRays = true,
                  .cpu = aoKernel});
+    for (int pack = 0; pack < 4; ++pack)
+        registerMap(masksMap(pack));
     registerSurfaceMaps();
     registerMaterialMaps();
     registerUvMaps();

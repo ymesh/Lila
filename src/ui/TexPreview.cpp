@@ -161,16 +161,12 @@ uint64_t keyOf(const tex::Graph& g, const tex::SetSettings& s, const tex::Output
 Prepared prepare(const Request& r)
 {
     Prepared p;
-    scene::Node* set = tex::findSet(scene::Graph::current(), r.set);
-    if (!set)
-    {
-        p.error = "no texture set named '" + r.set + "'";
-        return p;
-    }
+    scene::Node* set = nullptr;
     tex::SetSettings settings;
     try
     {
-        p.graph = tex::readGraph(*set);
+        // r.set may name a node group as "Set/Group"; its previews read the group's inputs at their defaults.
+        p.graph = tex::readGraphAt(scene::Graph::current(), r.set, &set);
         settings = tex::readSettings(*set);
     }
     catch (const std::exception& e)

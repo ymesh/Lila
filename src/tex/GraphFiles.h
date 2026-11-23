@@ -9,6 +9,8 @@
  */
 namespace lila::tex
 {
-/** texExportGraph and texImportGraph. */
+/** texExportGraph and texImportGraph, plus the node group commands. */
 LILA_SCENE_API void registerFileCommands();
+/** texGroupNodes, texUngroup, texSaveGroup and the group interface commands (texAddInput, texRenameInput, ...). */
+LILA_SCENE_API void registerGroupCommands();
 } // namespace lila::tex

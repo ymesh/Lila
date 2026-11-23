@@ -50,6 +50,7 @@
 #include "ui/Outliner.h"
 #include "ui/Overlay.h"
 #include "ui/RenderPasses.h"
+#include "ui/SceneLights.h"
 #include "ui/SelectionHandlers.h"
 #include "ui/SurfaceSnap.h"
 #include "ui/TabSelectLogic.h"

@@ -13,6 +13,7 @@
 #include "core/PrefStore.h"
 #include "gn/Group.h"
 #include "ops/Command.h"
+#include "ops/Undo.h"
 #include "scene/Graph.h"
 #include "scene/Node.h"
 #include "tex/NodeDef.h"
@@ -21,6 +22,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <functional>
 #include <set>
@@ -1323,6 +1325,69 @@ void registerLayerCommands()
                   {"format", "", T::String, "png", "png (16 bit, colour as sRGB) or exr (32 bit linear).", {"png", "exr"}}},
         .undoable = false,
         .run = exportFlattened,
+    });
+
+    ops::registerCommand({
+        .name = "texAddIdLayers",
+        .doc = "Add a fill layer per entry of the set's baked ID map (its bake project's id map: per material, object or group), each masked "
+               "by an ID Select set to that entry's colour and shaded in it as a placeholder. Bake the id map first. Returns {name: layer id}.",
+        .positionalDoc = "set",
+        .flags = {{"names", "", T::List, nullptr, "Only these entries of the ID map."},
+                  {"folder", "", T::String, "IDs", "Folder to put the layers in, made when missing; empty puts them at the root."}},
+        .run = [](const Args& a) -> json {
+            scene::Graph& g = scene::Graph::current();
+            const std::string set = positional(a, 0, "texAddIdLayers", "texture set");
+            Node* node = g.find(set);
+            if (!node)
+                throw CommandError("texAddIdLayers: no texture set " + set);
+            const SetSettings settings = readSettings(*node);
+            if (settings.bakeProject.empty())
+                throw CommandError("texAddIdLayers: " + set + " has no bake project");
+            const json meta = bakedMapMeta(g, settings.bakeProject, "id");
+            const json legend = meta.is_object() ? meta.value("legend", json()) : json();
+            if (!legend.is_object() || legend.empty())
+                throw CommandError("texAddIdLayers: bake the id map of " + settings.bakeProject + " first (from material, object or group)");
+            std::set<std::string> only;
+            for (const json& v : a.has("names") ? a.flags["names"] : json::array())
+                if (v.is_string())
+                    only.insert(v.get<std::string>());
+
+            UndoChunk chunk("Add ID Layers");
+            std::string parent;
+            if (const std::string folder = a.get<std::string>("folder", "IDs"); !folder.empty())
+            {
+                std::function<void(const json&)> find = [&](const json& j) {
+                    if (j.is_object() && j.value("kind", "") == "folder" && j.value("name", "") == folder && parent.empty())
+                        parent = j.value("id", "");
+                    if (j.is_object() || j.is_array())
+                        for (const json& v : j)
+                            find(v);
+                };
+                find(ops::execute("texLayerStack", {{"args", {set}}}).value("layers", json::array()));
+                if (parent.empty())
+                    parent = ops::execute("texAddLayer", {{"args", {set, "folder"}}, {"name", folder}}).at("id").get<std::string>();
+            }
+            json out = json::object();
+            for (const auto& [name, rgb] : legend.items())
+            {
+                if ((!only.empty() && !only.contains(name)) || !rgb.is_array() || rgb.size() < 3)
+                    continue;
+                const glm::vec3 id(rgb[0].get<float>() / 255.0f, rgb[1].get<float>() / 255.0f, rgb[2].get<float>() / 255.0f);
+                json material = defaultMaterial(settings);
+                if (material.contains("baseColor"))
+                    material["baseColor"] = {std::pow(id.r, 2.2f), std::pow(id.g, 2.2f), std::pow(id.b, 2.2f)};
+                json add = {{"args", {set, "fill"}}, {"name", name}, {"material", material}};
+                if (!parent.empty())
+                    add["parent"] = parent;
+                const std::string layer = ops::execute("texAddLayer", add).at("id").get<std::string>();
+                // The ID map holds its stored values as written, so the picked colour is the legend's own.
+                ops::execute("texAddGenerator", {{"args", {set, layer, "genIdSelect"}}, {"name", name}, {"values", {{"color", {id.r, id.g, id.b, 1.0f}}}}});
+                out[name] = layer;
+            }
+            if (out.empty())
+                throw CommandError("texAddIdLayers: none of the names are in the ID map");
+            return out;
+        },
     });
 }
 } // namespace lila::tex

@@ -587,6 +587,155 @@ float3 sampleBsdf(Hit h, Lobes lb, float3 v, inout uint rng)
     return normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + h.n * sqrt(max(1.0 - u1, 0.0)));
 }
 
+#include "atmosphere_common.slang"
+#include "volume_common.slang"
+
+// ---------------------------------------------------------------- frame header
+
+/** The light buffer's header; matches render::GpuFrame (mesh.slang's). */
+struct PtFrame
+{
+    float4 fog[6];
+    GpuAtmosphere* atmosphere;
+    float4* aerial;
+    float4 aerialParams; // x depth of the last slice (km), y cells across, z slices
+    float4* volumeOut;
+    uint volumeWidth, volumeHeight;
+    GpuVolume* volumes;
+    uint volumeCount, volumePad;
+    float4 pad[1];
+};
+
+PtFrame* frameHeader() { return (PtFrame*)P().lights; }
+
+/** The sky's haze between the camera and a first hit at dist cm through the pixel at ndc, from the froxels. */
+float3 aerialOver(float3 c, float2 ndc, float dist)
+{
+    PtFrame* fr = frameHeader();
+    if (fr == nullptr || fr->aerial == nullptr)
+        return c;
+    const float cells = fr->aerialParams.y, slices = fr->aerialParams.z;
+    float2 uv = ndc * 0.5 + 0.5;
+    float km = dist * 1e-5;
+    float3 at = float3(clamp(uv * cells - 0.5, 0.0, cells - 1.0), min(sqrt(km / max(fr->aerialParams.x, 1e-6)) * slices - 1.0, slices - 1.0));
+    int3 base = int3(floor(at));
+    float3 f = at - float3(base);
+    float3 light = float3(0.0), transmit = float3(0.0);
+    for (uint k = 0; k < 8; ++k)
+    {
+        int3 o = int3(k & 1, (k >> 1) & 1, (k >> 2) & 1);
+        float w = (o.x != 0 ? f.x : 1.0 - f.x) * (o.y != 0 ? f.y : 1.0 - f.y) * (o.z != 0 ? f.z : 1.0 - f.z);
+        int3 cell = min(base + o, int3(int(cells) - 1, int(cells) - 1, int(slices) - 1));
+        if (cell.z < 0)
+        {
+            transmit += w;
+            continue;
+        }
+        uint i = uint((cell.z * int(cells) + cell.y) * int(cells) + cell.x) * 2;
+        light += fr->aerial[i].rgb * w;
+        transmit += fr->aerial[i + 1].rgb * w;
+    }
+    return c * transmit + light;
+}
+
+/** A collision with a volume along the ray before maxT, by delta tracking against each volume's majorant. */
+bool volumeCollision(float3 origin, float3 dir, float maxT, inout uint rng, out float hitT, out uint hitVolume, out float hitDensity)
+{
+    hitT = maxT;
+    hitVolume = 0;
+    hitDensity = 0.0;
+    PtFrame* fr = frameHeader();
+    if (fr == nullptr || fr->volumes == nullptr)
+        return false;
+    bool hit = false;
+    for (uint vi = 0; vi < fr->volumeCount; ++vi)
+    {
+        GpuVolume* v = fr->volumes + vi;
+        float majorant = v->dims.w;
+        if (majorant <= 0.0)
+            continue;
+        float3 o = mul(v->worldToIndex, float4(origin, 1.0)).xyz;
+        float3 d = mul((float3x3)v->worldToIndex, dir);
+        float2 r = volBoxRange(o, d, v->dims.xyz);
+        float t = max(r.x, 0.0);
+        float end = min(r.y, hitT);
+        float sigma = volSigma(v);
+        for (uint step = 0; step < 256 && t < end; ++step)
+        {
+            t -= log(max(1.0 - rand(rng), 1e-7)) / majorant;
+            if (t >= end)
+                break;
+            float dens = volDensity(v, o + d * t);
+            if (rand(rng) < dens * sigma / majorant)
+            {
+                hitT = t;
+                hitVolume = vi;
+                hitDensity = dens;
+                hit = true;
+                break;
+            }
+        }
+    }
+    return hit;
+}
+
+/** The nearest volume box the ray enters before maxT with any density in it, and where; false for none. */
+bool volumeEntry(float3 origin, float3 dir, float maxT, out float entry, out uint volume)
+{
+    entry = maxT;
+    volume = 0;
+    PtFrame* fr = frameHeader();
+    if (fr == nullptr || fr->volumes == nullptr)
+        return false;
+    bool found = false;
+    for (uint vi = 0; vi < fr->volumeCount; ++vi)
+    {
+        GpuVolume* v = fr->volumes + vi;
+        if (v->dims.w <= 0.0)
+            continue;
+        float3 o = mul(v->worldToIndex, float4(origin, 1.0)).xyz;
+        float3 d = mul((float3x3)v->worldToIndex, dir);
+        float2 r = volBoxRange(o, d, v->dims.xyz);
+        if (r.y > max(r.x, 0.0) && max(r.x, 0.0) < entry)
+        {
+            entry = max(r.x, 0.0);
+            volume = vi;
+            found = true;
+        }
+    }
+    return found;
+}
+
+/** The share of light crossing the scene's volumes along a ray, by ratio tracking. */
+float volumeTransmit(float3 origin, float3 dir, float maxT, inout uint rng)
+{
+    PtFrame* fr = frameHeader();
+    if (fr == nullptr || fr->volumes == nullptr)
+        return 1.0;
+    float transmit = 1.0;
+    for (uint vi = 0; vi < fr->volumeCount; ++vi)
+    {
+        GpuVolume* v = fr->volumes + vi;
+        float majorant = v->dims.w;
+        if (majorant <= 0.0)
+            continue;
+        float3 o = mul(v->worldToIndex, float4(origin, 1.0)).xyz;
+        float3 d = mul((float3x3)v->worldToIndex, dir);
+        float2 r = volBoxRange(o, d, v->dims.xyz);
+        float t = max(r.x, 0.0);
+        float end = min(r.y, maxT);
+        float sigma = volSigma(v);
+        for (uint step = 0; step < 128 && t < end && transmit > 1e-3; ++step)
+        {
+            t -= log(max(1.0 - rand(rng), 1e-7)) / majorant;
+            if (t >= end)
+                break;
+            transmit *= 1.0 - min(volDensity(v, o + d * t) * sigma / majorant, 1.0);
+        }
+    }
+    return transmit;
+}
+
 // ---------------------------------------------------------------- lights
 
 /** Matches GpuLight in mesh.slang. */
@@ -613,6 +762,47 @@ bool visible(float3 from, float3 dir, float dist)
     q.TraceRayInline(sceneAs, RAY_FLAG_NONE, 0xff, ray);
     q.Proceed();
     return q.CommittedStatus() != COMMITTED_TRIANGLE_HIT;
+}
+
+/** One of the scene's lights picked at random: its light at a point in a volume, through the phase function, shadowed. */
+float3 sampleLightInVolume(float3 origin, float3 dirIn, float g, inout uint rng)
+{
+    PtParams p = P();
+    uint count = p.counts2.x;
+    if (count == 0)
+        return float3(0.0);
+    uint k = min(uint(rand(rng) * float(count)), count - 1);
+    GpuLight l = ((GpuLight*)p.lights)[k + 1];
+    uint kind = uint(l.position.w + 0.5) & 15;
+    float3 L;
+    float dist = 1e9;
+    float atten = 1.0;
+    if (kind == 2)
+        L = -l.direction.xyz;
+    else
+    {
+        float3 toLight = l.position.xyz - origin;
+        float d2 = max(dot(toLight, toLight), 1e-4);
+        dist = sqrt(d2);
+        L = toLight / dist;
+        atten = 1.0 / max(d2 * 1e-4, 1e-4);
+        if (l.direction.w > 0.0)
+        {
+            float r = dist / l.direction.w;
+            float window = saturate(1.0 - r * r * r * r);
+            atten *= window * window;
+        }
+        if (kind == 1)
+        {
+            float tt = saturate((dot(-L, l.direction.xyz) - l.cone.x) * l.cone.y);
+            atten *= tt * tt;
+        }
+        else if (kind >= 3)
+            atten *= saturate(dot(-L, l.direction.xyz));
+    }
+    if (atten <= 0.0 || !visible(origin, L, dist * 0.999))
+        return float3(0.0);
+    return l.radiance.rgb * atten * volPhase(g, dot(dirIn, L)) * volumeTransmit(origin, L, dist, rng) * float(count);
 }
 
 /** One of the scene's lights picked at random: its light on the hit, shadowed. */
@@ -690,7 +880,7 @@ float3 sampleLight(Hit h, Lobes lb, float3 v, float3 origin, inout uint rng)
         return float3(0.0);
     if (!visible(origin, L, dist * 0.999))
         return float3(0.0);
-    return f * l.radiance.rgb * atten * float(count);
+    return f * l.radiance.rgb * atten * volumeTransmit(origin, L, dist, rng) * float(count);
 }
 
 // ---------------------------------------------------------------- tracing
@@ -767,19 +957,88 @@ void traceCS(uint3 id: SV_DispatchThreadID)
         float3 throughput = float3(1.0);
         float lastPdf = 0.0; // the BSDF density of the last bounce's direction; 0 after the camera ray
         float coverage = 0.0;
+        float firstHit = -1.0;
+        bool guided = false;
         for (uint depth = 0; depth <= bounces; ++depth)
         {
             Hit h;
-            if (!traceSurface(ray, rng, h))
+            const bool surface = traceSurface(ray, rng, h);
+            float ge;
+            uint gv;
+            if (depth == 0 && volumeEntry(ray.Origin, ray.Direction, surface ? length(h.pos - ray.Origin) : 1e30, ge, gv))
+            {
+                // The denoiser's guides for a camera ray into a volume, whether it collides or passes through: the medium's
+                // albedo, a normal facing the camera and the box's entry depth, alike across the volume so neighbours blend.
+                GpuVolume* gvol = frameHeader()->volumes + gv;
+                alb.rgb += gvol->scatter.rgb / max(gvol->scatter.rgb + gvol->absorb.rgb, 1e-8);
+                nrm.xyz -= ray.Direction;
+                if (sampleIndex == 0)
+                    nrm.w = ge * dot(ray.Direction, p.camForward.xyz);
+                guided = true;
+            }
+            float vt;
+            uint vi;
+            float vd;
+            if (volumeCollision(ray.Origin, ray.Direction, surface ? length(h.pos - ray.Origin) : 1e30, rng, vt, vi, vd))
+            {
+                // A collision in a volume: its own light, then the sun and sky through its phase function, then on in a new direction.
+                GpuVolume* vol = frameHeader()->volumes + vi;
+                float3 X = ray.Origin + ray.Direction * vt;
+                float sigma = volSigma(vol) * vd;
+                if (depth == 0)
+                {
+                    coverage = 1.0;
+                    if (firstHit < 0.0)
+                        firstHit = vt;
+                }
+                radiance += throughput * vol->emission.rgb * vd / max(sigma, 1e-8);
+                throughput *= vol->scatter.rgb * vd / max(sigma, 1e-8);
+                if (depth == bounces)
+                    break;
+                float g = vol->scatter.w;
+                if (envOk)
+                {
+                    float lp;
+                    float3 L = sampleEnv(rand(rng), rand(rng), rand(rng), lp);
+                    float pp = volPhase(g, dot(ray.Direction, L));
+                    if (lp > 0.0 && visible(X, L, 1e30))
+                    {
+                        float3 c = throughput * envRadiance(L) * pp * volumeTransmit(X, L, 1e30, rng) * (mis(lp, pp) / lp);
+                        radiance += depth > 0 ? min(c, p.misc.y) : c;
+                    }
+                }
+                {
+                    float3 c = throughput * sampleLightInVolume(X, ray.Direction, g, rng);
+                    radiance += depth > 0 ? min(c, p.misc.y) : c;
+                }
+                float3 next = volSamplePhase(ray.Direction, g, rand(rng), rand(rng));
+                lastPdf = volPhase(g, dot(ray.Direction, next));
+                if (depth >= 2)
+                {
+                    float survive = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05, 0.95);
+                    if (rand(rng) >= survive)
+                        break;
+                    throughput /= survive;
+                }
+                ray.Origin = X;
+                ray.Direction = next;
+                ray.TMin = 0.0;
+                ray.TMax = 1e30;
+                continue;
+            }
+            if (!surface)
             {
                 if (depth == 0)
                 {
+                    PtFrame* fr = frameHeader();
                     if (p.envExtra.z > 0.5 && p.misc.z < 0.5)
                     {
-                        radiance += envRadiance(ray.Direction) * p.envExtra.y;
+                        // A sky atmosphere draws its own sky behind, sun disk and all, as the viewport does.
+                        radiance += fr != nullptr && fr->atmosphere != nullptr ? atmSkyColor(fr->atmosphere, ray.Direction)
+                                                                               : envRadiance(ray.Direction) * p.envExtra.y;
                         coverage = 1.0;
                     }
-                    if (sampleIndex == 0)
+                    if (sampleIndex == 0 && !guided)
                         nrm.w = 0.0;
                 }
                 else
@@ -793,11 +1052,15 @@ void traceCS(uint3 id: SV_DispatchThreadID)
             float3 v = -ray.Direction;
             if (depth == 0)
             {
+                firstHit = length(h.pos - ray.Origin);
                 coverage = 1.0;
-                alb.rgb += h.baseColor;
-                nrm.xyz += h.n;
-                if (sampleIndex == 0)
-                    nrm.w = dot(h.pos - p.eye.xyz, p.camForward.xyz);
+                if (!guided)
+                {
+                    alb.rgb += h.baseColor;
+                    nrm.xyz += h.n;
+                    if (sampleIndex == 0)
+                        nrm.w = dot(h.pos - p.eye.xyz, p.camForward.xyz);
+                }
             }
             float3 e = throughput * h.emissive;
             radiance += depth > 1 ? min(e, p.misc.y) : e;
@@ -872,6 +1135,8 @@ void traceCS(uint3 id: SV_DispatchThreadID)
             ray.TMin = 0.0;
             ray.TMax = 1e30;
         }
+        if (firstHit > 0.0)
+            radiance = aerialOver(radiance, ndc, firstHit);
         if (any(isnan(radiance)) || any(isinf(radiance)))
             radiance = float3(0.0);
         sum += float4(radiance, 1.0);

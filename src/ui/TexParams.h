@@ -16,6 +16,8 @@ using json = nlohmann::json;
 
 /** changed gets the parameter's id and new value. */
 using SetFn = std::function<void(const std::string& id, const json& value)>;
+/** Makes the input with this id an input of the node group the node is in. */
+using ExposeFn = std::function<void(const std::string& id)>;
 
 /**
  * Editors for one node as texGraphInfo lists it ("nodes" entry): its parameters (float and int sliders, enums, bools,
@@ -23,7 +25,7 @@ using SetFn = std::function<void(const std::string& id, const json& value)>;
  * then its unlinked inputs. A graph node's parameters are its exposed ones. Every edit goes to set. node's "set", when given,
  * names the texture set, for editors that read its bake (a camera picker filling position-map bounds).
  */
-LILA_UI_API QWidget* nodePanel(QWidget* parent, const json& node, SetFn set);
+LILA_UI_API QWidget* nodePanel(QWidget* parent, const json& node, SetFn set, ExposeFn expose = {});
 
 /** Colour stops on a bar: click the bar to add one, drag to move, double-click to pick its colour, right-click to remove. */
 LILA_UI_API QWidget* gradientEditor(QWidget* parent, const json& value, std::function<void(const json&)> changed);

@@ -461,3 +461,34 @@ TEST_CASE("gimbal rotate: a ring drag turns one rotate channel, and rings coinci
     PrefStore::get().set("general", "/manipulator/rotateSpace", "world");
     ui::tools::setCurrent(ui::Tool::Move);
 }
+
+TEST_CASE("scale plane handle scales its two axes together")
+{
+    run("newScene");
+    run("spaceLocator", {{"name", "A"}});
+    ui::tools::setCurrent(ui::Tool::Scale);
+    ui::ViewInfo view;
+    view.proj = glm::ortho(-50.0, 50.0, -50.0, 50.0, -100.0, 100.0);
+    view.width = view.height = 100.0;
+    view.ortho = true;
+    view.eye = {0.0, 0.0, 50.0};
+
+    run("select", {{"args", {"A"}}});
+    ui::Manipulator m;
+    m.setView(view);
+    // The XY plane square sits on the +X +Y diagonal (screen y runs with +Y in this view).
+    double r = 14.0; // past the centre square and the axes' grab distance
+    while (r < 49.0 && !(m.hover({50 + r, 50 + r}), m.hovering()))
+        r += 0.5;
+    REQUIRE(r < 49.0);
+    REQUIRE(m.press({50 + r, 50 + r}, Qt::LeftButton, Qt::NoModifier));
+    m.drag({50 + r + 10.0, 50 + r + 10.0}, Qt::NoModifier);
+    m.release();
+    const glm::dvec3 s = node("A").as<glm::dvec3>(scene::Transform::kScale);
+    CHECK(s.x > 1.05);
+    CHECK(s.y == doctest::Approx(s.x));
+    CHECK(s.z == doctest::Approx(1.0));
+    run("undo");
+    ui::tools::setCurrent(ui::Tool::Move);
+}
+

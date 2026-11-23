@@ -25,6 +25,7 @@ constexpr double kGap = 6.0;
 struct Toast
 {
     QString text;
+    QString key;
     QPointer<QWidget> view;
     bool everyView = false;
     qint64 expires = 0;
@@ -72,19 +73,20 @@ QTimer& ticker()
 }
 } // namespace
 
-void show(const QString& text, QWidget* view, int durationMs, Kind kind)
+void show(const QString& text, QWidget* view, int durationMs, Kind kind, const QString& key)
 {
     const qint64 expires = clock().elapsed() + std::max(durationMs, 1);
-    std::erase_if(toasts(), [&](const Toast& t) { return t.text == text && t.view == view && t.everyView == !view; });
-    toasts().push_back({text, view, !view, expires, kind});
+    const QString k = key.isEmpty() ? text : key;
+    std::erase_if(toasts(), [&](const Toast& t) { return t.key == k && t.view == view && t.everyView == !view; });
+    toasts().push_back({text, k, view, !view, expires, kind});
     if (!ticker().isActive())
         ticker().start();
     viewportTools::requestRedraw();
 }
 
-void showActive(const QString& text, int durationMs, Kind kind)
+void showActive(const QString& text, int durationMs, Kind kind, const QString& key)
 {
-    show(text, activeProvider() ? activeProvider()() : nullptr, durationMs, kind);
+    show(text, activeProvider() ? activeProvider()() : nullptr, durationMs, kind, key);
 }
 
 void setActive(std::function<QWidget*()> active)

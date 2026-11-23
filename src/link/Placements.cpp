@@ -18,6 +18,7 @@
 #include "math/Unreal.h"
 #include "scene/ArrayGroup.h"
 #include "scene/Georef.h"
+#include "scene/SkyAtmosphere.h"
 #include "scene/AttrComponents.h"
 #include "scene/Graph.h"
 #include "scene/Instancing.h"
@@ -424,7 +425,8 @@ json lightPlacement(scene::Graph& g, scene::NodeId id, const std::string& key)
             {"width", s.width},
             {"height", s.height},
             {"sourceRadius", s.sourceRadius},
-            {"castShadows", s.castShadows}};
+            {"castShadows", s.castShadows},
+            {"atmosphereSun", s.kind == lights::Kind::Directional && scene::skyAtmosphere::sunLight(g) == id}};
 }
 
 json channelBits(const std::array<bool, 3>& b) { return json::array({b[0], b[1], b[2]}); }

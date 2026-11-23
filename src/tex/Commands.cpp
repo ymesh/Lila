@@ -49,23 +49,35 @@ Node& setNode(const std::string& name, const char* cmd)
     return *n;
 }
 
-/** Reads the set's graph, lets fn change it, and writes it back undoably. */
+/** The graph at the address in the first positional ("Set" or "Set/Group") and its set's node. */
+Graph graphAt(const Args& a, const char* cmd, Node** set)
+{
+    try
+    {
+        return readGraphAt(graph(), positionalString(a, 0, cmd, "texture set"), set);
+    }
+    catch (const std::invalid_argument& e)
+    {
+        throw CommandError(std::string(cmd) + ": " + e.what());
+    }
+}
+
+/** Reads the set's graph (or one of its node groups), lets fn change it, and writes it back undoably. */
 json editGraph(const Args& a, const char* cmd, const std::function<json(Graph&, const SetSettings&)>& fn)
 {
-    Node& n = setNode(positionalString(a, 0, cmd, "texture set"), cmd);
-    Graph g;
+    Node* n = nullptr;
+    Graph g = graphAt(a, cmd, &n);
     SetSettings s;
     try
     {
-        g = readGraph(n);
-        s = readSettings(n);
+        s = readSettings(*n);
     }
     catch (const std::exception& e)
     {
         throw CommandError(std::string(cmd) + ": " + e.what());
     }
     json result = fn(g, s);
-    writeGraph(graph(), n, g);
+    writeGraphAt(graph(), a.positional[0].get<std::string>(), g);
     return result;
 }
 
@@ -208,6 +220,14 @@ json nodeJson(const GNode& n, const Graph& g, const SetSettings& s)
     j["inputs"] = ins;
     j["outputs"] = outs;
     j["params"] = prms;
+    // The group a Group node runs, as geometry nodes list theirs: a choice among the set's groups.
+    if (n.type == kGroupType)
+    {
+        json options = json::array();
+        for (const auto& [name, def] : g.subgroups)
+            options.push_back(name);
+        j["props"] = json::array({{{"id", "group"}, {"value", n.values.value("group", std::string())}, {"options", options}}});
+    }
     return j;
 }
 
@@ -996,8 +1016,7 @@ void registerCommands()
         .positionalDoc = "set nodes...",
         .undoable = false,
         .run = [](const Args& a) -> json {
-            Node& n = setNode(positionalString(a, 0, "texCopyNodes", "texture set"), "texCopyNodes");
-            Graph g = readGraph(n);
+            Graph g = graphAt(a, "texCopyNodes", nullptr);
             std::set<std::string> names;
             for (size_t i = 1; i < a.positional.size(); ++i)
                 names.insert(a.positional[i].get<std::string>());
@@ -1201,15 +1220,18 @@ void registerCommands()
 
     ops::registerCommand({
         .name = "texGraphInfo",
-        .doc = "A texture set's graph definition, settings, nodes with resolved ports, parameters and values, and its evaluation plan "
-               "(passes, buffers, structure hash) or compile error.",
+        .doc = "A texture set's graph (or, as \"Set/Group\", one of its node groups): definition, settings, nodes with resolved ports, "
+               "parameters and values, and the set graph's evaluation plan (passes, buffers, structure hash) or compile error.",
         .positionalDoc = "set",
         .flags = {{"source", "", T::Bool, false, "Include each pass's Slang source."}},
         .undoable = false,
         .run = [](const Args& a) -> json {
-            Node& n = setNode(positionalString(a, 0, "texGraphInfo", "texture set"), "texGraphInfo");
-            Graph g = readGraph(n);
+            Node* set = nullptr;
+            Graph g = graphAt(a, "texGraphInfo", &set);
+            Node& n = *set;
             SetSettings s = readSettings(n);
+            const std::string address = a.positional[0].get<std::string>();
+            const bool inGroup = !splitAddress(address).group.empty();
             json nodes = json::array();
             std::map<std::string, std::string> problems = gn::portalProblems(g.nodes, g.links);
             for (const GNode& node : g.nodes)
@@ -1222,12 +1244,16 @@ void registerCommands()
                 if (auto it = problems.find(node.name); it != problems.end())
                     nodes.back()["problem"] = it->second;
             }
+            json out = {{"name", address}, {"definition", g.toJson()}, {"settings", s.toJson()}, {"nodes", nodes}};
+            // A group evaluates as part of the set, so only the set's graph has a plan of its own.
+            if (inGroup)
+                return out;
             Plan plan = buildPlan(g, requestFor(g, s, 0, 0));
             json summary = plan.summary();
             if (a.get<bool>("source", false))
                 for (size_t i = 0; i < plan.passes.size(); ++i)
                     summary["passes"][i]["source"] = plan.passes[i].source;
-            json out = {{"name", n.name()}, {"definition", g.toJson()}, {"settings", s.toJson()}, {"nodes", nodes}, {"plan", summary}};
+            out["plan"] = summary;
             if (!plan.error.empty())
                 out["error"] = plan.error;
             return out;

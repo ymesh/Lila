@@ -282,6 +282,7 @@ std::vector<geo::Index> cornerOrder(const geo::Mesh& mesh)
 void registerCommands()
 {
     using T = ArgType;
+    registerMaskCommands();
 
     ops::registerCommand({
         .name = "polyColorSet",

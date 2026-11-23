@@ -10,6 +10,8 @@
   "rigging": {"extensions": ["RigTemplates"], "menus": ["Rig"], "actions": ["rig."]},
   "animation": {"menus": ["Animation"], "actions": ["anim.", "pose.", "picker."]},
   "sound-video": {"actions": ["create.audio", "anim.importFootage"]},
+  "sky-atmosphere": {"actions": ["create.skyAtmosphere", "render.skyAtmosphere", "unreal.sendSky"]},
+  "volumes": {"actions": ["create.fogVolume", "unreal.sendVolumes"]},
   "puppeteer": {"extensions": ["Puppeteer"]},
   "generated-motion": {"extensions": ["Crowds"]},
   "physics-animation": {"extensions": ["PhysicsAnimation", "Overlap"]},

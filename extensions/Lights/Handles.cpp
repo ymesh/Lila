@@ -33,6 +33,7 @@ enum Handle
 {
     kSwatch,
     kIntensity,
+    kSceneLightsOff,
     kRange,
     kOuter,
     kInner,
@@ -74,6 +75,8 @@ struct Layout
     /** Handles of a setting at 0 that means "none" (no range cutoff, no source radius): drawn hollow. */
     std::array<bool, kHandleCount> unset{};
     QRectF swatch, intensity;
+    /** The Scene Lights off chip beside the intensity, empty while scene lights are on. */
+    QRectF sceneLightsOff;
     double reach = 0.0;    // spot: the cone's length
     double pointBody = 0.0; // point: the bulb radius drawn
 };
@@ -219,10 +222,16 @@ Layout layout(const ui::nodeHandles::Context& c)
     if (auto o = c.view.project(world({})))
     {
         const double w = ui::OverlayPainter::textWidth(intensityText(s)) + 10;
-        l.swatch = QRectF(o->x() - (14 + 3 + w) * 0.5, o->y() + 30, 14, 14);
+        const double off = ui::sceneLights::on() ? 0.0 : 3 + 16;
+        l.swatch = QRectF(o->x() - (14 + 3 + w + off) * 0.5, o->y() + 30, 14, 14);
         l.intensity = QRectF(l.swatch.right() + 3, l.swatch.top() - 1, w, 16);
         l.at[kSwatch] = l.swatch.center();
         l.at[kIntensity] = l.intensity.center();
+        if (off > 0.0)
+        {
+            l.sceneLightsOff = QRectF(l.intensity.right() + 3, l.intensity.top(), 16, 16);
+            l.at[kSceneLightsOff] = l.sceneLightsOff.center();
+        }
     }
     return l;
 }
@@ -234,6 +243,8 @@ int pickHandle(QPointF px, const ui::nodeHandles::Context& c)
         return kSwatch;
     if (l.intensity.adjusted(-2, -2, 2, 2).contains(px))
         return kIntensity;
+    if (l.sceneLightsOff.adjusted(-2, -2, 2, 2).contains(px))
+        return kSceneLightsOff;
     int best = -1;
     double bestD = kPickPx;
     for (int h = kRange; h < kHandleCount; ++h)
@@ -267,6 +278,12 @@ void drawHandles(ui::OverlayPainter& p, const ui::nodeHandles::Context& c, int h
     p.rect(l.swatch, {float(toSrgb(col.x)), float(toSrgb(col.y)), float(toSrgb(col.z)), 1.0f});
     p.rect(l.intensity, hot == kIntensity ? kPlateHot : kPlate);
     p.text(QPointF(l.intensity.left() + 5, l.intensity.bottom() - 4), intensityText(l.s), hot == kIntensity ? kHot : glm::vec4(0.9f, 0.9f, 0.9f, 1.0f));
+    if (!l.sceneLightsOff.isEmpty())
+    {
+        p.rect(l.sceneLightsOff, hot == kSceneLightsOff ? kPlateHot : kPlate);
+        p.icon(l.sceneLightsOff.adjusted(1, 1, -1, -1), "sceneLightsOff",
+               hot == kSceneLightsOff ? kHot : ui::sceneLights::iconColor());
+    }
 }
 
 /** Lights in the selection. */
@@ -540,6 +557,15 @@ void openColorPopup(NodeId lead)
     ui::colorPopup::show(QCursor::pos() + QPoint(12, 12), std::move(o));
 }
 
+/** A click on the Scene Lights off chip turns scene lights back on. */
+class SceneLightsClick final : public ui::nodeHandles::Drag
+{
+public:
+    void move(QPointF, const ui::ViewInfo&, Qt::KeyboardModifiers) override {}
+    void release(bool) override { ui::sceneLights::setOn(true); }
+    void cancel() override {}
+};
+
 class SwatchClick final : public ui::nodeHandles::Drag
 {
 public:
@@ -558,6 +584,7 @@ std::unique_ptr<ui::nodeHandles::Drag> beginDrag(int handle, QPointF px, const u
     {
     case kSwatch: return std::make_unique<SwatchClick>(c.node.id());
     case kIntensity: return std::make_unique<IntensityDrag>(px);
+    case kSceneLightsOff: return std::make_unique<SceneLightsClick>();
     default: return std::make_unique<ShapeDrag>(Handle(handle), px, c);
     }
 }

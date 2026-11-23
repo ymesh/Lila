@@ -6,6 +6,7 @@ lila_module(lila_link Scene
     MlDeformerExport.cpp
     PcgSend.cpp
     Placements.cpp
+    SkySend.cpp SkySend.h
     RpcClient.cpp
     Socket.cpp
     GroomSend.cpp

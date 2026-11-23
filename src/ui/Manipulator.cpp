@@ -74,6 +74,15 @@ bool moveComponentSpace() { return PrefStore::get().value<std::string>("general"
 /** "world", "object" or "component" (the selection's average normal and tangent). Objects always scale on their pivot's axes. */
 std::string scaleSpace() { return PrefStore::get().value<std::string>("general", "/manipulator/scaleSpace", "world"); }
 
+/** The whole gizmo stays drawn while one of its handles is dragged; otherwise only the dragged handle does. */
+bool wholeWhileDragging(Tool t)
+{
+    const char* key = t == Tool::Rotate ? "/manipulator/wholeWhileDragging/rotate"
+                      : t == Tool::Scale ? "/manipulator/wholeWhileDragging/scale"
+                                         : "/manipulator/wholeWhileDragging/move";
+    return PrefStore::get().value<bool>("general", key, false);
+}
+
 /**
  * A pivot placed with Edit Pivot on a component selection, shared by every viewport. It lasts until that selection
  * changes, or while pinned until it is reset.
@@ -525,7 +534,6 @@ H Manipulator::pick(QPointF px) const
     const double grab = kHandleGrabPx;
     double L = handleLength();
     Tool t = effectiveTool();
-    glm::dvec3 viewDir = mView.viewDir(mPivot);
 
     if (t == Tool::Move && mNormal)
     {
@@ -540,19 +548,9 @@ H Manipulator::pick(QPointF px) const
     {
         if (std::abs(px.x() - c->x()) <= 8 && std::abs(px.y() - c->y()) <= 8)
             return H::Center;
-        if (t == Tool::Move)
-            for (int i = 0; i < 3; ++i)
-            {
-                glm::dvec3 a = axis((i + 1) % 3), b = axis((i + 2) % 3);
-                if (std::abs(glm::dot(axis(i), viewDir)) < 0.12)
-                    continue;
-                std::vector<QPointF> quad;
-                for (auto [s, u] : {std::pair{0.25, 0.25}, {0.45, 0.25}, {0.45, 0.45}, {0.25, 0.45}})
-                    if (auto p = mView.project(mPivot + (a * s + b * u) * L))
-                        quad.push_back(*p);
-                if (quad.size() == 4 && insideConvex(px, quad))
-                    return H(int(H::PlaneYZ) + i);
-            }
+        for (int i = 0; i < 3; ++i)
+            if (const auto quad = planeQuad(i, L); !quad.empty() && insideConvex(px, quad))
+                return H(int(H::PlaneYZ) + i);
         H best = H::None;
         double bestD = grab;
         for (int i = 0; i < 3; ++i)
@@ -1711,39 +1709,59 @@ std::optional<QRectF> Manipulator::badgeRect() const
     return QRectF(c->x() - w * 0.5, c->y() + 22, w, 20);
 }
 
+std::vector<QPointF> Manipulator::planeQuad(int i, double length, glm::dvec3 scale) const
+{
+    if (std::abs(glm::dot(axis(i), mView.viewDir(mPivot))) < 0.12)
+        return {};
+    const int ia = (i + 1) % 3, ib = (i + 2) % 3;
+    const glm::dvec3 a = axis(ia) * std::clamp(scale[ia], 0.05, 20.0), b = axis(ib) * std::clamp(scale[ib], 0.05, 20.0);
+    std::vector<QPointF> quad;
+    for (auto [s, u] : {std::pair{0.25, 0.25}, {0.45, 0.25}, {0.45, 0.45}, {0.25, 0.45}})
+        if (auto q = mView.project(mPivot + (a * s + b * u) * length))
+            quad.push_back(*q);
+    if (quad.size() != 4)
+        quad.clear();
+    return quad;
+}
+
+void Manipulator::drawPlanes(OverlayPainter& p, glm::dvec3 scale)
+{
+    const double L = handleLength();
+    const H active = mDrag ? mDrag->handle : H::None;
+    const H only = wholeWhileDragging(effectiveTool()) ? H::None : active;
+    for (int i = 0; i < 3; ++i)
+    {
+        const H h = H(int(H::PlaneYZ) + i);
+        if (only != H::None && only != h)
+            continue;
+        const auto quad = planeQuad(i, L, scale);
+        if (quad.empty())
+            continue;
+        glm::vec4 col = handleColor(h, -1);
+        p.fill(quad, {col.r, col.g, col.b, mHover == h || active == h ? 0.45f : 0.16f});
+        p.polyline(quad, 1.0f, {col.r, col.g, col.b, 0.6f}, true);
+    }
+}
+
 void Manipulator::drawMove(OverlayPainter& p)
 {
     auto c = mView.project(mPivot);
     if (!c)
         return;
     double L = handleLength();
-    glm::dvec3 viewDir = mView.viewDir(mPivot);
     bool pivotMode = mDrag ? mDrag->pivotEdit : tools::pivotEdit();
     H active = mDrag ? mDrag->handle : H::None;
+    const H only = wholeWhileDragging(Tool::Move) ? H::None : active;
 
-    for (int i = 0; i < 3; ++i)
-    {
-        H h = H(int(H::PlaneYZ) + i);
-        if (std::abs(glm::dot(axis(i), viewDir)) < 0.12 || (active != H::None && active != h) || pivotMode || mNormal)
-            continue;
-        glm::dvec3 a = axis((i + 1) % 3), b = axis((i + 2) % 3);
-        std::vector<QPointF> quad;
-        for (auto [s, u] : {std::pair{0.25, 0.25}, {0.45, 0.25}, {0.45, 0.45}, {0.25, 0.45}})
-            if (auto q = mView.project(mPivot + (a * s + b * u) * L))
-                quad.push_back(*q);
-        if (quad.size() != 4)
-            continue;
-        glm::vec4 col = handleColor(h, -1);
-        p.fill(quad, {col.r, col.g, col.b, mHover == h || active == h ? 0.45f : 0.16f});
-        p.polyline(quad, 1.0f, {col.r, col.g, col.b, 0.6f}, true);
-    }
+    if (!pivotMode && !mNormal)
+        drawPlanes(p, glm::dvec3(1.0));
 
     for (int i = 0; i < 3; ++i)
     {
         H h = H(int(H::X) + i);
-        if (active != H::None && active != h && active != H::Center && !isPlane(active))
+        if (only != H::None && only != h && only != H::Center && !isPlane(only))
             continue;
-        if (isPlane(active) && handleAxis(active) == i)
+        if (isPlane(only) && handleAxis(only) == i)
             continue;
         auto tip = mView.project(mPivot + axis(i) * L);
         if (!tip || dist(*tip, *c) < 12)
@@ -1785,6 +1803,7 @@ void Manipulator::drawRotate(OverlayPainter& p)
     if (!c)
         return;
     H active = mDrag ? mDrag->handle : H::None;
+    const H only = wholeWhileDragging(Tool::Rotate) ? H::None : active;
     double ringPx = 0.85 * generalPref("/manipulator/size", 100.0);
     bool pivotMode = mDrag ? mDrag->pivotEdit : tools::pivotEdit();
     auto stroke = [&](const std::vector<QPointF>& pts, float w, const glm::vec4& col, bool closed) {
@@ -1797,13 +1816,13 @@ void Manipulator::drawRotate(OverlayPainter& p)
     std::vector<QPointF> circle;
     for (int k = 0; k < 64; ++k)
         circle.push_back(*c + QPointF(std::cos(k * std::numbers::pi / 32), std::sin(k * std::numbers::pi / 32)) * ringPx);
-    if (active == H::None || active == H::Free)
+    if (only == H::None || only == H::Free)
         stroke(circle, mHover == H::Free || active == H::Free ? 1.5f : 1.0f, {0.6f, 0.6f, 0.6f, 0.35f}, true);
 
     for (int i = 0; i < 3; ++i)
     {
         H h = H(int(H::X) + i);
-        if (active != H::None && active != h)
+        if (only != H::None && only != h)
             continue;
         auto pts = ringPoints(i, active != h);
         glm::vec4 col = handleColor(h, i);
@@ -1824,7 +1843,7 @@ void Manipulator::drawRotate(OverlayPainter& p)
         flush();
     }
 
-    if (active == H::None || active == H::ViewRing)
+    if (only == H::None || only == H::ViewRing)
     {
         std::vector<QPointF> outer;
         for (int k = 0; k < 64; ++k)
@@ -1860,11 +1879,14 @@ void Manipulator::drawScale(OverlayPainter& p)
         return;
     double L = handleLength();
     H active = mDrag ? mDrag->handle : H::None;
+    const H only = wholeWhileDragging(Tool::Scale) ? H::None : active;
     glm::dvec3 s = mDrag ? mDrag->scale : glm::dvec3(1.0);
+    if (!(mDrag ? mDrag->pivotEdit : tools::pivotEdit()))
+        drawPlanes(p, s);
     for (int i = 0; i < 3; ++i)
     {
         H h = H(int(H::X) + i);
-        if (active != H::None && active != h && active != H::Center && !(isPlane(active) && handleAxis(active) != i))
+        if (only != H::None && only != h && only != H::Center && !(isPlane(only) && handleAxis(only) != i))
             continue;
         auto tip = mView.project(mPivot + axis(i) * L * std::clamp(s[i], 0.05, 20.0));
         if (!tip || dist(*tip, *c) < 12)

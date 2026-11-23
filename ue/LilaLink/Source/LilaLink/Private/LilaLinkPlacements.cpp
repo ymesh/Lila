@@ -805,6 +805,9 @@ void ApplyLightSettings(ULightComponent* Light, const TSharedPtr<FJsonObject>& P
 	if (UDirectionalLightComponent* Directional = Cast<UDirectionalLightComponent>(Light))
 	{
 		Directional->SetLightSourceAngle(NumberField(P, TEXT("sourceRadius"), 0.0));
+		bool bSun = false;
+		P->TryGetBoolField(TEXT("atmosphereSun"), bSun);
+		Directional->SetAtmosphereSunLight(bSun);
 	}
 	if (const TOptional<FLightingChannels> Channels = ChannelsOf(P))
 	{

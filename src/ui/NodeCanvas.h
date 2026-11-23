@@ -337,6 +337,18 @@ public:
     std::vector<std::pair<std::string, std::string>> props;
     /** Props with a text editor (code, multiline, font): drawn as typed, first line only. */
     std::set<std::string> textProps;
+    /** Props read from bool params: set as JSON booleans rather than strings. */
+    std::set<std::string> boolParams;
+    /** Each prop's choices, parallel to props; empty for a free value. */
+    std::vector<std::vector<std::string>> propOptions;
+    /** Prop i is a false/true choice, drawn as a check. */
+    bool propIsToggle(size_t i) const;
+    /** Prop i's drawn row in item coordinates; empty when it isn't drawn. */
+    QRectF propRect(size_t i) const;
+    /** The prop with choices under a scene point, -1 for none. */
+    int propAt(QPointF scenePos) const;
+    /** The prop the cursor is over, drawn lit. */
+    int hotProp = -1;
     bool viewer = false;
     bool viewerActive = false;
     std::string groupRef; // the group a Group node runs
@@ -366,6 +378,7 @@ public:
 
     QRectF boundingRect() const override;
     void paint(QPainter* p, const QStyleOptionGraphicsItem*, QWidget*) override;
+    void paintChoice(QPainter& p, size_t i, QRectF r) const;
 
     /** Drawn as its header only; with only linked sockets; bypassed (drawn dimmed). */
     bool collapsed = false;
@@ -1050,10 +1063,13 @@ private:
     QPointer<QLineEdit> mFieldEdit;
     QPointer<QWidget> mInPlace;
     NodeItem* mHotFieldNode = nullptr;
+    NodeItem* mHotPropNode = nullptr;
     bool mFieldCursor = false; // the viewport cursor is a field's, so leaving the field resets it
 
     /** A left press on an editable row: a toggle flips, a swatch opens the picker, a number arms a scrub. */
     void pressField(NodeItem* n, int input, QMouseEvent* e);
+    /** A click on a prop with choices: flips a check, or opens the choices under the row. */
+    void pressProp(NodeItem* n, int prop);
     /** Scrubs the armed number by the mouse's travel: Shift ten times as fast, Ctrl a tenth. One undo step per drag. */
     void dragField(QMouseEvent* e);
     void releaseField();

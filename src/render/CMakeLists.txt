@@ -1,4 +1,5 @@
 lila_module(lila_render UI
+    Atmosphere.cpp
     Backdrop.cpp
     Baker.cpp
     BakerTrace.cpp
@@ -50,6 +51,8 @@ endif()
 lila_add_shaders(lila_render FILES
     shaders/ao.slang
     shaders/ao_apply.slang
+    shaders/atmosphere.slang
+    shaders/volume.slang
     shaders/bake_dilate.slang
     shaders/bake_hw.slang
     shaders/bake_image.slang
@@ -102,6 +105,8 @@ lila_add_shaders(lila_render FILES
     shaders/vt.slang
     shaders/wire.slang
     INCLUDES
+    shaders/atmosphere_common.slang
+    shaders/volume_common.slang
     shaders/draw_offset.slang
     shaders/heightfield.slang
     shaders/mesh.slang

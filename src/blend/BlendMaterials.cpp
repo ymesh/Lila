@@ -155,6 +155,52 @@ glm::dvec4 socketColor(const View& socket, glm::dvec4 fallback)
         return fallback;
     return glm::dvec4(v.num("value", 0), v.num("value", 1), v.num("value", 2), v.type()->field("value")->count >= 4 ? v.num("value", 3) : 1.0);
 }
+
+/**
+ * A Principled Volume, Volume Scatter or Volume Absorption node as Lila's volume model, with Cycles' coefficients:
+ * scattering is density times colour, absorption density times (1 - colour) times (1 - absorption colour). False for
+ * any other volume shader.
+ */
+template <class Set, class ShadersT, class Result>
+bool importVolume(const View& node, const typename ShadersT::Context& ctx, const std::string& material, Set&& set, ShadersT& shaders, Result& r)
+{
+    using namespace scene::material;
+    const std::string kind = ShadersT::idname(node);
+    if (kind != "ShaderNodeVolumePrincipled" && kind != "ShaderNodeVolumeScatter" && kind != "ShaderNodeVolumeAbsorption")
+        return false;
+    auto value = [&](std::string_view name) {
+        const View in = ShadersT::input(node, name);
+        const typename ShadersT::Source src = shaders.follow(in, ctx);
+        if (src.node)
+            r.skipped.push_back(std::format("material '{}': the volume's {} is driven by nodes; its unlinked value is used", material, name));
+        return src.unlinked ? src.unlinked : in;
+    };
+    const glm::dvec3 color = glm::dvec3(socketColor(value("Color"), glm::dvec4(0.5, 0.5, 0.5, 1.0)));
+    const double density = std::max(socketFloat(value("Density"), 1.0), 0.0);
+    glm::dvec3 scatter = color, absorb(0.0);
+    if (kind == "ShaderNodeVolumePrincipled")
+    {
+        const glm::dvec3 absorption = glm::dvec3(socketColor(value("Absorption Color"), glm::dvec4(0.0, 0.0, 0.0, 1.0)));
+        absorb = glm::max(glm::dvec3(1.0) - color, 0.0) * glm::max(glm::dvec3(1.0) - absorption, 0.0);
+        const double strength = socketFloat(value("Emission Strength"), 0.0);
+        set(kVolumeEmissionColor, glm::dvec3(socketColor(value("Emission Color"), glm::dvec4(1.0))));
+        set(kVolumeEmissionStrength, std::max(strength, 0.0));
+        if (socketFloat(value("Blackbody Intensity"), 0.0) > 0.0)
+            r.skipped.push_back(std::format("material '{}': the volume's blackbody glow has no Lila match; use its emission", material));
+    }
+    else if (kind == "ShaderNodeVolumeAbsorption")
+    {
+        scatter = glm::dvec3(0.0);
+        absorb = glm::max(glm::dvec3(1.0) - color, 0.0);
+    }
+    set(kShadingModel, int64_t(ShadingModel::Volume));
+    set(kVolumeDensity, density);
+    set(kVolumeScatterColor, scatter);
+    set(kVolumeAbsorptionColor, absorb);
+    if (kind != "ShaderNodeVolumeAbsorption")
+        set(kVolumeAnisotropy, std::clamp(socketFloat(value("Anisotropy"), 0.0), -0.95, 0.95));
+    return true;
+}
 } // namespace
 
 std::string Importer::imagePath(const View& image)
@@ -348,13 +394,16 @@ std::string Importer::material(const View& ma)
     // Nothing on the surface, or only a Transparent BSDF (volume-only boxes, holdout cards): Blender draws nothing there.
     if (!bsdf.node && !emission.node && !diffuse.node)
     {
-        const bool volumeOnly = !shaders.follow(Shaders::input(output, "Surface"), top).node && shaders.follow(Shaders::input(output, "Volume"), top).node;
+        const Shaders::Source volume = shaders.follow(Shaders::input(output, "Volume"), top);
+        const bool volumeOnly = !shaders.follow(Shaders::input(output, "Surface"), top).node && volume.node;
+        if (volumeOnly && importVolume(volume.node, volume.ctx, ma.idName(), set, shaders, r))
+            return slot;
         if (transparentMix || volumeOnly)
         {
             set(kOpacity, 0.0);
             set(kBlendMode, int64_t(BlendMode::Masked));
             invisibleMaterials.insert(slot);
-            r.skipped.push_back(std::format("material '{}': {}; it draws nothing", ma.idName(), volumeOnly ? "a volume shader" : "only a Transparent BSDF"));
+            r.skipped.push_back(std::format("material '{}': {}; it draws nothing", ma.idName(), volumeOnly ? "a volume shader Lila has no match for" : "only a Transparent BSDF"));
             return slot;
         }
     }

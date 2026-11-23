@@ -57,6 +57,8 @@ lila_module(lila_scene Scene
     LastOp.cpp
     Light.cpp Light.h
     PostProcess.cpp PostProcess.h
+    SkyAtmosphere.cpp SkyAtmosphere.h
+    FloatPrecision.cpp FloatPrecision.h
     ColorManagement.cpp ColorManagement.h
     LodGroup.cpp LodGroup.h
     Materials.cpp

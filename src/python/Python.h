@@ -28,6 +28,12 @@ LILA_SCENE_API Result runFile(const std::filesystem::path& path);
 /** Evaluates one expression in __main__ and returns it as JSON text, or the error, without printing either. */
 LILA_SCENE_API Result evalJson(std::string_view expression);
 
+/**
+ * Takes the pending Python exception (GIL held): its traceback goes to the log and its message comes back, as
+ * str(exception), or the type name when that is empty. Empty when no exception is pending.
+ */
+LILA_SCENE_API std::string takeError();
+
 /** The UI installs these so lila.ui can reach its action registry; headless they stay empty. */
 struct UiHooks
 {

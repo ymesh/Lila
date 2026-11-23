@@ -3,6 +3,7 @@
 #include "ops/Command.h"
 #include "ops/Undo.h"
 #include "core/Achievements.h"
+#include "core/CrashHandler.h"
 #include "core/Events.h"
 #include "core/Log.h"
 #include "core/PrefStore.h"
@@ -1234,7 +1235,17 @@ void Graph::disconnectRaw(const PlugRef& dst)
     std::erase(mOutgoingDst[it->second.node], dst);
     mInputs.erase(it);
     mHeld.erase(dst);
-    if (Node* n = node(dst.node))
+    Node* n = node(dst.node);
+    if (n && size_t(dst.attr) >= n->type().attrs.size())
+    {
+        // A connection to an attr the node's type doesn't have means its type changed under it. Report it rather than read
+        // past the end, and leave the trail in a crash report should something else trip over it.
+        const std::string what = std::format("{}: plug {} of {} attrs (node {})", n->name(), dst.attr, n->type().attrs.size(), dst.node);
+        log::error("disconnect: connection to a missing attr on {}", what);
+        crash::setContext("context", "staleConnection", what);
+        n = nullptr;
+    }
+    if (n)
     {
         // A storable array keeps the element, holding the last value pulled through; an input-only one drops it.
         if (dst.element >= 0)

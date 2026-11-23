@@ -1,0 +1,8 @@
+{
+    "id": "pygroup",
+    "name": "Python Group",
+    "version": "1.0.0",
+    "vendor": "Lila Tests",
+    "sdk": "1.0",
+    "python": "pygroup.py"
+}

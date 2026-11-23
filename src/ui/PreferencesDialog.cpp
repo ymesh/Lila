@@ -943,8 +943,13 @@ void addBuiltIns(Registry<prefPages::Page>& r)
         choiceField(manip, "Scale space (components)", "/manipulator/scaleSpace", {{"World", "world"}, {"Object", "object"}, {"Component", "component"}}, "world");
         numberField(manip, "Rotate snap (degrees)", "/manipulator/rotateStep", 15.0, 0.1, 180.0, 1.0, 1);
         toggleField(manip, "Swap clone (Y) and fine control (Shift)", "/manipulator/swapCloneShift", false);
+        sectionHeader(manip, "Whole Gizmo While Dragging");
+        toggleField(manip, "Move", "/manipulator/wholeWhileDragging/move", false);
+        toggleField(manip, "Rotate", "/manipulator/wholeWhileDragging/rotate", false);
+        toggleField(manip, "Scale", "/manipulator/wholeWhileDragging/scale", false);
         sectionHeader(manip, "Soft Select");
         toggleField(manip, "Enabled", "/softSelect/enabled", false);
+        toggleField(manip, "Key tap bridges two borders", "/softSelect/bridgeOnTap", false);
         numberField(manip, "Radius (cm)", "/softSelect/radius", 25.0, 0.01, 100000.0, 1.0);
         addRow(manip, "Falloff", new SoftSelectPanel, "/softSelect/falloff");
         numberField(manip, "Falloff display strength (0 to 1)", viewportDisplay::kSoftSelectEmphasis, viewportDisplay::kSoftSelectEmphasisDefault, 0.0,

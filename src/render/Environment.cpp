@@ -380,6 +380,12 @@ EnvironmentData buildEnvironment(const HdrImage& equirect)
     return finish(renderCube(kCubeSize, ss, [&](const glm::vec3& d) { return sampleEquirect(equirect, d); }));
 }
 
+EnvironmentData buildEnvironment(int size, const std::function<glm::vec3(const glm::vec3&)>& radiance)
+{
+    LILA_ZONE();
+    return finish(renderCube(size, 1, radiance));
+}
+
 std::vector<uint16_t> buildBrdfLut(int size)
 {
     LILA_ZONE();

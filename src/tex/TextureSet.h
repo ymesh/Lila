@@ -111,6 +111,27 @@ LILA_SCENE_API SetSettings readSettings(const scene::Node& set);
 LILA_SCENE_API size_t setStamp(const scene::Node& set);
 /** Undoable writes (inside a command). */
 LILA_SCENE_API void writeGraph(scene::Graph& g, scene::Node& set, const Graph& graph);
+
+/**
+ * "Set" names a set's graph, "Set/Group" one of its node groups. A set keeps every group in one flat subgroups map on its
+ * own graph, and the graphs inside leave theirs empty so their Group nodes resolve against the set's.
+ */
+struct GraphAddress
+{
+    std::string set;
+    std::string group;
+};
+LILA_SCENE_API GraphAddress splitAddress(std::string_view address);
+LILA_SCENE_API std::string joinAddress(std::string_view set, std::string_view group);
+/** True when the address names a set, and a group the set has. */
+LILA_SCENE_API bool hasGraphAt(scene::Graph& g, std::string_view address);
+/**
+ * The graph at an address. A group comes back carrying the set's subgroups, so its Group nodes and new groups made in it
+ * work as in the set's graph. Throws std::invalid_argument naming what is missing.
+ */
+LILA_SCENE_API Graph readGraphAt(scene::Graph& g, std::string_view address, scene::Node** set = nullptr);
+/** Writes back what readGraphAt read, undoably: a group's subgroups go to the set's map. */
+LILA_SCENE_API void writeGraphAt(scene::Graph& g, std::string_view address, const Graph& graph);
 LILA_SCENE_API void writeSettings(scene::Graph& g, scene::Node& set, const SetSettings& settings);
 
 /** The set's channels that aren't standard Material Output inputs, for portsOf. */

@@ -2,12 +2,18 @@
 
 #include "ui/Actions.h"
 #include "ui/ViewportTool.h"
+#include "ui/ViewportToast.h"
 #include "ui/GizmoMath.h"
 
 #include "core/PrefStore.h"
+#include "geo/Bridge.h"
 #include "scene/Components.h"
+#include "scene/Graph.h"
+#include "scene/Modifiers.h"
 
 #include <QMouseEvent>
+#include <algorithm>
+#include <cmath>
 #include <map>
 #include <tuple>
 
@@ -31,14 +37,18 @@ void notify()
         fn();
 }
 
+/** A B tap bridges only when the pref allows it and the selected edges hold a pair of borders polyBridge would join. */
 bool bridgeOnTap()
 {
-    if (scene::components::mode() != scene::ComponentMode::Edge)
+    if (scene::components::mode() != scene::ComponentMode::Edge || !PrefStore::get().value<bool>("general", "/softSelect/bridgeOnTap", false))
         return false;
-    size_t count = 0;
+    scene::Graph& g = scene::Graph::current();
+    g.evaluate();
     for (const auto& [node, ids] : scene::components::selected(scene::ComponentMode::Edge))
-        count += ids.size();
-    return count >= 2;
+        if (const scene::Node* n = g.node(node); n && n->type().isA("mesh") && ids.size() >= 2)
+            if (scene::MeshPtr cage = scene::modifiers::cage(g, node); cage && !geo::planBridges(*cage, ids).empty())
+                return true;
+    return false;
 }
 } // namespace
 
@@ -271,6 +281,26 @@ void registerActions()
                   .python = "lila.prefs.set(\"general\", \"/manipulator/moveSpace\", \"normal\")",
                   .checked = spaceIs("/manipulator/moveSpace", "normal")});
 
+    auto resizeManip = [](double factor) {
+        double size = PrefStore::get().value<double>("general", "/manipulator/size", 100.0);
+        // Round to the Preferences field's 5 px step, always moving at least one step.
+        double next = std::round(size * factor / 5.0) * 5.0;
+        if (next == size)
+            next += factor > 1.0 ? 5.0 : -5.0;
+        next = std::clamp(next, 30.0, 400.0);
+        PrefStore::get().set("general", "/manipulator/size", next);
+        viewportToast::showActive(QString("Manipulator Size %1%").arg(qRound(next)), 1200, viewportToast::Kind::Info, "manip.size");
+        viewportTools::requestRedraw();
+    };
+    actions::add({.id = "manip.sizeUp", .label = "Larger Manipulator", .category = "Tools", .run = [resizeManip] { resizeManip(1.15); },
+                  .doc = "Draws the move, rotate and scale manipulators larger on screen.",
+                  .python = "lila.ui.run_action(\"manip.sizeUp\")",
+                  .keywords = {"gizmo size", "handle size", "manipulator size", "bigger", "increase"}});
+    actions::add({.id = "manip.sizeDown", .label = "Smaller Manipulator", .category = "Tools", .run = [resizeManip] { resizeManip(1.0 / 1.15); },
+                  .doc = "Draws the move, rotate and scale manipulators smaller on screen.",
+                  .python = "lila.ui.run_action(\"manip.sizeDown\")",
+                  .keywords = {"gizmo size", "handle size", "manipulator size", "decrease"}});
+
     auto snap = [](const char* key, const char* label, SnapFlags f, const char* doc) {
         actions::add({.id = std::string("snap.") + key + "On", .label = label, .category = "Snapping", .run = [f] { setSnap(f, true); },
                       .doc = doc});
@@ -297,7 +327,7 @@ void registerActions()
                   },
                   .doc = "Ends the radius drag started by Adjust Soft Select Radius."});
     // Maya's B: a tap toggles soft select, holding it while dragging with LMB (or MMB, from zero) sets the radius.
-    // A tap with two or more edges selected in edge mode bridges them instead.
+    // A tap on a bridgeable edge selection bridges it instead, unless the bridgeOnTap pref is off.
     actions::add({.id = "softSelect.keyDown", .label = "Soft Select Key Down", .category = "Tools", .run = [] {
                       gSoftAdjust = true;
                       gSoftKeyUsed = false;
@@ -312,8 +342,8 @@ void registerActions()
                           PrefStore::get().set("general", "/softSelect/enabled", !PrefStore::get().value<bool>("general", "/softSelect/enabled", false));
                       notify();
                   },
-                  .doc = "Release half of the soft select key: a tap without a drag bridges two or more selected edges in edge mode, "
-                         "otherwise toggles soft select."});
+                  .doc = "Release half of the soft select key: a tap without a drag toggles soft select, or with the Key tap bridges two "
+                         "borders pref on, bridges a selection of two borders in edge mode."});
     snap("edge", "Snap to Edge (hold)", SnapEdge, "While held, moves snap onto the nearest edge under the cursor.");
     snap("vertex", "Snap to Vertex (hold)", SnapVertex, "While held, moves snap to the nearest vertex, locator or joint under the cursor.");
     snap("surface", "Snap to Surface (hold)", SnapSurface, "While held, moves slide along the mesh surface under the cursor.");

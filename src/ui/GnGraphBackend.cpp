@@ -55,6 +55,14 @@ public:
     std::string subgroupNodeType() const override { return gn::kGroupNodeDeclType; }
     bool runsSubgroup(const std::string& type) const override { return gn::runsGroup(type); }
     std::vector<std::string> fileSuffixes() const override { return {"lilanodes", "json"}; }
+    bool canRenameGroup() const override { return true; }
+    std::string renameGroup(const std::string& group, const std::string& to) const override
+    {
+        json r = runUi("gnRenameGroup", {{"args", {group, to}}});
+        return r.is_string() ? r.get<std::string>() : std::string();
+    }
+    bool canDeleteGroup() const override { return true; }
+    bool deleteGroup(const std::string& group) const override { return tryRunUi("gnDeleteGroup", {{"args", {group}}}); }
 
     Owner followSelection(scene::Graph& g) const override
     {

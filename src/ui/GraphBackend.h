@@ -87,6 +87,14 @@ public:
     virtual std::string subgroupNodeType() const { return {}; }
     /** Any node type that runs the group its "group" prop names (the subgroup node, plus loops over one). */
     virtual bool runsSubgroup(const std::string& type) const { return !type.empty() && type == subgroupNodeType(); }
+    /** The editor's name for the group a node in current runs, given the node's "group" prop: the prop itself where groups are global. */
+    virtual std::string childGroup(const std::string& /*current*/, const std::string& child) const { return child; }
+    /** The group that holds group, where nesting is in the name ("Set/Sub" in "Set"); empty when it isn't. */
+    virtual std::string parentGroupOf(const std::string& /*group*/) const { return {}; }
+    /** Whether a Group node can be pointed at another group from the side panel. */
+    virtual bool canRetargetSubgroup() const { return true; }
+    /** Whether the group has inputs and outputs of its own to edit (a texture set's top graph doesn't). */
+    virtual bool hasInterface(const std::string& /*group*/) const { return true; }
     /** File suffixes the editor imports and exports, the first used for export: {"lilanodes", "json"}. */
     virtual std::vector<std::string> fileSuffixes() const { return {}; }
 

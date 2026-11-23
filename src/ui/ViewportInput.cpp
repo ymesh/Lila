@@ -29,7 +29,8 @@ void ViewportWidget::mousePressEvent(QMouseEvent* e)
         updateCursor();
         return;
     }
-    if (e->button() == Qt::LeftButton && !(e->modifiers() & Qt::AltModifier) && viewSwitcherClick(e->position()))
+    if (e->button() == Qt::LeftButton && !(e->modifiers() & Qt::AltModifier) &&
+        (sceneLights::clickBadge(this, e->position()) || viewSwitcherClick(e->position())))
     {
         mSwallowRelease = true;
         return;
@@ -245,6 +246,12 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* e)
     // Badges follow the cursor, which otherwise only redraws the view when the hover changes.
     if (e->buttons() == Qt::NoButton && !cursorBadges::active(state(e->position())).empty())
         requestFrame();
+    if (e->buttons() == Qt::NoButton)
+        if (const QRectF badge = sceneLights::badgeRect(this, width()); badge.contains(e->position()) != badge.contains(mLastPos - d))
+        {
+            updateCursor();
+            requestFrame();
+        }
     if (e->buttons() == Qt::NoButton && hud::shown(mHudPanel, "viewCube"))
         if (const QRectF cube = hud::viewCubeRect(width()); cube.contains(e->position()) || cube.contains(mLastPos - d))
             requestFrame();
@@ -571,9 +578,12 @@ bool ViewportWidget::selectLoopAt(QPointF at, Qt::KeyboardModifiers mods)
                         from = id;
                         break;
                     }
-            // Nothing selected on this mesh to run a path from: vertices and faces add their connected piece.
+            // Nothing else selected on this mesh to run a path from: an edge adds its loop, vertices and faces their connected piece.
             if (!from && mode == ComponentMode::Edge)
-                return false;
+            {
+                ops::execute("selectLoopThrough", {{"args", {n->path()}}, {"edge", h.id}, {"add", true}, {"symmetric", symmetric}}, CallSource::UI);
+                return true;
+            }
             if (!from)
             {
                 addConnected();

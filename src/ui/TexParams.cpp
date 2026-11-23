@@ -539,7 +539,7 @@ void takeCameraPose(const json& node, const SetFn& set, const glm::dvec3& eye, c
         return;
     scene::Graph& g = scene::Graph::current();
     const std::string setName = node.value("set", "");
-    scene::Node* setNode = setName.empty() ? nullptr : tex::findSet(g, setName);
+    scene::Node* setNode = setName.empty() ? nullptr : tex::findSet(g, tex::splitAddress(setName).set);
     double lo[3], hi[3];
     if (setNode && tex::bakedPositionBounds(g, tex::readSettings(*setNode).bakeProject, lo, hi))
     {
@@ -743,7 +743,7 @@ void addParam(QFormLayout* form, QWidget* parent, const json& p, const SetFn& se
 }
 
 /** The editor for an unlinked input's value. */
-void addInput(QFormLayout* form, QWidget* parent, const json& in, const SetFn& set)
+void addInput(QFormLayout* form, QWidget* parent, const json& in, const SetFn& set, const ExposeFn& expose)
 {
     const std::string id = in.value("id", "");
     const std::string type = in.value("type", "float");
@@ -757,12 +757,30 @@ void addInput(QFormLayout* form, QWidget* parent, const json& in, const SetFn& s
         form->addRow(labelOf(in), l);
         return;
     }
+    // Inside a node group every unlinked input can become one of the group's, like geometry nodes' Expose.
+    auto addRow = [&](QWidget* label, QWidget* field) {
+        if (!expose)
+        {
+            form->addRow(label, field);
+            return;
+        }
+        auto* row = new QWidget(parent);
+        auto* h = new QHBoxLayout(row);
+        h->setContentsMargins(0, 0, 0, 0);
+        h->addWidget(field, 1);
+        auto* b = new QToolButton(row);
+        b->setText("Expose");
+        b->setToolTip("Make this an input of the node group");
+        QObject::connect(b, &QToolButton::clicked, b, [expose, id] { expose(id); });
+        h->addWidget(b);
+        form->addRow(label, row);
+    };
     const json value = in.contains("value") ? in["value"] : in.value("default", json());
     if (value.is_null() && in.value("implicit", "") == "uv")
     {
         auto* l = dimLabel(parent, "Mesh UV");
         l->setToolTip(tip);
-        form->addRow(labelOf(in), l);
+        addRow(new QLabel(labelOf(in), parent), l);
         return;
     }
     auto changed = [set, id](const json& v) { set(id, v); };
@@ -770,7 +788,7 @@ void addInput(QFormLayout* form, QWidget* parent, const json& in, const SetFn& s
     {
         auto* label = new QLabel(labelOf(in), parent);
         label->setToolTip(tip);
-        form->addRow(label, colorSwatch(parent, value, changed));
+        addRow(label, colorSwatch(parent, value, changed));
         return;
     }
     if (type == "vector")
@@ -787,7 +805,7 @@ void addInput(QFormLayout* form, QWidget* parent, const json& in, const SetFn& s
             v3 = json::array({value, value, value});
         FlagFieldWidgets w = makeFlagField(f, v3, changed, parent);
         w.field->setToolTip(tip);
-        form->addRow(w.label ? w.label : new QLabel(labelOf(in), parent), w.field);
+        addRow(w.label ? w.label : new QLabel(labelOf(in), parent), w.field);
         return;
     }
     json p = in;
@@ -799,7 +817,7 @@ void addInput(QFormLayout* form, QWidget* parent, const json& in, const SetFn& s
     json number = value.is_array() && !value.empty() ? value[0] : value;
     FlagFieldWidgets w = makeFlagField(numberField(p, false), number, changed, parent);
     w.field->setToolTip(tip);
-    form->addRow(w.label, w.field);
+    addRow(w.label, w.field);
 }
 } // namespace
 
@@ -938,7 +956,7 @@ QWidget* curveEditor(QWidget* parent, const json& value, std::function<void(cons
     return w;
 }
 
-QWidget* nodePanel(QWidget* parent, const json& node, SetFn set)
+QWidget* nodePanel(QWidget* parent, const json& node, SetFn set, ExposeFn expose)
 {
     auto* w = new QWidget(parent);
     auto* v = new QVBoxLayout(w);
@@ -977,7 +995,7 @@ QWidget* nodePanel(QWidget* parent, const json& node, SetFn set)
         auto* form = new QFormLayout();
         form->setContentsMargins(0, 0, 0, 0);
         for (const json& in : node.value("inputs", json::array()))
-            addInput(form, w, in, set);
+            addInput(form, w, in, set, expose);
         v->addLayout(form);
     }
     if (params.empty() && !anyInput)

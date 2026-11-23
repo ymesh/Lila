@@ -4,9 +4,11 @@
 #include "core/Events.h"
 #include "extensions/ExtensionManager.h"
 #include "extensions/Library.h"
+#include "gn/Gn.h"
 #include "python/Python.h"
 #include "scene/Graph.h"
 #include "scene/Node.h"
+#include "scene/SceneCommands.h"
 #include "stream/ChangeStream.h"
 
 #include <doctest/doctest.h>
@@ -332,4 +334,31 @@ TEST_CASE("python extension: load, call, errors, unload")
     CHECK_FALSE(stream::recording());
     g.deleteNode(p->id());
     python::shutdown();
+}
+
+TEST_CASE("python extension: reloading one that rebuilds a geometry-nodes group keeps the group's modifiers" * doctest::skip())
+{
+    isolate();
+    REQUIRE(python::init({"lila_extensions_tests"}));
+    ExtensionManager& pm = ExtensionManager::get();
+    pm.addSearchPath(LILA_TEST_PACKAGES_DIR);
+    scene::types::registerBuiltins();
+    gn::registerTypes();
+    scene::registerCommands();
+    gn::registerCommands();
+    run("newScene");
+    REQUIRE(pm.load("pygroup") == "pygroup");
+    run("polyPlane", {{"name", "Ground"}});
+    run("gnApply", {{"args", {"Ground", "PyLift"}}});
+    run("gnApply", {{"args", {"Ground", "PyLift"}}});
+    // The group's type is Lila's, so unloading the extension leaves its modifiers alone.
+    CHECK(scene::types::registry().owned("pygroup").empty());
+    for (const char* inputs : {"0", "1", "2", "0"})
+    {
+        _putenv_s("PYGROUP_INPUTS", inputs);
+        CHECK(pm.reload("pygroup") == "pygroup");
+    }
+    _putenv_s("PYGROUP_INPUTS", "");
+    CHECK(scene::Graph::current().find("Ground"));
+    pm.unload("pygroup");
 }

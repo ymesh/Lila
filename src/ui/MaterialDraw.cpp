@@ -39,7 +39,10 @@ glm::vec2 boilOffset(double seconds, double fps)
 render::MaterialStyle style(const scene::Node& n)
 {
     render::MaterialStyle s;
-    s.model = render::ShadingModel(std::clamp<int64_t>(n.as<int64_t>(kShadingModel), 0, int64_t(render::ShadingModel::Eye)));
+    // A volume has no surface; its thumbnail and any surface fallback draw default lit.
+    const int64_t model = n.as<int64_t>(kShadingModel);
+    s.model = model == int64_t(ShadingModel::Volume) ? render::ShadingModel::DefaultLit
+                                                     : render::ShadingModel(std::clamp<int64_t>(model, 0, int64_t(render::ShadingModel::Eye)));
     if (s.model == render::ShadingModel::DefaultLit || s.model == render::ShadingModel::Unlit)
         return s;
     s.painterlyStrength = floatAttr(n, kPainterlyStrength);

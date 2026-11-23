@@ -43,6 +43,7 @@ add_executable(lila_tex_gpu_tests
     test_material_thumbs.cpp
     test_tex_displacement.cpp
     test_tex_pathtrace.cpp
+    test_tex_volumes.cpp
     test_thumbs_live_viewport.cpp
     test_tex_gpu.cpp
     test_tex_paint.cpp

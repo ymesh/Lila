@@ -49,6 +49,7 @@ public:
         kLensFlare,
         kLensFlareIntensity,
         kLensFlareScale,
+        kAtmosphereSun,
         kCount
     };
 };

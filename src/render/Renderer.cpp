@@ -3,6 +3,7 @@
 #include "core/Log.h"
 #include "core/Paths.h"
 #include "core/Profile.h"
+#include "render/Atmosphere.h"
 #include "render/Backdrop.h"
 #include "render/CameraRelative.h"
 #include "render/Compute.h"
@@ -259,7 +260,50 @@ struct GpuFrame
     glm::vec4 shadowing; // one past the light each traced shadow channel is for, 0 for none
     glm::vec4 worldOffset; // xyz: the render origin wrapped by kWorldPatternPeriod, for world-space patterns
     glm::vec4 reflection;  // x: 1 when the reflection pass ran this frame
-    glm::vec4 pad[5];
+    uint64_t atmosphere = 0; // GpuAtmosphere and its tables, 0 without a sky atmosphere
+    uint64_t aerial = 0;     // aerial perspective froxels, 0 without them
+    glm::vec4 aerialParams;  // depth of the last slice (km), cells across, slices
+    uint64_t volumes = 0;    // volume.slang's half-resolution light and transmittance, 0 without volumes
+    uint32_t volumeWidth = 0, volumeHeight = 0;
+    uint64_t volumeParams = 0; // GpuVolume per volume, for the path tracer
+    uint32_t volumeCount = 0, volumePad = 0;
+    glm::vec4 pad[1];
+};
+
+/** One volume as volume.slang reads it. */
+struct GpuVolume
+{
+    glm::mat4 worldToIndex;
+    glm::vec4 dims;     // w the majorant, per cm
+    glm::vec4 scatter;  // w anisotropy
+    glm::vec4 absorb;
+    glm::vec4 emission;
+    uint64_t values = 0;
+    uint64_t pad = 0;
+};
+static_assert(sizeof(GpuVolume) == 144, "matches GpuVolume in volume.slang");
+
+/** volume.slang's volumeCS. */
+struct VolumePush
+{
+    glm::mat4 invViewProj;
+    uint64_t volumes = 0;
+    uint64_t out = 0;
+    uint64_t lights = 0;
+    uint32_t lightCount = 0;
+    uint32_t volumeCount = 0;
+    glm::vec4 size;
+    glm::vec4 ambient;
+    glm::vec4 eye;
+};
+
+/** atmosphere.slang's aerialCS. */
+struct AerialPush
+{
+    glm::mat4 invViewProj;
+    uint64_t atmosphere = 0;
+    uint64_t froxels = 0;
+    glm::vec4 params;
 };
 
 /** World-space shading patterns (stylised strokes) repeat every this many cm, so they stay exact far from the origin. */
@@ -640,6 +684,11 @@ struct Frame
     compute::Buffer flareParams;   // FlareParams for this frame's lens flare
     compute::Buffer composeParams; // ComposeParams for this frame's compose pass
     compute::Buffer filmParams;    // FilmParams for this frame's depth of field and motion blur
+    compute::Buffer atmosphere;    // the sky atmosphere's header and tables (packAtmosphere)
+    compute::Buffer aerial;        // aerial perspective froxels written by atmosphere.slang
+    std::optional<AtmosphereSettings> atmosphereTables; // the settings the tables in atmosphere were built for
+    compute::Buffer volumeParams; // GpuVolume per volume
+    compute::Buffer volumeOut;    // volume.slang's half-resolution result
     std::vector<compute::Buffer> scratch; // acceleration structure builds' scratch, freed with the staging
     vt::Feedback feedback;       // virtual texture page requests, read once the fence signals
     // GPU timestamps: frame start, before and after ambient occlusion, frame end.
@@ -713,6 +762,7 @@ struct Viewport
     std::chrono::steady_clock::time_point drawAt{};
     bool vsync = false; // the present mode the swapchain was made with
     VkDescriptorSet rtaoSet = VK_NULL_HANDLE, bevelSet = VK_NULL_HANDLE, shadowSet = VK_NULL_HANDLE;
+    VkDescriptorSet volumeSet = VK_NULL_HANDLE; // binding 0: the prepass depth, for volume.slang
     uint64_t rtaoGeneration = 0, bevelGeneration = 0, shadowGeneration = 0; // Impl::tlasGeneration the sets point at
     Image bevel;    // rounded normals from the bevel pass
     Image rtShadow; // traced visibility, a channel per light
@@ -964,6 +1014,26 @@ struct Renderer::Impl
     Image blackBevel; // bound where no bevel pass ran
     /** The frame's lights on the GPU, and the shadow tiles to draw: tile index and the light's view-projection. */
     VkDeviceAddress frameLightAddress = 0;
+    VkDeviceAddress frameAtmosphereAddress = 0, frameAerialAddress = 0;
+    VkDeviceAddress frameVolumeOut = 0, frameVolumeParams = 0;
+    uint32_t frameVolumeCount = 0, frameVolumeWidth = 0, frameVolumeHeight = 0;
+    VkPipelineLayout volumeLayout = VK_NULL_HANDLE;
+    VkPipeline volumePipeline = VK_NULL_HANDLE;
+    /** The environment's average light (its first SH band), what volumes take as ambient. */
+    glm::vec3 envAmbient{0.3f};
+    /** Density grids on the GPU by their values' identity, kept while frames use them. */
+    struct VolumeGrid
+    {
+        std::shared_ptr<const std::vector<float>> values;
+        compute::Buffer buffer;
+        uint64_t lastFrame = 0;
+    };
+    std::map<const std::vector<float>*, VolumeGrid> volumeGrids;
+    VkPipelineLayout aerialLayout = VK_NULL_HANDLE;
+    VkPipeline aerialPipeline = VK_NULL_HANDLE;
+    /** The sky atmosphere's tables, rebuilt on the render thread when its settings change. */
+    std::optional<AtmosphereSettings> atmosphereLutSettings;
+    AtmosphereLuts atmosphereLuts;
     uint32_t frameLightCount = 0;
     struct ShadowView
     {
@@ -1346,6 +1416,7 @@ struct Renderer::Impl
         }
         v.gtaoSet = allocateSet(aoPool, aoComputeLayout);
         v.denoiseSet = allocateSet(aoPool, aoComputeLayout);
+        v.volumeSet = allocateSet(aoPool, aoComputeLayout);
         v.aoSampleSet = allocateSet(aoPool, aoSampleLayout);
         v.postSet = allocateSet(aoPool, aoSampleLayout);
         v.edlSet = allocateSet(aoPool, aoSampleLayout);
@@ -1413,6 +1484,11 @@ struct Renderer::Impl
             compute::destroy(vk, f.flareParams);
             compute::destroy(vk, f.composeParams);
             compute::destroy(vk, f.filmParams);
+            compute::destroy(vk, f.atmosphere);
+            compute::destroy(vk, f.aerial);
+            compute::destroy(vk, f.volumeParams);
+            compute::destroy(vk, f.volumeOut);
+            f.atmosphereTables.reset();
             if (f.lines)
             {
                 vmaUnmapMemory(vk.allocator, f.linesAlloc);
@@ -1429,7 +1505,7 @@ struct Renderer::Impl
         }
         destroySwapchain(v);
         for (VkDescriptorSet set : {v.gtaoSet, v.denoiseSet, v.aoSampleSet, v.postSet, v.taaSets[0][0], v.taaSets[0][1], v.taaSets[1][0],
-                                    v.taaSets[1][1], v.composeSets[0], v.composeSets[1], v.composeSets[2], v.composeSets[3]})
+                                    v.taaSets[1][1], v.composeSets[0], v.composeSets[1], v.composeSets[2], v.composeSets[3], v.volumeSet})
             if (set)
                 vkFreeDescriptorSets(vk.device, aoPool, 1, &set);
         for (VkDescriptorSet set : v.bloomSets)
@@ -1735,6 +1811,7 @@ struct Renderer::Impl
         uploadImage(envCube.image, extent, mips, 6, 8, data);
         envUniforms = createBuffer(env.sh.data(), sizeof(env.sh), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
         envMaxLod = float(mips - 1);
+        envAmbient = glm::vec3(env.sh[0]) * 0.282095f;
         envLoaded = true;
         pathTracer.setEnvironment(vk, env);
 
@@ -1786,8 +1863,11 @@ struct Renderer::Impl
             auto env = std::make_unique<EnvironmentData>();
             HdrImage hdr;
             std::string error;
+            glm::dvec3 skyEye(0.0);
             if (path.empty())
                 *env = buildStudioEnvironment();
+            else if (const std::optional<AtmosphereFrame> sky = parseAtmosphereKey(path, &skyEye))
+                *env = buildAtmosphereEnvironment(*sky, skyEye);
             else if (loadHdr(std::filesystem::path(reinterpret_cast<const char8_t*>(path.c_str())), hdr, error))
                 *env = buildEnvironment(hdr);
             else
@@ -1796,7 +1876,7 @@ struct Renderer::Impl
                 *env = buildStudioEnvironment();
             }
             auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
-            log::info("render: environment '{}' built in {} ms", path.empty() ? "studio" : path, ms);
+            log::info("render: environment '{}' built in {} ms", path.empty() ? "studio" : isAtmosphereKey(path) ? "sky atmosphere" : path, ms);
             {
                 std::shared_ptr<const EnvProbe> built = makeEnvProbe(*env);
                 std::scoped_lock probeLock(probeMutex);
@@ -2799,6 +2879,219 @@ struct Renderer::Impl
         frameInstanceAddress = f.instances.address;
     }
 
+    void initAtmosphere()
+    {
+        LILA_ZONE();
+        aerialLayout = compute::pipelineLayout(vk, sizeof(AerialPush), VK_SHADER_STAGE_COMPUTE_BIT);
+        if (VkShaderModule mod = module(loadSpirv("atmosphere.spv")))
+        {
+            aerialPipeline = buildCompute(aerialLayout, mod, "aerialCS");
+            vkDestroyShaderModule(vk.device, mod, nullptr);
+        }
+    }
+
+    void initVolumes()
+    {
+        LILA_ZONE();
+        volumeLayout = compute::pipelineLayout(vk, sizeof(VolumePush), VK_SHADER_STAGE_COMPUTE_BIT, std::span(&aoComputeLayout, 1));
+        if (VkShaderModule mod = module(loadSpirv("volume.spv")))
+        {
+            volumePipeline = buildCompute(volumeLayout, mod, "volumeCS");
+            vkDestroyShaderModule(vk.device, mod, nullptr);
+        }
+    }
+
+    void destroyVolumes()
+    {
+        if (volumePipeline)
+            vkDestroyPipeline(vk.device, volumePipeline, nullptr);
+        if (volumeLayout)
+            vkDestroyPipelineLayout(vk.device, volumeLayout, nullptr);
+        volumePipeline = VK_NULL_HANDLE;
+        volumeLayout = VK_NULL_HANDLE;
+        for (auto& [key, grid] : volumeGrids)
+            compute::destroy(vk, grid.buffer);
+        volumeGrids.clear();
+    }
+
+    bool volumesDrawn(const Viewport& v, const FrameState& s) const
+    {
+        return !s.volumes.empty() && volumePipeline && prepassPipeline && v.volumeSet && !s.xray && !s.externalScene &&
+               s.lighting != FrameState::Lighting::Flat;
+    }
+
+    /**
+     * The frame's volumes: grids uploaded when new and their parameters (the path tracer reads them too), and the result
+     * buffer the meshes read when the viewport ray marches them.
+     */
+    void prepareVolumes(Frame& f, const Viewport& v, const FrameState& s)
+    {
+        frameVolumeOut = frameVolumeParams = 0;
+        frameVolumeCount = 0;
+        if (s.volumes.empty() || s.lighting == FrameState::Lighting::Flat || s.externalScene)
+            return;
+        const bool marched = volumesDrawn(v, s);
+        LILA_ZONE();
+        const uint32_t w = (v.extent.width + 1) / 2, h = (v.extent.height + 1) / 2;
+        std::vector<GpuVolume> params;
+        try
+        {
+            for (const VolumeDraw& d : s.volumes)
+            {
+                if (!d.values || d.values->empty())
+                    continue;
+                VolumeGrid& grid = volumeGrids[d.values.get()];
+                if (!grid.buffer.buffer)
+                {
+                    grid.values = d.values;
+                    grid.buffer = compute::hostBuffer(vk, d.values->data(), d.values->size() * sizeof(float));
+                }
+                grid.lastFrame = frameCounter;
+                GpuVolume g{};
+                g.worldToIndex = glm::mat4(glm::inverse(d.indexToWorld));
+                const glm::vec3 sigmaT = (d.scatter + d.absorption) * d.density;
+                g.dims = glm::vec4(glm::vec3(d.dims), std::max({sigmaT.r, sigmaT.g, sigmaT.b}) * d.peak);
+                g.scatter = glm::vec4(d.scatter * d.density, d.anisotropy);
+                g.absorb = glm::vec4(d.absorption * d.density, 0.0f);
+                g.emission = glm::vec4(d.emission * d.density, 0.0f);
+                g.values = grid.buffer.address;
+                params.push_back(g);
+            }
+            if (params.empty())
+                return;
+            const size_t bytes = params.size() * sizeof(GpuVolume);
+            if (f.volumeParams.size < bytes)
+            {
+                compute::destroy(vk, f.volumeParams);
+                f.volumeParams = compute::makeBuffer(vk, kMaxVolumes * sizeof(GpuVolume), 0, compute::Host::Write);
+            }
+            const size_t outBytes = size_t(w) * h * sizeof(glm::vec4);
+            if (marched && f.volumeOut.size < outBytes)
+            {
+                compute::destroy(vk, f.volumeOut);
+                f.volumeOut = compute::makeBuffer(vk, outBytes, 0, compute::Host::None);
+            }
+        }
+        catch (const std::exception& e)
+        {
+            log::error("render: volumes: {}", e.what());
+            return;
+        }
+        std::memcpy(f.volumeParams.mapped, params.data(), params.size() * sizeof(GpuVolume));
+        vmaFlushAllocation(vk.allocator, f.volumeParams.alloc, 0, VK_WHOLE_SIZE);
+        frameVolumeParams = f.volumeParams.address;
+        frameVolumeOut = marched ? f.volumeOut.address : 0;
+        frameVolumeCount = uint32_t(params.size());
+        frameVolumeWidth = w;
+        frameVolumeHeight = h;
+        // Grids no frame has used for a while are gone from every frame in flight.
+        std::erase_if(volumeGrids, [&](auto& e) {
+            if (frameCounter - e.second.lastFrame < 16)
+                return false;
+            compute::destroy(vk, e.second.buffer);
+            return true;
+        });
+    }
+
+    /** volume.slang over the prepass depth, finished before the scene's fragments read it. */
+    void recordVolumes(VkCommandBuffer cmd, Viewport& v, const FrameState& s, const glm::dmat4& viewProj)
+    {
+        if (!frameVolumeOut)
+            return;
+        LILA_ZONE();
+        VolumePush p{};
+        p.invViewProj = glm::mat4(glm::inverse(viewProj));
+        p.volumes = frameVolumeParams;
+        p.out = frameVolumeOut;
+        p.lights = frameLightAddress;
+        p.lightCount = frameLightCount;
+        p.volumeCount = frameVolumeCount;
+        p.size = glm::vec4(float(frameVolumeWidth), float(frameVolumeHeight), float(v.extent.width), float(v.extent.height));
+        const glm::vec3 ambient = s.lighting == FrameState::Lighting::Environment && envLoaded ? envAmbient * s.envIntensity : glm::vec3(0.3f);
+        p.ambient = glm::vec4(ambient, float(frameCounter % 4096));
+        p.eye = glm::vec4(glm::vec3(s.eye), 1.0f);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, volumePipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, volumeLayout, 0, 1, &v.volumeSet, 0, nullptr);
+        vkCmdPushConstants(cmd, volumeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+        vkCmdDispatch(cmd, (frameVolumeWidth + 7) / 8, (frameVolumeHeight + 7) / 8, 1);
+        compute::memoryBarrier(cmd, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+    }
+
+    void destroyAtmosphere()
+    {
+        if (aerialPipeline)
+            vkDestroyPipeline(vk.device, aerialPipeline, nullptr);
+        if (aerialLayout)
+            vkDestroyPipelineLayout(vk.device, aerialLayout, nullptr);
+        aerialPipeline = VK_NULL_HANDLE;
+        aerialLayout = VK_NULL_HANDLE;
+    }
+
+    static float aerialDepthKm(const FrameState& s)
+    {
+        // Shrinks with a scaled-down atmosphere so a small globe keeps its haze slices; Earth-sized and larger keep the full depth.
+        return s.atmosphere ? kAerialDepthKm * float(s.atmosphere->settings.lengthUnit()) : 0.0f;
+    }
+
+    /** The sky atmosphere's block for this frame: its tables when the settings changed, the camera and sun every frame. */
+    void prepareAtmosphere(Frame& f, const FrameState& s)
+    {
+        frameAtmosphereAddress = 0;
+        frameAerialAddress = 0;
+        if (!s.atmosphere || s.lighting == FrameState::Lighting::Flat)
+            return;
+        const AtmosphereFrame& a = *s.atmosphere;
+        if (atmosphereLutSettings != a.settings)
+        {
+            LILA_ZONE_N("Atmosphere tables");
+            atmosphereLuts = buildAtmosphereLuts(a.settings);
+            atmosphereLutSettings = a.settings;
+        }
+        const std::vector<glm::vec4> block = packAtmosphere(a, atmosphereLuts, s.eye + s.renderOrigin);
+        const size_t bytes = block.size() * sizeof(glm::vec4);
+        constexpr size_t aerialBytes = size_t(kAerialSize) * kAerialSize * kAerialSlices * 2 * sizeof(glm::vec4);
+        try
+        {
+            if (f.atmosphere.size < bytes)
+            {
+                compute::destroy(vk, f.atmosphere);
+                f.atmosphere = compute::makeBuffer(vk, bytes, 0, compute::Host::Write);
+                f.atmosphereTables.reset();
+            }
+            if (!f.aerial.buffer && aerialPipeline)
+                f.aerial = compute::makeBuffer(vk, aerialBytes, 0, compute::Host::None);
+        }
+        catch (const std::exception& e)
+        {
+            log::error("render: {}", e.what());
+            return;
+        }
+        // The tables only change with the settings; the header carries the camera and sun.
+        const bool tables = f.atmosphereTables != a.settings;
+        std::memcpy(f.atmosphere.mapped, block.data(), tables ? bytes : sizeof(GpuAtmosphere));
+        vmaFlushAllocation(vk.allocator, f.atmosphere.alloc, 0, tables ? VK_WHOLE_SIZE : sizeof(GpuAtmosphere));
+        f.atmosphereTables = a.settings;
+        frameAtmosphereAddress = f.atmosphere.address;
+        frameAerialAddress = f.aerial.buffer ? f.aerial.address : 0;
+    }
+
+    /** The aerial perspective froxels for this frame's camera, ready before the scene's fragments read them. */
+    void recordAerial(VkCommandBuffer cmd, const Frame& f, const FrameState& s)
+    {
+        if (!frameAerialAddress || !aerialPipeline)
+            return;
+        LILA_ZONE();
+        AerialPush p{};
+        p.invViewProj = glm::mat4(glm::inverse(s.proj * s.view));
+        p.atmosphere = frameAtmosphereAddress;
+        p.froxels = f.aerial.address;
+        p.params = glm::vec4(aerialDepthKm(s), float(kAerialSize), float(kAerialSlices), 0.0f);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, aerialPipeline);
+        vkCmdPushConstants(cmd, aerialLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+        vkCmdDispatch(cmd, (kAerialSize + 7) / 8, (kAerialSize + 7) / 8, 1);
+        compute::memoryBarrier(cmd, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+    }
+
     /** The frame's lights into its light buffer, handing shadow tiles to the first four that cast shadows. */
     void writeLights(Frame& f, const FrameState& s)
     {
@@ -2832,6 +3125,14 @@ struct Renderer::Impl
             header.fogParams = glm::vec4(s.fog.height, s.fog.falloff, s.fog.start, s.fog.sunScatter);
             header.fogExtra = glm::vec4(s.fog.anisotropy, s.zUp ? 2.0f : 1.0f, 0.0f, 0.0f);
         }
+        header.atmosphere = frameAtmosphereAddress;
+        header.aerial = frameAerialAddress;
+        header.aerialParams = glm::vec4(aerialDepthKm(s), float(kAerialSize), float(kAerialSlices), 0.0f);
+        header.volumes = frameVolumeOut;
+        header.volumeParams = frameVolumeParams;
+        header.volumeCount = frameVolumeCount;
+        header.volumeWidth = frameVolumeWidth;
+        header.volumeHeight = frameVolumeHeight;
         std::memcpy(f.lights.mapped, &header, sizeof(header));
         if (s.rtShadows && vk.rayQuery && rtShadowPipeline)
             for (size_t i = 0; i < count && frameRtLights.size() < 4; ++i)
@@ -3177,7 +3478,18 @@ struct Renderer::Impl
         const uint64_t versions = textureVersions(s);
         mix(&versions, sizeof(versions));
         if (frameLightAddress && f.lights.mapped)
-            mix(f.lights.mapped, sizeof(GpuLight) * (size_t(frameLightCount) + 1));
+        {
+            // The header's buffer addresses change with the frame in flight; what they point at is what counts.
+            GpuFrame header;
+            std::memcpy(&header, f.lights.mapped, sizeof(header));
+            header.atmosphere = header.aerial = header.volumes = header.volumeParams = 0;
+            mix(&header, sizeof(header));
+            mix(static_cast<const GpuLight*>(f.lights.mapped) + 1, sizeof(GpuLight) * size_t(frameLightCount));
+            if (frameAtmosphereAddress && f.atmosphere.mapped)
+                mix(f.atmosphere.mapped, sizeof(GpuAtmosphere));
+            if (frameVolumeParams && f.volumeParams.mapped)
+                mix(f.volumeParams.mapped, sizeof(GpuVolume) * frameVolumeCount);
+        }
         in.signature = sig;
 
         if (!v.pathTrace)
@@ -3207,7 +3519,9 @@ struct Renderer::Impl
         v.keptRecordsValid = false;
         prepareRecords(v, s, false);
         v.keptRecordsValid = false;
+        // An empty scene next frame would match the cleared list and reuse batches pointing at this frame's draws.
         v.keptMeshes = {};
+        v.keptBatches = {};
         return true;
     }
 
@@ -3883,11 +4197,15 @@ struct Renderer::Impl
         initReflections();
         initFlares();
         initFilm();
+        initAtmosphere();
+        initVolumes();
     }
 
     void destroyAo()
     {
         destroyFilm();
+        destroyAtmosphere();
+        destroyVolumes();
         destroyFlares();
         destroyReflections();
         destroyImage(whiteAo);
@@ -3955,6 +4273,7 @@ struct Renderer::Impl
         writeImage(v.aoSampleSet, 0, sampler, v.aoFinal.view, general);
         writeImage(v.aoSampleSet, 1, sampler, v.aoDepth.view, depthRead);
         writeImage(v.aoSampleSet, 2, sampler, v.aoNormal.view, shaderRead);
+        writeImage(v.volumeSet, 0, sampler, v.aoDepth.view, depthRead);
 
         v.postColor = createImage(v.format, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | sampled, extent, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
         writeImage(v.postSet, 0, sampler, v.postColor.view, shaderRead);
@@ -4446,13 +4765,12 @@ struct Renderer::Impl
                 table.push_back(ti);
             }
         }
-        if (instances.empty())
-            return false;
+        // An empty structure still traces: the path tracer draws a scene of only volumes against it.
         if (built)
             compute::memoryBarrier(cmd, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                                    VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
 
-        const size_t bytes = instances.size() * sizeof(VkAccelerationStructureInstanceKHR);
+        const size_t bytes = std::max<size_t>(instances.size(), 1) * sizeof(VkAccelerationStructureInstanceKHR);
         try
         {
             if (f.tlasInstances.size < bytes)
@@ -4467,12 +4785,13 @@ struct Renderer::Impl
             log::error("render: {}", e.what());
             return false;
         }
-        std::memcpy(f.tlasInstances.mapped, instances.data(), bytes);
+        if (!instances.empty())
+            std::memcpy(f.tlasInstances.mapped, instances.data(), instances.size() * sizeof(VkAccelerationStructureInstanceKHR));
         vmaFlushAllocation(vk.allocator, f.tlasInstances.alloc, 0, VK_WHOLE_SIZE);
         try
         {
             const size_t tableBytes = table.size() * sizeof(TraceInstance);
-            const size_t totalBytes = tableBytes + sections.size() * sizeof(TraceSection);
+            const size_t totalBytes = std::max<size_t>(tableBytes + sections.size() * sizeof(TraceSection), sizeof(TraceInstance));
             if (f.traceTable.size < totalBytes)
             {
                 compute::destroy(vk, f.traceTable);
@@ -4480,7 +4799,8 @@ struct Renderer::Impl
             }
             for (TraceInstance& ti : table)
                 ti.sections = f.traceTable.address + tableBytes + ti.sections * sizeof(TraceSection);
-            std::memcpy(f.traceTable.mapped, table.data(), tableBytes);
+            if (tableBytes)
+                std::memcpy(f.traceTable.mapped, table.data(), tableBytes);
             if (!sections.empty())
                 std::memcpy(static_cast<char*>(f.traceTable.mapped) + tableBytes, sections.data(), sections.size() * sizeof(TraceSection));
             vmaFlushAllocation(vk.allocator, f.traceTable.alloc, 0, VK_WHOLE_SIZE);
@@ -6199,7 +6519,10 @@ struct Renderer::Impl
         prepareDisplacement(cmd, f, s);
         prepareDynamicMeshes(cmd, f, s, sameMeshes ? &v.keptDynamic : nullptr);
         writeInstances(f, s, v.offscreen ? nullptr : &v.keptBatches, sameMeshes);
+        prepareAtmosphere(f, s);
+        prepareVolumes(f, v, s);
         writeLights(f, s);
+        recordAerial(cmd, f, s);
         prepareHeightfields(cmd, f, s, v.extent.height);
         prepareRecords(v, s, sameMeshes);
         bool pathTraceMore = false;
@@ -6276,7 +6599,9 @@ struct Renderer::Impl
         const bool reflectWanted = s.reflections != FrameState::Reflections::Off;
         const bool envLit = s.lighting == FrameState::Lighting::Environment && envLoaded;
         const bool reflect = reflectWanted && envLit && reflectSetLayout && prepassPipeline && !s.xray && !s.externalScene && anyShaded(s);
-        const bool prepass = (ao && !aoFast) || (post && s.outline && prepassPipeline && anyShaded(s) && !s.xray) || bevel || rtShadow || reflect;
+        const bool volumes = frameVolumeOut != 0;
+        const bool prepass =
+            (ao && !aoFast) || (post && s.outline && prepassPipeline && anyShaded(s) && !s.xray) || bevel || rtShadow || reflect || volumes;
         timestamp(cmd, f, 1);
         LILA_GPU_SECTION(gpuPass, "Shadow maps");
         recordShadows(cmd, s);
@@ -6292,6 +6617,8 @@ struct Renderer::Impl
         {
             LILA_GPU_SECTION(gpuPass, "Prepass and AO");
             recordAo(cmd, f, v, s, vpScene, ao && !aoFast);
+            if (volumes)
+                recordVolumes(cmd, v, s, sceneViewProj);
             if (bevel)
                 frameBevel = recordBevel(cmd, f, v, s, vpScene);
             if (rtShadow)
@@ -7585,7 +7912,7 @@ struct Renderer::Impl
                 if (b.count == 0)
                     continue;
                 const MeshDraw& d = *b.draw;
-                GpuMesh* g = gpuMesh(d.mesh);
+                GpuMesh* g = d.mesh ? gpuMesh(d.mesh) : nullptr;
                 if (!g)
                     continue;
                 v.keptGpuMeshes.push_back(g);

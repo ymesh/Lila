@@ -17,10 +17,13 @@
 #include "scene/NodeBounds.h"
 #include "scene/Transform.h"
 #include "scene/PostProcess.h"
+#include "scene/SkyAtmosphere.h"
+#include "render/Atmosphere.h"
 #include "scene/ColorManagement.h"
 #include "scene/Relocate.h"
 #include "ui/Environments.h"
 #include "ui/Theme.h"
+#include "ui/VolumeDisplay.h"
 #include "scene/SceneIndex.h"
 
 #include <atomic>
@@ -77,6 +80,7 @@ void apply(render::FrameState& s)
     applyPostProcess(s, p.value<bool>("general", kPostEffects, true));
     applyColorManagement(s);
     applyLights(s);
+    volumeDisplay::apply(s);
     s.rtShadows = p.value<bool>("general", kRtShadows, true);
     const std::string reflections = p.value<std::string>("general", kReflections, "off");
     s.reflections = reflections == "rayTraced"     ? render::FrameState::Reflections::RayTraced
@@ -168,6 +172,101 @@ void applyDome(render::FrameState& s, const scene::lights::Settings& l, const gl
 }
 } // namespace
 
+/** The sky atmosphere's settings as the renderer takes them: Unreal's scales times colours. */
+static render::AtmosphereSettings atmosphereSettings(const scene::Node& sky)
+{
+    namespace sa = scene::skyAtmosphere;
+    const int a = sa::firstAttr();
+    auto num = [&](sa::Attr attr) { return sa::scaled(sky, attr); };
+    auto vec = [&](int attr) { return glm::vec3(sky.as<glm::dvec3>(a + attr)); };
+    render::AtmosphereSettings r;
+    r.bottomRadius = num(sa::kBottomRadius);
+    r.atmosphereHeight = num(sa::kAtmosphereHeight);
+    r.groundAlbedo = vec(sa::kGroundAlbedo);
+    r.multiScattering = float(num(sa::kMultiScatteringFactor));
+    r.rayleighScattering = vec(sa::kRayleighScattering) * float(num(sa::kRayleighScatteringScale));
+    r.rayleighScaleHeight = float(num(sa::kRayleighExponentialDistribution));
+    r.mieScattering = vec(sa::kMieScattering) * float(num(sa::kMieScatteringScale));
+    r.mieAbsorption = vec(sa::kMieAbsorption) * float(num(sa::kMieAbsorptionScale));
+    r.mieAnisotropy = float(num(sa::kMieAnisotropy));
+    r.mieScaleHeight = float(num(sa::kMieExponentialDistribution));
+    r.otherAbsorption = vec(sa::kOtherAbsorption) * float(num(sa::kOtherAbsorptionScale));
+    r.otherTipAltitude = float(num(sa::kOtherTentTipAltitude));
+    r.otherTipValue = float(num(sa::kOtherTentTipValue));
+    r.otherWidth = float(num(sa::kOtherTentWidth));
+    r.skyLuminanceFactor = vec(sa::kSkyLuminanceFactor);
+    r.aerialDistanceScale = float(num(sa::kAerialPerspectiveViewDistanceScale));
+    r.aerialStartDepth = float(num(sa::kAerialPerspectiveStartDepth));
+    r.minLightElevation = float(num(sa::kTransmittanceMinLightElevationAngle));
+    return r;
+}
+
+/** Tables for the CPU's look-ups (the sun's colour, the fog's), kept while the settings stay the same. */
+static const render::AtmosphereLuts& cpuAtmosphereLuts(const render::AtmosphereSettings& settings)
+{
+    static std::mutex mutex;
+    static std::optional<render::AtmosphereSettings> key;
+    static render::AtmosphereLuts luts;
+    std::lock_guard lock(mutex);
+    if (key != settings)
+    {
+        luts = render::buildAtmosphereLuts(settings);
+        key = settings;
+    }
+    return luts;
+}
+
+/**
+ * The scene's sky atmosphere into the frame: the sun's light coloured by the air it passes through, the sky baked as
+ * the environment in place of the viewport's, and height fog tinted by the sky.
+ */
+static void applyAtmosphere(render::FrameState& s, scene::NodeId sunId, int sunIndex)
+{
+    namespace sa = scene::skyAtmosphere;
+    const scene::Graph& g = scene::Graph::current();
+    const scene::NodeId id = sa::active(g);
+    if (id == scene::kNoNode)
+        return;
+    const scene::Node& sky = *g.node(id);
+    render::AtmosphereFrame f;
+    f.settings = atmosphereSettings(sky);
+    f.zUp = s.zUp;
+    f.planetCenter = sa::planetCenter(sky, s.zUp);
+    // Unlit without a sun, as in Unreal: the sky stays black.
+    f.sunRadiance = glm::vec3(0.0f);
+    f.sunDir = s.zUp ? glm::dvec3(0.0, 0.0, 1.0) : glm::dvec3(0.0, 1.0, 0.0);
+    if (sunId != scene::kNoNode)
+    {
+        const scene::Node& sun = *g.node(sunId);
+        f.sunDir = glm::normalize(glm::dvec3(sun.as<glm::dmat4>(scene::Transform::kWorldMatrix)[2]));
+        const double angle = sun.as<double>(scene::Light::kSourceRadius);
+        f.sunAngularRadius = float(glm::radians(angle > 0.0 ? std::min(angle, 10.0) : 0.2678));
+    }
+    if (sunIndex >= 0)
+        f.sunRadiance = s.lights[size_t(sunIndex)].radiance;
+    const glm::dvec3 eye = s.eye + s.renderOrigin;
+    const render::AtmosphereLuts& luts = cpuAtmosphereLuts(f.settings);
+    // Sunlight on the scene has crossed the air down to the ground beneath the camera.
+    const glm::dvec3 cam = render::atmosphereCameraKm(f, eye);
+    const glm::dvec3 ground = cam / glm::length(cam) * (f.settings.bottomRadius + 0.001);
+    if (sunIndex >= 0)
+        s.lights[size_t(sunIndex)].radiance *= render::sunTransmittance(f.settings, luts, ground, f.sunDir);
+    if (s.fog.on)
+    {
+        const double contribution = std::clamp(sky.as<double>(sa::firstAttr() + sa::kHeightFogContribution), 0.0, 1.0);
+        const glm::dvec3 up = cam / glm::length(cam);
+        glm::dvec3 side = glm::cross(up, f.sunDir);
+        side = glm::length(side) > 1e-6 ? glm::normalize(side) : glm::dvec3(1.0, 0.0, 0.0);
+        const glm::vec3 horizon = render::skyRadiance(f.settings, luts, ground, side, f.sunDir, 16) * f.sunRadiance;
+        s.fog.color = glm::mix(s.fog.color, horizon, float(contribution));
+    }
+    s.envPath = render::atmosphereEnvironmentKey(f, eye);
+    s.envRotation = 0.0f;
+    s.envIntensity = 1.0f;
+    s.envLightSaturation = 1.0f;
+    s.atmosphere = f;
+}
+
 void applyLights(render::FrameState& s)
 {
     LILA_ZONE();
@@ -194,8 +293,14 @@ void applyLights(render::FrameState& s)
         }
         return sceneBounds;
     };
+    s.atmosphere.reset();
+    const scene::NodeId sunId = scene::skyAtmosphere::active(g) != scene::kNoNode ? scene::skyAtmosphere::sunLight(g) : scene::kNoNode;
+    int sunIndex = -1;
     if (!PrefStore::get().value<bool>("general", kSceneLights, true))
+    {
+        applyAtmosphere(s, scene::kNoNode, -1);
         return;
+    }
     bool domeDone = false;
     for (const scene::Node* n : scene::sceneIndex::ofType(g, "light"))
     {
@@ -267,8 +372,11 @@ void applyLights(render::FrameState& s)
             }
             d.shadows = true;
         }
+        if (id == sunId)
+            sunIndex = int(s.lights.size());
         s.lights.push_back(d);
     }
+    applyAtmosphere(s, sunId, sunIndex);
 }
 
 void applyLens(render::FrameState& s, const scene::camera::Lens& lens)
@@ -500,6 +608,57 @@ std::string colorNote()
 bool defaultMaterial()
 {
     return PrefStore::get().value<bool>("general", kDefaultMaterial, false);
+}
+
+bool randomColors()
+{
+    return PrefStore::get().value<bool>("general", kRandomColors, false);
+}
+
+RandomPalette randomPalette()
+{
+    return PrefStore::get().value<std::string>("general", kRandomColorsPalette, "contrast") == "pastel" ? RandomPalette::Pastel : RandomPalette::Contrast;
+}
+
+void setRandomPalette(RandomPalette palette)
+{
+    PrefStore::get().set("general", kRandomColorsPalette, std::string(palette == RandomPalette::Pastel ? "pastel" : "contrast"));
+}
+
+int randomSeed()
+{
+    return PrefStore::get().value<int>("general", kRandomColorsSeed, 0);
+}
+
+glm::vec3 randomColor(std::string_view name, RandomPalette palette, int seed)
+{
+    uint64_t h = 1469598103934665603ull ^ (uint64_t(uint32_t(seed)) * 0x9e3779b97f4a7c15ull); // FNV-1a
+    for (unsigned char ch : name)
+        h = (h ^ ch) * 1099511628211ull;
+    // Finalise so names differing in one character (pCube1, pCube2) land far apart.
+    h = (h ^ (h >> 30)) * 0xbf58476d1ce4e5b9ull;
+    h = (h ^ (h >> 27)) * 0x94d049bb133111ebull;
+    h ^= h >> 31;
+    auto unit = [h](int shift) { return float((h >> shift) & 0xffff) / 65535.0f; };
+    float hue = unit(0) * 6.0f, sat = 0.35f + 0.3f * unit(16), val = 0.7f + 0.2f * unit(32);
+    if (palette == RandomPalette::Pastel)
+    {
+        sat = 0.12f + 0.18f * unit(16);
+        val = 0.85f + 0.1f * unit(32);
+    }
+    const float f = hue - std::floor(hue), p = val * (1.0f - sat), q = val * (1.0f - sat * f), t = val * (1.0f - sat * (1.0f - f));
+    glm::vec3 rgb;
+    switch (int(hue) % 6)
+    {
+    case 0: rgb = {val, t, p}; break;
+    case 1: rgb = {q, val, p}; break;
+    case 2: rgb = {p, val, t}; break;
+    case 3: rgb = {p, q, val}; break;
+    case 4: rgb = {t, p, val}; break;
+    default: rgb = {val, p, q}; break;
+    }
+    // HSV is picked in display space; draws take linear colour.
+    return glm::pow(rgb, glm::vec3(2.2f));
 }
 
 bool highlightSelection()

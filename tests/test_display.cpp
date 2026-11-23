@@ -3,6 +3,8 @@
 #include "render/DisplayOptions.h"
 #include "ui/ViewportDisplay.h"
 
+#include <string>
+
 using namespace lila::render;
 
 TEST_CASE("viewport MSAA sample count")
@@ -78,4 +80,41 @@ TEST_CASE("monotone overrides the selective accent colours")
     CHECK_FALSE(accentColors(false, false));
     CHECK_FALSE(accentColors(true, true));
     CHECK_FALSE(accentColors(true, false));
+}
+
+TEST_CASE("random colours are stable per name and tell names apart")
+{
+    using lila::ui::viewportDisplay::randomColor;
+    CHECK(randomColor("pCube1") == randomColor("pCube1"));
+    const glm::vec3 a = randomColor("pCube1"), b = randomColor("pCube2");
+    CHECK(glm::length(a - b) > 0.02f);
+    for (const char* name : {"", "a", "pSphere1", "wall_segment_042"})
+    {
+        const glm::vec3 c = randomColor(name);
+        CHECK(glm::all(glm::greaterThanEqual(c, glm::vec3(0.0f))));
+        CHECK(glm::all(glm::lessThanEqual(c, glm::vec3(1.0f))));
+        CHECK(std::max({c.r, c.g, c.b}) > 0.3f); // never near black
+    }
+}
+
+TEST_CASE("pastel random colours are light and soft")
+{
+    using namespace lila::ui::viewportDisplay;
+    for (int i = 0; i < 64; ++i)
+    {
+        const std::string name = "pCube" + std::to_string(i);
+        const glm::vec3 c = glm::pow(randomColor(name, RandomPalette::Pastel), glm::vec3(1.0f / 2.2f));
+        const float hi = std::max({c.r, c.g, c.b}), lo = std::min({c.r, c.g, c.b});
+        CHECK(lo > 0.55f);
+        CHECK((hi - lo) / hi < 0.31f);
+    }
+    CHECK(randomColor("pCube1", RandomPalette::Pastel) != randomColor("pCube2", RandomPalette::Pastel));
+}
+
+TEST_CASE("the random colour seed reshuffles colours")
+{
+    using namespace lila::ui::viewportDisplay;
+    CHECK(randomColor("pCube1", RandomPalette::Contrast, 0) == randomColor("pCube1"));
+    CHECK(randomColor("pCube1", RandomPalette::Contrast, 7) == randomColor("pCube1", RandomPalette::Contrast, 7));
+    CHECK(glm::length(randomColor("pCube1", RandomPalette::Contrast, 1) - randomColor("pCube1")) > 0.02f);
 }

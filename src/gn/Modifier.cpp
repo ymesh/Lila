@@ -6,8 +6,10 @@
 #include "gn/Tool.h"
 #include "gn/Viewer.h"
 
+#include "core/CrashHandler.h"
 #include "core/Log.h"
 #include "core/Profile.h"
+#include "core/Registry.h"
 #include "curve/CurveNodes.h"
 #include "geo/Mesh.h"
 #include "scene/MeshNodes.h"
@@ -784,6 +786,8 @@ const scene::NodeType& ensureType(const Group& g)
         return n;
     };
     r.signatures[name] = sig;
+    // A group's type is Lila's even when an extension's init builds the group: its modifiers outlive the extension.
+    owners::OwnerScope lilaOwned("");
     return scene::types::registerType(std::move(t));
 }
 
@@ -992,6 +996,7 @@ Node* migrate(Graph& g, Node& old, const scene::NodeType& type, const Renames& r
 
     std::string name = old.name();
     NodeId oldId = old.id();
+    crash::setContext("context", "gnMigrate", std::format("{} ({} attrs) to {} ({} attrs)", name, old.type().attrs.size(), type.name, type.attrs.size()));
     std::vector<std::pair<PlugRef, PlugRef>> in, out;
     for (auto& [dst, src] : g.connections())
     {
@@ -1005,7 +1010,8 @@ Node* migrate(Graph& g, Node& old, const scene::NodeType& type, const Renames& r
         return it == renames.end() ? n : it->second;
     };
     std::vector<std::pair<std::string, scene::PlugValue>> values;
-    const auto& defs = old.type().attrs;
+    // A copy: the old node's type can be its private one (it has user attrs), which goes with it.
+    const std::vector<scene::AttrDef> defs = old.type().attrs;
     for (int i = 0; i < int(defs.size()); ++i)
         if ((defs[i].flags & scene::AttrStorable) && (defs[i].flags & scene::AttrInput))
             values.push_back({defs[i].name, old.value(i)});
@@ -1054,6 +1060,7 @@ void syncInstances(Graph& g, Node& groupNode, const Group& grp, const Renames& r
             mod = migrate(g, *mod, type, renames);
         connectObjects(g, *mod, grp);
     }
+    crash::setContext("context", "gnMigrate", "");
 }
 
 /**
@@ -1220,6 +1227,38 @@ void commitGroup(Graph& g, Node& groupNode, Group next, const std::map<std::stri
     syncInstances(g, groupNode, next, renames);
     if (changed)
         propagateToUsers(g, next.name);
+}
+
+void renameGroup(Graph& g, Node& groupNode, const std::string& to)
+{
+    const std::string from = groupNode.name();
+    if (to == from)
+        return;
+    if (!validIdentifier(to))
+        throw std::invalid_argument("'" + to + "' isn't a valid group name");
+    if (!g.findAll(to).empty())
+        throw std::invalid_argument("a node named " + to + " already exists");
+    Group next = readGroup(groupNode);
+    next.name = to;
+    g.rename(groupNode.id(), to);
+    setGroupDefinition(g, groupNode, next);
+    syncInstances(g, groupNode, next, {});
+    for (const std::string& name : groupNames(g))
+    {
+        if (name == to)
+            continue;
+        Node* user = findGroupNode(g, name);
+        Group grp = readGroup(*user);
+        bool uses = false;
+        for (GNode& n : grp.nodes)
+            if (n.values.value("group", std::string()) == from && runsGroup(n.type))
+            {
+                n.values["group"] = to;
+                uses = true;
+            }
+        if (uses)
+            commitGroup(g, *user, std::move(grp));
+    }
 }
 
 namespace detail

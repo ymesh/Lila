@@ -3,6 +3,14 @@
 #include "core/Export.h"
 
 #include "gn/Geometry.h"
+#include "scene/Node.h"
+
+#include <memory>
+
+namespace lila::scene
+{
+class Graph;
+}
 
 #include <glm/glm.hpp>
 
@@ -89,4 +97,12 @@ LILA_SCENE_API geo::Mesh volumeToMesh(const Volume& v, double threshold);
  * Voxels outside read 0.
  */
 LILA_SCENE_API Volume sdfToFog(const Volume& sdf, double density, double interiorBand, bool fill);
+
+/**
+ * The density grid a mesh with a volume material draws as, in the mesh's object space: the volume its geometry nodes
+ * make (a signed distance filled with density 1), else its closed surface filled with density 1 at the material's voxel
+ * size (about 64 voxels across its longest side at 0). Null for a mesh without a volume material or for a vector grid.
+ * Kept while the mesh and its volume stay the same.
+ */
+LILA_SCENE_API std::shared_ptr<const Volume> meshVolume(scene::Graph& g, scene::NodeId mesh);
 } // namespace lila::gn

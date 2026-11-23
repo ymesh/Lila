@@ -48,7 +48,9 @@ if(WIN32)
 endif()
 add_test(NAME lila_viewport_extension_tests COMMAND lila_viewport_extension_tests)
 add_test(NAME lila_viewport_extension_python COMMAND lila_viewport_extension_tests --no-skip "--test-case=viewport extension points from Python*")
+add_test(NAME lila_python_action_error COMMAND lila_viewport_extension_tests --no-skip "--test-case=a Python action that raises*")
 add_test(NAME lila_extensions_python_nodes COMMAND lila_extensions_tests --no-skip "--test-case=python nodes API*")
+add_test(NAME lila_extensions_python_group_reload COMMAND lila_extensions_tests --no-skip "--test-case=python extension: reloading one that rebuilds*")
 add_test(NAME lila_extensions_python_registries COMMAND lila_extensions_tests --no-skip "--test-case=scene extension points from Python*")
 
 # The SDK package end to end: install it, build the samples as an outside project against the install alone, then

@@ -319,6 +319,37 @@ TEST_CASE("material ID maps hold exact colours with no averaging")
     CHECK(c.b == doctest::Approx(0.0f));
 }
 
+TEST_CASE("masks maps pack a 0/1 mask per material into channels")
+{
+    newScene();
+    const fs::path dir = tempDir("lila_bake_packed_masks");
+    geo::Mesh hi = plane(16);
+    std::vector<uint32_t> left, right;
+    for (geo::Index f = 0; f < hi.faceCapacity(); ++f)
+        (hi.faceCentroid(f).x < 0.0 ? left : right).push_back(f);
+    scene::materials::assign(hi, "matB", left);
+    scene::materials::assign(hi, "matA", right);
+    for (geo::Index p = 0; p < hi.pointCapacity(); ++p)
+        hi.setPosition(p, hi.position(p) + glm::dvec3(0.0, 1.0, 0.0));
+    const std::string low = addMesh("tile_low", plane(1));
+    const std::string high = addMesh("tile_high", std::move(hi));
+    const std::string p = project(dir, 33, 16, "png");
+    ops::execute("bakeGroup", {{"args", {"tile"}}, {"project", p}, {"lows", {low}}, {"highs", {high}}, {"frontal", 3.0}, {"rear", 3.0}});
+    ops::execute("setBakeMap", {{"args", {"masks"}}, {"project", p}, {"enabled", true}});
+    const json r = ops::execute("bake", {{"project", p}, {"maps", {"masks"}}});
+    const json& out = outputFor(r, "masks");
+    CHECK(out["meta"]["legend"]["R"] == "matA");
+    CHECK(out["meta"]["legend"]["G"] == "matB");
+    CHECK(out["meta"]["mapsNeeded"] == 1);
+    const image::Image img = readImage(out);
+    const glm::vec4 l = texel(img, 4, 8), rt = texel(img, 28, 8);
+    CHECK(l.r == doctest::Approx(0.0f));
+    CHECK(l.g == doctest::Approx(1.0f));
+    CHECK(rt.r == doctest::Approx(1.0f));
+    CHECK(rt.g == doctest::Approx(0.0f));
+    CHECK(rt.b == doctest::Approx(0.0f));
+}
+
 TEST_CASE("UV island and coverage masks")
 {
     newScene();

@@ -867,6 +867,8 @@ void decorateMenu(QMenu* menu)
     menu->installEventFilter(menuFilter());
     // Connected after the hotkey refresh that rewrites each row's text, so the padding goes on last.
     QObject::connect(menu, &QMenu::aboutToShow, menu, [menu] { markRows(menu); });
+    // Menus filled from their own aboutToShow decorate themselves mid-emission, too late for the connection above this time.
+    markRows(menu);
 }
 
 namespace

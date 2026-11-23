@@ -54,6 +54,11 @@ LILA_SCENE_API scene::Node* groupOfModifier(scene::Graph& g, const scene::Node& 
 LILA_SCENE_API void commitGroup(scene::Graph& g, scene::Node& groupNode, Group next);
 /** commitGroup where renames maps old exposed-input names to new ones, so modifiers keep those values and animation. */
 LILA_SCENE_API void commitGroup(scene::Graph& g, scene::Node& groupNode, Group next, const std::map<std::string, std::string>& renames);
+/**
+ * Renames a group: its node, its modifiers' type (keeping their values and connections) and the Group nodes in other
+ * groups that run it. Undoable inside a command. Throws std::invalid_argument when the name is taken or invalid.
+ */
+LILA_SCENE_API void renameGroup(scene::Graph& g, scene::Node& groupNode, const std::string& to);
 
 /** User library (prefs) and workspace library folders, user first. Missing folders are skipped. */
 LILA_SCENE_API std::vector<std::filesystem::path> libraryDirs();

@@ -6,6 +6,7 @@
 #include "core/PrefStore.h"
 #include "ui/AttrAuthoring.h"
 #include "ui/AttributeEditor.h"
+#include "ui/ModifierStack.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -18,6 +19,8 @@
 #include <QHBoxLayout>
 #include <QMouseEvent>
 #include <QToolButton>
+#include <QWindow>
+#include <qpa/qwindowsysteminterface.h>
 
 #include <set>
 
@@ -306,4 +309,112 @@ TEST_CASE("Attribute Editor: one label edge, dragged and reset; number fields dr
     settle();
     CHECK(cmd("getAttr", {{"args", {"Edge.gain"}}}).get<double>() == doctest::Approx(10.0).epsilon(0.05));
     CHECK_FALSE(field->hasFocus());
+}
+
+TEST_CASE("Attribute Editor: a real press and drag on a number field changes it; a click types")
+{
+    cmd("newScene");
+    cmd("spaceLocator", {{"name", "Gauge"}});
+    cmd("addAttr", {{"args", {"Gauge"}}, {"longName", "maxHealth"}});
+    cmd("select", {{"args", {"Gauge"}}});
+    ui::AttributeEditor ae;
+    ae.resize(400, 900);
+    ae.show();
+    ae.activateWindow();
+    for (int i = 0; i < 50 && !ae.isActiveWindow(); ++i)
+        QApplication::processEvents();
+    settle();
+    QLineEdit* field = nullptr;
+    for (QLabel* l : ae.findChildren<QLabel*>())
+        if (l->text() == "Max Health")
+            if (auto* form = qobject_cast<QFormLayout*>(l->parentWidget()->layout()))
+            {
+                int row = -1;
+                QFormLayout::ItemRole role;
+                form->getWidgetPosition(l, &row, &role);
+                if (QLayoutItem* item = form->itemAt(row, QFormLayout::FieldRole); item && item->widget())
+                    field = item->widget()->findChild<QLineEdit*>() ? item->widget()->findChild<QLineEdit*>() : qobject_cast<QLineEdit*>(item->widget());
+            }
+    REQUIRE(field);
+    QWindow* window = ae.windowHandle();
+    REQUIRE(window);
+    // Through the window system, as a real mouse: Qt then focuses on press before any filter sees it.
+    const QPoint at = field->mapTo(&ae, field->rect().center());
+    auto mouse = [&](QEvent::Type type, QPoint p, Qt::MouseButtons state, Qt::MouseButton button) {
+        QWindowSystemInterface::handleMouseEvent<QWindowSystemInterface::SynchronousDelivery>(window, QPointF(p), QPointF(window->mapToGlobal(p)),
+                                                                                               state, button, type);
+    };
+    mouse(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton);
+    for (int x = 5; x <= 40; x += 5)
+        mouse(QEvent::MouseMove, at + QPoint(x, 0), Qt::LeftButton, Qt::NoButton);
+    mouse(QEvent::MouseButtonRelease, at + QPoint(40, 0), Qt::NoButton, Qt::LeftButton);
+    settle();
+    CHECK(cmd("getAttr", {{"args", {"Gauge.maxHealth"}}}).get<double>() == doctest::Approx(4.0));
+    CHECK_FALSE(field->hasFocus());
+
+    mouse(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, at, Qt::NoButton, Qt::LeftButton);
+    settle();
+    CHECK(field->hasFocus());
+    CHECK(field->selectedText() == field->text());
+}
+
+TEST_CASE("Modifier stack: a real press and drag on a number field changes it, a step per ten pixels")
+{
+    cmd("newScene");
+    const json made = cmd("polyCube");
+    const std::string cube = made.is_array() ? made[0].get<std::string>() : made.get<std::string>();
+    const json added = cmd("addModifier", {{"args", {cube}}, {"kind", "subdivision"}});
+    const std::string mod = added.is_array() ? added[0].get<std::string>() : added.get<std::string>();
+    cmd("select", {{"args", {cube}}});
+    ui::ModifierStackWidget stack;
+    stack.resize(400, 600);
+    stack.show();
+    settle();
+    QLineEdit* field = nullptr;
+    for (QLineEdit* e : stack.findChildren<QLineEdit*>())
+        if (e->isVisible() && e->cursor().shape() == Qt::SizeHorCursor && e->text() == "1")
+            field = e;
+    REQUIRE(field);
+    QWindow* window = stack.windowHandle();
+    REQUIRE(window);
+    const QPoint at = field->mapTo(&stack, field->rect().center());
+    auto mouse = [&](QEvent::Type type, QPoint p, Qt::MouseButtons state, Qt::MouseButton button) {
+        QWindowSystemInterface::handleMouseEvent<QWindowSystemInterface::SynchronousDelivery>(window, QPointF(p), QPointF(window->mapToGlobal(p)),
+                                                                                               state, button, type);
+    };
+    mouse(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton);
+    for (int x = 5; x <= 20; x += 5)
+        mouse(QEvent::MouseMove, at + QPoint(x, 0), Qt::LeftButton, Qt::NoButton);
+    mouse(QEvent::MouseButtonRelease, at + QPoint(20, 0), Qt::NoButton, Qt::LeftButton);
+    settle();
+    CHECK(cmd("getAttr", {{"args", {mod + ".levels"}}}).get<int>() == 3);
+}
+
+TEST_CASE("Attribute Editor: a real middle click on a vector row's label resets every component")
+{
+    cmd("newScene");
+    cmd("spaceLocator", {{"name", "Pivoted"}});
+    cmd("setAttr", {{"args", {"Pivoted.scalePivot", 5.8, 5.8, 5.8}}});
+    cmd("select", {{"args", {"Pivoted"}}});
+    ui::AttributeEditor ae;
+    ae.resize(400, 900);
+    ae.show();
+    settle();
+    QLabel* label = nullptr;
+    for (QLabel* l : ae.findChildren<QLabel*>())
+        if (l->text() == "Scale Pivot" && l->isVisible())
+            label = l;
+    REQUIRE(label);
+    QWindow* window = ae.windowHandle();
+    REQUIRE(window);
+    const QPoint at = label->mapTo(&ae, label->rect().center());
+    auto mouse = [&](QEvent::Type type, Qt::MouseButtons state) {
+        QWindowSystemInterface::handleMouseEvent<QWindowSystemInterface::SynchronousDelivery>(window, QPointF(at), QPointF(window->mapToGlobal(at)), state,
+                                                                                               Qt::MiddleButton, type);
+    };
+    mouse(QEvent::MouseButtonPress, Qt::MiddleButton);
+    mouse(QEvent::MouseButtonRelease, Qt::NoButton);
+    settle();
+    CHECK(cmd("getAttr", {{"args", {"Pivoted.scalePivot"}}}) == json::array({0.0, 0.0, 0.0}));
 }

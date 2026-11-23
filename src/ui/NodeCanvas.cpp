@@ -92,13 +92,40 @@ NodeItem::NodeItem(NodeCanvas* canvas, const json& info) : mCanvas(canvas)
         props.push_back({p.value("id", ""), p.value("value", "")});
         if (p.contains("editor"))
             textProps.insert(props.back().first);
+        std::vector<std::string> options;
+        for (const json& o : p.value("options", json::array()))
+            if (o.is_string())
+                options.push_back(o.get<std::string>());
+        propOptions.push_back(std::move(options));
+    }
+    // Texture nodes keep settings as params; their choices (enums and checks) edit on the node like props.
+    for (const json& p : info.value("params", json::array()))
+    {
+        const std::string kind = p.value("type", ""), id = p.value("id", "");
+        const json v = p.contains("value") ? p["value"] : p.value("default", json());
+        if (kind == "enum" && v.is_string())
+        {
+            props.push_back({id, v.get<std::string>()});
+            propOptions.push_back(p.value("options", std::vector<std::string>{}));
+        }
+        else if (kind == "bool" && v.is_boolean())
+        {
+            props.push_back({id, v.get<bool>() ? "true" : "false"});
+            propOptions.push_back({"false", "true"});
+            boolParams.insert(id);
+        }
     }
     viewer = !canvas->backend->viewerType().empty() && type == canvas->backend->viewerType();
     previewSize = canvas->backend->thumbnailSize(type);
     if (canvas->backend->runsSubgroup(type))
+    {
         for (auto& [id, v] : props)
             if (id == "group")
                 groupRef = v;
+        for (const json& p : info.value("params", json::array()))
+            if (p.value("id", "") == "group" && p.value("value", json()).is_string())
+                groupRef = p["value"].get<std::string>();
+    }
     // A loop node keeps its kind in the title so a Repeat and a For Each over the same group tell apart.
     if (!groupRef.empty())
         label = type == canvas->backend->subgroupNodeType() ? qs(groupRef) : label + ": " + qs(groupRef);
@@ -107,7 +134,10 @@ NodeItem::NodeItem(NodeCanvas* canvas, const json& info) : mCanvas(canvas)
     portal = type == gn::kSendType || type == gn::kReceiveType;
     problem = qs(info.value("problem", ""));
     if (portal)
+    {
         props.clear();
+        propOptions.clear();
+    }
     setFlags(ItemIsMovable | ItemIsSelectable | ItemSendsGeometryChanges);
     layoutRows();
     const json& pos = info["position"];
@@ -220,6 +250,11 @@ void NodeItem::paint(QPainter* p, const QStyleOptionGraphicsItem*, QWidget*)
     for (size_t i = 0; i < props.size(); ++i, y += kRow)
     {
         QRectF r(8, y + 2, kNodeWidth - 16, kRow - 4);
+        if (!propOptions[i].empty() && !textProps.contains(props[i].first))
+        {
+            paintChoice(*p, i, r);
+            continue;
+        }
         p->setPen(QPen(gray(40), 1));
         p->setBrush(gray(44));
         p->drawRoundedRect(r, 3, 3);
@@ -262,8 +297,43 @@ void NodeItem::paint(QPainter* p, const QStyleOptionGraphicsItem*, QWidget*)
     }
 }
 
+bool NodeItem::propIsToggle(size_t i) const
+{
+    const std::vector<std::string>& o = propOptions[i];
+    return o.size() == 2 && o[0] == "false" && o[1] == "true";
+}
+
+/** A prop with choices: a check with its name for false/true, else a dropdown showing the current choice. */
+void NodeItem::paintChoice(QPainter& p, size_t i, QRectF r) const
+{
+    const bool hot = int(i) == hotProp;
+    QFontMetrics fm = p.fontMetrics();
+    if (propIsToggle(i))
+    {
+        SocketInfo s;
+        s.id = props[i].first;
+        s.value = props[i].second == "true";
+        paintField(p, s, FieldKind::Toggle, r, hot);
+        return;
+    }
+    p.setPen(QPen(gray(hot ? 75 : 40), 1));
+    p.setBrush(gray(hot ? 52 : 44));
+    p.drawRoundedRect(r, 3, 3);
+    const double cx = r.right() - 9.0, cy = r.center().y();
+    p.setPen(QPen(gray(hot ? 215 : 160), 1.3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    p.drawPolyline(QPolygonF({QPointF(cx - 3.5, cy - 1.8), QPointF(cx, cy + 1.8), QPointF(cx + 3.5, cy - 1.8)}));
+    p.setPen(gray(hot ? 225 : 200));
+    QRectF t = r.adjusted(6, 0, -18, 0);
+    p.drawText(t, Qt::AlignVCenter | Qt::AlignLeft, fm.elidedText(pretty(props[i].second), Qt::ElideRight, int(t.width())));
+}
+
 QString NodeItem::title() const
 {
+    // Collapsed, the operation dropdown is hidden, so the header carries it.
+    if (collapsed && label == typeLabel)
+        for (auto& [id, v] : props)
+            if (id == "operation" && !v.empty())
+                return label + ": " + pretty(v);
     if (!portal)
         return label;
     return label + QString(" %1 ").arg(QChar(0x00b7)) + (portalName.empty() ? QString("(unnamed)") : qs(portalName));
@@ -332,6 +402,22 @@ QRectF NodeItem::fieldRect(int i) const
         return {};
     double row = double(shownOut.size() + props.size()) + double(it - shownIn.begin());
     return QRectF(8, top() + kRow * row + 2, kNodeWidth - 16, kRow - 4);
+}
+
+QRectF NodeItem::propRect(size_t i) const
+{
+    if (collapsed || reroute || i >= props.size())
+        return {};
+    return QRectF(8, top() + kRow * double(shownOut.size() + i) + 2, kNodeWidth - 16, kRow - 4);
+}
+
+int NodeItem::propAt(QPointF scenePos) const
+{
+    QPointF local = mapFromScene(scenePos);
+    for (size_t i = 0; i < props.size(); ++i)
+        if (!propOptions[i].empty() && !textProps.contains(props[i].first) && propRect(i).contains(local))
+            return int(i);
+    return -1;
 }
 
 int NodeItem::fieldAt(QPointF scenePos) const

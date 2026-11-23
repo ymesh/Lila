@@ -313,6 +313,30 @@ json bakedPositionMeta(scene::Graph& g, const std::string& project)
     return json();
 }
 
+json bakedMapMeta(scene::Graph& g, const std::string& project, const std::string& map)
+{
+    if (project.empty())
+        return json();
+    if (json live = liveMeshMapMeta(project, map); live.is_object() && !live.empty())
+        return live;
+    for (scene::NodeId id : bake::projects(g))
+    {
+        scene::Node* n = g.node(id);
+        if (!n || n->name() != project)
+            continue;
+        json r = bake::lastResult(id);
+        if (!r.is_object() || !r.contains("outputs"))
+            r = bake::readManifest(*n);
+        if (!r.is_object())
+            return json();
+        for (const json& o : r.value("outputs", json::array()))
+            if (o.value("map", std::string()) == map && o.value("meta", json()).is_object())
+                return o["meta"];
+        return json();
+    }
+    return json();
+}
+
 json positionFrame(scene::Graph& g, const std::string& project)
 {
     json live = liveMeshMapMeta(project, "position");

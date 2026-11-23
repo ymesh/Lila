@@ -142,9 +142,11 @@ public:
 
     bool supports(std::string_view verb) const override
     {
-        static const std::set<std::string_view> kVerbs = {"GroupInfo", "NodeTypes",  "AddNode",    "DeleteNode",     "Connect",
-                                                          "Disconnect", "MoveNodes", "SetValue",   "CopyNodes",      "PasteNodes",
-                                                          "DuplicateNodes", "ExportGroup", "ImportGroup", "SetTies", "SetFrames", "SetNodeFlags", "SetNodeLabel", "SetBookmarks"};
+        static const std::set<std::string_view> kVerbs = {"GroupInfo",   "NodeTypes",   "AddNode",      "DeleteNode",  "Connect",     "Disconnect",
+                                                          "MoveNodes",   "SetValue",    "CopyNodes",    "PasteNodes",  "DuplicateNodes",
+                                                          "GroupNodes",  "Ungroup",     "SaveGroup",    "ExportGroup", "ImportGroup", "SetTies",
+                                                          "SetFrames",   "SetNodeFlags", "SetNodeLabel", "SetBookmarks", "AddInput",  "RemoveInput",
+                                                          "RenameInput", "MoveInput",   "SetInputInfo", "ExposeInput", "RemoveOutput"};
         return kVerbs.contains(verb);
     }
 
@@ -155,11 +157,23 @@ public:
     }
 
     std::vector<std::string> groupNames(scene::Graph& g) const override { return tex::setNames(g); }
-    bool hasGroup(scene::Graph& g, const std::string& group) const override { return tex::findSet(g, group) != nullptr; }
+    bool hasGroup(scene::Graph& g, const std::string& group) const override { return tex::hasGraphAt(g, group); }
+    std::string subgroupNodeType() const override { return tex::kGroupType; }
+    /** A set's node groups share one namespace, so a Group node anywhere in the set runs "Set/<its group>". */
+    std::string childGroup(const std::string& current, const std::string& child) const override
+    {
+        return tex::joinAddress(tex::splitAddress(current).set, child);
+    }
+    std::string parentGroupOf(const std::string& group) const override
+    {
+        const tex::GraphAddress at = tex::splitAddress(group);
+        return at.group.empty() ? std::string() : at.set;
+    }
+    bool hasInterface(const std::string& group) const override { return !tex::splitAddress(group).group.empty(); }
     bool isGroupNode(const scene::Node& n) const override { return n.type().name == tex::kTextureSetType; }
     std::optional<size_t> groupStamp(scene::Graph& g, const std::string& group) const override
     {
-        if (scene::Node* n = tex::findSet(g, group))
+        if (scene::Node* n = tex::findSet(g, tex::splitAddress(group).set))
             return tex::setStamp(*n);
         return std::nullopt;
     }
@@ -207,9 +221,21 @@ public:
     QString groupNoun() const override { return "Texture Set"; }
     bool canRenameGroup() const override { return true; }
 
-    std::string renameGroup(const std::string& group, const std::string& to) const override { return renameTextureSet(group, to); }
+    std::string renameGroup(const std::string& group, const std::string& to) const override
+    {
+        const tex::GraphAddress at = tex::splitAddress(group);
+        if (at.group.empty())
+            return renameTextureSet(group, to);
+        json r = runUi("texRenameGroup", argsCall({group, to}));
+        return r.is_string() ? tex::joinAddress(at.set, r.get<std::string>()) : std::string();
+    }
     bool canDeleteGroup() const override { return true; }
-    bool deleteGroup(const std::string& group) const override { return deleteTextureSet(group); }
+    bool deleteGroup(const std::string& group) const override
+    {
+        if (tex::splitAddress(group).group.empty())
+            return deleteTextureSet(group);
+        return tryRunUi("texDeleteGroup", argsCall({group}));
+    }
 
     bool canViewNodes() const override { return true; }
 
@@ -300,10 +326,16 @@ public:
         QPointer<NodeEditor> ed(&editor);
         json withSet = node;
         withSet["set"] = group;
-        QWidget* panel = texParams::nodePanel(parent, withSet, [ed, group, name](const std::string& id, const json& v) {
-            if (ed)
-                ed->setValueFromField(argsCall({group, name + "." + id, v}));
-        });
+        texParams::ExposeFn expose;
+        if (hasInterface(group))
+            expose = [group, name](const std::string& id) { runUi("texExposeInput", argsCall({group, name + "." + id})); };
+        QWidget* panel = texParams::nodePanel(
+            parent, withSet,
+            [ed, group, name](const std::string& id, const json& v) {
+                if (ed)
+                    ed->setValueFromField(argsCall({group, name + "." + id, v}));
+            },
+            expose);
         if (node.value("type", "") == "image")
             if (QWidget* row = imageSizeRow(panel, group, node))
             {

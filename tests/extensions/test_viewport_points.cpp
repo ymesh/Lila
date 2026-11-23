@@ -5,6 +5,8 @@
 #include "scene/SceneCommands.h"
 #include "python/Python.h"
 #include "scene/Graph.h"
+#include "core/Log.h"
+#include "ui/Actions.h"
 #include "ui/CursorBadges.h"
 #include "ui/DrawOverrides.h"
 #include "ui/Gizmo.h"
@@ -139,4 +141,25 @@ TEST_CASE("viewport extension points from Python: owned by the loading extension
     CHECK(viewportRegistries() == before);
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);
+}
+
+TEST_CASE("a Python action that raises reports its message and leaves the app running" * doctest::skip())
+{
+    isolate();
+    REQUIRE(python::init({"lila_viewport_extension_tests"}));
+    REQUIRE(python::run("import lila\n"
+                        "from lila import ui\n"
+                        "def _fail():\n"
+                        "    raise lila.CommandError('select the objects to send')\n"
+                        "ui.add_action('pyfail.send', _fail, 'Send Somewhere')\n")
+                .ok);
+    REQUIRE(actions::find("pyfail.send"));
+    const std::vector<LogEntry> before = log::since(0);
+    const uint64_t mark = before.empty() ? 0 : before.back().seq;
+    CHECK_FALSE(actions::run(nlohmann::json("pyfail.send")));
+    bool reported = false;
+    for (const LogEntry& e : log::since(mark))
+        reported |= e.level == LogLevel::Error && e.text == "Send Somewhere: select the objects to send";
+    CHECK(reported);
+    actions::remove("pyfail.send");
 }

@@ -37,8 +37,10 @@ public:
 
     bool supports(std::string_view verb) const override
     {
-        static const std::set<std::string_view> kVerbs = {"GroupInfo", "NodeTypes",    "AddNode",    "DeleteNode",   "Connect",   "Disconnect",
-                                                          "MoveNodes", "SetValue",     "SetNodeFlags", "InsertNode", "SetFrames", "SetNodeLabel"};
+        static const std::set<std::string_view> kVerbs = {"GroupInfo",    "NodeTypes",  "AddNode",   "DeleteNode",   "Connect",     "Disconnect",
+                                                          "MoveNodes",    "SetValue",   "SetNodeFlags", "InsertNode", "SetFrames", "SetNodeLabel",
+                                                          "SetTies",      "SetBookmarks", "CopyNodes", "PasteNodes", "DuplicateNodes",
+                                                          "GroupNodes",   "Ungroup"};
         return kVerbs.contains(verb);
     }
 
@@ -46,7 +48,8 @@ public:
     {
         if (verb == "NodeTypes")
             call.erase("group");
-        if (verb == "GroupInfo")
+        // Copying and grouping place nodes where this view shows them, which depends on the view's settings.
+        if (verb == "GroupInfo" || verb == "CopyNodes" || verb == "DuplicateNodes" || verb == "GroupNodes")
         {
             call["depth"] = mDepth;
             call["all"] = mAll;
@@ -57,7 +60,14 @@ public:
     {
         return std::vector<std::string>(scene::sceneGraph::kViews.begin(), scene::sceneGraph::kViews.end());
     }
+    bool hasGroup(scene::Graph&, const std::string& group) const override
+    {
+        return scene::sceneGraph::isView(group) || scene::sceneGraph::hasGroup(group);
+    }
     bool isGroupNode(const scene::Node&) const override { return false; }
+    std::string subgroupNodeType() const override { return scene::sceneGraph::kGroupNodeType; }
+    std::string parentGroupOf(const std::string& group) const override { return scene::sceneGraph::parentGroup(group); }
+    bool canRetargetSubgroup() const override { return false; }
 
     /** Every view is built from the selection, so a selection change rebuilds it rather than switching views. */
     bool rebuildsOn(scene::Change change, const scene::Node* n) const override

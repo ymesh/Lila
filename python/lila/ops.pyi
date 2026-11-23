@@ -2063,7 +2063,7 @@ def createGroom(*objects: Any, guides: str | None = None, count: int | None = No
         sides: Points around each lock.
     """
 
-def createMaterial(*objects: Any, baseColor: Sequence[float] | None = None, metallic: float | None = None, roughness: float | None = None, specular: float | None = None, emissive: Sequence[float] | None = None, emissiveIntensity: float | None = None, opacity: float | None = None, opacityMaskClipValue: float | None = None, blendMode: Any | None = None, twoSided: bool | None = None, uvSet: int | None = None, normalFormat: Any | None = None, flipGreen: bool | None = None, baseColorMap: str | None = None, metallicMap: str | None = None, roughnessMap: str | None = None, normalMap: str | None = None, ambientOcclusionMap: str | None = None, ormMap: str | None = None, packedLayout: Any | None = None, emissiveMap: str | None = None, shadingModel: Any | None = None, painterlyStrength: float | None = None, strokeNormal: float | None = None, strokeScale: float | None = None, strokeLayerRatio: float | None = None, strokeMapping: Any | None = None, strokeMap: str | None = None, paletteCount: int | None = None, paletteShadow: Sequence[float] | None = None, paletteLight: Sequence[float] | None = None, paletteAccent: Sequence[float] | None = None, paletteContrast: float | None = None, paletteSpread: float | None = None, specularTint: float | None = None, boil: bool | None = None, boilFps: float | None = None, toonShadowColor: Sequence[float] | None = None, toonLightTint: Sequence[float] | None = None, toonThreshold: float | None = None, toonSoftness: float | None = None, toonOuterOffset: float | None = None, toonOuterColor: Sequence[float] | None = None, rimColor: Sequence[float] | None = None, rimWidth: float | None = None, rimStrength: float | None = None, foliageBottomColor: Sequence[float] | None = None, foliageTopColor: Sequence[float] | None = None, foliageGradient: float | None = None, foliageBottomShadow: float | None = None, foliageTopHighlight: float | None = None, foliageTranslucency: float | None = None, foliageWrap: float | None = None, subsurfaceColor: Sequence[float] | None = None, subsurfaceAmount: float | None = None, sheenColor: Sequence[float] | None = None, sheenRoughness: float | None = None, clearcoat: float | None = None, clearcoatRoughness: float | None = None, anisotropy: float | None = None, anisotropyRotation: float | None = None, hairShift: float | None = None, irisRadius: float | None = None, irisDepth: float | None = None, limbalRing: float | None = None, bevelRadius: float | None = None, heightMap: str | None = None, normalFromHeight: bool | None = None, heightDepth: float | None = None, heightUvWidth: float | None = None, heightUvHeight: float | None = None, baseColorMapWrapU: Any | None = None, baseColorMapWrapV: Any | None = None, baseColorMapFilter: Any | None = None, baseColorMapColorSpace: Any | None = None, metallicMapWrapU: Any | None = None, metallicMapWrapV: Any | None = None, metallicMapFilter: Any | None = None, metallicMapColorSpace: Any | None = None, roughnessMapWrapU: Any | None = None, roughnessMapWrapV: Any | None = None, roughnessMapFilter: Any | None = None, roughnessMapColorSpace: Any | None = None, normalMapWrapU: Any | None = None, normalMapWrapV: Any | None = None, normalMapFilter: Any | None = None, normalMapColorSpace: Any | None = None, ambientOcclusionMapWrapU: Any | None = None, ambientOcclusionMapWrapV: Any | None = None, ambientOcclusionMapFilter: Any | None = None, ambientOcclusionMapColorSpace: Any | None = None, ormMapWrapU: Any | None = None, ormMapWrapV: Any | None = None, ormMapFilter: Any | None = None, ormMapColorSpace: Any | None = None, emissiveMapWrapU: Any | None = None, emissiveMapWrapV: Any | None = None, emissiveMapFilter: Any | None = None, emissiveMapColorSpace: Any | None = None, baseColorMapOcioSpace: str | None = None, emissiveMapOcioSpace: str | None = None, textureSet: str | None = None, bc: Sequence[float] | None = None) -> Any:
+def createMaterial(*objects: Any, baseColor: Sequence[float] | None = None, metallic: float | None = None, roughness: float | None = None, specular: float | None = None, emissive: Sequence[float] | None = None, emissiveIntensity: float | None = None, opacity: float | None = None, opacityMaskClipValue: float | None = None, blendMode: Any | None = None, twoSided: bool | None = None, uvSet: int | None = None, normalFormat: Any | None = None, flipGreen: bool | None = None, baseColorMap: str | None = None, metallicMap: str | None = None, roughnessMap: str | None = None, normalMap: str | None = None, ambientOcclusionMap: str | None = None, ormMap: str | None = None, packedLayout: Any | None = None, emissiveMap: str | None = None, shadingModel: Any | None = None, painterlyStrength: float | None = None, strokeNormal: float | None = None, strokeScale: float | None = None, strokeLayerRatio: float | None = None, strokeMapping: Any | None = None, strokeMap: str | None = None, paletteCount: int | None = None, paletteShadow: Sequence[float] | None = None, paletteLight: Sequence[float] | None = None, paletteAccent: Sequence[float] | None = None, paletteContrast: float | None = None, paletteSpread: float | None = None, specularTint: float | None = None, boil: bool | None = None, boilFps: float | None = None, toonShadowColor: Sequence[float] | None = None, toonLightTint: Sequence[float] | None = None, toonThreshold: float | None = None, toonSoftness: float | None = None, toonOuterOffset: float | None = None, toonOuterColor: Sequence[float] | None = None, rimColor: Sequence[float] | None = None, rimWidth: float | None = None, rimStrength: float | None = None, foliageBottomColor: Sequence[float] | None = None, foliageTopColor: Sequence[float] | None = None, foliageGradient: float | None = None, foliageBottomShadow: float | None = None, foliageTopHighlight: float | None = None, foliageTranslucency: float | None = None, foliageWrap: float | None = None, subsurfaceColor: Sequence[float] | None = None, subsurfaceAmount: float | None = None, sheenColor: Sequence[float] | None = None, sheenRoughness: float | None = None, clearcoat: float | None = None, clearcoatRoughness: float | None = None, anisotropy: float | None = None, anisotropyRotation: float | None = None, hairShift: float | None = None, irisRadius: float | None = None, irisDepth: float | None = None, limbalRing: float | None = None, bevelRadius: float | None = None, heightMap: str | None = None, normalFromHeight: bool | None = None, heightDepth: float | None = None, heightUvWidth: float | None = None, heightUvHeight: float | None = None, baseColorMapWrapU: Any | None = None, baseColorMapWrapV: Any | None = None, baseColorMapFilter: Any | None = None, baseColorMapColorSpace: Any | None = None, metallicMapWrapU: Any | None = None, metallicMapWrapV: Any | None = None, metallicMapFilter: Any | None = None, metallicMapColorSpace: Any | None = None, roughnessMapWrapU: Any | None = None, roughnessMapWrapV: Any | None = None, roughnessMapFilter: Any | None = None, roughnessMapColorSpace: Any | None = None, normalMapWrapU: Any | None = None, normalMapWrapV: Any | None = None, normalMapFilter: Any | None = None, normalMapColorSpace: Any | None = None, ambientOcclusionMapWrapU: Any | None = None, ambientOcclusionMapWrapV: Any | None = None, ambientOcclusionMapFilter: Any | None = None, ambientOcclusionMapColorSpace: Any | None = None, ormMapWrapU: Any | None = None, ormMapWrapV: Any | None = None, ormMapFilter: Any | None = None, ormMapColorSpace: Any | None = None, emissiveMapWrapU: Any | None = None, emissiveMapWrapV: Any | None = None, emissiveMapFilter: Any | None = None, emissiveMapColorSpace: Any | None = None, baseColorMapOcioSpace: str | None = None, emissiveMapOcioSpace: str | None = None, textureSet: str | None = None, volumeDensity: float | None = None, volumeScatterColor: Sequence[float] | None = None, volumeAbsorptionColor: Sequence[float] | None = None, volumeAnisotropy: float | None = None, volumeEmissionColor: Sequence[float] | None = None, volumeEmissionStrength: float | None = None, volumeVoxelSize: float | None = None, bc: Sequence[float] | None = None) -> Any:
     """Create a material (Unreal default lit inputs). Faces use it through a slot of the same name. Returns its name.
 
     Args:
@@ -2089,7 +2089,7 @@ def createMaterial(*objects: Any, baseColor: Sequence[float] | None = None, meta
         ormMap: Packed occlusion/roughness/metallic texture path.
         packedLayout: orm or mro: the packed map's channel order.
         emissiveMap: Texture path.
-        shadingModel: Lighting model: defaultLit (Unreal's default lit), painterly (brush strokes and a colour palette), toon (stepped ramp with tinted light and shadow), foliage (soft gradient shading, lit through), unlit (the base colour as it is, plus emissive, with no lighting), skin (light scattering under the surface), cloth (velvet sheen), clearcoat (a glossy layer on top), hair (stretched strand highlights, for hair cards) or eye (an iris under a glossy cornea; UVs centred on the pupil).
+        shadingModel: Lighting model: defaultLit (Unreal's default lit), painterly (brush strokes and a colour palette), toon (stepped ramp with tinted light and shadow), foliage (soft gradient shading, lit through), unlit (the base colour as it is, plus emissive, with no lighting), skin (light scattering under the surface), cloth (velvet sheen), clearcoat (a glossy layer on top), hair (stretched strand highlights, for hair cards) or eye (an iris under a glossy cornea; UVs centred on the pupil) or volume (fog, smoke or cloud filling the mesh, or its geometry nodes' density grid, in place of a surface).
         painterlyStrength: Painterly: scales the whole effect; 0 shades exactly like defaultLit.
         strokeNormal: Painterly: how far the stroke sheet bends the shading normal; 0 is the plain surface.
         strokeScale: Painterly: size of one stroke sheet tile, cm (UV mode: tiles per UV unit is 100 / this).
@@ -2170,6 +2170,13 @@ def createMaterial(*objects: Any, baseColor: Sequence[float] | None = None, meta
         baseColorMapOcioSpace: With OCIO colour management on: the config colour space the map is in (Utility - sRGB - Texture, ACEScg); empty reads it by its ColorSpace.
         emissiveMapOcioSpace: With OCIO colour management on: the config colour space the map is in (Utility - sRGB - Texture, ACEScg); empty reads it by its ColorSpace.
         textureSet: Texture set whose maps draw this material, in place of the maps it has. Any number of materials can use one set; painting a mesh with this material paints the set.
+        volumeDensity: Volume: how thick it is, per metre: 1 dims light to a third over a metre. Scales a density grid's values.
+        volumeScatterColor: Volume: the colour of light it scatters (its albedo); white is cloud, grey is smoke.
+        volumeAbsorptionColor: Volume: light it swallows by colour on top of what it scatters; dark smoke absorbs.
+        volumeAnisotropy: Volume: 0 scatters evenly, toward 1 forward (glowing toward the light), toward -1 back.
+        volumeEmissionColor: Volume: colour of light it gives off, for fire and glowing gas.
+        volumeEmissionStrength: Volume: brightness of its own light, scaled by density; 0 gives none.
+        volumeVoxelSize: Volume: voxel size a mesh is filled at, cm; 0 picks one from its size. Density grids keep their own.
     """
 
 def createMesh(points: Sequence[Any] | None = None, faces: Sequence[Any] | None = None, uvs: Sequence[Any] | None = None, name: str | None = None, *, n: str | None = None) -> Any:
@@ -3710,6 +3717,15 @@ def flushUndo(which: str | None = None, *, w: str | None = None) -> Any:
         which: past, future or all. Short form w. One of 'past', 'future', 'all'. Default 'past'.
     """
 
+def fogVolume(name: str | None = None, size: float | None = None, density: float | None = None, *, n: str | None = None, sz: float | None = None, d: float | None = None) -> Any:
+    """Create a box filled with fog: a cube with a new volume material. Returns the box.
+
+    Args:
+        name: Name of the box; made unique. Short form n. Default 'fogVolume'.
+        size: Edge length, cm. Short form sz. Default 400.0.
+        density: The material's volumeDensity, per metre. Short form d. Default 0.5.
+    """
+
 def fontList() -> Any:
     """The fonts textCurves can use by name: "Family Style" of every bundled and installed font, sorted."""
 
@@ -3969,6 +3985,13 @@ def gnDeleteBake(*objects: Any) -> Any:
         objects: group node.
     """
 
+def gnDeleteGroup(*objects: Any) -> Any:
+    """Delete a group nothing uses. Fails naming the modifiers and groups still running it.
+
+    Args:
+        objects: group.
+    """
+
 def gnDeleteNode(*objects: Any) -> Any:
     """Delete nodes from a group, with their links. A zone's input and output go together.
 
@@ -4106,6 +4129,13 @@ def gnRemoveOutput(*objects: Any) -> Any:
 
     Args:
         objects: group name.
+    """
+
+def gnRenameGroup(*objects: Any) -> Any:
+    """Rename a group, its modifiers' type (they keep their values) and the Group nodes running it. Returns the new name.
+
+    Args:
+        objects: group newName.
     """
 
 def gnRenameInput(*objects: Any, output: bool | None = None) -> Any:
@@ -8539,7 +8569,7 @@ def sceneData(*objects: Any, value: Any | None = None, remove: bool | None = Non
     """
 
 def sceneGraphAddNode(*objects: Any, position: Sequence[Any] | None = None, name: str | None = None, insert: bool | None = None) -> Any:
-    """Create a scene node from the node editor and add it to the selection, so the view shows it. Returns its path. A modifier added with a mesh (or one of its modifiers) selected goes on top of that mesh's stack, as addModifier puts it, and is laid out in the stack's columns rather than at position.
+    """Create a scene node from the node editor and add it to the selection, so the view shows it (in a node group, to the group). Returns its path. A modifier added with a mesh (or one of its modifiers) selected goes on top of that mesh's stack, as addModifier puts it, and is laid out in the stack's columns rather than at position.
 
     Args:
         objects: view type.
@@ -8549,14 +8579,23 @@ def sceneGraphAddNode(*objects: Any, position: Sequence[Any] | None = None, name
     """
 
 def sceneGraphConnect(*objects: Any) -> Any:
-    """Connect plugs from the node editor: sceneGraphConnect(view, 'Ctrl.translateX', 'Box.rotateY') replaces the input's connection. In the Hierarchy view, 'A.@children' to 'B.@parent' parents B under A.
+    """Connect plugs from the node editor: sceneGraphConnect(view, 'Ctrl.translateX', 'Box.rotateY') replaces the input's connection. In the Hierarchy view, 'A.@children' to 'B.@parent' parents B under A. A node group's socket '@Arm.L_hand.rotateX' is its member's plug.
 
     Args:
         objects: view from to.
     """
 
+def sceneGraphCopyNodes(*objects: Any, depth: int | None = None, all: bool | None = None) -> Any:
+    """Shown nodes as shareable text (JSON with a format header): their types, values, parents, the connections among them and the node groups they stand for. Paste it with sceneGraphPasteNodes, here or in another scene.
+
+    Args:
+        objects: view nodes...
+        depth: As sceneGraphInfo takes it, for where the nodes show. Default 2.
+        all: As sceneGraphInfo takes it. Default False.
+    """
+
 def sceneGraphDeleteNode(*objects: Any) -> Any:
-    """Delete scene nodes from the node editor, with their connections (and, for objects, their children).
+    """Delete scene nodes from the node editor, with their connections (and, for objects, their children); a node group's node deletes the group with every node in it.
 
     Args:
         objects: view nodes...
@@ -8570,10 +8609,30 @@ def sceneGraphDisconnect(*objects: Any, source: str | None = None) -> Any:
         source: node.socket of the one link to remove.
     """
 
+def sceneGraphDuplicateNodes(*objects: Any, offset: Sequence[Any] | None = None, depth: int | None = None, all: bool | None = None) -> Any:
+    """Copy shown nodes in place with the connections among them; copies join their originals' frames. Returns the new nodes as the view shows them.
+
+    Args:
+        objects: view nodes...
+        offset: [x, y] shift for the copies. Default [40, 40].
+        depth: As sceneGraphInfo takes it, for where the nodes show. Default 2.
+        all: As sceneGraphInfo takes it. Default False.
+    """
+
+def sceneGraphGroupNodes(*objects: Any, name: str | None = None, depth: int | None = None, all: bool | None = None) -> Any:
+    """Gather shown nodes into a node group, drawn as one node in their place: sceneGraphGroupNodes(view, 'L_arm', 'L_hand', name='Arm'). Scene nodes are untouched; links crossing the group become its node's sockets. Returns {group, node}.
+
+    Args:
+        objects: view nodes...
+        name: Name for the new group; made unique. Default 'NodeGroup'.
+        depth: As sceneGraphInfo takes it, for where the nodes show. Default 2.
+        all: As sceneGraphInfo takes it. Default False.
+    """
+
 def sceneGraphInfo(*objects: Any, depth: int | None = None, all: bool | None = None) -> Any:
     """A view of the scene's nodes for the node editor: the nodes with their plugs as sockets and values, the connections between them as links, and each node's canvas position.
 
-    Views: Selection (the selection and what is wired straight into and out of it), History (each selected mesh's whole modifier stack and its source), Hierarchy (the selection's parents and children), Upstream and Downstream (depth steps from the selection). Views look through anim curves and unit conversions unless all is on.
+    Views: Selection (the selection and what is wired straight into and out of it), History (each selected mesh's whole modifier stack and its source), Hierarchy (the selection's parents and children), Upstream and Downstream (depth steps from the selection). Views look through anim curves and unit conversions unless all is on. A node group shows as one node wherever its members show; given a group's name instead of a view, the group's members with the nodes wired to them.
 
     Args:
         objects: view.
@@ -8607,11 +8666,26 @@ def sceneGraphNodeTypes(linkType: str | None = None, linkInput: bool | None = No
         linkInput: The drag started at an input, so the node needs a matching output. Default False.
     """
 
+def sceneGraphPasteNodes(*objects: Any, position: Sequence[Any] | None = None) -> Any:
+    """Create scene nodes from text made by sceneGraphCopyNodes, centred at position, with their connections and node groups; names are made unique. Returns the new nodes as the view shows them. Bad text fails with every problem listed and changes nothing.
+
+    Args:
+        objects: view text.
+        position: [x, y] canvas centre for the pasted nodes. Default [0, 0].
+    """
+
 def sceneGraphRenameNode(*objects: Any) -> Any:
-    """Rename a scene node from the node editor, as rename does, keeping its place, flags and frames in every view: sceneGraphRenameNode(view, 'pCube1', 'Crate'). Returns its new path.
+    """Rename a scene node from the node editor, as rename does, keeping its place, flags, frames, ties and node groups in every view: sceneGraphRenameNode(view, 'pCube1', 'Crate'). Returns its new path.
 
     Args:
         objects: view node name.
+    """
+
+def sceneGraphSetBookmarks(*objects: Any) -> Any:
+    """Replace a view's saved canvas views: sceneGraphSetBookmarks(view, {'1': [x, y, zoom]}), centre and zoom by slot. Kept with the scene.
+
+    Args:
+        objects: view bookmarks.
     """
 
 def sceneGraphSetFrames(*objects: Any) -> Any:
@@ -8631,11 +8705,25 @@ def sceneGraphSetNodeFlags(*objects: Any, collapsed: bool | None = None, hideUnu
         muted: Accepted for the editor's mute key; scene nodes don't mute.
     """
 
+def sceneGraphSetTies(*objects: Any) -> Any:
+    """Replace a view's zip ties, shaped as gnSetTies takes them: sceneGraphSetTies(view, [{links: [[fromNode, fromSocket, toNode, toSocket], ...], position: [x, y], angle: 0, color: ''}]). Links naming no node are dropped, and so is a tie left with fewer than two. Kept with the scene.
+
+    Args:
+        objects: view ties.
+    """
+
 def sceneGraphSetValue(*objects: Any) -> Any:
     """Set an unconnected plug from the node editor: sceneGraphSetValue(view, 'Box.translateX', 2).
 
     Args:
         objects: view node.attr value.
+    """
+
+def sceneGraphUngroup(*objects: Any) -> Any:
+    """Remove the node group a group node stands for, showing its nodes in its place; the scene nodes are untouched. Returns them as the view shows them.
+
+    Args:
+        objects: view node.
     """
 
 def sceneInfo() -> Any:
@@ -9629,6 +9717,17 @@ def skinningMethod(*objects: Any, method: str | None = None, m: str | None = Non
         method: linear | dualQuaternion | centresOfRotation | directDeltaMush. Short form m. One of 'linear', 'dualQuaternion', 'centresOfRotation', 'directDeltaMush'. Default 'linear'.
     """
 
+def skyAtmosphere(name: str | None = None, existing: bool | None = None, sun: bool | None = None, sunElevation: float | None = None, sunAzimuth: float | None = None, *, n: str | None = None, e: bool | None = None, s: bool | None = None, se: float | None = None, sa: float | None = None) -> Any:
+    """Create a sky atmosphere and, when the scene has no directional light, a sun to light it, and select the sky. Returns its name.
+
+    Args:
+        name: Name; made unique. Short form n.
+        existing: Return the active sky if there is one instead of creating another. Short form e. Default False.
+        sun: Add a sun when the scene has no directional light. Short form s. Default True.
+        sunElevation: The new sun's height above the horizon, degrees. Short form se. Default 35.0.
+        sunAzimuth: The new sun's turn about the up axis, degrees. Short form sa. Default 30.0.
+    """
+
 def slideMedia(*objects: Any, frames: float | None = None, f: float | None = None) -> Any:
     """Move audio nodes and image planes along the timeline by a number of frames: an audio node's offset, an image plane's start frame. Trims stay with the sound.
 
@@ -10269,6 +10368,22 @@ def texAddGenerator(*objects: Any, name: str | None = None, mode: str | None = N
         index: Position in the mask stack, 0 the bottom; the top when left out.
     """
 
+def texAddIdLayers(*objects: Any, names: Sequence[Any] | None = None, folder: str | None = None) -> Any:
+    """Add a fill layer per entry of the set's baked ID map (its bake project's id map: per material, object or group), each masked by an ID Select set to that entry's colour and shaded in it as a placeholder. Bake the id map first. Returns {name: layer id}.
+
+    Args:
+        objects: set.
+        names: Only these entries of the ID map.
+        folder: Folder to put the layers in, made when missing; empty puts them at the root. Default 'IDs'.
+    """
+
+def texAddInput(*objects: Any) -> Any:
+    """Add an input to a node group ("Set/Group"): an output of its Group Input and a socket on the Group nodes running it. Returns its name, made unique.
+
+    Args:
+        objects: group name [type].
+    """
+
 def texAddLayer(*objects: Any, name: str | None = None, above: str | None = None, below: str | None = None, parent: str | None = None, index: int | None = None, material: Any | None = None, graph: Any | None = None, source: str | None = None, filter: str | None = None, values: Any | None = None, channels: Any | None = None, projection: Any | None = None, decal: Any | None = None, text: Any | None = None, scatter: Any | None = None) -> Any:
     """Add a layer to a texture set's stack (on top unless placed). Kinds: fill (material + mask), paint (placeholder material, paint buffers and a painted mask), procedural (a graph with outputs named after channels, optionally mask), folder, instance (another layer's values and mask), filter (a filter node applied to the composite below), decal (pictures per channel placed by projection), text (words drawn in the material's base colour, placed like a decal) and scatter (copies of a pattern over the uvs). A graph made by hand joins the stack as its bottom layer. Returns {id}.
 
@@ -10430,6 +10545,13 @@ def texCreateSet(*objects: Any, settings: Any | None = None, resolution: int | N
         materials: Materials that use the set (their Texture Set), created when missing.
     """
 
+def texDeleteGroup(*objects: Any) -> Any:
+    """Delete a node group ("Set/Group") and the Group nodes running it, with their links.
+
+    Args:
+        objects: group.
+    """
+
 def texDeleteNode(*objects: Any) -> Any:
     """Delete nodes from a texture set's graph, with their links.
 
@@ -10557,7 +10679,7 @@ def texExportFlipbook(*objects: Any, startFrame: float | None = None, endFrame: 
     """
 
 def texExportGraph(*objects: Any) -> Any:
-    """Write a texture set to a file: .lilamat holds its graph and settings (import it to make the set again); .lilatexnodes holds its node groups as graph nodes for the node library. Returns the path.
+    """Write a texture set to a file: .lilamat holds its graph and settings (import it to make the set again); .lilatexnodes holds its node groups as graph nodes for the node library, or only the one named as "Set/Group". Returns the path.
 
     Args:
         objects: set path.
@@ -10595,6 +10717,13 @@ def texExportPtex(*objects: Any, mesh: str | None = None, file: str | None = Non
         file: The .ptx to write; relative paths are under the workspace.
         channel: The set's channel. Default 'baseColor'.
         faceResolution: Texels per face side as a power of two: 6 is 64 x 64. Default 6.
+    """
+
+def texExposeInput(*objects: Any) -> Any:
+    """Make a node's input inside a node group an input of the group, linked from Group Input with the input's value as its default. Returns the new input's name.
+
+    Args:
+        objects: group node.input.
     """
 
 def texFaceGroup(*objects: Any, faces: Sequence[Any] | None = None, mesh: str | None = None, remove: bool | None = None) -> Any:
@@ -10635,11 +10764,22 @@ def texFlipbookMaterials(regenerate: bool | None = None) -> Any:
     """
 
 def texGraphInfo(*objects: Any, source: bool | None = None) -> Any:
-    """A texture set's graph definition, settings, nodes with resolved ports, parameters and values, and its evaluation plan (passes, buffers, structure hash) or compile error.
+    """A texture set's graph (or, as "Set/Group", one of its node groups): definition, settings, nodes with resolved ports, parameters and values, and the set graph's evaluation plan (passes, buffers, structure hash) or compile error.
 
     Args:
         objects: set.
         source: Include each pass's Slang source. Default False.
+    """
+
+def texGroupNodes(*objects: Any, name: str | None = None) -> Any:
+    """Collapse nodes into a new node group of the set and put a Group node running it in their place. Links crossing the boundary become the group's inputs and outputs. Open it as "Set/Group". Returns {group, node}.
+
+    Args:
+        objects: set nodes...
+        name: Name for the new group; made unique. Default 'NodeGroup'.
+
+    Examples:
+        texGroupNodes("RockTex", "Noise", "Levels", name="Grit")
     """
 
 def texImportGraph(*objects: Any, name: str | None = None) -> Any:
@@ -10703,6 +10843,13 @@ def texMaterialFromMaps(*objects: Any, folder: str | None = None, recursive: boo
         category: Library category. Default 'Imported'.
         path: Write the .lilamat files to this folder instead.
         set: Add them to this texture set as layers instead.
+    """
+
+def texMoveInput(*objects: Any) -> Any:
+    """Move a node group's input to another place in its interface, 0 first.
+
+    Args:
+        objects: group name index.
     """
 
 def texMoveLayer(*objects: Any, above: str | None = None, below: str | None = None, parent: str | None = None, index: int | None = None) -> Any:
@@ -10863,6 +11010,13 @@ def texRebuildLayers(*objects: Any) -> Any:
         objects: set.
     """
 
+def texRemoveInput(*objects: Any) -> Any:
+    """Remove a node group's input, its links inside, and the links into it on the Group nodes running the group.
+
+    Args:
+        objects: group name.
+    """
+
 def texRemoveLayer(*objects: Any) -> Any:
     """Remove layers (folders with their contents) from a texture set's stack.
 
@@ -10877,11 +11031,32 @@ def texRemoveMask(*objects: Any) -> Any:
         objects: set layer mask...
     """
 
+def texRemoveOutput(*objects: Any) -> Any:
+    """Remove a node group's output, its link inside, and the links out of it on the Group nodes running the group.
+
+    Args:
+        objects: group name.
+    """
+
 def texRemoveVariant(*objects: Any) -> Any:
     """Remove a texture set's variant; the set goes back to the base when it was active.
 
     Args:
         objects: set name.
+    """
+
+def texRenameGroup(*objects: Any) -> Any:
+    """Rename a node group ("Set/Group") and point the Group nodes running it at the new name. Returns the name, made unique.
+
+    Args:
+        objects: group newName.
+    """
+
+def texRenameInput(*objects: Any) -> Any:
+    """Rename a node group's input, keeping its links inside and on the Group nodes running the group.
+
+    Args:
+        objects: group name newName.
     """
 
 def texSampleChannels(*objects: Any, uv: Sequence[Any] | None = None, mesh: str | None = None, position: Sequence[Any] | None = None, source: str | None = None, layer: str | None = None) -> Any:
@@ -10907,6 +11082,13 @@ def texSaveBrushPreset(*objects: Any, brush: Any | None = None, payload: Any | N
         category: Where it lists.
         doc: What it is for.
         tier: user or workspace. One of 'user', 'workspace'.
+    """
+
+def texSaveGroup(*objects: Any) -> Any:
+    """Save a node group ("Set/Group") to the user's texture node library as a graph node, so Add Node offers it in every scene; a set name saves the set to the material library instead. Returns the file path.
+
+    Args:
+        objects: group.
     """
 
 def texSaveSmartMaterial(*objects: Any, name: str | None = None, description: str | None = None, mask: bool | None = None) -> Any:
@@ -10953,6 +11135,22 @@ def texSetFrames(*objects: Any) -> Any:
 
     Args:
         objects: set frames.
+    """
+
+def texSetInputInfo(*objects: Any, label: str | None = None, description: str | None = None, subtype: str | None = None, panel: str | None = None, min: Any | None = None, max: Any | None = None, softMin: Any | None = None, softMax: Any | None = None, step: Any | None = None) -> Any:
+    """Set how a node group's input presents: label, description, panel and number limits. An empty string clears one.
+
+    Args:
+        objects: group name.
+        label: Shown instead of the name.
+        description: Tooltip.
+        subtype: Accepted for other node editors' inputs; texture inputs ignore it.
+        panel: Panel it is listed under.
+        min: Hard minimum, or empty.
+        max: Hard maximum, or empty.
+        softMin: Slider minimum, or empty.
+        softMax: Slider maximum, or empty.
+        step: Drag step, or empty.
     """
 
 def texSetLayer(*objects: Any) -> Any:
@@ -11081,6 +11279,13 @@ def texTransferSet(*objects: Any, source: str | None = None, onto: str | None = 
         folder: Where the pixels go; textures/<target>/transferred by default.
     """
 
+def texUngroup(*objects: Any) -> Any:
+    """Replace a Group node with the nodes of the group it runs, rewired in place. The group goes when nothing else runs it. Returns the added node names.
+
+    Args:
+        objects: set node.
+    """
+
 def texVariants(*objects: Any) -> Any:
     """A texture set's variants: {active, variants {name: {layer id: override}}}. An override patches the layer's settings (enabled, opacity, material, params...) and maskOverrides {mask id: patch} its masks.
 
@@ -11185,6 +11390,15 @@ def textureFolders(include: Sequence[Any] | None = None, exclude: Sequence[Any] 
         exclude: Exclude globs; [] clears them. Short form e.
         scene: Set the scene's override instead of the workspace's lists. Short form s. Default False.
         clear: Remove the lists at that level (with scene, the scene falls back to the workspace). Short form c. Default False.
+    """
+
+def tileMesh(*objects: Any, tileSize: float | None = None, maxTiles: int | None = None, ts: float | None = None, mt: int | None = None) -> Any:
+    """Split meshes into a grid of tile objects, each with its origin at its centre, so none reaches far enough from its origin for the viewport's float precision to make it jitter. Faces crossing a tile edge are cut there. The tiles go in a new group at the top of the scene, with the mesh's transform baked in. Returns the tiles.
+
+    Args:
+        objects: objects.
+        tileSize: Tile edge, cm. Short form ts. Default 500000.0.
+        maxTiles: Refuse a mesh that would make more tiles than this. Short form mt. Default 4096.
     """
 
 def timeRange(start: float | None = None, end: float | None = None, falloff: float | None = None, falloffBefore: float | None = None, falloffAfter: float | None = None, falloffType: str | None = None, every: int | None = None, clear: bool | None = None, *, s: float | None = None, e: float | None = None, fo: float | None = None, fob: float | None = None, foa: float | None = None, fot: str | None = None, ev: int | None = None, c: bool | None = None) -> Any:
@@ -11714,6 +11928,14 @@ def unrealSendPointCloud(*objects: Any, spacing: float | None = None, clip: bool
         folder: Content folder for the asset. Default '/Game/Lila/PointClouds'.
     """
 
+def unrealSendSky(sun: bool | None = None, fog: bool | None = None, *, s: bool | None = None, f: bool | None = None) -> Any:
+    """Send the scene's sky to Unreal's open level: the sky atmosphere as a SkyAtmosphere (Unreal's own model, settings unchanged), a SkyLight capturing it in real time, the sun as its atmosphere sun light, and the active post process's height fog as an ExponentialHeightFog with volumetric fog. Each is made when the level has none. Returns what was set.
+
+    Args:
+        sun: Place the sun light too, marked as the atmosphere's sun. Short form s. Default True.
+        fog: Send the height fog too. Short form f. Default True.
+    """
+
 def unrealSendTextureSet(*objects: Any, folder: str | None = None, materialParent: str | None = None, materialFolder: str | None = None, exportFolder: str | None = None, preset: str | None = None, all: bool | None = None, remember: bool | None = None, save: bool | None = None, wait: bool | None = None, fo: str | None = None, mp: str | None = None, mf: str | None = None, ef: str | None = None, pr: str | None = None, a: bool | None = None, rm: bool | None = None, sv: bool | None = None, w: bool | None = None) -> Any:
     """Send a texture set to Unreal: exports it through the Unreal preset (only tiles and channels that changed since the last export are rewritten and sent, unless all=True) and updates the textures and the material instance of the set's slot (MI_<slot>), set on the slot of every mapped mesh using it. Painterly and Toon materials become instances of LilaLink's stylised masters with their palette values; others need materialParent (or the unreal pref), else only textures go. The set then also goes on every save. Returns {queued, textures} or, with wait=True, Unreal's {assets, warnings, errors}.
 
@@ -11745,6 +11967,14 @@ def unrealSendTextures(project: str | None = None, folder: str | None = None, ma
         assign: Run bakeAssign first. Short form as. Default True.
         save: Save the packages in Unreal afterwards. Short form sv.
         wait: Block until Unreal finishes and return its reply. Short form w. Default False.
+    """
+
+def unrealSendVolumes(*objects: Any, folder: str | None = None, fo: str | None = None) -> Any:
+    """Send meshes with a volume material to Unreal's open level: each grid written as OpenVDB, imported as a Sparse Volume Texture and shown by a Heterogeneous Volume with a material instance of M_LilaVolume (built on MF_LilaVolume, which your own Volume materials can use). With no objects, the selected volumes, else every volume in the scene. Needs the NanoVDB extension. Returns one entry per volume.
+
+    Args:
+        objects: objects.
+        folder: Content folder for the textures and material instances. Short form fo. Default '/Game/Lila/Volumes'.
     """
 
 def unrealSetGeoreference() -> Any:
@@ -12365,6 +12595,16 @@ def vertexColorGradient(*objects: Any, colorSet: str | None = None, type: str | 
         colorB: Linear RGBA at the end. Default [1.0, 1.0, 1.0, 1.0].
         channels: Channels to change: some of r, g, b, a. Default 'rgba'.
         target: auto (the component selection, or everything without one), all, selection, or element (whole shells of the selection). One of 'auto', 'all', 'selection', 'element'. Default 'auto'.
+    """
+
+def vertexColorMasks(*objects: Any, source: str | None = None, channels: int | None = None, prefix: str | None = None) -> Any:
+    """Writes a 0/1 mask per object or per material into vertex color channels, packed into sets named prefix0, prefix1, ... Masks are numbered by name, alphabetically, so the bake's masks map packs the same names into the same channels. Every mesh gets every set, so one material can read them all. Works on the given meshes, else the selected ones, else every mesh. Returns {name: "set.channel"}.
+
+    Args:
+        objects: meshes.
+        source: What gets a mask: object or material. One of 'object', 'material'. Default 'object'.
+        channels: Masks per set: 3 (RGB) or 4 (RGBA). Default 4.
+        prefix: Set names: the prefix, then the set's number. Default 'mask'.
     """
 
 def vertexColorSample(*objects: Any, colorSet: str | None = None, at: Sequence[float] | None = None) -> Any:

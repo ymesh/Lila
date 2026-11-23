@@ -128,6 +128,14 @@ enum Attr
     // The texture set drawing every map it has, and per-map picks of one set's map ({channel: set}, JSON).
     kTextureSet,
     kTextureSetMaps,
+    // The volume model: participating media filling the mesh (or its geometry nodes' density grid).
+    kVolumeDensity,
+    kVolumeScatterColor,
+    kVolumeAbsorptionColor,
+    kVolumeAnisotropy,
+    kVolumeEmissionColor,
+    kVolumeEmissionStrength,
+    kVolumeVoxelSize,
     kCount
 };
 
@@ -144,6 +152,7 @@ enum class ShadingModel
     Clearcoat, // a glossy layer over the base: Unreal's Clear Coat (car paint, lacquer)
     Hair,      // highlights stretched across the strand: Unreal's Hair, for hair cards
     Eye,       // iris under a refracting cornea: Unreal's Eye
+    Volume,    // fog, smoke or cloud filling the mesh: Unreal's Volume material domain, Blender's Principled Volume
 };
 
 /** Where Painterly stroke sheets are projected. */

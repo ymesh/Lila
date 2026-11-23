@@ -262,6 +262,80 @@ size_t setStamp(const Node& set)
     return graph ^ (std::hash<std::string>{}(set.as<std::string>(attr(set, "settings"))) + 0x9e3779b97f4a7c15ull + (graph << 6) + (graph >> 2));
 }
 
+GraphAddress splitAddress(std::string_view address)
+{
+    const size_t slash = address.find('/');
+    if (slash == std::string_view::npos)
+        return {std::string(address), {}};
+    return {std::string(address.substr(0, slash)), std::string(address.substr(slash + 1))};
+}
+
+std::string joinAddress(std::string_view set, std::string_view group)
+{
+    return group.empty() ? std::string(set) : std::string(set) + "/" + std::string(group);
+}
+
+bool hasGraphAt(scene::Graph& g, std::string_view address)
+{
+    const GraphAddress at = splitAddress(address);
+    const Node* set = findSet(g, at.set);
+    if (!set || at.group.empty())
+        return set != nullptr;
+    try
+    {
+        return readGraph(*set).subgroups.contains(at.group);
+    }
+    catch (const std::exception&)
+    {
+        return false;
+    }
+}
+
+Graph readGraphAt(scene::Graph& g, std::string_view address, Node** setOut)
+{
+    const GraphAddress at = splitAddress(address);
+    Node* set = findSet(g, at.set);
+    if (!set)
+        throw std::invalid_argument("no texture set named '" + at.set + "'");
+    if (setOut)
+        *setOut = set;
+    Graph top = readGraph(*set);
+    if (at.group.empty())
+        return top;
+    auto it = top.subgroups.find(at.group);
+    if (it == top.subgroups.end())
+        throw std::invalid_argument(at.set + " has no node group named '" + at.group + "'");
+    Graph sub = Graph::fromJson(it->second);
+    sub.name = at.group;
+    for (auto& [name, def] : top.subgroups)
+        sub.subgroups.try_emplace(name, def);
+    return sub;
+}
+
+void writeGraphAt(scene::Graph& g, std::string_view address, const Graph& graph)
+{
+    const GraphAddress at = splitAddress(address);
+    Node* set = findSet(g, at.set);
+    if (!set)
+        throw std::invalid_argument("no texture set named '" + at.set + "'");
+    if (at.group.empty())
+    {
+        writeGraph(g, *set, graph);
+        return;
+    }
+    Graph top = readGraph(*set);
+    Graph own = graph;
+    top.subgroups = std::move(own.subgroups);
+    own.subgroups.clear();
+    gn::pruneTies(own.ties, own.links);
+    std::vector<std::string> names;
+    for (const GNode& n : own.nodes)
+        names.push_back(n.name);
+    gn::pruneFrames(own.frames, names);
+    top.subgroups[at.group] = own.toJson();
+    writeGraph(g, *set, top);
+}
+
 void writeGraph(scene::Graph& g, Node& set, const Graph& graph)
 {
     if (graph.ties.empty() && graph.frames.empty())

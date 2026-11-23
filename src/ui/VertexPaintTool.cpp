@@ -1436,5 +1436,7 @@ void registerVertexPaintUi()
                   "Bakes curvature (0.5 flat, convex brighter) into vertex color channels.");
     commandAction("vcolor.bakeHeight", "Bake Height Gradient", "vertexColorBake", {{"type", "height"}},
                   "Bakes a bottom-to-top gradient into vertex color channels.");
+    commandAction("vcolor.masks", "Bake Masks", "vertexColorMasks", json::object(),
+                  "Writes a 0/1 mask per object or material into vertex color channels, packed into mask sets.");
 }
 } // namespace lila::ui

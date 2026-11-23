@@ -74,27 +74,36 @@ std::string freeName(std::string name)
 
 void registerFileCommands()
 {
+    registerGroupCommands();
     using T = ArgType;
     ops::registerCommand({
         .name = "texExportGraph",
         .doc = "Write a texture set to a file: .lilamat holds its graph and settings (import it to make the set again); "
-               ".lilatexnodes holds its node groups as graph nodes for the node library. Returns the path.",
+               ".lilatexnodes holds its node groups as graph nodes for the node library, or only the one named as \"Set/Group\". "
+               "Returns the path.",
         .positionalDoc = "set path",
         .undoable = false,
         .run = [](const Args& a) -> json {
             if (a.positional.size() < 2 || !a.positional[0].is_string() || !a.positional[1].is_string())
                 throw CommandError("texExportGraph: set and path required");
-            scene::Node* n = findSet(scene::Graph::current(), a.positional[0].get<std::string>());
+            const GraphAddress at = splitAddress(a.positional[0].get<std::string>());
+            scene::Node* n = findSet(scene::Graph::current(), at.set);
             if (!n)
-                throw CommandError("texExportGraph: no texture set named '" + a.positional[0].get<std::string>() + "'");
+                throw CommandError("texExportGraph: no texture set named '" + at.set + "'");
             fs::path path = paths::fromUtf8(a.positional[1].get<std::string>());
             Graph g = readGraph(*n);
             std::string ext = lowerExt(path);
+            if (!at.group.empty() && !g.subgroups.contains(at.group))
+                throw CommandError("texExportGraph: " + at.set + " has no node group named '" + at.group + "'");
+            if (!at.group.empty() && ext != ".lilatexnodes" && ext != ".lilatexnode")
+                throw CommandError("texExportGraph: a node group exports as .lilatexnodes; .lilamat holds a whole set");
             if (ext == ".lilatexnodes" || ext == ".lilatexnode")
             {
                 json nodes = json::array();
                 for (const auto& [name, sub] : g.subgroups)
                 {
+                    if (!at.group.empty() && name != at.group)
+                        continue;
                     json def = {{"type", name}, {"label", sub.value("name", name)}, {"category", "Graphs"}, {"kind", "graph"}, {"graph", sub}};
                     if (sub.contains("description"))
                         def["doc"] = sub["description"];

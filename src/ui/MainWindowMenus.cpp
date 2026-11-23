@@ -92,7 +92,7 @@ void MainWindow::buildMenus()
         });
     });
     menus::addActions("File", {"file.save", "file.saveAs", "file.incrementAndSave", "file.versions", "file.saveSceneTemplate", "#Validate", "validate.run", "window.validation", "#Import and Export", "file.import", "file.convertMaya",
-                        "file.exportSelection", "file.gameExporter", "file.exportMeshSequence", "file.exportWebViewer", "file.exportOnSave", "window.batchRun", "file.createReference", "#Unreal", "unreal.send", "animated.sendOptions", "unreal.sync", "unreal.sendBake", "groom.sendToUnreal",
+                        "file.exportSelection", "file.gameExporter", "file.exportMeshSequence", "file.exportWebViewer", "file.exportOnSave", "window.batchRun", "file.createReference", "#Unreal", "unreal.send", "animated.sendOptions", "unreal.sync", "unreal.sendBake", "unreal.sendSky", "unreal.sendVolumes", "groom.sendToUnreal",
                         "deform.exportMLDeformer", "unreal.expressionRig", "unreal.connect","#Workspace", "file.openFolder"});
     addSubmenu("File", "Recent Folders", [this](QMenu* recent) {
         recent->setProperty(menuSearch::kNoSearchProperty, true);
@@ -122,7 +122,7 @@ void MainWindow::buildMenus()
     addSubmenu("Create", "Polygon Primitives");
     menus::addActions("Create/Polygon Primitives", {"create.cube", "create.sphere", "create.cylinder", "create.capsule", "create.cone", "create.plane", "create.torus",
                                              "create.disc", "create.pipe", "create.quadSphere", "create.icoSphere"});
-    menus::addActions("Create", {"create.locator", "create.camera", "create.cameraFromView", "create.emptyGroup", "create.turntableBase", "create.audio", "anim.importFootage"});
+    menus::addActions("Create", {"create.locator", "create.camera", "create.cameraFromView", "create.skyAtmosphere", "create.fogVolume", "create.emptyGroup", "create.turntableBase", "create.audio", "anim.importFootage"});
     addSubmenu("Create", "Reference Images");
     menus::addActions("Create/Reference Images", {"create.imagePlane", "imagePlane.cut", "imagePlane.guides", "reference.addImages", "referenceOverlay.addImage", "", "referenceOverlay.adjust",
                                                    "referenceOverlay.toggle", "referenceOverlay.next", ""});
@@ -149,7 +149,7 @@ void MainWindow::buildMenus()
                           "select.edgesByCenter", "select.facesByCenter"});
 
     menu("Mesh", "Mesh", Area::MenuBar, {}, "", {"Model", "Sculpt", "Level"});
-    menus::addActions("Mesh", {"#Combine", "mesh.combine", "mesh.smartJoin", "mesh.separate", "mesh.splitMeshTool", "mesh.extract", "mesh.duplicateFaces", "mesh.boundingMesh", "mesh.collisionHull", "mesh.multiBoxBounds",
+    menus::addActions("Mesh", {"#Combine", "mesh.combine", "mesh.smartJoin", "mesh.separate", "mesh.tile", "mesh.splitMeshTool", "mesh.extract", "mesh.duplicateFaces", "mesh.boundingMesh", "mesh.collisionHull", "mesh.multiBoxBounds",
                                "#Booleans", "mesh.booleanUnion", "mesh.booleanDifference", "mesh.booleanIntersection", "#Construct"});
     addSubmenu("Mesh", "Clay");
     menus::addActions("Mesh/Clay", {"clay.create", "clay.tool", "clay.addShape", "clay.addCut", "clay.group", "", "clay.refresh", "clay.convert"});
@@ -216,7 +216,7 @@ void MainWindow::buildMenus()
     menus::addActions("Surface", {"#Normals", "mesh.softenEdges", "mesh.hardenEdges", "mesh.setNormalAngle", "mesh.flip", "mesh.conform",
                                   "mesh.softFoliageNormals", "#Vertex Colors", "vcolor.paint", "vcolor.createSet", "vcolor.fill", "vcolor.gradient",
                                   "vcolor.invert", "vcolor.levels", "vcolor.blur", "#Bake to Vertex Colors", "vcolor.bakeAO", "vcolor.bakeCavity",
-                                  "vcolor.bakeCurvature", "vcolor.bakeHeight", "#Display", "viewport.vertexColors.off", "viewport.vertexColors.shaded",
+                                  "vcolor.bakeCurvature", "vcolor.bakeHeight", "vcolor.masks", "viewport.bakeRandomColors", "#Display", "viewport.vertexColors.off", "viewport.vertexColors.shaded",
                                   "viewport.vertexColors.unlit", "viewport.toggleBackfaceCulling"});
 
     menu("Sculpt", "Sculpt", Area::MenuBar, {}, "", {"Sculpt"});
@@ -308,7 +308,7 @@ void MainWindow::buildMenus()
 
     menu("Display", "Display", Area::MenuBar, syncChecks);
     menus::addActions("Display", {"#Shading", "viewport.wireframe", "viewport.shaded", "viewport.textured", "viewport.wireOnShaded", "viewport.defaultMaterial",
-                           "viewport.greyBaseColor",
+                           "viewport.greyBaseColor", "viewport.randomColors", "viewport.bakeRandomColors",
                            "viewport.toggleXray", "viewport.toggleBackfaceCulling", "#Lighting and Effects"});
     addSubmenu("Display", "Lighting", syncChecks);
     menus::addActions("Display/Lighting", {"viewport.lighting.environment", "viewport.lighting.studio", "viewport.lighting.sculpt", "viewport.lighting.flat", "viewport.resetLight"});
@@ -367,7 +367,7 @@ void MainWindow::buildMenus()
     menu("Render", "Render", Area::MenuBar, syncChecks, "", {"Texture", "Render", "Level", "Animate", "Effects"});
     menus::addActions("Render", {"window.renderToolkit", "#Output", "render.frame", "render.sequence", "render.turntable", "render.openLast", "render.showFolder",
                                  "window.renderSettings", "#Look",
-                                 "render.postProcess", "render.colorManagement", "render.exportGradeLut", "window.scopes", "render.lightRig.threePoint", "render.lightRig.rim", "render.lightRig.product", "viewport.toggleRtShadows", "viewport.togglePostEffects", "viewport.toggleTAA", "viewport.toggleDepthOfField", "viewport.toggleMotionBlur", "camera.pickFocus"});
+                                 "render.postProcess", "render.skyAtmosphere", "render.colorManagement", "render.exportGradeLut", "window.scopes", "render.lightRig.threePoint", "render.lightRig.rim", "render.lightRig.product", "viewport.toggleRtShadows", "viewport.togglePostEffects", "viewport.toggleTAA", "viewport.toggleDepthOfField", "viewport.toggleMotionBlur", "camera.pickFocus"});
     addSubmenu("Render", "Reflections", syncChecks);
     menus::addActions("Render/Reflections", {"viewport.reflections.off", "viewport.reflections.screenSpace", "viewport.reflections.rayTraced"});
     menus::addActions("Render", {"#Framing", "viewport.toggleResolutionGate",

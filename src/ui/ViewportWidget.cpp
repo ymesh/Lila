@@ -506,6 +506,12 @@ void ViewportWidget::updateCursor()
             setCursor(Qt::CrossCursor);
         return;
     }
+    if (sceneLights::badgeRect(this, width()).contains(mapFromGlobal(QCursor::pos().toPointF())))
+    {
+        if (cursor().shape() != Qt::PointingHandCursor)
+            setCursor(Qt::PointingHandCursor);
+        return;
+    }
     if (ViewportTool* tool = viewportTools::active())
     {
         QCursor want = tool->cursor().value_or(QCursor(Qt::ArrowCursor));

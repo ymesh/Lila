@@ -1393,3 +1393,88 @@ TEST_CASE("notes and empty frames select by their title, and copy, paste, duplic
     REQUIRE(pasted);
     CHECK(g.frames[1].position.y - pasted->position.y == doctest::Approx(-600.0 - 300.0).epsilon(0.01));
 }
+
+TEST_CASE("Shift extends the selection, Shift+right-drag adds reroutes, and a node's choices edit on the node")
+{
+    run("newScene");
+    run("gnCreateGroup", {{"args", {"G"}}});
+    run("gnMoveNodes", {{"args", {"G"}}, {"positions", {{"GroupOutput", {700, 0}}, {"GroupInput", {-300, 0}}}}});
+    run("gnAddNode", {{"args", {"G", "Math"}}, {"position", {0, 300}}, {"name", "M"}});
+    run("gnAddNode", {{"args", {"G", "Math"}}, {"position", {300, 300}}, {"name", "N"}});
+    QMainWindow win;
+    ui::NodeEditor* editor = openOn(win, "G");
+    auto* view = editor->findChild<QGraphicsView*>();
+    auto selectedCount = [&] {
+        size_t n = 0;
+        for (QGraphicsItem* i : view->scene()->items())
+            n += (i->flags() & QGraphicsItem::ItemIsSelectable) && i->isSelected() && i->boundingRect().width() > 100;
+        return n;
+    };
+    auto click = [&](QPointF at, Qt::KeyboardModifiers mods) {
+        mouse(view, QEvent::MouseButtonPress, at, Qt::LeftButton, mods);
+        mouse(view, QEvent::MouseButtonRelease, at, Qt::NoButton, mods);
+    };
+    click(QPointF(85, 300 + 12), Qt::NoModifier);
+    CHECK(selectedCount() == 1);
+    click(QPointF(385, 300 + 12), Qt::ShiftModifier);
+    CHECK(selectedCount() == 2);
+    click(QPointF(385, 300 + 12), Qt::ShiftModifier);
+    CHECK(selectedCount() == 1);
+    dragInView(view, QPointF(280, 280), QPointF(500, 450), Qt::ShiftModifier);
+    CHECK(selectedCount() == 2);
+
+    // Shift+right-drag across the GroupInput-GroupOutput wire puts a reroute on it.
+    std::vector<QGraphicsPathItem*> before = wires(view);
+    REQUIRE(before.size() == 1);
+    const QPointF mid = before[0]->path().pointAtPercent(0.5);
+    auto right = [&](QEvent::Type type, QPointF at, Qt::MouseButtons buttons) {
+        QPoint p = view->mapFromScene(at);
+        QMouseEvent e(type, QPointF(p), QPointF(view->viewport()->mapToGlobal(p)), type == QEvent::MouseMove ? Qt::NoButton : Qt::RightButton,
+                      buttons, Qt::ShiftModifier);
+        QApplication::sendEvent(view->viewport(), &e);
+        pump();
+    };
+    right(QEvent::MouseButtonPress, mid + QPointF(0, -40), Qt::RightButton);
+    right(QEvent::MouseMove, mid + QPointF(0, 40), Qt::RightButton);
+    right(QEvent::MouseButtonRelease, mid + QPointF(0, 40), Qt::NoButton);
+    CHECK(gn::readGroup(*gn::findGroupNode(scene::Graph::current(), "G")).firstOfType(gn::kRerouteType) != nullptr);
+
+    // M's props come after its one output: operation, then the clamp check.
+    auto value = [](const char* prop) {
+        return gn::readGroup(*gn::findGroupNode(scene::Graph::current(), "G")).node("M")->values.value(prop, json()).dump();
+    };
+    click(QPointF(85, 300 + 24 + 20.0 * 2 + 10), Qt::NoModifier);
+    CHECK(value("clamp") == "\"true\"");
+    run("undo");
+    pump();
+    CHECK(value("clamp") != "\"true\"");
+}
+
+TEST_CASE("geometry node groups rename with their users and delete only when unused")
+{
+    registerTexGraphUi();
+    run("newScene");
+    run("gnCreateGroup", {{"args", {"G"}}});
+    run("gnAddNode", {{"args", {"G", "Math"}}, {"position", {0, 0}}, {"name", "M"}});
+    run("gnGroupNodes", {{"args", {"G", "M"}}, {"name", "Inner"}});
+    REQUIRE(gn::findGroupNode(scene::Graph::current(), "Inner"));
+    auto runsIn = [](const char* group) {
+        for (const gn::GNode& n : gn::readGroup(*gn::findGroupNode(scene::Graph::current(), "G")).nodes)
+            if (gn::runsGroup(n.type))
+                return n.values.value("group", std::string()) == group;
+        return false;
+    };
+    CHECK(runsIn("Inner"));
+    run("gnRenameGroup", {{"args", {"Inner", "Core"}}});
+    CHECK(gn::findGroupNode(scene::Graph::current(), "Core"));
+    CHECK_FALSE(gn::findGroupNode(scene::Graph::current(), "Inner"));
+    CHECK(runsIn("Core"));
+    CHECK_THROWS(run("gnDeleteGroup", {{"args", {"Core"}}}));
+    run("undo");
+    CHECK(gn::findGroupNode(scene::Graph::current(), "Inner"));
+    CHECK(runsIn("Inner"));
+
+    run("gnCreateGroup", {{"args", {"Spare"}}});
+    run("gnDeleteGroup", {{"args", {"Spare"}}});
+    CHECK_FALSE(gn::findGroupNode(scene::Graph::current(), "Spare"));
+}

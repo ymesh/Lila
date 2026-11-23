@@ -153,7 +153,7 @@ void installSceneListener()
     // The views draw the live channel while painting; the preview (histogram, pixel readout) catches up once painting
     // pauses, as each update reads every paint buffer back and evaluates the whole graph again.
     c.paintListener = render::paint::addChangeListener([](scene::NodeId id) {
-        const scene::Node* set = tex::findSet(scene::Graph::current(), ctl().source.set);
+        const scene::Node* set = tex::findSet(scene::Graph::current(), tex::splitAddress(ctl().source.set).set);
         if (!set || set->id() != id || !QCoreApplication::instance())
             return;
         ctl().painted.start();
@@ -227,7 +227,7 @@ void request()
     c.skipped = !wanted();
     if (c.skipped)
         return;
-    if (c.source.set.empty() || !tex::findSet(scene::Graph::current(), c.source.set))
+    if (c.source.set.empty() || !tex::hasGraphAt(scene::Graph::current(), c.source.set))
     {
         c.result = {};
         if (c.source.set.empty() == false)
@@ -266,7 +266,7 @@ bool meshHook(scene::NodeId, const geo::Mesh& mesh, std::vector<render::Material
 std::vector<std::pair<QString, texture2d::Source>> sourcesOf(const std::string& set)
 {
     std::vector<std::pair<QString, texture2d::Source>> out;
-    scene::Node* n = set.empty() ? nullptr : tex::findSet(scene::Graph::current(), set);
+    scene::Node* n = set.empty() ? nullptr : tex::findSet(scene::Graph::current(), tex::splitAddress(set).set);
     if (!n)
         return out;
     try
@@ -936,7 +936,7 @@ struct Texture2DView::Impl
         if (s.set != tiledFor)
         {
             tiledFor = s.set;
-            if (scene::Node* set = tex::findSet(scene::Graph::current(), s.set); set && tex::readSettings(*set).tileable && !tile->isChecked())
+            if (scene::Node* set = tex::findSet(scene::Graph::current(), tex::splitAddress(s.set).set); set && tex::readSettings(*set).tileable && !tile->isChecked())
                 tile->setChecked(true);
         }
         computeHistogram();

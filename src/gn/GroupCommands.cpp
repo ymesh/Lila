@@ -1069,6 +1069,48 @@ void registerGroupCommands()
     });
 
     ops::registerCommand({
+        .name = "gnRenameGroup",
+        .doc = "Rename a group, its modifiers' type (they keep their values) and the Group nodes running it. Returns the new name.",
+        .positionalDoc = "group newName",
+        .run = [](const Args& a) -> json {
+            Node& n = groupNodeOf(positional(a, 0, "gnRenameGroup", "group"), "gnRenameGroup");
+            const std::string to = positional(a, 1, "gnRenameGroup", "new name");
+            try
+            {
+                renameGroup(Graph::current(), n, to);
+            }
+            catch (const std::invalid_argument& e)
+            {
+                throw CommandError(std::string("gnRenameGroup: ") + e.what());
+            }
+            return to;
+        },
+    });
+
+    ops::registerCommand({
+        .name = "gnDeleteGroup",
+        .doc = "Delete a group nothing uses. Fails naming the modifiers and groups still running it.",
+        .positionalDoc = "group",
+        .run = [](const Args& a) -> json {
+            const std::string name = positional(a, 0, "gnDeleteGroup", "group");
+            Graph& g = Graph::current();
+            Node& n = groupNodeOf(name, "gnDeleteGroup");
+            std::vector<std::string> users;
+            for (scene::NodeId id : instancesOf(g, n.id()))
+                users.push_back(g.node(id)->name());
+            for (const std::string& other : groupNames(g))
+                if (other != name)
+                    if (std::vector<std::string> refs = referencedGroups(readGroup(*findGroupNode(g, other)));
+                        std::find(refs.begin(), refs.end(), name) != refs.end())
+                        users.push_back(other);
+            if (!users.empty())
+                throw CommandError("gnDeleteGroup: " + name + " is still used by " + joinStrings(users));
+            g.deleteNode(n.id());
+            return true;
+        },
+    });
+
+    ops::registerCommand({
         .name = "gnUngroup",
         .doc = "Replace a Group node with the nodes of the group it runs, rewired in place. Returns the added node names.",
         .positionalDoc = "group node",

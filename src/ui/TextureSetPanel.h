@@ -83,6 +83,8 @@ public:
     std::string addLayer(const std::string& kind, const std::string& filter = {});
     /** Adds a mask to the selected layer: fill, paint, levels, generator or filter (with the node type), anchor (with its name). */
     std::string addMask(const std::string& kind, const std::string& type = {});
+    /** A fill layer per entry of the set's baked ID map, each masked to it (texAddIdLayers). */
+    void addIdLayers();
     /** Moves a layer as a drop onto target's row does (a mask onto a mask of the same layer reorders the masks). */
     void moveLayer(const std::string& id, const std::string& target, Drop where);
     /** Adds a library material as a fill or procedural layer placed as a drop onto target's row; empty target puts it on top. */
