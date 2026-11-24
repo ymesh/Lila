@@ -13,7 +13,7 @@ import time
 MAX_LINES = 40
 
 BUILD_ERROR = re.compile(r"\berror\b|: fatal error|\bLNK\d{4}\b|^FAILED:|CMake Error|ninja: build stopped", re.I)
-TEST_DETAIL = re.compile(r"ERROR:|FATAL|REQUIRE|CHECK|TEST CASE:|SUBCASE:|Exception|\*\*\*|values:|Timeout|Failed|SEGFAULT")
+TEST_DETAIL = re.compile(r"ERROR:|FATAL|logged:|REQUIRE|CHECK|TEST CASE:|SUBCASE:|Exception|\*\*\*|values:|Timeout|Failed|SEGFAULT")
 TEST_SUMMARY = re.compile(r"tests passed|The following tests FAILED|^\s*\d+ - .*\((Failed|Timeout|SEGFAULT|Exception|Not Run)|Total Test time")
 
 
@@ -75,9 +75,11 @@ def build(build_dir, args):
     command += ["--", "-k", "0"]
     log_path = os.path.join(build_dir, "last_build.log")
     code, lines, seconds = run(command, log_path)
-    warnings = sum(1 for line in lines if re.search(r"\bwarning [A-Z]+\d+", line))
+    # MSVC's "warning C4100" and slangc's "warning[E30056]" with the "-->" location line after it.
+    warned = [i for i, line in enumerate(lines) if re.search(r"\bwarning(\[[A-Z]+\d+\]| [A-Z]+\d+)", line)]
     if code == 0:
-        print(f"build OK {seconds:.0f}s, {warnings} warnings")
+        emit(lines[i].rstrip() + (" " + lines[i + 1].strip() if i + 1 < len(lines) and "-->" in lines[i + 1] else "") for i in warned)
+        print(f"build OK {seconds:.0f}s, {len(warned)} warnings")
         return 0
     emit(line for line in lines if BUILD_ERROR.search(line))
     print(f"build FAILED {seconds:.0f}s, log {log_path}")

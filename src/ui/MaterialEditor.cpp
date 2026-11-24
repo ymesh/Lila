@@ -1312,6 +1312,16 @@ void MaterialEditor::rebuild()
                 emission->setEnabled(m->as<double>(kVolumeEmissionStrength) > 0.0);
         });
         slider("Voxel Size", kVolumeVoxelSize, 0.0, 50.0, "cm");
+        slider("Edge Fade", kVolumeEdgeFade, 0.0, 100.0, "cm");
+        section("Clouds");
+        slider("Noise", kVolumeNoise, 0.0, 1.0);
+        std::vector<QWidget*> noiseRows{slider("Scale", kVolumeNoiseScale, 1.0, 1000.0, "cm"), slider("Coverage", kVolumeNoiseCoverage, 0.0, 1.0),
+                                        slider("Detail", kVolumeNoiseDetail, 0.0, 10.0), slider("Roughness", kVolumeNoiseRoughness, 0.0, 1.0)};
+        mUpdaters.push_back([this, noiseRows] {
+            if (scene::Node* m = current())
+                for (QWidget* w : noiseRows)
+                    w->setEnabled(m->as<double>(kVolumeNoise) > 0.0);
+        });
         finish();
         return;
     }

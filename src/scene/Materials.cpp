@@ -198,6 +198,18 @@ std::vector<AttrDef> materialAttrs()
     a[kVolumeEmissionColor] = colorAttr("volumeEmissionColor", glm::dvec3(1.0, 0.5, 0.1), "Volume: colour of light it gives off, for fire and glowing gas.");
     a[kVolumeEmissionStrength] = floatAttr("volumeEmissionStrength", 0.0, "Volume: brightness of its own light, scaled by density; 0 gives none.", 0.0);
     a[kVolumeVoxelSize] = floatAttr("volumeVoxelSize", 0.0, "Volume: voxel size a mesh is filled at, cm; 0 picks one from its size. Density grids keep their own.", 0.0);
+    a[kVolumeNoise] = floatAttr("volumeNoise", 0.0, "Volume: how far 3D noise breaks the density into clouds; 0 keeps it even.", 0.0, 1.0);
+    a[kVolumeNoiseScale] = floatAttr("volumeNoiseScale", 100.0, "Volume: size of the noise's largest puffs, cm.", 1e-3);
+    a[kVolumeNoiseDetail] = floatAttr("volumeNoiseDetail", 4.0, "Volume: noise octaves; more adds smaller wisps on the puffs.", 0.0, 10.0);
+    a[kVolumeNoiseRoughness] = floatAttr("volumeNoiseRoughness", 0.5, "Volume: how strong each finer octave is; higher is wispier.", 0.0, 1.0);
+    a[kVolumeNoiseCoverage] = floatAttr("volumeNoiseCoverage", 0.5, "Volume: share of the space the noise fills; 0 clears it, 1 fills it.", 0.0, 1.0);
+    {
+        AttrDef offset{.name = "volumeNoiseOffset", .type = PlugType::Vec3, .defaultValue = glm::dvec3(0.0),
+                       .flags = AttrInput | AttrStorable | AttrKeyable, .doc = "Volume: moves the noise through the volume, cm; key it for drifting clouds."};
+        offset.childNames = {"volumeNoiseOffsetX", "volumeNoiseOffsetY", "volumeNoiseOffsetZ"};
+        a[kVolumeNoiseOffset] = std::move(offset);
+    }
+    a[kVolumeEdgeFade] = floatAttr("volumeEdgeFade", 0.0, "Volume: depth inside a filled mesh over which density fades in from its surface, cm; 0 is a hard edge.", 0.0);
     stylisedAttrs(a);
     heightAttrs(a);
     samplingAttrs(a);

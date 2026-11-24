@@ -1,0 +1,89 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "heightBlend",
+  "label": "Height Blend",
+  "category": "Filter",
+  "doc": "Lays one material's height over another's: the top shows where it stands higher, so sand fills the gaps between stones. Offset raises the top; Contrast sharpens the edge. Mask limits where the top can show.",
+  "keywords": [
+    "height blend",
+    "height lerp",
+    "blend by height",
+    "material height"
+  ],
+  "inputs": [
+    {
+      "id": "heightTop",
+      "type": "gray",
+      "default": 0.5
+    },
+    {
+      "id": "heightBottom",
+      "type": "gray",
+      "default": 0.5
+    },
+    {
+      "id": "colorTop",
+      "type": "color",
+      "default": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "id": "colorBottom",
+      "type": "color",
+      "default": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "id": "mask",
+      "type": "gray",
+      "default": 1.0
+    }
+  ],
+  "outputs": [
+    {
+      "id": "height",
+      "type": "gray"
+    },
+    {
+      "id": "color",
+      "type": "color"
+    },
+    {
+      "id": "mask",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "offset",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -1.0,
+      "softMax": 1.0,
+      "doc": "Raises the top height before comparing."
+    },
+    {
+      "id": "contrast",
+      "type": "float",
+      "default": 0.9,
+      "min": 0.0,
+      "max": 1.0,
+      "doc": "1 is a hard edge, 0 a wide fade."
+    }
+  ],
+  "cost": 3,
+  "body": {
+    "height": "float t = heightTop.sample(uv) + p.offset;\nfloat b = heightBottom.sample(uv);\nfloat m = saturate((t - b) / max(1.0 - p.contrast, 1e-3) + 0.5) * saturate(mask.sample(uv));\nreturn lerp(b, t, m);",
+    "color": "float t = heightTop.sample(uv) + p.offset;\nfloat b = heightBottom.sample(uv);\nfloat m = saturate((t - b) / max(1.0 - p.contrast, 1e-3) + 0.5) * saturate(mask.sample(uv));\nreturn lerp(colorBottom.sample(uv), colorTop.sample(uv), m);",
+    "mask": "float t = heightTop.sample(uv) + p.offset;\nfloat b = heightBottom.sample(uv);\nreturn saturate((t - b) / max(1.0 - p.contrast, 1e-3) + 0.5) * saturate(mask.sample(uv));"
+  }
+}

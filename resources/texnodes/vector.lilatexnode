@@ -1,0 +1,45 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "vector",
+  "label": "Vector",
+  "category": "Input",
+  "doc": "A constant vector, for Vector Math, Mapping and coordinates.",
+  "keywords": [
+    "vector",
+    "constant vector",
+    "combine",
+    "xyz value"
+  ],
+  "inputs": [],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "vector"
+    }
+  ],
+  "params": [
+    {
+      "id": "x",
+      "type": "float",
+      "default": 0.0,
+      "doc": "X."
+    },
+    {
+      "id": "y",
+      "type": "float",
+      "default": 0.0,
+      "doc": "Y."
+    },
+    {
+      "id": "z",
+      "type": "float",
+      "default": 0.0,
+      "doc": "Z."
+    }
+  ],
+  "cost": 0,
+  "body": {
+    "out": "return float3(p.x, p.y, p.z);"
+  }
+}

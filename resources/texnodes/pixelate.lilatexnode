@@ -1,0 +1,54 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "pixelate",
+  "label": "Pixelate",
+  "category": "Filter",
+  "doc": "Flat squares, Cells across, each the colour at its centre.",
+  "keywords": [
+    "mosaic",
+    "pixel",
+    "blocky",
+    "quantize uv"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0.5,
+        0.5,
+        0.5,
+        1.0
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "cellsX",
+      "type": "int",
+      "default": 32,
+      "min": 1,
+      "softMax": 256,
+      "doc": "Squares across."
+    },
+    {
+      "id": "cellsY",
+      "type": "int",
+      "default": 32,
+      "min": 1,
+      "softMax": 256,
+      "doc": "Squares down."
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float2 n = float2(float(max(p.cellsX, 1)), float(max(p.cellsY, 1)));\nreturn input.sample((floor(uv * n + 1e-4) + 0.5) / n);"
+  }
+}

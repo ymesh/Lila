@@ -1,0 +1,98 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "safeTransform",
+  "label": "Safe Transform",
+  "category": "Transform",
+  "doc": "Moves, turns by quarter turns and mirrors a tiling texture so it stays tiling: random per seed, for breaking up a repeated material without seams.",
+  "keywords": [
+    "safe transform",
+    "random offset",
+    "tile offset",
+    "variation"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0.5,
+        0.5,
+        0.5,
+        1.0
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "tiles",
+      "type": "int",
+      "default": 1,
+      "min": 1,
+      "softMax": 16,
+      "doc": "Repeats across."
+    },
+    {
+      "id": "offsetX",
+      "type": "float",
+      "default": 0.0,
+      "softMin": 0.0,
+      "softMax": 1.0,
+      "doc": "Slides across, in whole textures."
+    },
+    {
+      "id": "offsetY",
+      "type": "float",
+      "default": 0.0,
+      "softMin": 0.0,
+      "softMax": 1.0,
+      "doc": "Slides down, in whole textures."
+    },
+    {
+      "id": "turn",
+      "type": "enum",
+      "default": "none",
+      "options": [
+        "none",
+        "quarter",
+        "half",
+        "threeQuarter",
+        "random"
+      ],
+      "doc": "Turns by quarter turns; random picks one from the seed."
+    },
+    {
+      "id": "mirror",
+      "type": "enum",
+      "default": "none",
+      "options": [
+        "none",
+        "horizontal",
+        "vertical",
+        "both"
+      ],
+      "doc": "Flips the texture."
+    },
+    {
+      "id": "randomOffset",
+      "type": "bool",
+      "default": false,
+      "doc": "Adds a random slide from the seed."
+    },
+    {
+      "id": "seed",
+      "type": "seed",
+      "default": 0
+    }
+  ],
+  "cost": 2,
+  "body": {
+    "out": "float2 q = frac(uv * float(max(p.tiles, 1)) + float2(p.offsetX, p.offsetY));\nuint s = uint(p.seed);\nif (p.randomOffset)\n    q = frac(q + float2(texRand(uint2(3u, 1u), s), texRand(uint2(5u, 1u), s)));\nint turn = p.turn == 4 ? int(texRand(uint2(7u, 1u), s) * 4.0) : p.turn;\nfor (int i = 0; i < turn; ++i)\n    q = float2(q.y, 1.0 - q.x);\nif (p.mirror == 1 || p.mirror == 3)\n    q.x = 1.0 - q.x;\nif (p.mirror == 2 || p.mirror == 3)\n    q.y = 1.0 - q.y;\nreturn input.sample(q);"
+  }
+}

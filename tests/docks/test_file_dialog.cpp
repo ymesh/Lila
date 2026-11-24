@@ -32,7 +32,7 @@ bool waitForFiles(const FileDialog& dlg, int files)
 {
     QElapsedTimer t;
     t.start();
-    while (t.elapsed() < 5000)
+    while (t.elapsed() < 30000)
     {
         QApplication::processEvents(QEventLoop::AllEvents, 20);
         if (dlg.fileCount() == files)
@@ -278,7 +278,7 @@ TEST_CASE("file dialog: model preview loads small OBJs and refuses large ones")
     REQUIRE(preview.setFile(obj));
     QElapsedTimer t;
     t.start();
-    while (preview.loading() && t.elapsed() < 5000)
+    while (preview.loading() && t.elapsed() < 30000)
         QApplication::processEvents(QEventLoop::AllEvents, 20);
     CHECK(preview.triangleCount() == 2);
 

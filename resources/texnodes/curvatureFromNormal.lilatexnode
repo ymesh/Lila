@@ -15,7 +15,8 @@
         1,
         1
       ],
-      "taps": 4
+      "taps": 4,
+      "reach": 16
     }
   ],
   "outputs": [
@@ -31,6 +32,14 @@
       "default": 1.0,
       "min": 0,
       "softMax": 8
+    },
+    {
+      "id": "radius",
+      "type": "int",
+      "default": 1,
+      "min": 1,
+      "softMax": 16,
+      "doc": "How many texels apart it compares normals: larger shows broader curvature and less fine noise."
     }
   ],
   "cost": 8,
@@ -38,6 +47,6 @@
     "normals"
   ],
   "body": {
-    "out": "float2 e = texel();\nfloat r = normalDecode(input.sample(uv + float2(e.x, 0.0))).x;\nfloat l = normalDecode(input.sample(uv - float2(e.x, 0.0))).x;\nfloat t = normalDecode(input.sample(uv + float2(0.0, e.y))).y;\nfloat b = normalDecode(input.sample(uv - float2(0.0, e.y))).y;\nreturn saturate(0.5 + (r - l + t - b) * p.intensity);"
+    "out": "float2 e = texel() * float(max(p.radius, 1));\nfloat r = normalDecode(input.sample(uv + float2(e.x, 0.0))).x;\nfloat l = normalDecode(input.sample(uv - float2(e.x, 0.0))).x;\nfloat t = normalDecode(input.sample(uv + float2(0.0, e.y))).y;\nfloat b = normalDecode(input.sample(uv - float2(0.0, e.y))).y;\nreturn saturate(0.5 + (r - l + t - b) * p.intensity);"
   }
 }

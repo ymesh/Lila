@@ -1416,7 +1416,7 @@ void DockSidebars::collapse(QDockWidget* dock)
     Q_EMIT changed();
 }
 
-void DockSidebars::expand(QDockWidget* dock)
+void DockSidebars::expand(QDockWidget* dock, bool raise)
 {
     auto it = mTabs.find(dock);
     if (it == mTabs.end() || mOpen.count(dock))
@@ -1435,7 +1435,8 @@ void DockSidebars::expand(QDockWidget* dock)
                 dock->setProperty(kCoveredTab, other->objectName());
             }
     dock->show();
-    dock->raise();
+    if (raise)
+        dock->raise();
     if (auto size = mSizes.find(dock); size != mSizes.end() && size->second.width() > 40 && size->second.height() > 40)
     {
         Qt::DockWidgetArea area = mWindow->dockWidgetArea(dock);
@@ -1608,10 +1609,11 @@ void DockSidebars::expandAll()
     std::vector<QDockWidget*> all;
     for (auto& [dock, tab] : mTabs)
         all.push_back(dock);
-    // A layout change starts from no tabs at all: the ones it collapses come back, open panels' tabs don't.
+    // A layout change starts from no tabs at all: the ones it collapses come back, open panels' tabs don't. No raise:
+    // Qt's tab groups of docks just shown aren't settled, raising into them reads freed layout items, and the layout picks the tops anyway.
     for (QDockWidget* dock : all)
     {
-        expand(dock);
+        expand(dock, false);
         dropTab(dock);
     }
 }

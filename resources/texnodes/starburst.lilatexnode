@@ -1,0 +1,59 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "starburst",
+  "label": "Starburst",
+  "category": "Pattern",
+  "doc": "Rays out from the centre, Count of them, sharpened by Sharpness: sun rays, light leaks, radial streaks.",
+  "keywords": [
+    "starburst",
+    "rays",
+    "sunburst",
+    "radial lines"
+  ],
+  "inputs": [],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "count",
+      "type": "int",
+      "default": 12,
+      "min": 1,
+      "softMax": 64,
+      "doc": "Rays."
+    },
+    {
+      "id": "sharpness",
+      "type": "float",
+      "default": 4.0,
+      "min": 0.1,
+      "softMax": 32.0,
+      "doc": "Higher makes thinner rays."
+    },
+    {
+      "id": "falloff",
+      "type": "float",
+      "default": 0.0,
+      "min": 0.0,
+      "softMax": 4.0,
+      "doc": "Fades rays out toward the edge."
+    },
+    {
+      "id": "rotation",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -180.0,
+      "softMax": 180.0,
+      "doc": "Degrees."
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float2 d = uv - 0.5;\nfloat a = atan2(d.y, d.x) - radians(p.rotation);\nfloat r = pow(abs(cos(a * float(p.count) * 0.5)), p.sharpness);\nreturn r * saturate(1.0 - length(d) * 2.0 * p.falloff);"
+  }
+}

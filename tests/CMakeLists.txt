@@ -41,6 +41,7 @@ add_executable(lila_tests
     test_debug_draw.cpp
     test_surface_snap.cpp
     test_geometry_snap.cpp
+    test_volume_material.cpp
     test_imageplane.cpp
     test_hotkeys.cpp
     test_keymaps.cpp

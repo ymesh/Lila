@@ -1,0 +1,102 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "floodFillMapper",
+  "label": "Flood Fill Mapper",
+  "category": "Fill",
+  "doc": "Stamps the pattern into every Flood Fill region, fitted to the region's bounding box, with an optional random turn, size and brightness per region.",
+  "keywords": [
+    "stamp",
+    "per region pattern",
+    "fill pattern",
+    "substance flood fill mapper"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0,
+        0,
+        -1,
+        -1
+      ],
+      "doc": "A Flood Fill output."
+    },
+    {
+      "id": "pattern",
+      "type": "gray",
+      "default": 1.0,
+      "doc": "Its 0 to 1 square is fitted to each region."
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "fit",
+      "type": "enum",
+      "default": "stretch",
+      "options": [
+        "stretch",
+        "keepProportions"
+      ],
+      "doc": "Stretch fills the box; keep proportions fits the pattern's square to the box's shorter side."
+    },
+    {
+      "id": "rotation",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -180,
+      "softMax": 180,
+      "doc": "Degrees."
+    },
+    {
+      "id": "rotationRandom",
+      "type": "float",
+      "default": 0.0,
+      "min": 0,
+      "max": 1
+    },
+    {
+      "id": "size",
+      "type": "float",
+      "default": 1.0,
+      "min": 0,
+      "softMax": 2
+    },
+    {
+      "id": "sizeRandom",
+      "type": "float",
+      "default": 0.0,
+      "min": 0,
+      "max": 1,
+      "doc": "Shrinks each region's pattern by up to this share."
+    },
+    {
+      "id": "valueRandom",
+      "type": "float",
+      "default": 0.0,
+      "min": 0,
+      "max": 1,
+      "doc": "Darkens each region's pattern by up to this share."
+    },
+    {
+      "id": "seed",
+      "type": "seed",
+      "default": 0,
+      "doc": "Changes the pattern without changing its look."
+    }
+  ],
+  "cost": 12,
+  "helpers": [
+    "fill"
+  ],
+  "body": {
+    "out": "FillRegion r = fillRegion(input.sample(uv), uv);\nif (!r.valid)\n    return 0.0;\nuint2 k = uint2(r.key);\nuint s = uint(p.seed);\nfloat a = radians(p.rotation) + (texRand(k, s ^ 0x3c6ef372u) - 0.5) * 6.28318530718 * p.rotationRandom;\nfloat scale = max(p.size * (1.0 - p.sizeRandom * texRand(k, s ^ 0xa54ff53au)), 1e-4);\nfloat2 q = r.local - 0.5;\n// Measured in texels so the turn is a true rotation; stretch then fits the turned square back to the box.\nfloat2 d = q * r.texels;\nfloat2 t = float2(d.x * cos(a) + d.y * sin(a), d.y * cos(a) - d.x * sin(a));\nt = p.fit == 1 ? t / min(r.texels.x, r.texels.y) : t / r.texels;\nt = t / scale + 0.5;\nif (any(t < 0.0) || any(t > 1.0))\n    return 0.0;\nreturn pattern.sample(t) * (1.0 - p.valueRandom * texRand(k, s ^ 0x510e527fu));"
+  }
+}

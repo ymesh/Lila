@@ -26,6 +26,12 @@
         1
       ],
       "taps": 3
+    },
+    {
+      "id": "amount",
+      "type": "gray",
+      "default": 1.0,
+      "doc": "Scales the intensity per pixel, so a mask confines the warp."
     }
   ],
   "outputs": [
@@ -54,6 +60,6 @@
   ],
   "cost": 6,
   "body": {
-    "out": "float2 d;\nif (p.mode == 0)\n{\n    float2 e = texel();\n    float h = texToFloat(warp.sample(uv));\n    float hx = texToFloat(warp.sample(uv + float2(e.x, 0.0)));\n    float hy = texToFloat(warp.sample(uv + float2(0.0, e.y)));\n    d = float2(hx - h, hy - h) / e * 0.002;\n}\nelse\n    d = (warp.sample(uv).rg - 0.5) * 0.2;\nreturn input.sample(uv + d * p.intensity);"
+    "out": "float2 d;\nif (p.mode == 0)\n{\n    float2 e = texel();\n    float h = texToFloat(warp.sample(uv));\n    float hx = texToFloat(warp.sample(uv + float2(e.x, 0.0)));\n    float hy = texToFloat(warp.sample(uv + float2(0.0, e.y)));\n    d = float2(hx - h, hy - h) / e * 0.002;\n}\nelse\n    d = (warp.sample(uv).rg - 0.5) * 0.2;\nreturn input.sample(uv + d * p.intensity * amount.sample(uv));"
   }
 }

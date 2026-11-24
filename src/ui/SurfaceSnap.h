@@ -32,6 +32,8 @@ struct Hit
 LILA_UI_API std::optional<Hit> underCursor(QPointF px, const ViewInfo& view, const std::vector<scene::NodeId>& exclude = {});
 /** underCursor for a world-space ray. */
 LILA_UI_API std::optional<Hit> raycast(const glm::dvec3& origin, const glm::dvec3& dir, const std::vector<scene::NodeId>& exclude = {});
+/** The first visible mesh a world-space ray hits, ignoring the snap surface designation. */
+LILA_UI_API std::optional<Hit> firstHit(const glm::dvec3& origin, const glm::dvec3& dir, const std::vector<scene::NodeId>& exclude = {});
 /** Closest point on the snap surfaces (or, if none set, on the given fallback meshes) to a world point. */
 LILA_UI_API std::optional<Hit> closest(const glm::dvec3& world, const std::vector<scene::NodeId>& fallback = {});
 /** Closest point on exactly these meshes (visible ones only), whatever the snap surface. */

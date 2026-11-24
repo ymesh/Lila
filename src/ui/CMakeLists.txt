@@ -130,7 +130,7 @@ lila_module(lila_ui UI
     ModifierStack.cpp ModifierStack.h
     NodeEditor.cpp NodeEditor.h NodeCanvas.cpp NodeCanvas.h NodeCanvasLayout.cpp NodeCanvasInput.cpp NodeCanvasWires.cpp NodeCanvasTies.cpp NodeCanvasFrames.cpp NodeCanvasGrab.cpp NodeCanvasFields.cpp GraphBackend.cpp GraphBackend.h GnGraphBackend.cpp
     SceneGraphBackend.cpp
-    TexGraphBackend.cpp TexParams.cpp TexParams.h TexPreview.cpp TexPreview.h Texture2DView.cpp TextureGraphUi.h TextureSetPanel.cpp TextureSetPanel.h
+    TexGraphBackend.cpp TexGraphPreview.cpp TexGraphPreview.h TexParams.cpp TexParams.h TexPreview.cpp TexPreview.h Texture2DView.cpp TextureGraphUi.h TextureSetPanel.cpp TextureSetPanel.h
     Overlay.cpp Overlay.h
     CursorBadges.cpp CursorBadges.h
     Panels.cpp Panels.h

@@ -15,6 +15,12 @@
       "id": "b",
       "type": "float",
       "default": 0.0
+    },
+    {
+      "id": "c",
+      "type": "float",
+      "default": 0.0,
+      "doc": "Third value: Multiply Add adds it, Wrap's maximum, Smooth Min and Max's distance, Compare's tolerance, Mix's factor."
     }
   ],
   "outputs": [
@@ -44,12 +50,52 @@
         "cosine",
         "floor",
         "fraction",
-        "clamp"
-      ]
+        "clamp",
+        "multiplyAdd",
+        "squareRoot",
+        "inverseSquareRoot",
+        "logarithm",
+        "exponent",
+        "sign",
+        "round",
+        "ceiling",
+        "truncate",
+        "snap",
+        "wrap",
+        "pingPong",
+        "smoothMinimum",
+        "smoothMaximum",
+        "compare",
+        "lessThan",
+        "greaterThan",
+        "mix",
+        "tangent",
+        "arctan2",
+        "flooredModulo",
+        "toRadians",
+        "toDegrees"
+      ],
+      "doc": "a and b by default. Logarithm takes b as its base, Snap rounds a to a multiple of b, Wrap keeps a between b and c, Ping Pong bounces a between 0 and b, Compare is 1 where a and b differ by at most c, Mix blends a to b by c."
     }
   ],
   "cost": 2,
   "body": {
-    "out": "float x = a.sample(uv);\nfloat y = b.sample(uv);\nswitch (p.operation)\n{\ncase 1: return x - y;\ncase 2: return x * y;\ncase 3: return abs(y) > 1e-8 ? x / y : 0.0;\ncase 4: return min(x, y);\ncase 5: return max(x, y);\ncase 6: return pow(abs(x), y);\ncase 7: return abs(x);\ncase 8: return 1.0 - x;\ncase 9: return step(y, x);\ncase 10: return abs(y) > 1e-8 ? x - y * floor(x / y) : 0.0;\ncase 11: return sin(x);\ncase 12: return cos(x);\ncase 13: return floor(x);\ncase 14: return frac(x);\ncase 15: return saturate(x);\ndefault: return x + y;\n}"
-  }
+    "out": "float x = a.sample(uv);\nfloat y = b.sample(uv);\nfloat z = c.sample(uv);\nswitch (p.operation)\n{\ncase 1: return x - y;\ncase 2: return x * y;\ncase 3: return abs(y) > 1e-8 ? x / y : 0.0;\ncase 4: return min(x, y);\ncase 5: return max(x, y);\ncase 6: return pow(abs(x), y);\ncase 7: return abs(x);\ncase 8: return 1.0 - x;\ncase 9: return step(y, x);\ncase 10: return abs(y) > 1e-8 ? x - y * floor(x / y) : 0.0;\ncase 11: return sin(x);\ncase 12: return cos(x);\ncase 13: return floor(x);\ncase 14: return frac(x);\ncase 15: return saturate(x);\ncase 16: return x * y + z;\ncase 17: return sqrt(max(x, 0.0));\ncase 18: return x > 0.0 ? rsqrt(x) : 0.0;\ncase 19: return x > 0.0 && y > 0.0 && abs(y - 1.0) > 1e-6 ? log(x) / log(y) : 0.0;\ncase 20: return exp(x);\ncase 21: return sign(x);\ncase 22: return floor(x + 0.5);\ncase 23: return ceil(x);\ncase 24: return trunc(x);\ncase 25: return abs(y) > 1e-8 ? floor(x / y + 0.5) * y : x;\ncase 26: return mathWrap(x, y, z);\ncase 27: return abs(y) > 1e-8 ? y - abs(mathWrap(x, 0.0, 2.0 * y) - y) : 0.0;\ncase 28: return mathSmoothMin(x, y, z);\ncase 29: return -mathSmoothMin(-x, -y, z);\ncase 30: return abs(x - y) <= max(z, 1e-5) ? 1.0 : 0.0;\ncase 31: return x < y ? 1.0 : 0.0;\ncase 32: return x > y ? 1.0 : 0.0;\ncase 33: return lerp(x, y, z);\ncase 34: return tan(x);\ncase 35: return atan2(x, y);\ncase 36: return abs(y) > 1e-8 ? x - y * floor(x / y) : 0.0;\ncase 37: return radians(x);\ncase 38: return degrees(x);\ndefault: return x + y;\n}"
+  },
+  "keywords": [
+    "add",
+    "multiply",
+    "divide",
+    "power",
+    "sqrt",
+    "log",
+    "round",
+    "snap",
+    "wrap",
+    "ping pong",
+    "smooth min",
+    "lerp",
+    "math node"
+  ],
+  "code": "float mathSmoothMin(float a, float b, float k)\n{\n    if (k <= 0.0)\n        return min(a, b);\n    float h = max(k - abs(a - b), 0.0) / k;\n    return min(a, b) - h * h * h * k / 6.0;\n}\n\nfloat mathWrap(float x, float lo, float hi)\n{\n    float r = hi - lo;\n    return abs(r) < 1e-8 ? lo : x - r * floor((x - lo) / r);\n}"
 }

@@ -1,0 +1,68 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "vectorRotate",
+  "label": "Vector Rotate",
+  "category": "Utility",
+  "doc": "Turns a vector around an axis through Center by Angle: UV and Projection coordinates, or directions.",
+  "keywords": [
+    "rotate vector",
+    "rotate uv",
+    "vector rotate"
+  ],
+  "inputs": [
+    {
+      "id": "coord",
+      "type": "vector",
+      "implicit": "uv",
+      "doc": "The mesh's uvs unless linked."
+    },
+    {
+      "id": "angle",
+      "type": "float",
+      "default": 0.0,
+      "doc": "Degrees, anticlockwise looking down the axis."
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "vector"
+    }
+  ],
+  "params": [
+    {
+      "id": "axis",
+      "type": "enum",
+      "default": "z",
+      "options": [
+        "z",
+        "x",
+        "y"
+      ],
+      "doc": "The axis it turns around: z turns UV coordinates in their plane."
+    },
+    {
+      "id": "centerX",
+      "type": "float",
+      "default": 0.5,
+      "doc": "The point it turns around."
+    },
+    {
+      "id": "centerY",
+      "type": "float",
+      "default": 0.5,
+      "doc": "The point it turns around."
+    },
+    {
+      "id": "centerZ",
+      "type": "float",
+      "default": 0.0,
+      "doc": "The point it turns around."
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float3 c = float3(p.centerX, p.centerY, p.centerZ);\nfloat3 v = coord.sample(uv) - c;\nfloat a = radians(angle.sample(uv));\nfloat co = cos(a), si = sin(a);\nif (p.axis == 1)\n    v = float3(v.x, v.y * co - v.z * si, v.y * si + v.z * co);\nelse if (p.axis == 2)\n    v = float3(v.x * co + v.z * si, v.y, -v.x * si + v.z * co);\nelse\n    v = float3(v.x * co - v.y * si, v.x * si + v.y * co, v.z);\nreturn v + c;"
+  }
+}

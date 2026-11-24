@@ -1,0 +1,54 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "nonUniformBlur",
+  "label": "Non-Uniform Blur",
+  "category": "Filter",
+  "doc": "A blur whose radius follows a map: Radius where the map is white, none where it is black, so one area softens and the rest stays sharp.",
+  "keywords": [
+    "variable blur",
+    "blur by mask",
+    "depth of field",
+    "soften"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0.5,
+        0.5,
+        0.5,
+        1.0
+      ],
+      "taps": 48
+    },
+    {
+      "id": "map",
+      "type": "gray",
+      "default": 1.0,
+      "doc": "How much of Radius each pixel gets."
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "radius",
+      "type": "float",
+      "default": 0.02,
+      "min": 0.0,
+      "softMax": 0.1,
+      "doc": "The widest blur, as a fraction of the texture width."
+    }
+  ],
+  "cost": 48,
+  "code": "float2 vogelDisk(int i, int n)\n{\n    float r = sqrt((float(i) + 0.5) / float(n));\n    float a = float(i) * 2.39996323;\n    return float2(cos(a), sin(a)) * r;\n}",
+  "body": {
+    "out": "float r = p.radius * saturate(map.sample(uv));\nif (r <= 1e-6)\n    return input.sample(uv);\nfloat4 acc = float4(0.0, 0.0, 0.0, 0.0);\nfloat sum = 0.0;\nfor (int i = 0; i < 48; ++i)\n{\n    float2 o = vogelDisk(i, 48);\n    float w = exp(-2.0 * dot(o, o));\n    acc += w * input.sample(uv + o * r);\n    sum += w;\n}\nreturn acc / sum;"
+  }
+}

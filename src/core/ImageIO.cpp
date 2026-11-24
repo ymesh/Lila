@@ -4,6 +4,19 @@
 #include "core/Profile.h"
 
 #define MINIZ_NO_ZLIB_COMPATIBLE_NAMES
+// nanosvg's unreachable-code warning comes from the optimiser, after the push below has been popped.
+#pragma warning(disable : 4702)
+#pragma warning(push, 0)
+#pragma warning(disable : 4996)
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#define NANOSVG_IMPLEMENTATION
+#define NANOSVGRAST_IMPLEMENTATION
+#include "curve/third_party/nanosvg/nanosvg.h"
+#include "curve/third_party/nanosvg/nanosvgrast.h"
+#pragma warning(pop)
 #include <miniz.h>
 #include <webp/decode.h>
 #define STB_IMAGE_STATIC
@@ -1688,9 +1701,38 @@ Image decodeWebp(const uint8_t* data, size_t size, std::string* err)
     return img;
 }
 
+Image readSvg(const fs::path& path, int longestSide, std::string* err)
+{
+    LILA_ZONE();
+    std::ifstream in(path, std::ios::binary);
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    auto fail = [&](const char* why) {
+        if (err)
+            *err = why;
+        return Image{};
+    };
+    if (text.empty())
+        return fail("can't read the SVG file");
+    std::unique_ptr<NSVGimage, void (*)(NSVGimage*)> svg(nsvgParse(text.data(), "px", 96.0f), nsvgDelete);
+    if (!svg || svg->width <= 0.0f || svg->height <= 0.0f)
+        return fail("not a readable SVG, or it has no size");
+    const float scale = float(std::clamp(longestSide, 16, 16384)) / std::max(svg->width, svg->height);
+    const int w = std::max(1, int(std::lround(svg->width * scale))), h = std::max(1, int(std::lround(svg->height * scale)));
+    std::unique_ptr<NSVGrasterizer, void (*)(NSVGrasterizer*)> raster(nsvgCreateRasterizer(), nsvgDeleteRasterizer);
+    std::vector<unsigned char> px(size_t(w) * size_t(h) * 4);
+    nsvgRasterize(raster.get(), svg.get(), 0.0f, 0.0f, scale, px.data(), w, h, w * 4);
+    Image img{w, h, std::vector<float>(px.size())};
+    // Straight-alpha sRGB bytes, read as an 8-bit PNG would be.
+    for (size_t i = 0; i < px.size(); ++i)
+        img.rgba[i] = px[i] / 255.0f;
+    return img;
+}
+
 Image read(const fs::path& path, std::string* err)
 {
     const std::string ext = lowerExt(path);
+    if (ext == ".svg")
+        return readSvg(path, 2048, err);
     if (ext == ".exr")
         return readExr(path, err);
     if (ext == ".tga")

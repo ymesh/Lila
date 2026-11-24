@@ -1,0 +1,58 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "histogramSelect",
+  "label": "Histogram Select",
+  "category": "Filter",
+  "doc": "White where the input is within a band of values around a position, black elsewhere. Contrast 0 fades out from the band's centre; 1 cuts it hard.",
+  "keywords": [
+    "band",
+    "value range",
+    "select range",
+    "isolate",
+    "substance histogram select",
+    "map range"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "gray",
+      "default": 0.5
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "position",
+      "type": "float",
+      "default": 0.5,
+      "min": 0,
+      "max": 1,
+      "doc": "The band's centre."
+    },
+    {
+      "id": "range",
+      "type": "float",
+      "default": 0.25,
+      "min": 0,
+      "max": 1,
+      "doc": "The band's width."
+    },
+    {
+      "id": "contrast",
+      "type": "float",
+      "default": 0.5,
+      "min": 0,
+      "max": 1
+    }
+  ],
+  "cost": 2,
+  "body": {
+    "out": "float w = 0.5 * p.range;\nfloat d = abs(input.sample(uv) - p.position);\nreturn w > 0.0 ? saturate((w - d) / max(w * (1.0 - p.contrast), 1e-4)) : 0.0;"
+  }
+}

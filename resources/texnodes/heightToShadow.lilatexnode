@@ -1,0 +1,66 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "heightToShadow",
+  "label": "Height to Shadow",
+  "category": "Normal",
+  "doc": "Where a height map shades itself under a low light from Angle: 1 lit, 0 in shadow. For baked-looking shading on stylised maps and for masking crevices away from a light.",
+  "keywords": [
+    "self shadow",
+    "height shadow",
+    "directional lighting",
+    "relief shadow"
+  ],
+  "inputs": [
+    {
+      "id": "height",
+      "type": "gray",
+      "default": 0.0,
+      "taps": 32
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "angle",
+      "type": "float",
+      "default": 45.0,
+      "softMin": -180.0,
+      "softMax": 180.0,
+      "doc": "Where the light comes from, in degrees from the right, anticlockwise."
+    },
+    {
+      "id": "elevation",
+      "type": "float",
+      "default": 20.0,
+      "min": 1.0,
+      "max": 89.0,
+      "doc": "The light's height above the surface, degrees: lower casts longer shadows."
+    },
+    {
+      "id": "depth",
+      "type": "float",
+      "default": 0.1,
+      "min": 0.0,
+      "softMax": 0.5,
+      "doc": "How tall white is, as a fraction of the texture width."
+    },
+    {
+      "id": "softness",
+      "type": "float",
+      "default": 0.5,
+      "min": 0.0,
+      "max": 1.0,
+      "doc": "Fades shadows in over this much of their length."
+    }
+  ],
+  "cost": 32,
+  "body": {
+    "out": "float a = radians(p.angle);\nfloat2 dir = float2(cos(a), sin(a));\nfloat slope = tan(radians(clamp(p.elevation, 1.0, 89.0)));\nfloat h0 = height.sample(uv) * p.depth;\nfloat reach = p.depth / slope;\nfloat lit = 1.0;\nfor (int i = 1; i <= 32; ++i)\n{\n    float t = reach * float(i) / 32.0;\n    float above = height.sample(uv + dir * t) * p.depth - (h0 + t * slope);\n    lit = min(lit, saturate(1.0 - above / max(p.softness * p.depth, 1e-5)));\n}\nreturn lit;"
+  }
+}

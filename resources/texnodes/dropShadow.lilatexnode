@@ -1,0 +1,66 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "dropShadow",
+  "label": "Drop Shadow",
+  "category": "Filter",
+  "doc": "A soft shadow a mask casts: the mask moved by Distance toward Angle and softened, without the mask itself. Blend it under the shape for raised decals and lettering.",
+  "keywords": [
+    "shadow",
+    "drop shadow",
+    "cast shadow"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "gray",
+      "default": 0.0,
+      "taps": 32
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "angle",
+      "type": "float",
+      "default": -45.0,
+      "softMin": -180.0,
+      "softMax": 180.0,
+      "doc": "Where the shadow falls, in degrees from the right, anticlockwise."
+    },
+    {
+      "id": "distance",
+      "type": "float",
+      "default": 0.02,
+      "min": 0.0,
+      "softMax": 0.2,
+      "doc": "How far the shadow falls, uv."
+    },
+    {
+      "id": "softness",
+      "type": "float",
+      "default": 0.01,
+      "min": 0.0,
+      "softMax": 0.1,
+      "doc": "Edge blur, uv."
+    },
+    {
+      "id": "opacity",
+      "type": "float",
+      "default": 0.8,
+      "min": 0.0,
+      "max": 1.0,
+      "doc": "Darkness of the shadow."
+    }
+  ],
+  "cost": 32,
+  "code": "float2 vogelDisk(int i, int n)\n{\n    float r = sqrt((float(i) + 0.5) / float(n));\n    float a = float(i) * 2.39996323;\n    return float2(cos(a), sin(a)) * r;\n}",
+  "body": {
+    "out": "float a = radians(p.angle);\nfloat2 from = uv - float2(cos(a), sin(a)) * p.distance;\nfloat acc = 0.0;\nfor (int i = 0; i < 32; ++i)\n    acc += input.sample(from + vogelDisk(i, 32) * p.softness);\nreturn saturate(acc / 32.0) * p.opacity;"
+  }
+}

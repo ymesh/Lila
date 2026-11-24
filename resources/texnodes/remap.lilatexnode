@@ -43,10 +43,36 @@
       "id": "clamp",
       "type": "bool",
       "default": true
+    },
+    {
+      "id": "interpolation",
+      "type": "enum",
+      "default": "linear",
+      "options": [
+        "linear",
+        "stepped",
+        "smoothStep",
+        "smootherStep"
+      ],
+      "doc": "How the value moves between the bounds. stepped: in Steps equal jumps. smoothStep and smootherStep: eased at both ends."
+    },
+    {
+      "id": "steps",
+      "type": "int",
+      "default": 4,
+      "min": 1,
+      "softMax": 32,
+      "doc": "Jumps for stepped."
     }
   ],
   "cost": 2,
   "body": {
-    "out": "float lo = fromLow.sample(uv);\nfloat hi = fromHigh.sample(uv);\nfloat span = abs(hi - lo) < 1e-9 ? 1e-9 : hi - lo;\nfloat x = (input.sample(uv) - lo) / span;\nif (p.clamp)\n    x = saturate(x);\nfloat to0 = toLow.sample(uv);\nreturn to0 + x * (toHigh.sample(uv) - to0);"
-  }
+    "out": "float lo = fromLow.sample(uv);\nfloat hi = fromHigh.sample(uv);\nfloat span = abs(hi - lo) < 1e-9 ? 1e-9 : hi - lo;\nfloat x = (input.sample(uv) - lo) / span;\nif (p.clamp || p.interpolation >= 2)\n    x = saturate(x);\nif (p.interpolation == 1)\n    x = floor(x * float(max(p.steps, 1)) + 1e-6) / float(max(p.steps, 1));\nelse if (p.interpolation == 2)\n    x = x * x * (3.0 - 2.0 * x);\nelse if (p.interpolation == 3)\n    x = x * x * x * (x * (x * 6.0 - 15.0) + 10.0);\nfloat to0 = toLow.sample(uv);\nreturn to0 + x * (toHigh.sample(uv) - to0);"
+  },
+  "keywords": [
+    "map range",
+    "fit",
+    "rescale",
+    "range"
+  ]
 }

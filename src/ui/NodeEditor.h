@@ -9,6 +9,7 @@
 
 #include <array>
 #include <functional>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -117,6 +118,11 @@ public:
     void toggleNodeFlag(const char* flag);
     /** True when every selected node the flag applies to has it on. */
     bool nodeFlagOn(const char* flag) const;
+    /** The Node Timings overlay: how long each node takes, timed again whenever the graph changes. */
+    void setTimings(bool on);
+    bool timings() const { return mTimings; }
+    /** The times the overlay shows by node, in ms; empty while it is off or the first timing runs. */
+    const std::map<std::string, double>& nodeTimes() const;
     /** Image previews on every node that has one; remembered as a pref. */
     void setPreviews(bool on);
     bool previews() const;
@@ -142,6 +148,10 @@ public:
     void ungroupSelected();
     /** Opens the group the selected Group node runs. */
     void openSelectedGroup();
+    /** The group the first selected Group node runs, or empty. */
+    QString selectedSubgroup() const;
+    /** Keeps the selected Group node's group in the library, else the group on show. */
+    void saveGroupToLibrary();
     /** Shows a group run from the one on show, remembering the way back for the path bar and Parent Group. */
     void enterGroup(const QString& name);
     /** Back to the group that runs this one, with its Group node selected: the way in, else the first group that runs it. */
@@ -160,6 +170,8 @@ public:
     std::vector<std::string> sendTargets() const;
     /** Runs the backend's SetValue for a side-panel field, keeping the panel (and the field being dragged) in place. */
     void setValueFromField(const nlohmann::json& call);
+    /** Runs a command for a side-panel field the same way, so dragging the field doesn't rebuild the panel under it. */
+    void runFromField(const std::string& command, const nlohmann::json& call);
 
 private:
     void openAddMenu(QPointF scenePos, const WireDrag* wire);
@@ -180,6 +192,7 @@ private:
     /** Drops the path past a group that's on it; any other group starts a new path. */
     void retracePath(const QString& name);
     void rebuildSidePanel();
+    void rebuildPinned();
     void followSelection();
     void followOwner(const GraphBackend::Owner& owner);
     /** The followed owner's path when it runs the group on show, else empty. */
@@ -217,6 +230,14 @@ private:
     QWidget* mPathBar = nullptr;
     NodeCanvas* mCanvas = nullptr;
     QScrollArea* mSide = nullptr;
+    /** The side panel's column: the backend's pinned panel over the scrolling side panel. */
+    QWidget* mSideColumn = nullptr;
+    QWidget* mPinned = nullptr;
+    bool mTimings = false;
+    /** Times the graph a moment after it last changed; a run's result only lands when it is the latest. */
+    QTimer* mProfileTimer = nullptr;
+    int mProfileRun = 0;
+    void profileNow();
     QTimer* mRefresh = nullptr;
     QToolButton* mSendBtn = nullptr;
     int mListener = 0;

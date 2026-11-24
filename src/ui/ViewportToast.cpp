@@ -84,6 +84,12 @@ void show(const QString& text, QWidget* view, int durationMs, Kind kind, const Q
     viewportTools::requestRedraw();
 }
 
+void dismiss(const QString& key, QWidget* view)
+{
+    if (std::erase_if(toasts(), [&](const Toast& t) { return t.key == key && t.view == view && t.everyView == !view; }))
+        viewportTools::requestRedraw();
+}
+
 void showActive(const QString& text, int durationMs, Kind kind, const QString& key)
 {
     show(text, activeProvider() ? activeProvider()() : nullptr, durationMs, kind, key);

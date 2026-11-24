@@ -1,0 +1,54 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "bevel",
+  "label": "Bevel",
+  "category": "Filter",
+  "doc": "A height that rises from a mask's edges to full inside over Width, for chamfered panels, rounded tiles and raised lettering. Feed it a shape's mask; link the result into Height to Normal for its normals.",
+  "keywords": [
+    "chamfer",
+    "round edges",
+    "soft height",
+    "emboss shape"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "gray",
+      "default": 0.0,
+      "taps": 64
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "width",
+      "type": "float",
+      "default": 0.02,
+      "min": 0.0,
+      "softMax": 0.2,
+      "doc": "How far in from the edge the bevel reaches, as a fraction of the texture width."
+    },
+    {
+      "id": "profile",
+      "type": "enum",
+      "default": "linear",
+      "options": [
+        "linear",
+        "round",
+        "smooth"
+      ],
+      "doc": "The bevel's cross-section: a straight slope, a quarter circle, or eased at both ends."
+    }
+  ],
+  "cost": 64,
+  "code": "float2 vogelDisk(int i, int n)\n{\n    float r = sqrt((float(i) + 0.5) / float(n));\n    float a = float(i) * 2.39996323;\n    return float2(cos(a), sin(a)) * r;\n}",
+  "body": {
+    "out": "float inside = input.sample(uv);\nif (p.width <= 1e-6)\n    return inside;\nfloat cover = 0.0;\nfor (int i = 0; i < 64; ++i)\n    cover += input.sample(uv + vogelDisk(i, 64) * p.width);\ncover /= 64.0;\nfloat t = saturate((min(cover, inside) - 0.5) * 2.0);\nif (p.profile == 1)\n    t = sqrt(saturate(1.0 - (1.0 - t) * (1.0 - t)));\nelse if (p.profile == 2)\n    t = t * t * (3.0 - 2.0 * t);\nreturn t;"
+  }
+}

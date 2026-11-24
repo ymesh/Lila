@@ -1,0 +1,33 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "normalNormalize",
+  "label": "Normal Normalize",
+  "category": "Normal",
+  "doc": "Rescales a normal map's vectors to unit length, after blending or filtering has shortened them.",
+  "keywords": [
+    "normalize",
+    "renormalize",
+    "unit"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color"
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [],
+  "cost": 1,
+  "helpers": [
+    "normals"
+  ],
+  "body": {
+    "out": "float3 n = normalDecode(input.sample(uv));\nreturn normalEncode(dot(n, n) > 1e-8 ? n : float3(0.0, 0.0, 1.0));"
+  }
+}

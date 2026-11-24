@@ -1,0 +1,89 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "fractalSum",
+  "label": "Fractal Sum",
+  "category": "Noise",
+  "doc": "Layers of one base noise, each finer and fainter: perlin, value, simplex or cells. Roughness keeps more of the fine layers; Lacunarity spaces them.",
+  "keywords": [
+    "fractal sum",
+    "fbm",
+    "fractal noise",
+    "octaves"
+  ],
+  "inputs": [],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "base",
+      "type": "enum",
+      "default": "perlin",
+      "options": [
+        "perlin",
+        "value",
+        "simplex",
+        "cells"
+      ],
+      "doc": "The noise each layer is made of."
+    },
+    {
+      "id": "scale",
+      "type": "int",
+      "default": 4,
+      "min": 1,
+      "softMax": 64,
+      "doc": "The first layer's cells across."
+    },
+    {
+      "id": "octaves",
+      "type": "int",
+      "default": 6,
+      "min": 1,
+      "max": 10,
+      "doc": "Layers."
+    },
+    {
+      "id": "roughness",
+      "type": "float",
+      "default": 0.5,
+      "min": 0.0,
+      "max": 1.0,
+      "doc": "Each layer's strength over the last."
+    },
+    {
+      "id": "lacunarity",
+      "type": "int",
+      "default": 2,
+      "min": 1,
+      "max": 4,
+      "doc": "Each octave's frequency over the last: whole numbers keep it tiling."
+    },
+    {
+      "id": "distortion",
+      "type": "float",
+      "default": 0.0,
+      "min": 0.0,
+      "softMax": 4.0,
+      "doc": "Bends the noise with a second noise, in cells."
+    },
+    {
+      "id": "seed",
+      "type": "seed",
+      "default": 0
+    }
+  ],
+  "cost": 60,
+  "helpers": [
+    "noise",
+    "simplex",
+    "cellular"
+  ],
+  "body": {
+    "out": "uint s = uint(p.seed);\nif (p.base <= 1)\n    return noiseFbmEx(uv, p.scale, p.octaves, p.roughness, p.lacunarity, p.distortion, s, p.base == 0);\nfloat sum = 0.0, weight = 0.0, amp = 1.0;\nint freq = max(p.scale, 1);\nfor (int o = 0; o < p.octaves; ++o)\n{\n    uint so = s + uint(o) * 0x9e3779b9u;\n    float v = p.base == 2 ? simplexFbm(uv, freq, 1, 0.5, so)\n                          : saturate(cellular(uv, int2(freq, freq), 1.0, 0, so).f1);\n    sum += amp * v;\n    weight += amp;\n    amp *= p.roughness;\n    freq *= max(p.lacunarity, 1);\n}\nreturn weight > 0.0 ? sum / weight : 0.5;"
+  }
+}

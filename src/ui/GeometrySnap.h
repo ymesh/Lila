@@ -30,9 +30,17 @@ class LILA_UI_API Nearest
 public:
     Nearest(QPointF px, const ViewInfo& view, double radiusPx) : mPx(px), mView(view), mBest(radiusPx) {}
 
-    void point(const glm::dvec3& world);
+    /** A point candidate; one drawn over meshes (a joint) passes visible = true and is never hidden. */
+    void point(const glm::dvec3& world, bool visible = false);
     /** The point of the segment nearest the cursor on screen. */
     void segment(const glm::dvec3& a, const glm::dvec3& b);
+
+    /** Skips candidates hidden behind a mesh surface, as seen from the view. Meshes in ignore never hide anything. */
+    void hideOccluded(std::vector<scene::NodeId> ignore)
+    {
+        mOcclusion = true;
+        mOccluderIgnore = std::move(ignore);
+    }
 
     const std::optional<glm::dvec3>& hit() const { return mHit; }
     const ViewInfo& view() const { return mView; }
@@ -41,10 +49,14 @@ public:
     double radius() const { return mBest; }
 
 private:
+    bool occluded(const glm::dvec3& world, QPointF screen) const;
+
     QPointF mPx;
     const ViewInfo& mView;
     double mBest;
     std::optional<glm::dvec3> mHit;
+    bool mOcclusion = false;
+    std::vector<scene::NodeId> mOccluderIgnore;
 };
 
 /**

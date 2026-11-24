@@ -1,0 +1,48 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "highPass",
+  "label": "High Pass",
+  "category": "Filter",
+  "doc": "Keeps the fine detail and drops the broad shading: the input minus a blur of Radius, around 0.5. Lays well over a base with Overlay.",
+  "keywords": [
+    "high pass",
+    "detail",
+    "frequency separation",
+    "sharpen"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0.5,
+        0.5,
+        0.5,
+        1.0
+      ],
+      "taps": 48
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "radius",
+      "type": "float",
+      "default": 0.02,
+      "min": 0.0,
+      "softMax": 0.1,
+      "doc": "Detail larger than this, as a fraction of the texture width, goes."
+    }
+  ],
+  "cost": 48,
+  "code": "float2 vogelDisk(int i, int n)\n{\n    float r = sqrt((float(i) + 0.5) / float(n));\n    float a = float(i) * 2.39996323;\n    return float2(cos(a), sin(a)) * r;\n}",
+  "body": {
+    "out": "float4 c = input.sample(uv);\nfloat4 acc = float4(0.0, 0.0, 0.0, 0.0);\nfor (int i = 0; i < 48; ++i)\n    acc += input.sample(uv + vogelDisk(i, 48) * p.radius);\nreturn float4(saturate(c.rgb - acc.rgb / 48.0 + 0.5), c.a);"
+  }
+}

@@ -266,7 +266,8 @@ TEST_CASE("unclean exit detection")
     // Our own pid in a file means a dead process that had it before us.
     CHECK(recovery::staleSessions(dir, 222, alive).size() == 3);
     CHECK(recovery::processAlive(recovery::currentPid(), recovery::nowMs()));
-    CHECK_FALSE(recovery::processAlive(recovery::currentPid(), started));
+    // A day back, so a slow run never reaches it from this process's own start.
+    CHECK_FALSE(recovery::processAlive(recovery::currentPid(), recovery::nowMs() - 24LL * 3600 * 1000));
 
     std::vector<recovery::Session> crashed;
     for (auto& s : stale)

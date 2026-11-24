@@ -1,11 +1,14 @@
 #include "tex/Plan.h"
 
 #include "core/Profile.h"
+#include "tex/Expressions.h"
 #include "tex/Ports.h"
 #include "tex/Prelude.h"
+#include "tex/TextRaster.h"
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -54,6 +57,11 @@ struct FlatNode
     std::map<std::string, json> values;
     std::vector<Ref> inputs;
     std::map<std::string, int> paramSlot;
+    /** Node settings: its buffers are the plan's size times 2^sizeShift; bits 0 keeps the plan's format. */
+    int sizeShift = 0;
+    int bits = 0;
+
+    bool ownBuffers() const { return sizeShift != 0 || bits != 0; }
 };
 
 struct Root
@@ -64,7 +72,27 @@ struct Root
     std::string field;
     /** The ref is already in a buffer of another type: the pass converts what it reads from there. */
     bool fromBuffer = false;
+    /** Stores 8-bit steps. */
+    bool quantize = false;
 };
+
+const std::vector<NodeSetting> kNodeSettings = {
+    {"outputSize", "Size", {"eighth", "quarter", "half", "set", "double", "quadruple"}, "set", "Resolution of the node's output against the set's."},
+    {"bitDepth", "Bit Depth", {"set", "8", "16", "32"}, "set", "Bits per channel the node's output is stored at; set keeps the set's."},
+};
+
+/** The option index a node's value picks for a setting, -1 when it has none or an unknown one. */
+int settingIndex(const json& values, const char* id)
+{
+    const NodeSetting* s = nodeSetting(id);
+    auto it = values.find(id);
+    if (!s || it == values.end() || !it->is_string())
+        return -1;
+    auto at = std::find(s->options.begin(), s->options.end(), it->get<std::string>());
+    return at == s->options.end() ? -1 : int(at - s->options.begin());
+}
+
+int scaledSize(int size, int shift) { return std::clamp(int(std::ldexp(double(size), shift)), 1, std::max(size, 16384)); }
 
 struct Scope
 {
@@ -73,11 +101,28 @@ struct Scope
     std::string prefix;
     std::map<std::string, Ref> groupInputs;
     std::map<std::string, json> overrides;
+    /** The graph's exposed param inputs by name, as expressions read them (input.name). */
+    std::map<std::string, json> inputValues;
+    /** node.param expressions being evaluated, to catch one that reads itself. */
+    std::set<std::string> evaluating;
     std::map<std::string, int> flatOf;
     std::map<std::string, std::unique_ptr<Scope>> children;
     std::set<std::string> visiting;
     int depth = 0;
+    /** Appended to the paths of nodes flattened here: a repeat pass's "#k". */
+    std::string suffix;
+    /** A repeat pass: its zone's body resolves here, every other node in parent (once for all passes). */
+    Scope* parent = nullptr;
+    std::set<std::string> body;
+    std::string repeatInput;
+    /** The zone input's outputs during this pass. */
+    std::map<std::string, Ref> lanes;
+    /** Unrolled zones by Repeat Output, with their passes' scopes. */
+    std::map<std::string, std::map<std::string, Ref>> repeats;
+    std::vector<std::unique_ptr<Scope>> passes;
 };
+
+constexpr int kRepeatPassesPerBuffer = 8;
 
 const std::vector<std::pair<std::string, PortType>> kStandard = {
     {"baseColor", PortType::Color}, {"roughness", PortType::Gray},   {"metallic", PortType::Gray}, {"normal", PortType::Color},
@@ -125,6 +170,11 @@ public:
         LILA_ZONE();
         Scope top;
         top.g = &g;
+        mSeed = g.seed;
+        mTime = g.time;
+        for (const GraphInput& gi : g.inputs)
+            if (gi.param)
+                top.inputValues[gi.name] = gi.defaultValue;
         mPlan.width = std::max(1, mReq.width);
         mPlan.height = std::max(1, mReq.height);
         try
@@ -179,9 +229,56 @@ private:
     {
         if (auto it = s.overrides.find(n.name + "." + id); it != s.overrides.end())
             return it->second;
+        json stored = fallback;
         if (auto it = n.values.find(id); it != n.values.end())
-            return *it;
-        return fallback;
+            stored = *it;
+        if (const std::string text = expressionOf(n, id); !text.empty())
+            return expressionValue(s, n, id, text, stored);
+        return stored;
+    }
+
+    /** An expression's value; a broken one warns and keeps the stored value. */
+    json expressionValue(Scope& s, const GNode& n, const std::string& id, const std::string& text, const json& stored)
+    {
+        const std::string key = n.name + "." + id;
+        if (!s.evaluating.insert(key).second)
+            throw std::invalid_argument(key + " reads itself through its expression");
+        auto read = [&](const std::string& name) -> double {
+            const size_t dot = name.find('.');
+            const std::string node = name.substr(0, dot), what = name.substr(dot + 1);
+            if (node == "input" && !s.g->node(node))
+            {
+                auto it = s.inputValues.find(what);
+                if (it == s.inputValues.end())
+                    throw std::invalid_argument("the graph has no input " + what);
+                return expressionNumber(it->second, name);
+            }
+            const GNode* other = s.g->node(node);
+            if (!other)
+                throw std::invalid_argument("no node " + node);
+            const NodePorts ports = portsOf(*s.g, *other);
+            json fallback;
+            if (const ParamDecl* p = ports.param(what))
+                fallback = p->defaultValue;
+            else if (const PortDecl* in = ports.input(what))
+                fallback = in->defaultValue;
+            else
+                throw std::invalid_argument(node + " has no parameter " + what);
+            return expressionNumber(valueFor(s, *other, what, fallback), name);
+        };
+        json out = stored;
+        try
+        {
+            out = evaluateExpression(text, read, mTime);
+        }
+        catch (const std::invalid_argument& e)
+        {
+            const std::string warning = s.prefix + key + ": expression " + text + ": " + e.what() + ", using " + stored.dump();
+            if (std::find(mPlan.warnings.begin(), mPlan.warnings.end(), warning) == mPlan.warnings.end())
+                mPlan.warnings.push_back(warning);
+        }
+        s.evaluating.erase(key);
+        return out;
     }
 
     /** implicitUv: the reader is a fused Slang node, which can read the coordinate in place of a constant. */
@@ -217,7 +314,7 @@ private:
         child->owned = std::make_unique<Graph>(Graph::fromJson(ports.graph));
         resolveRouting(*child->owned);
         child->g = child->owned.get();
-        child->prefix = s.prefix + n.name + "/";
+        child->prefix = s.prefix + n.name + s.suffix + "/";
         child->depth = s.depth + 1;
         // A graph node's own subgroups resolve inside it; a Group node shares its parent's.
         if (child->owned->subgroups.empty())
@@ -229,6 +326,7 @@ private:
                 json v = valueFor(s, n, gi.name, gi.defaultValue);
                 for (const std::string& t : gi.targets)
                     child->overrides[t] = v;
+                child->inputValues[gi.name] = v;
                 continue;
             }
             const PortDecl* decl = ports.input(gi.name);
@@ -238,8 +336,60 @@ private:
         return *slot;
     }
 
+    /** Unrolls a repeat zone: its body flattened once per pass, each pass reading the last one's results. */
+    const std::map<std::string, Ref>& unroll(Scope& s, const GNode& out, const NodePorts& outPorts)
+    {
+        if (auto it = s.repeats.find(out.name); it != s.repeats.end())
+            return it->second;
+        const GNode* in = repeatInputOf(*s.g, out);
+        if (!in)
+            throw std::invalid_argument(s.prefix + out.name + ": no Repeat Input pairs with it");
+        const NodePorts inPorts = portsOf(*s.g, *in);
+        if (!inPorts.error.empty())
+            throw std::invalid_argument(s.prefix + in->name + ": " + inPorts.error);
+        const json count = valueFor(s, *in, "iterations", inPorts.param("iterations")->defaultValue);
+        int passes = count.is_number() ? int(std::lround(count.get<double>())) : 0;
+        if (passes > kMaxRepeatIterations)
+            mPlan.warnings.push_back(s.prefix + in->name + ": " + std::to_string(passes) + " iterations, running the most, " +
+                                     std::to_string(kMaxRepeatIterations));
+        passes = std::clamp(passes, 0, kMaxRepeatIterations);
+
+        std::map<std::string, Ref> lanes;
+        for (const PortDecl& lane : inPorts.inputs)
+            lanes[lane.id] = resolveInput(s, *in, lane);
+        const std::vector<std::string> bodyNames = repeatBody(*s.g, in->name, out.name);
+        for (int k = 0; k < passes; ++k)
+        {
+            auto pass = std::make_unique<Scope>();
+            pass->g = s.g;
+            pass->prefix = s.prefix;
+            pass->suffix = s.suffix + "#" + std::to_string(k);
+            pass->groupInputs = s.groupInputs;
+            pass->overrides = s.overrides;
+            pass->inputValues = s.inputValues;
+            pass->depth = s.depth;
+            pass->parent = &s;
+            pass->body = {bodyNames.begin(), bodyNames.end()};
+            pass->repeatInput = in->name;
+            pass->lanes = lanes;
+            pass->lanes["iteration"] = constantRef(s.prefix + in->name + pass->suffix, "iteration", PortType::Float, json(k));
+            for (const PortDecl& lane : outPorts.inputs)
+                if (!s.g->linksInto(out.name, lane.id).empty())
+                    lanes[lane.id] = resolveInput(*pass, out, lane);
+            // Every few passes the lanes go to buffers, so no pass fuses more than that many copies of the body.
+            if ((k + 1) % kRepeatPassesPerBuffer == 0 && k + 1 < passes)
+                for (const auto& [id, r] : lanes)
+                    if (!r.constant() && !r.uv)
+                        mRepeatCuts.push_back(r);
+            s.passes.push_back(std::move(pass));
+        }
+        return s.repeats[out.name] = lanes;
+    }
+
     Ref resolveOutput(Scope& s, const std::string& nodeName, const std::string& socket)
     {
+        if (s.parent && nodeName != s.repeatInput && !s.body.contains(nodeName))
+            return resolveOutput(*s.parent, nodeName, socket);
         const GNode* n = s.g->node(nodeName);
         if (!n)
             throw std::invalid_argument(s.prefix + ": no node " + nodeName);
@@ -272,6 +422,17 @@ private:
         }
         if (kind == NodeKind::Output || kind == NodeKind::GroupOutput)
             throw std::invalid_argument(s.prefix + nodeName + " has no outputs");
+        if (kind == NodeKind::RepeatInput)
+        {
+            if (nodeName == s.repeatInput)
+                return s.lanes.at(socket);
+            // Read outside its zone, or with no zone: the values it starts from, at pass 0.
+            if (const PortDecl* lane = ports.input(socket))
+                return resolveInput(s, *n, *lane);
+            return constantRef(s.prefix + nodeName + s.suffix, socket, out->type, json(0.0));
+        }
+        if (kind == NodeKind::RepeatOutput)
+            return unroll(s, *n, ports).at(socket);
         return {flatten(s, *n, ports), socket, out->type, -1};
     }
 
@@ -282,7 +443,7 @@ private:
         if (!s.visiting.insert(n.name).second)
             throw std::invalid_argument(s.prefix + n.name + ": the graph has a cycle through it");
         FlatNode f;
-        f.path = s.prefix + n.name;
+        f.path = s.prefix + n.name + s.suffix;
         f.def = ports.def;
         f.ports = ports;
         for (const PortDecl& in : ports.inputs)
@@ -290,13 +451,27 @@ private:
         for (const ParamDecl& p : ports.params)
         {
             json v = valueFor(s, n, p.id, p.defaultValue);
+            if ((p.type == ParamType::Int || p.type == ParamType::Seed || p.type == ParamType::Enum) && v.is_number_float())
+                v = std::llround(v.get<double>());
             if (!paramValueValid(p.type, v, p.options))
             {
                 mPlan.warnings.push_back(f.path + "." + p.id + ": " + v.dump() + " doesn't fit a " + paramTypeName(p.type) + ", using the default");
                 v = p.defaultValue;
             }
+            if (p.type == ParamType::Seed && mSeed != 0 && v.is_number())
+                v = std::llround(v.get<double>()) + mSeed;
             f.values[p.id] = v;
             f.paramSlot[p.id] = newSlots(f.path, p.id, paramSlots(p.type));
+        }
+        if (f.def && (f.def->kind == NodeKind::Slang || f.def->kind == NodeKind::Native || f.def->kind == NodeKind::Buffer))
+        {
+            if (const int i = settingIndex(n.values, "outputSize"); i >= 0)
+                f.sizeShift = i - 3;
+            if (const int i = settingIndex(n.values, "bitDepth"); i > 0)
+                f.bits = std::stoi(kNodeSettings[1].options[size_t(i)]);
+            for (const NodeSetting& ns : kNodeSettings)
+                if (n.values.contains(ns.id) && settingIndex(n.values, ns.id.c_str()) < 0)
+                    mPlan.warnings.push_back(f.path + "." + ns.id + ": " + n.values[ns.id].dump() + " isn't one of its options, using " + ns.defaultValue);
         }
         s.visiting.erase(n.name);
         int index = int(mNodes.size());
@@ -406,12 +581,18 @@ private:
                 refs[r.ref.key()] = r.ref;
             }
 
+        for (const Ref& r : mRepeatCuts)
+            buffer(r, "repeat passes");
         for (size_t i = 0; i < mNodes.size(); ++i)
         {
             const FlatNode& n = mNodes[i];
             if (n.def->kind == NodeKind::Native || n.def->kind == NodeKind::Buffer)
                 for (const PortDecl& o : n.ports.outputs)
                     buffer({int(i), o.id, o.type, -1}, "native");
+            if (n.ownBuffers())
+                for (const PortDecl& o : n.ports.outputs)
+                    if (o.type != PortType::Material)
+                        buffer({int(i), o.id, o.type, -1}, "node settings");
             for (size_t k = 0; k < n.inputs.size(); ++k)
             {
                 const Ref& src = n.inputs[k];
@@ -533,7 +714,8 @@ private:
         case ParamType::Curve: return "TexCurve " + p.id;
         case ParamType::Image:
         case ParamType::Code:
-        case ParamType::Node: return {};
+        case ParamType::Node:
+        case ParamType::String: return {};
         }
         return {};
     }
@@ -567,18 +749,18 @@ private:
         return text;
     }
 
-    /** The generic sampler arguments of a node type: its inputs, then its image params. */
-    std::vector<std::pair<std::string, PortType>> samplerArgs(const NodePorts& ports)
+    /** The generic sampler arguments of a node type with their interfaces: its inputs, then its image params. */
+    std::vector<std::pair<std::string, std::string>> samplerArgs(const NodePorts& ports)
     {
-        std::vector<std::pair<std::string, PortType>> out;
+        std::vector<std::pair<std::string, std::string>> out;
         for (const PortDecl& in : ports.inputs)
-            out.emplace_back(in.id, in.type);
+            out.emplace_back(in.id, samplerInterface(in.type));
         for (const ParamDecl& p : ports.params)
             if (p.type == ParamType::Image)
-                out.emplace_back(p.id, PortType::Color);
+                out.emplace_back(p.id, "ITexImage");
         if (ports.def)
             for (const std::string& e : ports.def->externals)
-                out.emplace_back(e, PortType::Color);
+                out.emplace_back(e, samplerInterface(PortType::Color));
         return out;
     }
 
@@ -602,7 +784,7 @@ private:
             {
                 s << "<";
                 for (size_t i = 0; i < args.size(); ++i)
-                    s << (i ? ", " : "") << "S_" << args[i].first << " : " << samplerInterface(args[i].second);
+                    s << (i ? ", " : "") << "S_" << args[i].first << " : " << args[i].second;
                 s << ">";
             }
             s << "(float2 uv, TexP_" << key << " p";
@@ -661,7 +843,8 @@ private:
             case ParamType::Curve: s << "    p." << p.id << ".base = " << slot << "u;\n"; break;
             case ParamType::Image:
             case ParamType::Code:
-            case ParamType::Node: break;
+            case ParamType::Node:
+            case ParamType::String: break;
             }
         }
         s << "    return p;\n}\n";
@@ -690,7 +873,8 @@ private:
 
     /**
      * Whether a node's code samples the sampler argument id only at its own uv: every use is `id.sample(uv)` (or
-     * `id.sample(uv * float(p.k))` with k at 1) and uv is never reassigned. Anything else, such as passing the sampler to a
+     * `id.sample(uv * float(p.k))` with k at 1, or the same as `id.sampleImage(..., wrap, filter)` without cubic filtering)
+     * and uv is never reassigned. Anything else, such as passing the sampler to a
      * helper, counts as non-local.
      */
     static bool samplesAtUv(const std::string& text, const std::string& id, const FlatNode& n)
@@ -717,17 +901,28 @@ private:
             if ((at > 0 && (word(text[at - 1]) || text[at - 1] == '.')) || (at + id.size() < text.size() && word(text[at + id.size()])))
                 continue;
             const std::string rest = text.substr(at + id.size(), 64);
-            if (rest.starts_with(".sample(uv)"))
+            // An image read's wrap, filter and footprint args leave it reading the texels at uv, unless cubic filtering widens it.
+            const bool image = rest.starts_with(".sampleImage(");
+            if (image)
+            {
+                auto it = n.values.find("filter");
+                if (it != n.values.end() && ((it->second.is_string() && it->second.get<std::string>() == "cubic") ||
+                                             (it->second.is_number() && it->second.get<int>() == 2)))
+                    return false;
+            }
+            const std::string method = image ? ".sampleImage(" : ".sample(";
+            const std::string end = image ? "," : ")";
+            if (rest.starts_with(method + "uv" + end))
                 continue;
             bool scaled = false;
-            for (const char* form : {".sample(uv * float(p.", ".sample(uv * p."})
-                if (rest.starts_with(form))
+            for (const std::string scale : {"uv * float(p.", "uv * p."})
+                if (const std::string form = method + scale; rest.starts_with(form))
                 {
-                    const size_t from = std::strlen(form);
+                    const size_t from = form.size();
                     size_t to = from;
                     while (to < rest.size() && word(rest[to]))
                         ++to;
-                    const std::string close = std::string(form).find("float(") != std::string::npos ? "))" : ")";
+                    const std::string close = (scale.find("float(") != std::string::npos ? ")" : "") + end;
                     scaled = rest.compare(to, close.size(), close) == 0 && unitParam(rest.substr(from, to - from));
                 }
             if (!scaled)
@@ -851,8 +1046,10 @@ private:
                 if (p.type == ParamType::Image)
                 {
                     int b = mImageBuffer.at(std::to_string(i) + "." + p.id);
-                    src << "struct " << tag << "_s_" << p.id << " : ITexColor\n{\n    float4 sample(float2 uv) { return texReadBuf("
-                        << mPlan.buffers[size_t(b)].slot << ", uv); }\n};\n";
+                    const std::string slot = std::to_string(mPlan.buffers[size_t(b)].slot);
+                    src << "struct " << tag << "_s_" << p.id << " : ITexImage\n{\n    float4 sample(float2 uv) { return texReadBuf(" << slot
+                        << ", uv); }\n    float4 sampleImage(float2 uv, int wrap, int filter, float2 dx, float2 dy) { return texReadImage(" << slot
+                        << ", uv, wrap, filter, dx, dy); }\n};\n";
                     readsOut.push_back(b);
                 }
             for (const std::string& e : n.def->externals)
@@ -897,7 +1094,8 @@ private:
         src << "\n[shader(\"compute\")]\n[numthreads(8, 8, 1)]\nvoid texMain(uint3 id : SV_DispatchThreadID)\n{\n"
             << "    uint w = uint(gPass.res.x);\n    uint h = uint(gPass.res.y);\n    if (id.x >= w || id.y >= h)\n        return;\n"
             << "    float2 uv = gPass.uv.xy + float2((float(id.x) + 0.5) * gPass.res.z, 1.0 - (float(id.y) + 0.5) * gPass.res.w) * gPass.uv.zw;\n"
-            << "    gOut[id.y * w + id.x] = texStore(" << convFn(root.store) << "(" << value << "));\n}\n";
+            << "    gOut[id.y * w + id.x] = " << (root.quantize ? "texQuantize8(" : "") << "texStore(" << convFn(root.store) << "(" << value << "))"
+            << (root.quantize ? ")" : "") << ";\n}\n";
 
         for (const std::string& k : reads)
             readsOut.push_back(mBufferOf.at(k));
@@ -960,7 +1158,9 @@ private:
                 const json& v = n.values[p.id];
                 if (p.type == ParamType::Image)
                 {
-                    const std::string path = v.is_string() ? v.get<std::string>() : std::string();
+                    const std::string path = p.source == "text"  ? textSourceName(n.values, mPlan.width, mPlan.height)
+                                             : v.is_string() ? v.get<std::string>()
+                                                             : std::string();
                     // "external:<name>" reads a caller-supplied map (a paint buffer) instead of a file.
                     int b;
                     if (path.starts_with("external:"))
@@ -993,8 +1193,15 @@ private:
         });
         for (const Ref& r : order)
         {
-            std::string name = r.constant() ? "constant" + std::to_string(r.slot) : mNodes[size_t(r.node)].path + "." + r.socket;
-            mBufferOf[r.key()] = addBuffer(BufferKind::Intermediate, name, r.type, mPlan.width, mPlan.height);
+            const FlatNode* n = r.constant() ? nullptr : &mNodes[size_t(r.node)];
+            std::string name = n ? n->path + "." + r.socket : "constant" + std::to_string(r.slot);
+            const int shift = n ? n->sizeShift : 0;
+            const int b = addBuffer(BufferKind::Intermediate, name, r.type, scaledSize(mPlan.width, shift), scaledSize(mPlan.height, shift));
+            if (n && n->bits)
+                mPlan.buffers[size_t(b)].format = n->bits == 32 ? "rgba32f" : "rgba16f";
+            if (n && n->bits == 8 && n->def->kind == NodeKind::Native)
+                mPlan.warnings.push_back(name + ": a native node's output keeps 16 bits; 8-bit steps come from fused nodes only");
+            mBufferOf[r.key()] = b;
         }
         for (const Ref& r : order)
         {
@@ -1004,6 +1211,7 @@ private:
             else
             {
                 Root root{"", r, r.type, {}};
+                root.quantize = !r.constant() && mNodes[size_t(r.node)].bits == 8;
                 p.source = passSource(root, p.reads, &p.slots, &p.local, &p.reach);
                 p.hash = hash64(p.source);
                 p.node = r.constant() ? "constant" : mNodes[size_t(r.node)].path;
@@ -1017,7 +1225,8 @@ private:
         for (const Root& root : mRoots)
         {
             auto it = mBufferOf.find(root.ref.key());
-            if (it != mBufferOf.end() && root.field.empty() && storageCompatible(root.ref.type, root.store) && !claimed.contains(it->second))
+            if (it != mBufferOf.end() && root.field.empty() && storageCompatible(root.ref.type, root.store) && !claimed.contains(it->second) &&
+                mPlan.buffers[size_t(it->second)].width == mPlan.width && mPlan.buffers[size_t(it->second)].height == mPlan.height)
             {
                 BufferDesc& b = mPlan.buffers[size_t(it->second)];
                 b.kind = BufferKind::Output;
@@ -1039,6 +1248,23 @@ private:
             mPlan.passes.push_back(std::move(p));
             mPlan.outputs[root.name] = b;
         }
+
+        // Mip levels pack below level 0, so only buffers every node reads through sampleImage (which knows the layout) get them.
+        std::set<int> plainReads;
+        for (const auto& [key, b] : mImageBuffer)
+        {
+            const FlatNode& n = mNodes[size_t(std::stoi(key.substr(0, key.find('.'))))];
+            const std::string id = key.substr(key.find('.') + 1);
+            for (const auto& [out, text] : n.def->body)
+                for (size_t at = text.find(id + ".sample("); at != std::string::npos; at = text.find(id + ".sample(", at + 1))
+                    if (at == 0 || !(std::isalnum(static_cast<unsigned char>(text[at - 1])) || text[at - 1] == '_' || text[at - 1] == '.'))
+                        plainReads.insert(b);
+        }
+        for (const Pass& p : mPlan.passes)
+            for (int b : p.reads)
+                if (BufferDesc& d = mPlan.buffers[size_t(b)]; d.kind == BufferKind::Image && p.kind == PassKind::Fused && !plainReads.contains(b) &&
+                                                              std::find(p.local.begin(), p.local.end(), b) == p.local.end() && !p.reach.contains(b))
+                    d.mips = true;
     }
 
     void packParam(const ParamDecl& p, const json& v, int slot)
@@ -1111,7 +1337,8 @@ private:
         }
         case ParamType::Image:
         case ParamType::Code:
-        case ParamType::Node: return;
+        case ParamType::Node:
+        case ParamType::String: return;
         }
         packFloat4(u, slot, f);
     }
@@ -1123,13 +1350,16 @@ private:
             structure.push_back({p.hash, p.output, p.reads});
         json bufs = json::array();
         for (const BufferDesc& b : mPlan.buffers)
-            bufs.push_back({int(b.kind), b.kind == BufferKind::Image ? std::string() : b.name, int(b.type), b.width, b.height, b.format, b.slot});
+            bufs.push_back({int(b.kind), b.kind == BufferKind::Image ? std::string() : b.name, int(b.type), b.width, b.height, b.format, b.slot, b.mips});
         json all = {{"passes", structure}, {"buffers", bufs}, {"slots", mPlan.uniformSlots}, {"outputs", mPlan.outputs}};
         mPlan.structureHash = hash64(all.dump());
     }
 
     const PlanRequest& mReq;
+    double mTime = 0.0;
     Plan mPlan;
+    /** The graph seed, added to every seed parameter. */
+    int64_t mSeed = 0;
     std::vector<FlatNode> mNodes;
     std::vector<Root> mRoots;
     std::set<std::string> mBuffered;
@@ -1138,6 +1368,8 @@ private:
     std::map<std::string, int> mBufferOf;
     std::map<std::string, int> mImageBuffer;
     std::map<std::string, int> mExternalBuffer;
+    /** Repeat lanes buffered between groups of passes. */
+    std::vector<Ref> mRepeatCuts;
 };
 } // namespace
 
@@ -1153,6 +1385,16 @@ uint64_t hash64(std::string_view data, uint64_t seed)
 }
 
 const std::vector<std::pair<std::string, PortType>>& standardChannels() { return kStandard; }
+
+const std::vector<NodeSetting>& nodeSettings() { return kNodeSettings; }
+
+const NodeSetting* nodeSetting(std::string_view id)
+{
+    for (const NodeSetting& s : kNodeSettings)
+        if (s.id == id)
+            return &s;
+    return nullptr;
+}
 
 std::vector<OutputRequest> materialRequests(const Graph& g, const std::vector<std::pair<std::string, PortType>>& channels)
 {
@@ -1188,7 +1430,7 @@ json Plan::summary() const
     static const char* kinds[] = {"intermediate", "output", "image", "external"};
     for (const BufferDesc& b : buffers)
         buffersJ.push_back({{"id", b.id}, {"kind", kinds[int(b.kind)]}, {"name", b.name}, {"type", portTypeName(b.type)}, {"width", b.width},
-                            {"height", b.height}, {"format", b.format}});
+                            {"height", b.height}, {"format", b.format}, {"mips", b.mips}});
     json out = {{"passes", passesJ},  {"buffers", buffersJ}, {"uniformSlots", uniformSlots}, {"structureHash", std::to_string(structureHash)},
                 {"outputs", outputs}, {"width", width},      {"height", height}};
     if (!error.empty())

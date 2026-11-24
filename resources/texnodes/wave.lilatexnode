@@ -1,0 +1,101 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "wave",
+  "label": "Wave",
+  "category": "Pattern",
+  "doc": "Bands or rings with a sine, saw or triangle profile, Count repeats across, wobbled by noise with Distortion. Bands tile.",
+  "keywords": [
+    "stripes",
+    "bands",
+    "rings",
+    "sine",
+    "wood rings",
+    "wave texture"
+  ],
+  "inputs": [],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "shape",
+      "type": "enum",
+      "default": "bands",
+      "options": [
+        "bands",
+        "rings"
+      ],
+      "doc": "Straight bands, or rings around the centre."
+    },
+    {
+      "id": "direction",
+      "type": "enum",
+      "default": "x",
+      "options": [
+        "x",
+        "y",
+        "diagonal"
+      ],
+      "doc": "Which way bands run across."
+    },
+    {
+      "id": "profile",
+      "type": "enum",
+      "default": "sine",
+      "options": [
+        "sine",
+        "saw",
+        "triangle"
+      ],
+      "doc": "The shape of one wave."
+    },
+    {
+      "id": "count",
+      "type": "int",
+      "default": 8,
+      "min": 1,
+      "softMax": 64,
+      "doc": "Waves across."
+    },
+    {
+      "id": "phase",
+      "type": "float",
+      "default": 0.0,
+      "softMin": 0.0,
+      "softMax": 1.0,
+      "doc": "Slides the waves along, in waves."
+    },
+    {
+      "id": "distortion",
+      "type": "float",
+      "default": 0.0,
+      "min": 0.0,
+      "softMax": 4.0,
+      "doc": "Noise that bends the waves."
+    },
+    {
+      "id": "detail",
+      "type": "int",
+      "default": 3,
+      "min": 1,
+      "max": 8,
+      "doc": "Octaves of the distortion noise."
+    },
+    {
+      "id": "seed",
+      "type": "seed",
+      "default": 0
+    }
+  ],
+  "cost": 4,
+  "helpers": [
+    "noise"
+  ],
+  "body": {
+    "out": "float t = p.shape == 1 ? length(uv - 0.5) * 2.0 : p.direction == 1 ? uv.y : p.direction == 2 ? uv.x + uv.y : uv.x;\nfloat v = t * float(p.count) + p.phase;\nif (p.distortion > 0.0)\n    v += p.distortion * (noiseFbm(uv, 4, p.detail, 0.5, uint(p.seed), true) - 0.5) * 2.0;\nif (p.profile == 1)\n    return frac(v);\nif (p.profile == 2)\n    return 1.0 - abs(2.0 * frac(v) - 1.0);\nreturn 0.5 + 0.5 * sin(6.28318530718 * v);"
+  }
+}

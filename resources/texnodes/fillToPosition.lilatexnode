@@ -1,0 +1,41 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "fillToPosition",
+  "label": "Fill to Position",
+  "category": "Fill",
+  "doc": "Each Flood Fill region's bounding box centre as a colour: u in red, v in green. Black outside the regions.",
+  "keywords": [
+    "centre",
+    "center",
+    "region position",
+    "substance flood fill to position"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0,
+        0,
+        -1,
+        -1
+      ],
+      "doc": "A Flood Fill output."
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [],
+  "cost": 6,
+  "helpers": [
+    "fill"
+  ],
+  "body": {
+    "out": "FillRegion r = fillRegion(input.sample(uv), uv);\nreturn r.valid ? float4(fillCentre(r), 0.0, 1.0) : float4(0.0, 0.0, 0.0, 1.0);"
+  }
+}

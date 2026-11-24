@@ -30,6 +30,10 @@ using json = nlohmann::json;
 std::shared_ptr<const gn::Volume> volumeOf(scene::Graph& g, scene::Node& target)
 {
     g.evaluate();
+    // A mesh with a volume material exports what the viewport draws, its material's cloud noise included.
+    if (!gn::isGnModifier(target))
+        if (std::shared_ptr<const gn::Volume> shown = gn::meshVolume(g, target.id()))
+            return shown;
     std::vector<scene::NodeId> mods = {target.id()};
     if (!gn::isGnModifier(target))
     {
@@ -40,8 +44,7 @@ std::shared_ptr<const gn::Volume> volumeOf(scene::Graph& g, scene::Node& target)
         if (scene::Node* n = g.node(m); n && gn::isGnModifier(*n))
             if (gn::GeometryPtr geo = gn::modifierGeometry(m); geo && geo->volume && !geo->volume->empty())
                 return geo->volume;
-    // A mesh with a volume material and no grid of its own: its surface filled, as the viewport draws it.
-    return gn::meshVolume(g, target.id());
+    return nullptr;
 }
 
 /** A sparse NanoVDB float grid of the voxels that differ from the background, with the volume's transform. */

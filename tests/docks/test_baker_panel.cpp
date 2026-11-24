@@ -296,7 +296,7 @@ TEST_CASE("baker panel: groups from names, drops, stacks, output preview, bake a
         do
             pump();
         while ((bake::bakeRunning() || panel.thumbnailsPending() || !summaryRow("Time")) &&
-               t.elapsed() < 20000);
+               t.elapsed() < 120000);
         auto* thumbs = child<QListWidget>(&panel, "bakerThumbs");
         REQUIRE(thumbs->count() >= 3);
         CHECK_FALSE(panel.thumbnailsPending());

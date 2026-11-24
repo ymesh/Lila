@@ -51,7 +51,7 @@ struct GraphOutput
  *   { "name", "typeVersion", "description", "inputs": [{name, kind: port|param, type, default, label, description, panel,
  *     min, max, softMin, softMax, step, options, targets}], "outputs": [{name, type, description}],
  *     "nodes": [{name, type, position, values}], "links": [[fromNode, fromSocket, toNode, toSocket]],
- *     "ties": [see gn::tiesToJson], "subgroups": {name: graph} }
+ *     "ties": [see gn::tiesToJson], "subgroups": {name: graph}, "presets": [{name, values, seed}], "seed" }
  * Node values hold parameter values and unlinked input values by id; missing ones take the definition's default.
  */
 struct LILA_SCENE_API Graph
@@ -71,6 +71,15 @@ struct LILA_SCENE_API Graph
     json bookmarks = json::object();
     /** Graphs its Group nodes use (values.group names one), by name, each self-contained. */
     std::map<std::string, json> subgroups;
+    /** The scene time it is evaluated at, in seconds (sequence::followTime): what expressions read as time. Not saved. */
+    double time = 0.0;
+    /** Named snapshots of the param inputs' values: [{name, values: {input: value}, seed}], in the order they were saved. */
+    json presets = json::array();
+    /**
+     * Added to every seed parameter of the nodes in the graph and in the groups it runs, so one number re-rolls the whole
+     * material. Only the graph a plan is built from counts (a set's own graph).
+     */
+    int seed = 0;
 
     json toJson() const;
     /** Throws std::invalid_argument on malformed input. */
@@ -94,4 +103,19 @@ inline constexpr const char* kGroupInputType = "GroupInput";
 inline constexpr const char* kGroupOutputType = "GroupOutput";
 inline constexpr const char* kGroupType = "Group";
 inline constexpr const char* kMaterialOutputType = "materialOutput";
+
+/**
+ * A repeat zone: a Repeat Input naming its Repeat Output in its "output" value (as geometry nodes' zones do), and the
+ * nodes downstream of the one and upstream of the other as its body. The planner unrolls the body once per pass.
+ */
+inline constexpr const char* kRepeatInputType = "RepeatInput";
+inline constexpr const char* kRepeatOutputType = "RepeatOutput";
+inline constexpr int kMaxRepeatIterations = 64;
+
+/** The Repeat Output a Repeat Input pairs with, or null. */
+LILA_SCENE_API const GNode* repeatOutputOf(const Graph& g, const GNode& input);
+/** The Repeat Input pairing with a Repeat Output, or null. */
+LILA_SCENE_API const GNode* repeatInputOf(const Graph& g, const GNode& output);
+/** The zone's body: nodes downstream of input and upstream of output, in graph order. */
+LILA_SCENE_API std::vector<std::string> repeatBody(const Graph& g, const std::string& input, const std::string& output);
 } // namespace lila::tex

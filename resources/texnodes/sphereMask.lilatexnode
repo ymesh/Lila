@@ -1,0 +1,62 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "sphereMask",
+  "label": "Sphere Mask",
+  "category": "Pattern",
+  "doc": "1 inside a circle around Center, fading to 0 at Radius: Hardness keeps more of it solid.",
+  "keywords": [
+    "sphere mask",
+    "circle mask",
+    "radial mask",
+    "vignette"
+  ],
+  "inputs": [
+    {
+      "id": "coord",
+      "type": "vector",
+      "implicit": "uv",
+      "doc": "Where to measure from: the uvs unless linked."
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "centerX",
+      "type": "float",
+      "default": 0.5,
+      "doc": "The circle's centre."
+    },
+    {
+      "id": "centerY",
+      "type": "float",
+      "default": 0.5,
+      "doc": "The circle's centre."
+    },
+    {
+      "id": "radius",
+      "type": "float",
+      "default": 0.3,
+      "min": 0.0,
+      "softMax": 1.0,
+      "doc": "Where it reaches 0."
+    },
+    {
+      "id": "hardness",
+      "type": "float",
+      "default": 0.5,
+      "min": 0.0,
+      "max": 1.0,
+      "doc": "0 fades from the centre, 1 is a hard edge."
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float d = length(coord.sample(uv).xy - float2(p.centerX, p.centerY)) / max(p.radius, 1e-5);\nreturn saturate((1.0 - d) / max(1.0 - saturate(p.hardness), 1e-4));"
+  }
+}

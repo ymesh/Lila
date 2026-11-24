@@ -77,3 +77,33 @@ float noiseFbm(float2 uv, int scale, int octaves, float persistence, uint seed, 
     }
     return weight > 0.0 ? sum / weight : 0.5;
 }
+
+/**
+ * noiseFbm with a whole-number lacunarity (each octave's frequency over the last, kept whole so every octave tiles) and
+ * domain distortion: the lookup is pushed by a second noise, Distortion cells of the base scale at most.
+ */
+float noiseFbmEx(float2 uv, int scale, int octaves, float persistence, int lacunarity, float distortion, uint seed, bool gradient)
+{
+    int base = max(scale, 1);
+    if (distortion > 0.0)
+    {
+        int2 period = int2(base, base);
+        float2 w = float2(perlinNoise(uv * float(base), period, seed ^ 0x3c6ef372u), perlinNoise(uv * float(base), period, seed ^ 0xa54ff53au)) - 0.5;
+        uv += w * 2.0 * distortion / float(base);
+    }
+    float sum = 0.0;
+    float weight = 0.0;
+    float amp = 1.0;
+    int freq = base;
+    for (int o = 0; o < octaves; ++o)
+    {
+        int2 period = int2(freq, freq);
+        float2 q = uv * float(freq);
+        uint s = seed + uint(o) * 0x9e3779b9u;
+        sum += amp * (gradient ? perlinNoise(q, period, s) : valueNoise(q, period, s));
+        weight += amp;
+        amp *= persistence;
+        freq *= max(lacunarity, 1);
+    }
+    return weight > 0.0 ? sum / weight : 0.5;
+}

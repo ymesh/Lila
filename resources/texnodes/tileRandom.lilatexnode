@@ -1,0 +1,93 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "tileRandom",
+  "label": "Tile Random",
+  "category": "Transform",
+  "doc": "Repeats the input in a grid with every copy turned, flipped or slid at random, so a repeat doesn't read as one: break up tiles, planks and panels.",
+  "keywords": [
+    "tile random",
+    "random tiling",
+    "variation",
+    "tile sampler",
+    "2x2"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0.5,
+        0.5,
+        0.5,
+        1.0
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    },
+    {
+      "id": "random",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "countX",
+      "type": "int",
+      "default": 2,
+      "min": 1,
+      "softMax": 16,
+      "doc": "Copies across."
+    },
+    {
+      "id": "countY",
+      "type": "int",
+      "default": 2,
+      "min": 1,
+      "softMax": 16,
+      "doc": "Copies down."
+    },
+    {
+      "id": "turn",
+      "type": "bool",
+      "default": true,
+      "doc": "Turns each copy by a random quarter turn."
+    },
+    {
+      "id": "flip",
+      "type": "bool",
+      "default": false,
+      "doc": "Mirrors copies at random."
+    },
+    {
+      "id": "offset",
+      "type": "float",
+      "default": 0.0,
+      "min": 0.0,
+      "max": 1.0,
+      "doc": "Slides each copy's content by up to this much at random."
+    },
+    {
+      "id": "valueRandom",
+      "type": "float",
+      "default": 0.0,
+      "min": 0.0,
+      "max": 1.0,
+      "doc": "Darkens copies by up to this much at random."
+    },
+    {
+      "id": "seed",
+      "type": "seed",
+      "default": 0
+    }
+  ],
+  "cost": 2,
+  "body": {
+    "out": "float2 n = float2(float(max(p.countX, 1)), float(max(p.countY, 1)));\nfloat2 g = uv * n;\nint2 cell = int2(floor(g + 1e-4));\nint2 w = ((cell % int2(n)) + int2(n)) % int2(n);\nuint s = uint(p.seed);\nfloat2 q = frac(g);\nif (p.turn)\n{\n    int t = int(texRand(uint2(w), s ^ 0x51edu) * 4.0);\n    for (int i = 0; i < t; ++i)\n        q = float2(q.y, 1.0 - q.x);\n}\nif (p.flip && texRand(uint2(w), s ^ 0x2b79u) < 0.5)\n    q.x = 1.0 - q.x;\nq = frac(q + (float2(texRand(uint2(w), s ^ 0x7f4au), texRand(uint2(w), s ^ 0x9e37u)) - 0.5) * p.offset);\nfloat4 c = input.sample(q);\nreturn float4(c.rgb * (1.0 - p.valueRandom * texRand(uint2(w), s ^ 0x1656u)), c.a);",
+    "random": "float2 n = float2(float(max(p.countX, 1)), float(max(p.countY, 1)));\nint2 cell = int2(floor(uv * n + 1e-4));\nint2 w = ((cell % int2(n)) + int2(n)) % int2(n);\nreturn texRand(uint2(w), uint(p.seed) ^ 0x3c6eu);"
+  }
+}

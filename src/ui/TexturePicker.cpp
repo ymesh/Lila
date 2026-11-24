@@ -61,7 +61,7 @@ constexpr int kKindRole = Qt::UserRole;
 constexpr int kValueRole = Qt::UserRole + 1;
 constexpr int kThumbRole = Qt::UserRole + 2;
 constexpr int kFileRole = Qt::UserRole + 3;
-constexpr const char* kImages = "Images (*.png *.tga *.jpg *.jpeg *.exr *.tif *.tiff *.psd *.hdr *.bmp *.dds *.webp)";
+constexpr const char* kImages = "Images (*.png *.tga *.jpg *.jpeg *.exr *.tif *.tiff *.psd *.hdr *.bmp *.dds *.webp *.svg)";
 
 QString qs(const std::string& s)
 {

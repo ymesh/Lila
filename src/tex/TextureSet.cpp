@@ -40,7 +40,14 @@ json SetSettings::toJson() const
 {
     json ch = json::array();
     for (const Channel& c : channels)
-        ch.push_back({{"name", c.name}, {"type", portTypeName(c.type)}, {"bits", c.bits}});
+    {
+        json o = {{"name", c.name}, {"type", portTypeName(c.type)}, {"bits", c.bits}};
+        if (!c.suffix.empty())
+            o["suffix"] = c.suffix;
+        if (c.colorSpace != "linear")
+            o["colorSpace"] = c.colorSpace;
+        ch.push_back(o);
+    }
     json tl = json::array();
     for (const Tile& t : tiles)
     {
@@ -81,6 +88,10 @@ SetSettings SetSettings::fromJson(const json& j)
                     throw std::invalid_argument("channel " + ch.name + ": bits must be 8, 16 or 32");
                 if (s.channel(ch.name))
                     throw std::invalid_argument("channel " + ch.name + " is listed twice");
+                ch.suffix = c.value("suffix", std::string());
+                ch.colorSpace = c.value("colorSpace", std::string("linear"));
+                if (ch.colorSpace != "linear" && ch.colorSpace != "srgb")
+                    throw std::invalid_argument("channel " + ch.name + ": colorSpace must be linear or srgb");
                 s.channels.push_back(ch);
             }
         }

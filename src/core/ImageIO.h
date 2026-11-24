@@ -105,6 +105,8 @@ LILA_FOUNDATION_API Image readTiff(const fs::path& path, std::string* err = null
 /** The flattened image of an uncompressed 8/16 bit RGB PSD. */
 LILA_FOUNDATION_API Image readPsd(const fs::path& path, std::string* err = nullptr);
 LILA_FOUNDATION_API Image readWebp(const fs::path& path, std::string* err = nullptr);
+/** An SVG drawn into an image whose longest side is longestSide pixels, keeping its aspect; outside the shapes is transparent. */
+LILA_FOUNDATION_API Image readSvg(const fs::path& path, int longestSide = 2048, std::string* err = nullptr);
 /** A WebP image held in memory. */
 LILA_FOUNDATION_API Image decodeWebp(const uint8_t* data, size_t size, std::string* err = nullptr);
 /** The layers of an uncompressed 8/16 bit RGB PSD, bottom first as stored, with their names. */

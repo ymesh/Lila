@@ -34,6 +34,9 @@ enum class Kind
  */
 LILA_UI_API void show(const QString& text, QWidget* view = nullptr, int durationMs = 2000, Kind kind = Kind::Info, const QString& key = {});
 
+/** Removes view's toast with this key at once, for a toast whose state no longer holds. */
+LILA_UI_API void dismiss(const QString& key, QWidget* view = nullptr);
+
 /** Shows text in the active viewport, or in every viewport when there is none. */
 LILA_UI_API void showActive(const QString& text, int durationMs = 2000, Kind kind = Kind::Info, const QString& key = {});
 

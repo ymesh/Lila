@@ -681,6 +681,67 @@ bool compiles(const std::string& text, std::string* why)
     }
 }
 
+double evaluate(const Ast& a, const std::function<double(const std::string&)>& plug, double time, double frame)
+{
+    auto run = [](const char* fn, std::vector<double> in, int output = 0) {
+        const lila_expr::Op op = lila_expr::opNamed(fn);
+        in.resize(size_t(std::max(lila_expr::info(op).inputs, int(in.size()))), 0.0);
+        double out[2];
+        lila_expr::apply(op, in.data(), out);
+        return out[output];
+    };
+    std::vector<double> args;
+    for (const auto& c : a.args)
+        args.push_back(evaluate(*c, plug, time, frame));
+    switch (a.kind)
+    {
+    case Ast::Number: return a.number;
+    case Ast::Plug: return plug(a.op);
+    case Ast::Time: return a.op == "frame" ? frame : time;
+    case Ast::Unary: return run(a.op == "-" ? "negate" : "not", args);
+    case Ast::Binary:
+    {
+        static const std::map<std::string, const char*> kOps = {{"+", "add"},  {"-", "subtract"}, {"*", "multiply"}, {"/", "divide"},
+                                                                {"**", "pow"}, {"and", "and"},     {"or", "or"}};
+        if (a.op == "%")
+            return run("fmod", args, 1);
+        return run(kOps.at(a.op), args);
+    }
+    case Ast::Compare:
+    {
+        static const std::map<std::string, const char*> kCmp = {{"<", "less"},         {"<=", "lessEqual"}, {">", "greater"},
+                                                                {">=", "greaterEqual"}, {"==", "equal"},     {"!=", "notEqual"}};
+        return run(kCmp.at(a.op), args);
+    }
+    case Ast::Ternary: return run("select", {args[0], args[2], args[1]});
+    case Ast::Call:
+    {
+        auto it = fnTable().find(a.op);
+        if (it == fnTable().end())
+            throw std::invalid_argument(a.op + "() isn't a function expressions know");
+        const FnInfo& f = it->second;
+        if (!arityOk(a.op, f, int(args.size())))
+            throw std::invalid_argument(a.op + "() takes " + (a.op == "random" ? std::string("1 or 3") : std::to_string(f.args)) + " arguments");
+        if (a.op == "log" && args.size() == 2)
+            return run("log", args);
+        if (a.op == "random" && args.size() == 3)
+            return run("randomFloatInRangeFromStream", {args[1], args[2], args[0]});
+        std::vector<double> in = args;
+        if (!f.pins.empty())
+        {
+            in.assign(size_t(lila_expr::info(lila_expr::opNamed(f.rigmath.c_str())).inputs), 0.0);
+            for (size_t i = 0; i < args.size(); ++i)
+                in[size_t(f.pins[i])] = args[i];
+            for (const auto& [pin, v] : f.fixed)
+                in[size_t(pin)] = v;
+        }
+        const double v = run(f.rigmath.c_str(), in, f.output);
+        return a.op == "smoothstep" ? v * v * (3.0 - 2.0 * v) : v;
+    }
+    }
+    throw std::invalid_argument("unknown expression part");
+}
+
 std::vector<PlugRef> targets(Graph& g)
 {
     std::vector<PlugRef> out;

@@ -53,7 +53,20 @@
         "darken",
         "lighten",
         "difference",
-        "softLight"
+        "softLight",
+        "addSigned",
+        "colorBurn",
+        "linearBurn",
+        "colorDodge",
+        "hardLight",
+        "vividLight",
+        "linearLight",
+        "pinLight",
+        "exclusion",
+        "divide",
+        "saturation",
+        "color",
+        "value"
       ]
     },
     {
@@ -66,9 +79,9 @@
   ],
   "cost": 6,
   "helpers": [
-    "blend"
+    "layers"
   ],
   "body": {
-    "out": "float4 b = background.sample(uv);\nfloat4 f = foreground.sample(uv);\nfloat k = saturate(mask.sample(uv) * p.opacity * f.a);\nreturn float4(lerp(b.rgb, blendMode(p.mode, b.rgb, f.rgb), k), b.a);"
+    "out": "float4 b = background.sample(uv);\nfloat4 f = foreground.sample(uv);\nfloat k = saturate(mask.sample(uv) * p.opacity * f.a);\nreturn float4(lerp(b.rgb, layerBlendMode(p.mode, b.rgb, f.rgb), k), b.a);"
   }
 }

@@ -1,0 +1,47 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "time",
+  "label": "Time",
+  "category": "Input",
+  "doc": "The scene's time while it plays, for animated textures: seconds and frames.",
+  "keywords": [
+    "time",
+    "frame",
+    "animate",
+    "seconds"
+  ],
+  "inputs": [],
+  "outputs": [
+    {
+      "id": "seconds",
+      "type": "float"
+    },
+    {
+      "id": "frame",
+      "type": "float"
+    }
+  ],
+  "params": [
+    {
+      "id": "time",
+      "type": "float",
+      "default": 0.0,
+      "hidden": true,
+      "doc": "Scene time in seconds, filled in at evaluation."
+    },
+    {
+      "id": "fps",
+      "type": "float",
+      "default": 30.0,
+      "min": 1.0,
+      "softMax": 120.0,
+      "doc": "Frames per second, for Frame."
+    }
+  ],
+  "cost": 0,
+  "body": {
+    "seconds": "return p.time;",
+    "frame": "return floor(p.time * p.fps + 1e-4);"
+  }
+}

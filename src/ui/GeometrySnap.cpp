@@ -9,6 +9,7 @@
 #include "scene/Rig.h"
 #include "scene/Transform.h"
 #include "ui/Isolate.h"
+#include "ui/SurfaceSnap.h"
 #include "ui/Tools.h"
 
 #include <algorithm>
@@ -22,10 +23,24 @@ namespace
 double distPx(QPointF a, QPointF b) { return std::hypot(a.x() - b.x(), a.y() - b.y()); }
 } // namespace
 
-void Nearest::point(const glm::dvec3& world)
+bool Nearest::occluded(const glm::dvec3& world, QPointF screen) const
+{
+    if (!mOcclusion)
+        return false;
+    glm::dvec3 origin, dir;
+    mView.ray(screen, origin, dir);
+    const auto hit = surfaceSnap::firstHit(origin, dir, mOccluderIgnore);
+    if (!hit)
+        return false;
+    // The candidate's own surface hits at its depth, so only a hit clearly nearer hides it.
+    const double target = glm::dot(world - origin, dir);
+    return glm::dot(hit->position - origin, dir) < target - (1e-4 * std::abs(target) + 1e-3);
+}
+
+void Nearest::point(const glm::dvec3& world, bool visible)
 {
     if (auto s = mView.project(world))
-        if (double d = distPx(*s, mPx); d < mBest)
+        if (double d = distPx(*s, mPx); d < mBest && (visible || !occluded(world, *s)))
         {
             mBest = d;
             mHit = world;
@@ -42,9 +57,12 @@ void Nearest::segment(const glm::dvec3& a, const glm::dvec3& b)
     double t = len2 > 0 ? std::clamp(QPointF::dotProduct(mPx - *sa, dir) / len2, 0.0, 1.0) : 0.0;
     if (double d = distPx(*sa + dir * t, mPx); d < mBest)
     {
-        mBest = d;
         // Screen-space t is close enough along short segments; perspective skew is tiny at snap distances.
-        mHit = glm::mix(a, b, t);
+        const glm::dvec3 at = glm::mix(a, b, t);
+        if (occluded(at, *sa + dir * t))
+            return;
+        mBest = d;
+        mHit = at;
     }
 }
 
@@ -67,7 +85,7 @@ bool addPointObject(Nearest& n, scene::Graph& g, scene::NodeId id, unsigned snap
     if (!isPointObject(g, id))
         return false;
     if ((snaps & SnapVertex) && scene::effectivelyVisible(g, id) && isolate::shows(scene::isolation::active(), id))
-        n.point(glm::dvec3(g.node(id)->as<glm::dmat4>(scene::Transform::kWorldMatrix)[3]));
+        n.point(glm::dvec3(g.node(id)->as<glm::dmat4>(scene::Transform::kWorldMatrix)[3]), scene::rig::isJoint(*g.node(id)));
     return true;
 }
 

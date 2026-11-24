@@ -114,6 +114,8 @@ struct LoadedImage
     std::shared_ptr<const image::Image> image;
     /** Set when the file was scaled down to fit a GPU evaluation. */
     std::string warning;
+    /** Descriptor flags of its mip levels (withMipLevels), 0 without. */
+    uint32_t flags = 0;
 };
 
 /** A region of a buffer or image as fractions of its size: x right, y down (rows), [x0, x1) x [y0, y1). */
@@ -173,6 +175,8 @@ struct Prepared
     VkDeviceSize scratchTexels = 0;
     /** Image buffers by id. */
     std::map<int, std::shared_ptr<const image::Image>> images;
+    /** Image buffers' mip level descriptor flags by id, where they have levels. */
+    std::map<int, uint32_t> imageFlags;
     /** Per buffer: nothing reads or writes it. */
     std::vector<uint8_t> unused;
     /** Every buffer's size, Image and External ones from their sources. */

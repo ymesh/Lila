@@ -1,6 +1,7 @@
 #include "ui/GraphBackend.h"
 
 #include "core/Log.h"
+#include "core/MainQueue.h"
 #include "geo/Mesh.h"
 #include "ops/Command.h"
 #include "ops/Undo.h"
@@ -11,15 +12,19 @@
 #pragma push_macro("slots")
 #undef slots
 #include "tex/Evaluate.h"
+#include "tex/GraphProfile.h"
 #include "tex/NodeDef.h"
 #include "tex/TextureSet.h"
 #include "tex/PaintStrokes.h"
 #include "render/PaintGpu.h"
 #pragma pop_macro("slots")
 #include "ui/Actions.h"
+#include "ui/Controls.h"
+#include "ui/Icons.h"
 #include "ui/Menus.h"
 #include "ui/NodeEditor.h"
 #include "ui/Panels.h"
+#include "ui/TexGraphPreview.h"
 #include "ui/TexParams.h"
 #include "ui/TexPreview.h"
 #include "ui/TextureGraphUi.h"
@@ -31,8 +36,13 @@
 #include "ui/UiCommon.h"
 #include "ui/PainterImportUi.h"
 
+#include <QAction>
 #include <QApplication>
+#include <QComboBox>
 #include <QFormLayout>
+#include <QMenu>
+#include <QThreadPool>
+#include <QTimer>
 #include <QHBoxLayout>
 #include <QPushButton>
 #include <QLabel>
@@ -43,6 +53,7 @@
 #include <QToolButton>
 
 #include <algorithm>
+#include <format>
 #include <set>
 
 namespace lila::ui
@@ -51,6 +62,10 @@ namespace
 {
 
 constexpr int kThumbnail = 96;
+/** The square size Node Timings evaluates the set at. */
+constexpr int kProfileSize = 256;
+/** The Parameters panel's id for the graph seed: "@" never starts a graph parameter's name. */
+constexpr const char* kSeedParam = "@seed";
 
 std::vector<NodeEditor*>& texEditors()
 {
@@ -119,6 +134,180 @@ QWidget* imageSizeRow(QWidget* parent, const std::string& set, const json& node)
         h->addWidget(match);
     }
     return row;
+}
+
+/** texGraphParams for a graph address, or null when it can't be read. */
+json queryGraphParams(const std::string& group)
+{
+    try
+    {
+        return ops::execute("texGraphParams", argsCall({group}));
+    }
+    catch (const std::exception&)
+    {
+        return nullptr;
+    }
+}
+
+/** A node's parameters that drive graph parameters: parameter id to graph parameter name. */
+std::map<std::string, std::string> exposedParamsOf(const json& graphParams, const std::string& node)
+{
+    std::map<std::string, std::string> out;
+    if (!graphParams.is_object())
+        return out;
+    for (const json& p : graphParams.value("params", json::array()))
+        for (const json& t : p.value("targets", json::array()))
+            if (const std::string plug = t.get<std::string>(); plug.starts_with(node + "."))
+                out[plug.substr(node.size() + 1)] = p.value("name", "");
+    return out;
+}
+
+/** Runs a UI command on the next turn of the event loop, for menu actions living in the panel it rebuilds. */
+void deferTexCommand(std::string command, json call)
+{
+    QTimer::singleShot(0, qApp, [command = std::move(command), call = std::move(call)] { runUi(command, call); });
+}
+
+QLabel* texGraphHeading(QWidget* parent, const QString& text)
+{
+    auto* l = new QLabel(text, parent);
+    QFont f = l->font();
+    f.setBold(true);
+    l->setFont(f);
+    l->setStyleSheet("color: rgb(225,225,225); padding-top: 6px;");
+    return l;
+}
+
+/** Preset picker, Save and a menu with Rename and Delete, over the presets of the graph at group. */
+QWidget* presetRow(QWidget* parent, const std::string& group, const json& graphParams)
+{
+    auto* row = new QWidget(parent);
+    auto* h = new QHBoxLayout(row);
+    h->setContentsMargins(0, 0, 0, 0);
+    h->setSpacing(2);
+    auto* picker = new QComboBox(row);
+    picker->setObjectName("graphPresets");
+    for (const json& name : graphParams.value("presets", json::array()))
+        picker->addItem(qs(name.get<std::string>()));
+    picker->setPlaceholderText(picker->count() ? "Custom" : "No presets");
+    picker->setCurrentIndex(picker->findText(qs(graphParams.value("active", std::string()))));
+    picker->setToolTip("Preset\nPick one to set every parameter to its values. Custom: the values match no preset");
+    QObject::connect(picker, &QComboBox::activated, picker, [group, picker](int i) {
+        if (i >= 0)
+            runUi("texApplyPreset", argsCall({group, picker->itemText(i).toStdString()}));
+    });
+    h->addWidget(picker, 1);
+
+    auto* save = new QToolButton(row);
+    save->setObjectName("savePreset");
+    save->setIcon(icon("device-floppy"));
+    save->setToolTip("Save Preset\nStore every parameter's value under a name; a preset's own name replaces it");
+    QObject::connect(save, &QToolButton::clicked, picker, [group, picker] {
+        const QString start = picker->currentIndex() >= 0 ? picker->currentText() : QString("Preset %1").arg(picker->count() + 1);
+        controls::editInPlace(picker, start, [group](const QString& name) { deferTexCommand("texSavePreset", argsCall({group, name.toStdString()})); });
+    });
+    h->addWidget(save);
+
+    auto* more = new QToolButton(row);
+    more->setIcon(icon("dots"));
+    more->setToolTip("Preset Actions");
+    more->setPopupMode(QToolButton::InstantPopup);
+    controls::setRole(more, "overflow");
+    auto* menu = new QMenu(more);
+    QAction* rename = menu->addAction(icon("pencil"), "Rename Preset", picker, [group, picker] {
+        const QString from = picker->currentText();
+        controls::editInPlace(picker, from, [group, from](const QString& to) {
+            deferTexCommand("texRenamePreset", argsCall({group, from.toStdString(), to.toStdString()}));
+        });
+    });
+    QAction* remove = menu->addAction(icon("trash"), "Delete Preset", picker, [group, picker] {
+        deferTexCommand("texDeletePreset", argsCall({group, picker->currentText().toStdString()}));
+    });
+    QObject::connect(menu, &QMenu::aboutToShow, menu, [picker, rename, remove] {
+        rename->setEnabled(picker->currentIndex() >= 0);
+        remove->setEnabled(picker->currentIndex() >= 0);
+    });
+    more->setMenu(menu);
+    h->addWidget(more);
+    return row;
+}
+
+/**
+ * The graph's own section of the side panel. A set's graph: its presets and parameters, each right-click removable. A node
+ * group lists its inputs under Parameter Defaults already, so it gets only the presets over them.
+ */
+QWidget* graphParamsPanel(QWidget* parent, NodeEditor& editor, const std::string& group, bool setGraph)
+{
+    const json gp = queryGraphParams(group);
+    if (!gp.is_object())
+        return nullptr;
+    const json params = gp.value("params", json::array());
+    if (!setGraph && params.empty())
+        return nullptr;
+    auto* box = new QWidget(parent);
+    box->setObjectName("graphParams");
+    auto* v = new QVBoxLayout(box);
+    v->setContentsMargins(0, 0, 0, 0);
+    v->setSpacing(3);
+    v->addWidget(texGraphHeading(box, setGraph ? "Parameters" : "Presets"));
+    v->addWidget(presetRow(box, group, gp));
+    if (!setGraph)
+        return box;
+    QPointer<QComboBox> presets = box->findChild<QComboBox*>("graphPresets");
+    QPointer<NodeEditor> ed(&editor);
+    // The panel stays up under a field being edited, so the picker follows on its own.
+    auto followPreset = [group, presets] {
+        if (const json now = queryGraphParams(group); presets && now.is_object())
+            presets->setCurrentIndex(presets->findText(qs(now.value("active", std::string()))));
+    };
+
+    json shown = {{"title", ""}, {"params", json::array()}};
+    shown["params"].push_back({{"id", kSeedParam},
+                               {"label", "Seed"},
+                               {"type", "seed"},
+                               {"value", gp.value("seed", 0)},
+                               {"doc", "Added to every seed parameter in the set, groups included: one number re-rolls the whole material"}});
+    for (const json& p : params)
+    {
+        json e = {{"id", p.value("name", "")}, {"type", p.value("type", "float")}, {"value", p.value("value", json())}};
+        if (const std::string label = p.value("label", ""); !label.empty())
+            e["label"] = label;
+        std::string doc = p.value("description", "");
+        for (const json& t : p.value("targets", json::array()))
+            doc += (doc.empty() ? "" : "\n") + std::string("Drives ") + t.get<std::string>();
+        e["doc"] = doc;
+        for (const char* k : {"options", "min", "max", "softMin", "softMax", "step"})
+            if (p.contains(k))
+                e[k] = p[k];
+        shown["params"].push_back(e);
+    }
+    v->addWidget(texParams::nodePanel(
+        box, shown,
+        [ed, group, followPreset](const std::string& id, const json& value) {
+            if (!ed)
+                return;
+            if (id == kSeedParam)
+                ed->runFromField("texSetGraphSeed", argsCall({group, value}));
+            else
+                ed->runFromField("texSetGraphParam", argsCall({group, id, value}));
+            followPreset();
+        },
+        {},
+        [group](const std::string& id, QWidget* owner) -> QAction* {
+            if (id == kSeedParam)
+                return nullptr;
+            auto* a = new QAction("Remove Graph Parameter", owner);
+            QObject::connect(a, &QAction::triggered, qApp, [group, id] { deferTexCommand("texUnexposeParam", argsCall({group, id})); });
+            return a;
+        }));
+    if (params.empty())
+    {
+        auto* none = new QLabel("No parameters. Right-click a node's parameter to expose it.", box);
+        none->setWordWrap(true);
+        none->setStyleSheet("color: rgb(150,150,150);");
+        v->addWidget(none);
+    }
+    return box;
 }
 
 /** Texture graphs: one per texture set, edited through the tex* commands. */
@@ -329,13 +518,32 @@ public:
         texParams::ExposeFn expose;
         if (hasInterface(group))
             expose = [group, name](const std::string& id) { runUi("texExposeInput", argsCall({group, name + "." + id})); };
+        const std::string type = node.value("type", "");
+        texParams::ParamActionFn paramAction;
+        if (type != tex::kGroupOutputType && type != tex::kMaterialOutputType)
+            paramAction = [group, name, exposed = exposedParamsOf(queryGraphParams(group), name)](const std::string& id, QWidget* owner) -> QAction* {
+                auto it = exposed.find(id);
+                if (it == exposed.end())
+                {
+                    auto* a = new QAction("Expose as Graph Parameter", owner);
+                    QObject::connect(a, &QAction::triggered, qApp, [group, plug = name + "." + id] { deferTexCommand("texExposeParam", argsCall({group, plug})); });
+                    return a;
+                }
+                QFont f = owner->font();
+                f.setBold(true);
+                owner->setFont(f);
+                owner->setToolTip("Graph Parameter: " + qs(it->second) + (owner->toolTip().isEmpty() ? QString() : "\n" + owner->toolTip()));
+                auto* a = new QAction("Remove Graph Parameter", owner);
+                QObject::connect(a, &QAction::triggered, qApp, [group, param = it->second] { deferTexCommand("texUnexposeParam", argsCall({group, param})); });
+                return a;
+            };
         QWidget* panel = texParams::nodePanel(
             parent, withSet,
             [ed, group, name](const std::string& id, const json& v) {
                 if (ed)
                     ed->setValueFromField(argsCall({group, name + "." + id, v}));
             },
-            expose);
+            expose, paramAction);
         if (node.value("type", "") == "image")
             if (QWidget* row = imageSizeRow(panel, group, node))
             {
@@ -345,6 +553,53 @@ public:
                     panel->layout()->addWidget(row);
             }
         return panel;
+    }
+
+    QWidget* pinnedPanel(QWidget* parent, NodeEditor& editor) const override { return new TexGraphPreview(editor, parent); }
+
+    bool canProfile() const override { return true; }
+
+    /** The set's passes timed on the CPU (the GPU evaluator doesn't time passes), on a pool thread. */
+    void profile(const std::string& group, std::function<void(json)> done) const override
+    {
+        const tex::GraphAddress at = tex::splitAddress(group);
+        scene::Node* n = tex::findSet(scene::Graph::current(), at.set);
+        if (!n)
+        {
+            done({{"error", "no texture set named " + at.set}});
+            return;
+        }
+        tex::Graph graph;
+        tex::SetSettings settings;
+        try
+        {
+            graph = tex::readGraph(*n);
+            settings = tex::readSettings(*n);
+        }
+        catch (const std::exception& e)
+        {
+            done({{"error", e.what()}});
+            return;
+        }
+        QThreadPool::globalInstance()->start([graph = std::move(graph), settings = std::move(settings), sub = at.group, done = std::move(done)] {
+            json r;
+            try
+            {
+                r = tex::profileGraph(graph, settings, sub, kProfileSize);
+                r["label"] = std::format("CPU, {} px", kProfileSize);
+            }
+            catch (const std::exception& e)
+            {
+                r = {{"error", e.what()}};
+            }
+            mainq::post([done, r] { done(r); });
+        });
+    }
+
+    QWidget* graphPanel(QWidget* parent, NodeEditor& editor, const json&) const override
+    {
+        const std::string group = editor.group().toStdString();
+        return graphParamsPanel(parent, editor, group, !hasInterface(group));
     }
 
     void addToolbarButtons(QBoxLayout* bar, NodeEditor& editor) const override

@@ -46,6 +46,9 @@ struct Field
     std::string doc;
     double min = std::numeric_limits<double>::quiet_NaN();
     double max = std::numeric_limits<double>::quiet_NaN();
+    /** The range a bounded field's slider covers when narrower than min..max (FlagDef::softMin/softMax); NaN for min/max. */
+    double softMin = std::numeric_limits<double>::quiet_NaN();
+    double softMax = std::numeric_limits<double>::quiet_NaN();
     double step = std::numeric_limits<double>::quiet_NaN();
     std::string suffix; // " cm", " deg"
     /** Values a number field offers in a menu and steps through on the wheel (FlagDef::presets); empty for none. */

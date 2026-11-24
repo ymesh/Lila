@@ -22,6 +22,11 @@
     {
       "id": "random",
       "type": "gray"
+    },
+    {
+      "id": "smoothF1",
+      "type": "gray",
+      "doc": "F1 with its creases rounded by Smoothness: soft blobs instead of cones."
     }
   ],
   "params": [
@@ -41,6 +46,14 @@
       "doc": "0 is a regular grid."
     },
     {
+      "id": "smoothness",
+      "type": "float",
+      "default": 0.5,
+      "min": 0.0,
+      "max": 1.0,
+      "doc": "How round Smooth F1 is."
+    },
+    {
       "id": "seed",
       "type": "seed",
       "default": 0,
@@ -55,6 +68,12 @@
     "f1": "VoronoiResult r = voronoi(uv, int2(p.scale, p.scale), p.jitter, uint(p.seed));\nreturn saturate(r.f1);",
     "f2": "VoronoiResult r = voronoi(uv, int2(p.scale, p.scale), p.jitter, uint(p.seed));\nreturn saturate(r.f2);",
     "edge": "VoronoiResult r = voronoi(uv, int2(p.scale, p.scale), p.jitter, uint(p.seed));\nreturn saturate(r.f2 - r.f1);",
-    "random": "VoronoiResult r = voronoi(uv, int2(p.scale, p.scale), p.jitter, uint(p.seed));\nreturn r.cellRandom;"
-  }
+    "random": "VoronoiResult r = voronoi(uv, int2(p.scale, p.scale), p.jitter, uint(p.seed));\nreturn r.cellRandom;",
+    "smoothF1": "return saturate(voronoiSmoothF1(uv, int2(p.scale, p.scale), p.jitter, p.smoothness, uint(p.seed)));"
+  },
+  "code": "float voronoiSmoothF1(float2 uv, int2 scale, float jitter, float smoothness, uint seed)\n{\n    float2 q = uv * float2(scale);\n    float2 i = floor(q);\n    float2 f = q - i;\n    int2 c = int2(i);\n    float k = max(smoothness, 1e-4);\n    float res = 8.0;\n    for (int y = -2; y <= 2; ++y)\n        for (int x = -2; x <= 2; ++x)\n        {\n            int2 n = c + int2(x, y);\n            int2 w = ((n % scale) + scale) % scale;\n            float2 o = float2(float(x), float(y)) + 0.5 + (texRand2(uint2(w), seed) - 0.5) * jitter;\n            float d = length(o - f);\n            float h = smoothstep(0.0, 1.0, 0.5 + 0.5 * (res - d) / k);\n            res = lerp(res, d, h) - h * (1.0 - h) * k / (1.0 + 3.0 * k);\n        }\n    return res;\n}",
+  "keywords": [
+    "smooth f1",
+    "soft voronoi"
+  ]
 }

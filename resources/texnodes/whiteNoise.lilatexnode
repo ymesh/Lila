@@ -1,0 +1,46 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "whiteNoise",
+  "label": "White Noise",
+  "category": "Noise",
+  "doc": "A random value per cell, Scale cells across, tiling. Colour gives three independent values.",
+  "keywords": [
+    "random",
+    "grain",
+    "static",
+    "per pixel",
+    "hash"
+  ],
+  "inputs": [],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    },
+    {
+      "id": "color",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "scale",
+      "type": "int",
+      "default": 256,
+      "min": 1,
+      "softMax": 2048,
+      "doc": "Cells across the texture."
+    },
+    {
+      "id": "seed",
+      "type": "seed",
+      "default": 0
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "uint2 cell = uint2(floor(frac(uv) * float(p.scale) + 1e-4));\nreturn texRand(cell, uint(p.seed));",
+    "color": "uint2 cell = uint2(floor(frac(uv) * float(p.scale) + 1e-4));\nuint s = uint(p.seed);\nreturn float4(texRand(cell, s), texRand(cell, s ^ 0x68e31da4u), texRand(cell, s ^ 0xb5297a4du), 1.0);"
+  }
+}

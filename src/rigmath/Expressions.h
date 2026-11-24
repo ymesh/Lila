@@ -50,6 +50,13 @@ LILA_SCENE_API const std::vector<std::pair<std::string, std::string>>& functions
 /** Whether text compiles to rig math nodes; else why not, in why. */
 LILA_SCENE_API bool compiles(const std::string& text, std::string* why = nullptr);
 
+/**
+ * The value of a parsed expression with no scene nodes behind it, by the same ops the rig math nodes run (ExpressionVm.h):
+ * plug reads a plug's value by its name as written. Throws std::invalid_argument for an unknown function or a wrong
+ * argument count, and lets plug's own exceptions through.
+ */
+LILA_SCENE_API double evaluate(const Ast& a, const std::function<double(const std::string& plug)>& plug, double time, double frame);
+
 /** Python for the expressions that don't compile: code with plugs as v0, v1 ... and their values, plus time and frame. */
 using PythonEvaluator =
     std::function<std::optional<double>(const std::string& code, const std::vector<double>& values, double time, double frame, std::string* error)>;

@@ -136,6 +136,14 @@ enum Attr
     kVolumeEmissionColor,
     kVolumeEmissionStrength,
     kVolumeVoxelSize,
+    // 3D noise breaking the volume into clouds, in the object's own space, and a soft edge inside a filled mesh.
+    kVolumeNoise,
+    kVolumeNoiseScale,
+    kVolumeNoiseDetail,
+    kVolumeNoiseRoughness,
+    kVolumeNoiseCoverage,
+    kVolumeNoiseOffset,
+    kVolumeEdgeFade,
     kCount
 };
 

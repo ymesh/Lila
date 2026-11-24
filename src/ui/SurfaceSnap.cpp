@@ -83,12 +83,12 @@ std::optional<Target> target(const scene::Graph& g, NodeId id)
     return Target{id, mesh, n->as<glm::dmat4>(scene::Transform::kWorldMatrix)};
 }
 
-/** The snap surfaces if any are set, else every visible mesh, minus exclude. */
-std::vector<Target> targets(const std::vector<NodeId>& exclude)
+/** The snap surfaces if any are set (and designated allows them), else every visible mesh, minus exclude. */
+std::vector<Target> targets(const std::vector<NodeId>& exclude, bool designated = true)
 {
     scene::Graph& g = scene::Graph::current();
     g.evaluate();
-    std::vector<NodeId> ids = surfaces();
+    std::vector<NodeId> ids = designated ? surfaces() : std::vector<NodeId>{};
     if (ids.empty())
         ids = g.nodes();
     std::vector<Target> out;
@@ -110,13 +110,25 @@ glm::dvec3 worldNormal(const Target& t, const geo::MeshBvh& bvh, geo::Index tria
 }
 } // namespace
 
+static std::optional<Hit> raycastAmong(const glm::dvec3& origin, const glm::dvec3& dir, const std::vector<NodeId>& exclude, bool designated);
+
 std::optional<Hit> raycast(const glm::dvec3& origin, const glm::dvec3& dir, const std::vector<NodeId>& exclude)
+{
+    return raycastAmong(origin, dir, exclude, true);
+}
+
+std::optional<Hit> firstHit(const glm::dvec3& origin, const glm::dvec3& dir, const std::vector<NodeId>& exclude)
+{
+    return raycastAmong(origin, dir, exclude, false);
+}
+
+static std::optional<Hit> raycastAmong(const glm::dvec3& origin, const glm::dvec3& dir, const std::vector<NodeId>& exclude, bool designated)
 {
     LILA_ZONE();
 
     std::optional<Hit> best;
     double bestDist = 1e300;
-    for (const Target& t : targets(exclude))
+    for (const Target& t : targets(exclude, designated))
     {
         auto bvh = bvhFor(t.mesh);
         if (bvh->empty())

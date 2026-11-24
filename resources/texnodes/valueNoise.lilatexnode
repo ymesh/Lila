@@ -37,6 +37,22 @@
       "doc": "Amplitude of each octave relative to the one before."
     },
     {
+      "id": "lacunarity",
+      "type": "int",
+      "default": 2,
+      "min": 1,
+      "max": 4,
+      "doc": "Each octave's frequency over the last: whole numbers keep it tiling."
+    },
+    {
+      "id": "distortion",
+      "type": "float",
+      "default": 0.0,
+      "min": 0.0,
+      "softMax": 4.0,
+      "doc": "Bends the noise with a second noise, in cells."
+    },
+    {
       "id": "seed",
       "type": "seed",
       "default": 0,
@@ -48,6 +64,12 @@
     "noise"
   ],
   "body": {
-    "out": "return noiseFbm(uv, p.scale, p.octaves, p.persistence, uint(p.seed), false);"
-  }
+    "out": "return noiseFbmEx(uv, p.scale, p.octaves, p.persistence, p.lacunarity, p.distortion, uint(p.seed), false);"
+  },
+  "keywords": [
+    "fbm",
+    "lacunarity",
+    "distortion",
+    "fractal"
+  ]
 }

@@ -466,15 +466,21 @@ NodeEditor::NodeEditor(QWidget* parent, const std::string& backend) : QWidget(pa
     auto* split = new QSplitter(Qt::Horizontal, this);
     mCanvas = new NodeCanvas(split);
     mCanvas->backend = mBackend.get();
-    mSide = new QScrollArea(split);
+    mSideColumn = new QWidget(split);
+    auto* column = new QVBoxLayout(mSideColumn);
+    column->setContentsMargins(0, 0, 0, 0);
+    column->setSpacing(0);
+    mSide = new QScrollArea(mSideColumn);
     mSide->setWidgetResizable(true);
     mSide->setMinimumWidth(230);
+    column->addWidget(mSide, 1);
     split->addWidget(mCanvas);
-    split->addWidget(mSide);
+    split->addWidget(mSideColumn);
     split->setStretchFactor(0, 1);
     split->setSizes({700, 260});
     lay->addWidget(split, 1);
     buildToolbar();
+    rebuildPinned();
 
     // Sends stored after the command returns, so the label is read on the next turn of the event loop.
     mExecuteListener = ops::addExecuteListener([this](const ExecuteEvent& e) {
@@ -483,6 +489,11 @@ NodeEditor::NodeEditor(QWidget* parent, const std::string& backend) : QWidget(pa
         if (e.done && (e.name == "undo" || e.name == "redo") && mBackend->rebuildsOnUndo())
             scheduleRefresh();
     });
+
+    mProfileTimer = new QTimer(this);
+    mProfileTimer->setSingleShot(true);
+    mProfileTimer->setInterval(300);
+    connect(mProfileTimer, &QTimer::timeout, this, [this] { profileNow(); });
 
     mRefresh = new QTimer(this);
     mRefresh->setSingleShot(true);
@@ -748,10 +759,20 @@ bool NodeEditor::setBackend(const std::string& id)
     mGroup.clear();
     mOwner.clear();
     mSelectedNode.clear();
+    setTimings(mTimings);
     buildToolbar();
+    rebuildPinned();
     followSelection();
     refresh();
     return true;
+}
+
+void NodeEditor::rebuildPinned()
+{
+    delete mPinned;
+    mPinned = mBackend->pinnedPanel(mSideColumn, *this);
+    if (mPinned)
+        static_cast<QVBoxLayout*>(mSideColumn->layout())->insertWidget(0, mPinned);
 }
 
 NodeEditor::~NodeEditor()
@@ -1185,7 +1206,7 @@ void NodeEditor::ungroupSelected()
         selectAfterRefresh(added);
 }
 
-void NodeEditor::openSelectedGroup()
+QString NodeEditor::selectedSubgroup() const
 {
     for (const std::string& n : mCanvas->selectedNames())
         if (mBackend->runsSubgroup(mCanvas->typeOf(n)))
@@ -1195,11 +1216,30 @@ void NodeEditor::openSelectedGroup()
                 if (d.value("name", "") == n && d.contains("values"))
                 {
                     std::string g = mBackend->childGroup(mGroup.toStdString(), d["values"].value("group", ""));
-                    if (mBackend->hasGroup(scene::Graph::current(), g))
-                        enterGroup(qs(g));
-                    return;
+                    return mBackend->hasGroup(scene::Graph::current(), g) ? qs(g) : QString();
                 }
         }
+    return {};
+}
+
+void NodeEditor::openSelectedGroup()
+{
+    if (QString g = selectedSubgroup(); !g.isEmpty())
+        enterGroup(g);
+}
+
+void NodeEditor::saveGroupToLibrary()
+{
+    if (!mBackend->supports("SaveGroup"))
+        return;
+    QString g = selectedSubgroup();
+    if (g.isEmpty())
+        g = mGroup;
+    if (g.isEmpty())
+        return;
+    json p = run("SaveGroup", args({g.toStdString()}));
+    if (p.is_string())
+        log::info("saved {}", p.get<std::string>());
 }
 
 namespace
@@ -1430,6 +1470,47 @@ std::vector<std::string> NodeEditor::sendTargets() const
 
 void NodeEditor::setValueFromField(const json& call) { setFromField(*mBackend, call); }
 
+void NodeEditor::setTimings(bool on)
+{
+    mTimings = on && mBackend->canProfile();
+    ++mProfileRun;
+    mCanvas->setNodeTimes({}, {});
+    if (mTimings)
+        profileNow();
+}
+
+const std::map<std::string, double>& NodeEditor::nodeTimes() const { return mCanvas->nodeTimes(); }
+
+void NodeEditor::profileNow()
+{
+    if (!mTimings || mGroup.isEmpty())
+        return;
+    const int runId = ++mProfileRun;
+    QPointer<NodeEditor> self(this);
+    mBackend->profile(mGroup.toStdString(), [self, runId](json r) {
+        if (!self || runId != self->mProfileRun || !self->mTimings)
+            return;
+        if (r.contains("error"))
+        {
+            log::warn("Node Timings: {}", r["error"].get<std::string>());
+            self->mCanvas->setNodeTimes({}, {});
+            return;
+        }
+        std::map<std::string, double> times;
+        const json nodes = r.value("nodes", json::object());
+        for (const auto& [node, ms] : nodes.items())
+            times[node] = ms.get<double>();
+        self->mCanvas->setNodeTimes(std::move(times), qs(r.value("label", std::string())));
+    });
+}
+
+void NodeEditor::runFromField(const std::string& command, const json& call)
+{
+    ++gFieldEdits;
+    runCmd(command, call);
+    --gFieldEdits;
+}
+
 void NodeEditor::refreshSendButton()
 {
     if (!mSendBtn)
@@ -1498,6 +1579,12 @@ void NodeEditor::refresh(bool panel)
     if (selected.empty() && !mSelectedNode.isEmpty())
         selected.insert(mSelectedNode.toStdString());
     json info = mGroup.isEmpty() ? json() : run("GroupInfo", args({mGroup.toStdString()}));
+    if (mTimings)
+    {
+        if (mGroup != mBuiltGroup)
+            mCanvas->setNodeTimes({}, {});
+        mProfileTimer->start();
+    }
     mBuiltStamp = stamp;
     mBuiltGroup = mGroup;
     mBuiltOwner = mOwner;
@@ -1957,6 +2044,17 @@ void NodeEditor::showCanvasMenu(QPoint global)
         }
         QObject::connect(q, &QAction::triggered, q, [id] { actions::run(json(id)); });
     };
+    if (auto s = mCanvas->interfaceSocketAt(mCanvas->mapToScene(mCanvas->viewport()->mapFromGlobal(global))))
+    {
+        menu.addSection(pretty(s->id));
+        menu.addAction("Rename\tDouble-click", this, [this, s = *s] { mCanvas->renameInterfaceSocket(s); });
+        menu.addAction("Move Up", this, [this, s = *s] { mCanvas->moveInterfaceSocket(s, s.index - 1); })->setEnabled(s->index > 0);
+        menu.addAction("Move Down", this, [this, s = *s] { mCanvas->moveInterfaceSocket(s, s.index + 1); })->setEnabled(s->index + 1 < s->count);
+        menu.addAction(s->groupOutput ? "Remove Output" : "Remove Input", this, [this, s = *s] {
+            run(s.groupOutput ? "RemoveOutput" : "RemoveInput", args({mGroup.toStdString(), s.id}));
+        });
+        menu.addSeparator();
+    }
     for (const char* id : {"nodeEditor.addNode", "nodeEditor.duplicate", "nodeEditor.copy", "nodeEditor.paste", "nodeEditor.delete"})
         item(&menu, id);
     std::vector<std::string> selected = mCanvas->selectedNames();
@@ -1974,6 +2072,8 @@ void NodeEditor::showCanvasMenu(QPoint global)
         item(&menu, "nodeEditor.groupNodes");
     if (groupNode)
         item(&menu, "nodeEditor.ungroup");
+    if (mBackend->supports("SaveGroup") && (groupNode || !parentGroup().isEmpty()))
+        item(&menu, "nodeEditor.saveGroup");
     menu.addSeparator();
     QMenu* arrange = menu.addMenu("Arrange");
     for (const char* id : {"nodeEditor.alignLeft", "nodeEditor.alignCenter", "nodeEditor.alignRight", "nodeEditor.alignTop", "nodeEditor.alignMiddle",
@@ -1993,6 +2093,8 @@ void NodeEditor::showCanvasMenu(QPoint global)
     item(&menu, "nodeEditor.toggleFlow");
     item(&menu, "nodeEditor.toggleSelectedWires");
     item(&menu, "nodeEditor.toggleMinimap");
+    if (mBackend->canProfile())
+        item(&menu, "nodeEditor.toggleTimings");
     if (mCanvas->hasPreviews(false))
         item(&menu, "nodeEditor.togglePreviews");
     item(&menu, "nodeEditor.find");
@@ -2028,7 +2130,7 @@ void NodeEditor::rebuildSidePanel()
         return;
     }
 
-    if ((mBackend->supports("AddInput") && mBackend->hasInterface(group)) || !info["definition"].value("inputs", json::array()).empty())
+    if (mBackend->hasInterface(group) && (mBackend->supports("AddInput") || !info["definition"].value("inputs", json::array()).empty()))
         lay->addWidget(buildInterface(panel, info));
     if (info.contains("owners") || info.contains("modifiers"))
     {
@@ -2198,6 +2300,8 @@ void NodeEditor::rebuildSidePanel()
     }
     else
     {
+        if (QWidget* graph = mBackend->graphPanel(panel, *this, info))
+            lay->addWidget(graph);
         auto* hint = new QLabel(mBackend->canvasHint(), panel);
         hint->setWordWrap(true);
         hint->setStyleSheet("color: rgb(150,150,150);");
@@ -2236,7 +2340,9 @@ void registerEditActions()
     add("nodeEditor.openGroup", "Open Group", &NodeEditor::openSelectedGroup, "Open the group the selected Group node runs.");
     add("nodeEditor.parentGroup", "Parent Group", &NodeEditor::openParentGroup,
         "Go back to the group that runs this one, with its Group node selected.");
-    add("nodeEditor.exportGroup", "Export Node Group...", &NodeEditor::exportGroup,
+    add("nodeEditor.saveGroup", "Save Group to Library", &NodeEditor::saveGroupToLibrary,
+        "Keep the selected Group node's group, or the group on show, in your library as a node for every scene.");
+    add("nodeEditor.exportGroup","Export Node Group...", &NodeEditor::exportGroup,
         "Write the group and the groups nested in it to a .lilanodes file to share.");
     struct AlignAction
     {
@@ -2302,6 +2408,16 @@ void registerEditActions()
                       },
                   .doc = "Show an overview of the whole graph in the corner; click or drag in it to move the view.",
                   .checked = [] { return NodeEditor::active() && NodeEditor::active()->minimap(); }});
+    actions::add({.id = "nodeEditor.toggleTimings", .label = "Node Timings", .category = "Node Editor",
+                  .run =
+                      [] {
+                          if (NodeEditor* e = NodeEditor::active())
+                              e->setTimings(!e->timings());
+                      },
+                  .doc = "Show how long each node takes to evaluate, on a tag above it, with the slowest lit. Timed again after every "
+                         "edit; texture graphs time their passes on the CPU.",
+                  .checked = [] { return NodeEditor::active() && NodeEditor::active()->timings(); },
+                  .keywords = {"profile", "profiler", "performance", "slow", "cost", "time"}});
     for (int slot = 1; slot <= 5; ++slot)
     {
         actions::add({.id = "nodeEditor.bookmarkSet" + std::to_string(slot), .label = "Save View " + std::to_string(slot), .category = "Node Editor",

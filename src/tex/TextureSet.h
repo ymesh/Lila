@@ -30,6 +30,12 @@ struct Channel
     PortType type = PortType::Gray;
     /** 8, 16 or 32 (float). */
     int bits = 8;
+    /**
+     * Channels the export preset doesn't name (packed ORM, specular...) export as their own file: suffix is its map token
+     * (the name when empty), colorSpace "srgb" encodes it as colour, "linear" writes it as data.
+     */
+    std::string suffix;
+    std::string colorSpace = "linear";
 };
 
 /** One UDIM tile's size; 0 takes the set's. */

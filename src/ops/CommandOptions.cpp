@@ -388,6 +388,8 @@ Field fieldFor(const FlagDef& flag)
         f.editor = "uvSet";
     f.min = flag.min.value_or(f.min);
     f.max = flag.max.value_or(f.max);
+    f.softMin = flag.softMin.value_or(f.softMin);
+    f.softMax = flag.softMax.value_or(f.softMax);
     if (f.kind == FieldKind::Int || f.kind == FieldKind::Float)
         f.presets = flag.presets;
     const json& given = flag.defaultValue.is_null() ? flag.shownDefault : flag.defaultValue;
@@ -451,6 +453,7 @@ std::vector<Field> fields(std::string_view command, const json& fixed)
             {
                 f.min = it->second.min;
                 f.max = it->second.max;
+                f.softMin = f.softMax = std::numeric_limits<double>::quiet_NaN();
                 f.step = it->second.step;
                 f.suffix = it->second.suffix;
             }

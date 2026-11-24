@@ -42,7 +42,7 @@ LILA_SCENE_API Frames framesAt(double position, int count, std::string_view loop
 LILA_SCENE_API std::string driver(const GNode& node, std::string_view param);
 /** The attribute name a driver of node.param gets. */
 LILA_SCENE_API std::string driverName(std::string_view node, std::string_view param);
-/** Whether the graph changes with time: it has an Image Sequence node or a driven parameter. */
+/** Whether the graph changes with time: it has an Image Sequence node, a driven parameter or an expression reading time. */
 LILA_SCENE_API bool animated(const Graph& g);
 
 /**

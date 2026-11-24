@@ -10,6 +10,7 @@
 #include <map>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 /**
@@ -34,6 +35,8 @@ struct EvalResult
     std::map<std::string, image::Image> outputs;
     std::vector<std::string> warnings;
     double milliseconds = 0.0;
+    /** Each pass's run time in plan order, compiling left out; empty from an evaluator that doesn't time passes (the GPU one). */
+    std::vector<double> passMilliseconds;
     /** Kernels compiled and found in the cache during this evaluation. */
     size_t compiled = 0;
     size_t cached = 0;
@@ -74,8 +77,21 @@ LILA_SCENE_API void registerNativeCpu(const std::string& type, NativeCpuFn fn);
 /** The registered CPU side of a native type; empty when there is none. */
 LILA_SCENE_API NativeCpuFn nativeCpu(const std::string& type);
 
+/**
+ * The file an image parameter reads for the UDIM tile whose uv origin is uvOffset: with a <UDIM> or <UVTILE> token in path,
+ * that tile's file; otherwise path itself.
+ */
+LILA_SCENE_API std::string imageForTile(const std::string& path, const float uvOffset[2]);
+
 /** An image parameter's file: absolute as given, else under root, the workspace, the scene's folder or Lila's resources. */
 LILA_SCENE_API std::filesystem::path resolveImagePath(const std::string& path, const std::filesystem::path& root);
+
+/** Whether an Image buffer's name is drawn rather than read from a file (a Text node's words): it has no path. */
+LILA_SCENE_API bool generatedSource(std::string_view name);
+
+/** An Image buffer's texels: the file its name resolves to (resolveImagePath, read by readSourceFile), or what a generated name draws. */
+LILA_SCENE_API image::Image readSourceImage(const std::string& name, const std::filesystem::path& root, int planWidth, int planHeight,
+                                            std::string* error = nullptr);
 
 /**
  * An Image node's file as a plan samples it: no larger than the plan (detail past the set's resolution never shows), and
@@ -83,6 +99,14 @@ LILA_SCENE_API std::filesystem::path resolveImagePath(const std::string& path, c
  */
 LILA_SCENE_API image::Image fitSourceImage(image::Image img, const std::string& name, int planWidth, int planHeight, size_t maxTexels,
                                            std::string* warning);
+/** An Image node's file read for a plan: an SVG is drawn at the plan's size, so its edges stay sharp; anything else as stored. */
+LILA_SCENE_API image::Image readSourceFile(const std::filesystem::path& path, int planWidth, int planHeight, std::string* err);
+
+/**
+ * An Image buffer's texels with its mip levels (each half the last, area averaged, down to 1 x 1) packed after it, one
+ * level after another, as width-wide rows. flags receives the descriptor flags texReadImage reads them by.
+ */
+LILA_SCENE_API image::Image withMipLevels(const image::Image& img, uint32_t& flags);
 
 /** The GPU evaluator the renderer installs: evaluate throws like evaluateCpu; available says whether a GPU can run it. */
 struct GpuEvaluator

@@ -117,3 +117,26 @@ TEST_CASE("V snaps to the centers of locators and joints")
     g.evaluate();
     CHECK_FALSE(at(loc, QPointF(62, 56), ui::SnapVertex).second);
 }
+
+TEST_CASE("V skips points hidden behind a mesh")
+{
+    run("newScene");
+    run("polyCube", {{"width", 20}, {"height", 20}, {"depth", 20}});
+    std::string front = run("spaceLocator", {{"position", {5, 5, 50}}, {"skipSelect", true}});
+    std::string back = run("spaceLocator", {{"position", {5, 5, -50}}, {"skipSelect", true}});
+    scene::Graph& g = scene::Graph::current();
+    g.evaluate();
+    ui::ViewInfo view = snapTopView();
+    // Reversed Z, as the viewport draws: depth 1 is the near plane at z = 100.
+    view.proj = glm::ortho(-50.0, 50.0, -50.0, 50.0, 100.0, -100.0);
+    auto at = [&](const std::string& node, bool occlusion) {
+        geometrySnap::Nearest n(*view.project(D3(5, 5, 0)), view, 5.0);
+        if (occlusion)
+            n.hideOccluded({});
+        geometrySnap::addPointObject(n, g, g.find(node)->id(), ui::SnapVertex);
+        return n.hit();
+    };
+    checkHit(at(back, false), D3(5, 5, -50));
+    CHECK_FALSE(at(back, true));
+    checkHit(at(front, true), D3(5, 5, 50));
+}

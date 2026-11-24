@@ -61,6 +61,11 @@ struct BufferDesc
     std::string format = "rgba16f";
     /** The gU slot of its descriptor. */
     int slot = -1;
+    /**
+     * Image: a pass reads it away from its own uv (tiled, scaled, warped), so the evaluator packs mip levels after it
+     * (withMipLevels in Evaluate.h) and sampleImage reads the level the footprint covers.
+     */
+    bool mips = false;
 };
 
 enum class PassKind : uint8_t
@@ -156,6 +161,23 @@ struct LILA_SCENE_API Plan
     /** Summary for commands and tests: passes (kind, node, cost, reads, output), buffers, slots, hash. */
     json summary() const;
 };
+
+/**
+ * A setting every computing node (Slang, native, Buffer) takes besides its parameters, kept in its values by id. A node with
+ * one off its default caches its outputs in buffers of its own: outputSize scales them against the plan's size (eighth to
+ * quadruple), bitDepth stores them at 8 (quantized to 1/255 by fused passes), 16 or 32 bits instead of the plan's format.
+ */
+struct NodeSetting
+{
+    std::string id;
+    std::string label;
+    std::vector<std::string> options;
+    std::string defaultValue;
+    std::string doc;
+};
+LILA_SCENE_API const std::vector<NodeSetting>& nodeSettings();
+/** Null when id names no node setting. */
+LILA_SCENE_API const NodeSetting* nodeSetting(std::string_view id);
 
 /** The standard material channels a Material Output has, in order, with their port types. */
 LILA_SCENE_API const std::vector<std::pair<std::string, PortType>>& standardChannels();

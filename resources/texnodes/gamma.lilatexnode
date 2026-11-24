@@ -1,0 +1,45 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "gamma",
+  "label": "Gamma",
+  "category": "Filter",
+  "doc": "Bends the midtones: above 1 brightens them, below darkens, black and white stay.",
+  "keywords": [
+    "gamma",
+    "midtones",
+    "power"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0.5,
+        0.5,
+        0.5,
+        1.0
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "gamma",
+      "type": "float",
+      "default": 1.0,
+      "min": 0.01,
+      "softMax": 4.0,
+      "doc": "1 changes nothing."
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float4 c = input.sample(uv);\nreturn float4(pow(max(c.rgb, float3(0.0)), float3(1.0 / max(p.gamma, 0.01))), c.a);"
+  }
+}

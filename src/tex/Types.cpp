@@ -9,7 +9,7 @@ namespace lila::tex
 namespace
 {
 constexpr std::array<const char*, 6> kPortNames = {"float", "gray", "color", "vector", "sdf2d", "material"};
-constexpr std::array<const char*, 11> kParamNames = {"float", "int", "enum", "bool", "color", "gradient", "curve", "image", "seed", "code", "node"};
+constexpr std::array<const char*, 12> kParamNames = {"float", "int", "enum", "bool", "color", "gradient", "curve", "image", "seed", "code", "node", "string"};
 
 bool isScalar(PortType t) { return t == PortType::Float || t == PortType::Gray || t == PortType::Sdf2d; }
 
@@ -168,7 +168,8 @@ bool paramValueValid(ParamType t, const json& v, const std::vector<std::string>&
     case ParamType::Color: return valueToFloat4(v, PortType::Color, tmp);
     case ParamType::Image:
     case ParamType::Code:
-    case ParamType::Node: return v.is_string();
+    case ParamType::Node:
+    case ParamType::String: return v.is_string();
     case ParamType::Gradient:
         return stopsValid(v.is_object() ? v.value("stops", json()) : v, 2);
     case ParamType::Curve:

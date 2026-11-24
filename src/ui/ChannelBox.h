@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 
+class QDoubleSpinBox;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -104,6 +105,10 @@ private:
     /** Whether a row passes the filter text and chips. */
     bool passesFilter(const Row& row, scene::NodeId lead) const;
     void refreshStrip();
+    /** Shows the lead's size; hidden for objects without geometry of their own. */
+    void refreshSize();
+    /** Scales every edited object along its own axis so its size there becomes cm. */
+    void setSize(int axis, double cm);
     /** After a lead-only edit with several objects selected: "Changed X only. Hold Alt to change all N." */
     void noteEdit(const Row& row);
     /** Opens what drives the row: the Graph Editor for keys, the source node for anything else. */
@@ -150,6 +155,8 @@ private:
     QLabel* mHintText = nullptr;
     int mViewListener = 0;
     QTableWidget* mTable = nullptr;
+    QWidget* mSizeRow = nullptr;
+    std::vector<QDoubleSpinBox*> mSize;
     std::vector<Row> mRows;
     scene::NodeId mNode = scene::kNoNode;
     int mListener = 0;

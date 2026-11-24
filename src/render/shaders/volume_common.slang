@@ -35,7 +35,7 @@ float volDensity(GpuVolume* v, float3 idx)
 /** Where a ray in voxel coordinates is inside the grid's box, as a range of its t. */
 float2 volBoxRange(float3 o, float3 d, float3 dims)
 {
-    float3 inv = 1.0 / (abs(d) > 1e-12 ? d : float3(1e-12, 1e-12, 1e-12));
+    float3 inv = 1.0 / select(abs(d) > 1e-12, d, float3(1e-12, 1e-12, 1e-12));
     float3 a = (-0.5 - o) * inv, b = (dims - 0.5 - o) * inv;
     float3 lo = min(a, b), hi = max(a, b);
     return float2(max(max(lo.x, lo.y), lo.z), min(min(hi.x, hi.y), hi.z));

@@ -8,9 +8,15 @@
 #include "ui/DockSidebar.h"
 #include "ui/OptionBox.h"
 #include "ui/ToolkitLayout.h"
+#include "ui/Tools.h"
 #include "ui/UiCommon.h"
 
+#include <QComboBox>
+#include <QDoubleSpinBox>
+#include <QGridLayout>
+#include <QLabel>
 #include <QScrollArea>
+#include <QSignalBlocker>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -115,6 +121,8 @@ ModelingToolkit::ModelingToolkit(QWidget* parent) : QWidget(parent)
                       {}, kModelingGroupColumns, body),
         false);
 
+    add("Move", moveSettings(body), false);
+
     // The in-view popup is the main place for these; the section serves those who turn it off.
     auto* optionsBox = new QWidget(body);
     auto* optionsLayout = new QVBoxLayout(optionsBox);
@@ -128,6 +136,7 @@ ModelingToolkit::ModelingToolkit(QWidget* parent) : QWidget(parent)
     mRefresh->setInterval(30);
     connect(mRefresh, &QTimer::timeout, this, [this] { refreshState(); });
     mGraphListener = scene::Graph::current().addListener([this](scene::Change, scene::NodeId) { mRefresh->start(); });
+    mToolsListener = tools::addListener([this] { mRefresh->start(); });
     mPrefListener = PrefStore::get().onChanged([this](const std::string& file) {
         if (file == "general")
             QMetaObject::invokeMethod(mRefresh, qOverload<>(&QTimer::start), Qt::QueuedConnection);
@@ -137,6 +146,7 @@ ModelingToolkit::ModelingToolkit(QWidget* parent) : QWidget(parent)
 ModelingToolkit::~ModelingToolkit()
 {
     scene::Graph::current().removeListener(mGraphListener);
+    tools::removeListener(mToolsListener);
     PrefStore::get().removeOnChanged(mPrefListener);
 }
 
@@ -156,6 +166,49 @@ QToolButton* ModelingToolkit::tile(const std::string& id, const char* iconName, 
 QToolButton* ModelingToolkit::push(const std::string& id, const QString& label, QWidget* parent)
 {
     return actions::find(id) ? track(controls::row(id, nullptr, parent, label), id) : nullptr;
+}
+
+QWidget* ModelingToolkit::moveSettings(QWidget* parent)
+{
+    auto* box = new QWidget(parent);
+    auto* grid = new QGridLayout(box);
+    grid->setContentsMargins(0, 0, 0, 4);
+    grid->setHorizontalSpacing(6);
+    grid->setVerticalSpacing(2);
+    grid->setColumnStretch(1, 1);
+
+    mMoveAxis = new QComboBox(box);
+    mMoveAxis->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    mMoveAxis->setMinimumContentsLength(6);
+    for (auto [label, space] : {std::pair{"World", "world"}, {"Object", "object"}, {"Parent", "parent"}, {"Component", "component"},
+                                {"Normal", "normal"}, {"Custom", "custom"}})
+        mMoveAxis->addItem(label, space);
+    mMoveAxis->setToolTip("The move manipulator's axes. Also on the move tool's marking menu.");
+    connect(mMoveAxis, &QComboBox::activated, this,
+            [this](int i) { PrefStore::get().set("general", "/manipulator/moveSpace", mMoveAxis->itemData(i).toString().toStdString()); });
+    grid->addWidget(new QLabel("Axis", box), 0, 0);
+    grid->addWidget(mMoveAxis, 0, 1);
+
+    mCustomAxis = controls::vectorField(mCustomAngles, -360.0, 360.0, 3, QStringLiteral("°"), box);
+    mCustomAxis->setToolTip("Custom axis angles, in degrees. Used by the move and rotate manipulators when their axis is Custom.");
+    for (QDoubleSpinBox* s : mCustomAngles)
+        connect(s, &QDoubleSpinBox::valueChanged, this, [this] {
+            PrefStore::get().set("general", "/manipulator/customAxis",
+                                 json::array({mCustomAngles[0]->value(), mCustomAngles[1]->value(), mCustomAngles[2]->value()}));
+        });
+    grid->addWidget(new QLabel("Angles", box), 1, 0);
+    grid->addWidget(mCustomAxis, 1, 1);
+
+    std::vector<QWidget*> buttons;
+    if (QToolButton* edit = push("tool.pivotEditToggle", "Edit Pivot", box))
+    {
+        edit->setCheckable(true);
+        buttons.push_back(edit);
+    }
+    if (QToolButton* reset = push("modify.resetPivot", "Reset Pivot", box))
+        buttons.push_back(reset);
+    grid->addWidget(controls::grid(buttons, kModelingGroupColumns, box), 2, 0, 1, 2);
+    return box;
 }
 
 void ModelingToolkit::showEvent(QShowEvent* e)
@@ -180,6 +233,20 @@ void ModelingToolkit::refreshState()
             b->setToolTip(tip);
         if (a->checked && b->isCheckable())
             b->setChecked(a->checked());
+    }
+    if (mMoveAxis)
+    {
+        const std::string space = PrefStore::get().value<std::string>("general", "/manipulator/moveSpace", "world");
+        mMoveAxis->setCurrentIndex(std::max(0, mMoveAxis->findData(QString::fromStdString(space))));
+        const bool custom = space == "custom" || PrefStore::get().value<std::string>("general", "/manipulator/rotateSpace", "world") == "custom";
+        mCustomAxis->setEnabled(custom);
+        const json angles = PrefStore::get().value("general", "/manipulator/customAxis", json::array({0.0, 0.0, 0.0}));
+        for (size_t i = 0; i < mCustomAngles.size(); ++i)
+            if (!mCustomAngles[i]->hasFocus())
+            {
+                QSignalBlocker block(mCustomAngles[i]);
+                mCustomAngles[i]->setValue(angles.is_array() && angles.size() == 3 && angles[i].is_number() ? angles[i].get<double>() : 0.0);
+            }
     }
 }
 

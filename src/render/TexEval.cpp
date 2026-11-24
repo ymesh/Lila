@@ -2,6 +2,7 @@
 #include "render/TexEvalInternal.h"
 
 #include "core/Progress.h"
+#include "tex/TextRaster.h"
 
 #include <optional>
 #include <tbb/parallel_for.h>
@@ -122,13 +123,16 @@ float4 texFetchBuf(uint slot, int2 p)
     return texFetchAt(d, uint(y * w + x));
 }
 
-float4 texReadBuf(uint slot, float2 uv)
+float2 texBufSize(uint slot)
 {
     float4 d = gU[slot];
-    float2 size = float2(float(asuint(d.y)), float(asuint(d.z)));
     uint flags = asuint(d.w);
-    if ((flags & 2u) != 0)
-        size = gU[flags >> 8].zw;
+    return (flags & 2u) != 0 ? gU[flags >> 8].zw : float2(float(asuint(d.y)), float(asuint(d.z)));
+}
+
+float4 texReadBuf(uint slot, float2 uv)
+{
+    float2 size = texBufSize(slot);
     float2 p = float2(uv.x, 1.0 - uv.y) * size - 0.5;
     float2 f = floor(p);
     float2 t = p - f;
@@ -549,13 +553,22 @@ std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget
         if (b.kind == BufferKind::Image)
         {
             std::shared_ptr<const image::Image> img = blackImage();
-            if (!b.name.empty())
+            if (tex::generatedSource(b.name))
             {
-                const fs::path path = tex::resolveImagePath(b.name, inputs.imageRoot);
+                std::string err;
+                std::shared_ptr<const image::Image> drawn = tex::textSourceImage(b.name, &err);
+                if (drawn->width > 0)
+                    img = std::move(drawn);
+                if (!err.empty())
+                    warnings.push_back("text: " + err);
+            }
+            else if (!b.name.empty())
+            {
+                const fs::path path = tex::resolveImagePath(tex::imageForTile(b.name, inputs.uvOffset), inputs.imageRoot);
                 std::error_code ec;
                 const fs::file_time_type time = fs::last_write_time(path, ec);
                 // Cached per plan size: each plan keeps only the copy it samples, not the whole file.
-                const std::string key = path.string() + "@" + std::to_string(plan.width) + "x" + std::to_string(plan.height);
+                const std::string key = path.string() + "@" + std::to_string(plan.width) + "x" + std::to_string(plan.height) + (b.mips ? "+mips" : "");
                 std::optional<LoadedImage> cached;
                 {
                     std::scoped_lock lock(m->mutex);
@@ -565,10 +578,13 @@ std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget
                 if (!cached)
                 {
                     std::string err, fitted;
-                    image::Image read = tex::fitSourceImage(image::read(path, &err), b.name, plan.width, plan.height, kMaxImageTexels, &fitted);
+                    image::Image read = tex::fitSourceImage(tex::readSourceFile(path, plan.width, plan.height, &err), b.name, plan.width, plan.height, kMaxImageTexels, &fitted);
                     if (read.width > 0)
                     {
-                        cached = LoadedImage{time, std::make_shared<const image::Image>(std::move(read)), fitted};
+                        uint32_t flags = 0;
+                        if (b.mips)
+                            read = tex::withMipLevels(read, flags);
+                        cached = LoadedImage{time, std::make_shared<const image::Image>(std::move(read)), fitted, flags};
                         std::scoped_lock lock(m->mutex);
                         m->imageCache[key] = *cached;
                     }
@@ -578,6 +594,8 @@ std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget
                 if (cached)
                 {
                     img = cached->image;
+                    if (cached->flags)
+                        prep->imageFlags[b.id] = cached->flags;
                     if (!cached->warning.empty())
                         warnings.push_back(cached->warning);
                 }

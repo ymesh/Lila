@@ -41,7 +41,7 @@ namespace lila::ui
 {
 namespace
 {
-const QString kImageFiles = "Images (*.png *.jpg *.jpeg *.tga *.hdr *.exr *.bmp *.tif *.tiff *.psd *.webp)";
+const QString kImageFiles = "Images (*.png *.jpg *.jpeg *.tga *.hdr *.exr *.bmp *.tif *.tiff *.psd *.webp *.svg)";
 
 } // namespace
 

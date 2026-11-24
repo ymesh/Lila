@@ -21,6 +21,11 @@ namespace lila::ui
 {
 using namespace viewportDetail;
 
+namespace
+{
+const QString kIsolateToastKey = QStringLiteral("viewport.isolate");
+}
+
 void ViewportWidget::setView(const std::string& name)
 {
     if (name == mViewName)
@@ -465,7 +470,8 @@ void ViewportWidget::toggleIsolate()
         g.evaluate();
         mIsolation = scene::isolation::fromSelection(g);
         const QString key = Hotkeys::get().keyFor("viewport.isolate");
-        viewportToast::show(key.isEmpty() ? QString("Isolate Select on") : QString("Isolate Select on: %1 to show all").arg(key), this, 3000);
+        viewportToast::show(key.isEmpty() ? QString("Isolate Select on") : QString("Isolate Select on: %1 to show all").arg(key), this, 3000,
+                            viewportToast::Kind::Info, kIsolateToastKey);
     }
     setIsolation(std::move(mIsolation));
 }
@@ -491,6 +497,8 @@ void ViewportWidget::removeFromIsolation()
 void ViewportWidget::setIsolation(scene::isolation::Set set)
 {
     mIsolation = std::move(set);
+    if (!mIsolation.active())
+        viewportToast::dismiss(kIsolateToastKey, this);
     clearPreselect();
     requestFrame();
     Q_EMIT viewStateChanged();

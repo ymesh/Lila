@@ -90,12 +90,12 @@ uint64_t mix(uint64_t h, uint64_t v)
 uint64_t mixText(uint64_t h, std::string_view s) { return mix(h, std::hash<std::string_view>{}(s)); }
 
 /**
- * A fused pass's source with the slot numbers it names (gU[n], texReadBuf(n, .base = nu) replaced by their order of
- * first use, and those slots in that order: two plans that number their slots differently give equal text.
+ * A fused pass's source with the slot numbers it names (gU[n], texReadBuf(n, texReadImage(n, .base = nu) replaced by their
+ * order of first use, and those slots in that order: two plans that number their slots differently give equal text.
  */
 std::pair<std::string, std::vector<int>> slotFree(const std::string& src)
 {
-    static constexpr std::string_view kMarks[] = {"gU[", "texReadBuf(", ".base = "};
+    static constexpr std::string_view kMarks[] = {"gU[", "texReadBuf(", "texReadImage(", ".base = "};
     std::string out;
     out.reserve(src.size());
     std::vector<int> order;
@@ -310,7 +310,7 @@ void Evaluator::State::adopt(VkDeviceSize maxBytes)
                 loadTarget[id] = 0;
             }
         }
-        if (!changed.empty())
+        if (!changed.empty() || next->imageFlags != cur->imageFlags)
             uniformsDirty = true;
         storesChanged = !sameStores(next->stores, cur->stores);
     }
@@ -427,8 +427,9 @@ void Evaluator::State::adopt(VkDeviceSize maxBytes)
     {
         // The GPU form indexes the arena in 32-bit pairs.
         const size_t id = size_t(b.id);
+        const auto flags = cur->imageFlags.find(b.id);
         const uint32_t d[4] = {uint32_t(cur->gpuForm ? offset[id] * 2 : offset[id]), uint32_t(cur->sizes[id].first), uint32_t(cur->sizes[id].second),
-                               cur->half[id] ? 1u : 0u};
+                               (cur->half[id] ? 1u : 0u) | (flags != cur->imageFlags.end() ? flags->second : 0u)};
         std::memcpy(&uniformValues[size_t(b.slot) * 4], d, sizeof(d));
     }
     if (!keep)

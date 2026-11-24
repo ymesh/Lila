@@ -1,0 +1,48 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "normalRotate",
+  "label": "Normal Rotate",
+  "category": "Normal",
+  "doc": "Turns a normal map's slopes by an angle. After turning a normal map's pixels (Transform, Tiler), turn its slopes by the same angle so the lighting follows.",
+  "keywords": [
+    "rotate normal",
+    "normal vector rotation",
+    "turn"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color"
+    },
+    {
+      "id": "rotation",
+      "type": "gray",
+      "default": 0.0,
+      "doc": "Added turn, in whole turns (1 is 360 degrees), for a per-pixel angle."
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "angle",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -180.0,
+      "softMax": 180.0,
+      "doc": "Degrees, counterclockwise."
+    }
+  ],
+  "cost": 1,
+  "helpers": [
+    "normals"
+  ],
+  "body": {
+    "out": "float3 n = normalDecode(input.sample(uv));\nfloat a = radians(p.angle) + rotation.sample(uv) * 6.28318530718;\nfloat c = cos(a), s = sin(a);\nreturn normalEncode(float3(n.x * c - n.y * s, n.x * s + n.y * c, n.z));"
+  }
+}

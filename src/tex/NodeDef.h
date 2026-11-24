@@ -61,6 +61,9 @@ enum class NodeKind : uint8_t
     Group,
     /** Reroutes and portals (gn/Routing.h): spliced out before planning. */
     Route,
+    /** The two ends of a repeat zone (Graph.h): the planner unrolls the nodes between them. */
+    RepeatInput,
+    RepeatOutput,
 };
 
 LILA_SCENE_API const char* nodeKindName(NodeKind k);
@@ -95,6 +98,10 @@ struct ParamDecl
     std::optional<double> min, max, softMin, softMax, step;
     /** Filled by the planner rather than the user: left out of the node's fields. */
     bool hidden = false;
+    /** String params: the field that edits it ("multiline", "font"); empty for one line. */
+    std::string editor;
+    /** Image params the planner fills from the node's other values instead of a file: "text" draws a Text node's words. */
+    std::string source;
 };
 
 struct LILA_SCENE_API NodeDef

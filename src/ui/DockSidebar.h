@@ -134,7 +134,8 @@ public:
     /** Gives the dock the collapsible title bar. */
     void manage(QDockWidget* dock);
     void collapse(QDockWidget* dock);
-    void expand(QDockWidget* dock);
+    /** Shows a collapsed dock; raise puts it on top of its tab group, which needs the dock layout settled. */
+    void expand(QDockWidget* dock, bool raise = true);
     /** Collapses every tab of the dock's group at once, so the whole column closes like a drawer. */
     void collapseGroup(QDockWidget* dock);
     /** Expands the dock and the collapsed tabs of its group together, with the dock on top. */

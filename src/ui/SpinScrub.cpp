@@ -238,6 +238,8 @@ private:
         };
         // A slider field's width covers its range, as its fill shows.
         t.span = [b] {
+            if (auto* s = dynamic_cast<controls::SliderField*>(b.data()))
+                return s->fillMax() - s->fillMin();
             auto* d = qobject_cast<QDoubleSpinBox*>(b.data());
             return d && d->property("role").toString() == "slider" ? d->maximum() - d->minimum() : 0.0;
         };

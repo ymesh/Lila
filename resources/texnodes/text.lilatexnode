@@ -1,0 +1,151 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "text",
+  "label": "Text",
+  "category": "Pattern",
+  "doc": "Words drawn in a font: a mask that is 1 on the letters and 0 around them, and the letters in a colour over a background. Size is the letter height as a fraction of the texture's height, so the letters keep their shape on a non-square texture. Position is where the alignment point sits, in uv; the block of lines is centred on it vertically. With Tile, letters crossing an edge come back in at the opposite one, so the texture still tiles.",
+  "keywords": [
+    "font",
+    "letters",
+    "label",
+    "words",
+    "typography",
+    "decal",
+    "stencil"
+  ],
+  "inputs": [
+    {
+      "id": "coord",
+      "type": "vector",
+      "label": "UV",
+      "implicit": "uv",
+      "doc": "Where to read the letters: the mesh's uvs unless linked (a warp, Mapping)."
+    }
+  ],
+  "outputs": [
+    {
+      "id": "mask",
+      "type": "gray"
+    },
+    {
+      "id": "out",
+      "type": "color",
+      "label": "Color"
+    }
+  ],
+  "params": [
+    {
+      "id": "text",
+      "type": "string",
+      "default": "Lila",
+      "editor": "multiline",
+      "doc": "The words; a new line starts a new line of text."
+    },
+    {
+      "id": "font",
+      "type": "string",
+      "default": "Inter",
+      "editor": "font",
+      "doc": "A family and style (Inter SemiBold), bundled or installed, or a font file."
+    },
+    {
+      "id": "size",
+      "type": "float",
+      "default": 0.2,
+      "min": 0,
+      "softMax": 1,
+      "doc": "Letter height (one em) as a fraction of the texture's height."
+    },
+    {
+      "id": "positionX",
+      "type": "float",
+      "label": "Position X",
+      "default": 0.5,
+      "softMin": 0,
+      "softMax": 1
+    },
+    {
+      "id": "positionY",
+      "type": "float",
+      "label": "Position Y",
+      "default": 0.5,
+      "softMin": 0,
+      "softMax": 1
+    },
+    {
+      "id": "rotation",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -180,
+      "softMax": 180,
+      "doc": "Degrees, counterclockwise about the position."
+    },
+    {
+      "id": "alignment",
+      "type": "enum",
+      "default": "center",
+      "options": [
+        "left",
+        "center",
+        "right"
+      ],
+      "doc": "Which part of each line sits on the position. left: the line's start. center: its middle. right: its end."
+    },
+    {
+      "id": "lineSpacing",
+      "type": "float",
+      "default": 1.0,
+      "min": 0,
+      "softMin": 0.5,
+      "softMax": 3,
+      "doc": "Baseline to baseline, in the font's line heights."
+    },
+    {
+      "id": "tracking",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -0.2,
+      "softMax": 1,
+      "doc": "Extra space after each letter, in ems."
+    },
+    {
+      "id": "tile",
+      "type": "bool",
+      "default": true,
+      "doc": "Letters crossing an edge come back in at the opposite one."
+    },
+    {
+      "id": "color",
+      "type": "color",
+      "default": [
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "id": "background",
+      "type": "color",
+      "default": [
+        0,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "id": "glyphs",
+      "type": "image",
+      "default": "",
+      "hidden": true,
+      "source": "text"
+    }
+  ],
+  "cost": 3,
+  "body": {
+    "mask": "return glyphs.sample(coord.sample(uv).xy).x;",
+    "out": "return lerp(p.background, p.color, glyphs.sample(coord.sample(uv).xy).x);"
+  }
+}

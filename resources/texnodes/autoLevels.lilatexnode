@@ -1,0 +1,48 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "autoLevels",
+  "label": "Auto Levels",
+  "category": "Filter",
+  "doc": "Stretches the input so its darkest value becomes 0 and its brightest 1. Runs as its own pass.",
+  "kind": "native",
+  "keywords": [
+    "normalize",
+    "normalise",
+    "auto contrast",
+    "stretch",
+    "substance auto levels",
+    "blender normalize"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0.5,
+        0.5,
+        0.5,
+        1
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "mode",
+      "type": "enum",
+      "default": "perChannel",
+      "options": [
+        "perChannel",
+        "luminance"
+      ],
+      "doc": "Per channel stretches red, green and blue separately; luminance stretches all three by the brightness range, keeping the hues. Alpha is untouched."
+    }
+  ],
+  "cost": 10
+}

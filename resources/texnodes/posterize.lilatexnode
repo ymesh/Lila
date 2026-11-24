@@ -1,0 +1,41 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "posterize",
+  "label": "Posterize",
+  "category": "Filter",
+  "doc": "Cuts each channel to Steps flat levels.",
+  "keywords": [
+    "quantize",
+    "levels",
+    "banding",
+    "toon",
+    "steps"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color"
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "steps",
+      "type": "int",
+      "default": 4,
+      "min": 2,
+      "softMax": 32,
+      "doc": "Levels per channel."
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float4 c = input.sample(uv);\nfloat n = float(max(p.steps, 2));\nreturn float4(min(floor(saturate(c.rgb) * n), n - 1.0) / (n - 1.0), c.a);"
+  }
+}

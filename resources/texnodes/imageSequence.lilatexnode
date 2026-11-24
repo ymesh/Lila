@@ -21,7 +21,8 @@
       "type": "vector",
       "label": "UV",
       "implicit": "uv",
-      "doc": "Where to read the frames: the mesh's uvs unless linked (Projection, Mapping)."
+      "doc": "Where to read the frames: the mesh's uvs unless linked (Projection, Mapping).",
+      "reach": 1
     }
   ],
   "outputs": [
@@ -100,7 +101,30 @@
       "default": 1,
       "min": 1,
       "softMax": 16,
-      "doc": "Repeats across the texture."
+      "doc": "Repeats across the texture. Repeated or read through a scaled UV, the image is read from prefiltered smaller copies, so detail finer than a texel averages instead of aliasing."
+    },
+    {
+      "id": "wrap",
+      "type": "enum",
+      "default": "repeat",
+      "options": [
+        "repeat",
+        "extend",
+        "mirror",
+        "clip"
+      ],
+      "doc": "Past the image's edge. repeat: tiles it. extend: stretches the edge pixels. mirror: tiles it flipped every other time. clip: transparent black."
+    },
+    {
+      "id": "filter",
+      "type": "enum",
+      "default": "linear",
+      "options": [
+        "linear",
+        "closest",
+        "cubic"
+      ],
+      "doc": "Between pixels. linear: blends the four nearest. closest: the nearest pixel, hard-edged, for pixel art and ID maps. cubic: smoother when the image is enlarged."
     },
     {
       "id": "colorSpace",
@@ -111,6 +135,17 @@
         "srgb"
       ],
       "doc": "How the files' colour values are read. linear: as stored, for data maps and EXR. srgb: decoded from sRGB to linear, for colour frames saved as 8 or 16-bit PNG, JPEG, TGA or TIFF. Alpha is never decoded."
+    },
+    {
+      "id": "alphaMode",
+      "label": "Alpha",
+      "type": "enum",
+      "default": "straight",
+      "options": [
+        "straight",
+        "premultiplied"
+      ],
+      "doc": "How the file stores colour against alpha. straight: colour as is (PNG, TGA, most paint exports). premultiplied: colour already multiplied by alpha (EXR renders), divided back out on read so the output is straight."
     },
     {
       "id": "next",
@@ -128,9 +163,9 @@
     }
   ],
   "cost": 4,
-  "code": "float4 sequenceFrame(float4 a, float4 b, float mix, int colorSpace)\n{\n    float4 c = mix > 0.0 ? lerp(a, b, mix) : a;\n    if (colorSpace != 1)\n        return c;\n    float3 lo = c.rgb / 12.92;\n    float3 hi = pow(max((c.rgb + 0.055) / 1.055, float3(0.0)), float3(2.4));\n    return float4(lerp(hi, lo, step(c.rgb, float3(0.04045))), c.a);\n}",
+  "code": "float4 sequenceFrame(float4 a, float4 b, float mix, int colorSpace, int alphaMode)\n{\n    float4 c = mix > 0.0 ? lerp(a, b, mix) : a;\n    if (alphaMode == 1 && c.a > 0.0)\n        c.rgb /= c.a;\n    if (colorSpace != 1)\n        return c;\n    float3 lo = c.rgb / 12.92;\n    float3 hi = pow(max((c.rgb + 0.055) / 1.055, float3(0.0)), float3(2.4));\n    return float4(lerp(hi, lo, step(c.rgb, float3(0.04045))), c.a);\n}",
   "body": {
-    "out": "float2 at = coord.sample(uv).xy * float(p.tiles);\nreturn sequenceFrame(file.sample(at), next.sample(at), p.mix, p.colorSpace);",
-    "alpha": "float2 at = coord.sample(uv).xy * float(p.tiles);\nreturn lerp(file.sample(at).a, next.sample(at).a, p.mix);"
+    "out": "float2 at = coord.sample(uv).xy * float(p.tiles);\nfloat2 dx = texWrapDelta(coord.sample(uv + float2(texel().x, 0.0)).xy * float(p.tiles) - at);\nfloat2 dy = texWrapDelta(coord.sample(uv + float2(0.0, texel().y)).xy * float(p.tiles) - at);\nfloat4 a = file.sampleImage(coord.sample(uv).xy * float(p.tiles), p.wrap, p.filter, dx, dy);\nfloat4 b = next.sampleImage(coord.sample(uv).xy * float(p.tiles), p.wrap, p.filter, dx, dy);\nreturn sequenceFrame(a, b, p.mix, p.colorSpace, p.alphaMode);",
+    "alpha": "float2 at = coord.sample(uv).xy * float(p.tiles);\nfloat2 dx = texWrapDelta(coord.sample(uv + float2(texel().x, 0.0)).xy * float(p.tiles) - at);\nfloat2 dy = texWrapDelta(coord.sample(uv + float2(0.0, texel().y)).xy * float(p.tiles) - at);\nreturn lerp(file.sampleImage(coord.sample(uv).xy * float(p.tiles), p.wrap, p.filter, dx, dy).a, next.sampleImage(coord.sample(uv).xy * float(p.tiles), p.wrap, p.filter, dx, dy).a, p.mix);"
   }
 }

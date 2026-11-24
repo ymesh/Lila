@@ -7,6 +7,7 @@
 #include "io/SceneFile.h"
 #include "tex/Natives.h"
 #include "tex/SlangRt.h"
+#include "tex/TextRaster.h"
 
 #include <tbb/parallel_for.h>
 
@@ -93,6 +94,13 @@ GpuEvaluator& gpuEvaluator()
 }
 } // namespace
 
+image::Image readSourceFile(const std::filesystem::path& path, int planWidth, int planHeight, std::string* err)
+{
+    std::string ext = path.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    return ext == ".svg" ? image::readSvg(path, std::max(planWidth, planHeight), err) : image::read(path, err);
+}
+
 image::Image fitSourceImage(image::Image img, const std::string& name, int planWidth, int planHeight, size_t maxTexels, std::string* warning)
 {
     if (img.width <= 0 || img.height <= 0)
@@ -112,6 +120,35 @@ image::Image fitSourceImage(image::Image img, const std::string& name, int planW
     return image::downsampled(img, w, h);
 }
 
+image::Image withMipLevels(const image::Image& img, uint32_t& flags)
+{
+    flags = 0;
+    if (img.width <= 0 || img.height <= 0 || (img.width == 1 && img.height == 1) || img.height >= (1 << 24))
+        return img;
+    std::vector<float> texels = img.rgba;
+    image::Image level = img;
+    uint32_t levels = 1;
+    while ((level.width > 1 || level.height > 1) && levels < 31)
+    {
+        level = image::downsampled(level, std::max(1, level.width / 2), std::max(1, level.height / 2));
+        texels.insert(texels.end(), level.rgba.begin(), level.rgba.end());
+        ++levels;
+    }
+    image::Image out{img.width, int((texels.size() / 4 + size_t(img.width) - 1) / size_t(img.width)), std::move(texels)};
+    out.rgba.resize(size_t(out.width) * size_t(out.height) * 4, 0.0f);
+    flags = (levels << 2) | (uint32_t(img.height) << 8);
+    return out;
+}
+
+std::string imageForTile(const std::string& path, const float uvOffset[2])
+{
+    const std::optional<image::UdimPattern> pattern = image::udimPattern(path, false);
+    if (!pattern)
+        return path;
+    const int u = int(std::floor(uvOffset[0])), v = int(std::floor(uvOffset[1]));
+    return image::udimTilePath(*pattern, 1001 + std::clamp(u, 0, 9) + 10 * std::max(v, 0));
+}
+
 fs::path resolveImagePath(const std::string& path, const fs::path& root)
 {
     fs::path p(path);
@@ -128,6 +165,15 @@ fs::path resolveImagePath(const std::string& path, const fs::path& root)
     if (fs::exists(paths::resourcesDir() / p))
         return paths::resourcesDir() / p;
     return scene.empty() ? p : scene;
+}
+
+bool generatedSource(std::string_view name) { return name.starts_with(kTextSourcePrefix); }
+
+image::Image readSourceImage(const std::string& name, const fs::path& root, int planWidth, int planHeight, std::string* error)
+{
+    if (generatedSource(name))
+        return *textSourceImage(name, error);
+    return readSourceFile(resolveImagePath(name, root), planWidth, planHeight, error);
 }
 
 void registerNativeCpu(const std::string& type, NativeCpuFn fn) { natives()[type] = std::move(fn); }
@@ -167,6 +213,7 @@ EvalResult evaluateCpu(const Plan& plan, const EvalOptions& options)
     std::vector<image::Image> sourced(plan.buffers.size());
     std::vector<size_t> offset(plan.buffers.size());
     std::vector<std::pair<int, int>> size(plan.buffers.size());
+    std::vector<uint32_t> flags(plan.buffers.size(), 0);
     size_t total = 0;
     for (const BufferDesc& b : plan.buffers)
     {
@@ -174,15 +221,19 @@ EvalResult evaluateCpu(const Plan& plan, const EvalOptions& options)
         if (b.kind == BufferKind::Image)
         {
             std::string err;
+            const std::string name = imageForTile(b.name, options.uvOffset);
             image::Image img = b.name.empty() ? image::Image{}
-                                              : fitSourceImage(image::read(resolveImagePath(b.name, options.imageRoot), &err), b.name, plan.width,
-                                                               plan.height, 0, nullptr);
+                                              : fitSourceImage(readSourceImage(name, options.imageRoot, plan.width, plan.height, &err), b.name, plan.width, plan.height, 0, nullptr);
+            if (img.width > 0 && !err.empty() && generatedSource(b.name))
+                result.warnings.push_back("text: " + err);
             if (img.width <= 0)
             {
                 if (!b.name.empty())
                     result.warnings.push_back("image " + b.name + ": " + (err.empty() ? "can't read" : err));
                 img = {1, 1, {0.0f, 0.0f, 0.0f, 1.0f}};
             }
+            if (b.mips)
+                img = withMipLevels(img, flags[size_t(b.id)]);
             sourced[size_t(b.id)] = std::move(img);
         }
         else if (b.kind == BufferKind::External)
@@ -229,7 +280,7 @@ EvalResult evaluateCpu(const Plan& plan, const EvalOptions& options)
         uniforms.assign(4, 0.0f);
     for (const BufferDesc& b : plan.buffers)
     {
-        const uint32_t d[4] = {uint32_t(offset[size_t(b.id)]), uint32_t(size[size_t(b.id)].first), uint32_t(size[size_t(b.id)].second), 0u};
+        const uint32_t d[4] = {uint32_t(offset[size_t(b.id)]), uint32_t(size[size_t(b.id)].first), uint32_t(size[size_t(b.id)].second), flags[size_t(b.id)]};
         std::memcpy(&uniforms[size_t(b.slot) * 4], d, sizeof(d));
     }
 
@@ -246,7 +297,9 @@ EvalResult evaluateCpu(const Plan& plan, const EvalOptions& options)
             NativeCall call{plan, pass, uniforms, {}, {out, w, h}};
             for (const auto& [id, b] : pass.inputBuffers)
                 call.inputs[id] = {&arena[offset[size_t(b)] * 4], size[size_t(b)].first, size[size_t(b)].second};
+            const auto started = std::chrono::steady_clock::now();
             it->second(call);
+            result.passMilliseconds.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
             continue;
         }
         std::string err;
@@ -265,11 +318,13 @@ EvalResult evaluateCpu(const Plan& plan, const EvalOptions& options)
             std::memcpy(&globals[kernel->offArena], &a, sizeof(a));
         std::memcpy(&globals[kernel->offOut], &o, sizeof(o));
         const uint32_t groupsX = uint32_t((w + 7) / 8), groupsY = uint32_t((h + 7) / 8);
+        const auto started = std::chrono::steady_clock::now();
         tbb::parallel_for(uint32_t(0), groupsY, [&](uint32_t gy) {
             slangrt::Varying v{{0, gy, 0}, {groupsX, gy + 1, 1}};
             std::vector<uint8_t> local = globals;
             kernel->fn(&v, nullptr, local.data());
         });
+        result.passMilliseconds.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
     }
 
     for (const auto& [name, id] : plan.outputs)

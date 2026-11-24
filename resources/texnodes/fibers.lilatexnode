@@ -1,0 +1,90 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "fibers",
+  "label": "Fibers",
+  "category": "Pattern",
+  "doc": "Many thin strands at random places, mostly along one direction with some spread: fabric fibres, hair, scratches, straw.",
+  "keywords": [
+    "fibers",
+    "fibres",
+    "strands",
+    "hair",
+    "fabric",
+    "lint"
+  ],
+  "inputs": [],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "count",
+      "type": "int",
+      "default": 16,
+      "min": 1,
+      "softMax": 128,
+      "doc": "Cells across; each holds Per Cell strands."
+    },
+    {
+      "id": "perCell",
+      "type": "int",
+      "default": 4,
+      "min": 1,
+      "max": 16,
+      "doc": "Strands per cell."
+    },
+    {
+      "id": "length",
+      "type": "float",
+      "default": 1.5,
+      "min": 0.0,
+      "softMax": 4.0,
+      "doc": "Strand length, in cells."
+    },
+    {
+      "id": "width",
+      "type": "float",
+      "default": 0.02,
+      "min": 0.001,
+      "softMax": 0.2,
+      "doc": "Strand width, in cells."
+    },
+    {
+      "id": "angle",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -180.0,
+      "softMax": 180.0,
+      "doc": "Main direction, degrees."
+    },
+    {
+      "id": "spread",
+      "type": "float",
+      "default": 0.2,
+      "min": 0.0,
+      "max": 1.0,
+      "doc": "Random turn from the main direction, 1 is any direction."
+    },
+    {
+      "id": "valueRandom",
+      "type": "float",
+      "default": 0.5,
+      "min": 0.0,
+      "max": 1.0,
+      "doc": "Darkens strands by up to this much at random."
+    },
+    {
+      "id": "seed",
+      "type": "seed",
+      "default": 0
+    }
+  ],
+  "cost": 40,
+  "body": {
+    "out": "int n = max(p.count, 1);\nfloat2 q = uv * float(n);\nint2 c = int2(floor(q));\nfloat best = 0.0;\nint reach = int(ceil(p.length * 0.5)) + 1;\nfor (int dy = -reach; dy <= reach; ++dy)\n    for (int dx = -reach; dx <= reach; ++dx)\n    {\n        int2 cell = c + int2(dx, dy);\n        int2 w = ((cell % n) + n) % n;\n        for (int k = 0; k < clamp(p.perCell, 1, 16); ++k)\n        {\n            uint s = uint(p.seed) + uint(k) * 0x632be5abu;\n            float2 centre = float2(cell) + float2(texRand(uint2(w), s ^ 0x1b87u), texRand(uint2(w), s ^ 0xcc9eu));\n            float a = radians(p.angle) + (texRand(uint2(w), s ^ 0x27d4u) - 0.5) * 6.28318530718 * p.spread;\n            float2 dir = float2(cos(a), sin(a));\n            float2 d = q - centre;\n            float t = clamp(dot(d, dir), -p.length * 0.5, p.length * 0.5);\n            float dist = length(d - dir * t);\n            float v = (1.0 - smoothstep(p.width * 0.5, p.width, dist)) * (1.0 - p.valueRandom * texRand(uint2(w), s ^ 0x1656u));\n            best = max(best, v);\n        }\n    }\nreturn best;"
+  }
+}

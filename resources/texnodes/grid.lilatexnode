@@ -1,0 +1,60 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "grid",
+  "label": "Grid",
+  "category": "Pattern",
+  "doc": "Lines Count X by Count Y across, Thickness wide, tiling: panel lines, tile grout, graph paper.",
+  "keywords": [
+    "grid",
+    "lines",
+    "grout",
+    "panel lines",
+    "mesh lines"
+  ],
+  "inputs": [],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "countX",
+      "type": "int",
+      "default": 8,
+      "min": 1,
+      "softMax": 64,
+      "doc": "Lines across."
+    },
+    {
+      "id": "countY",
+      "type": "int",
+      "default": 8,
+      "min": 1,
+      "softMax": 64,
+      "doc": "Lines down."
+    },
+    {
+      "id": "thickness",
+      "type": "float",
+      "default": 0.05,
+      "min": 0.0,
+      "max": 1.0,
+      "doc": "Line width, as a fraction of a cell."
+    },
+    {
+      "id": "softness",
+      "type": "float",
+      "default": 0.0,
+      "min": 0.0,
+      "softMax": 0.5,
+      "doc": "Fades the lines' edges, as a fraction of a cell."
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float2 q = frac(uv * float2(float(p.countX), float(p.countY)));\nfloat2 d = min(q, 1.0 - q);\nfloat m = min(d.x, d.y);\nfloat h = p.thickness * 0.5;\nreturn 1.0 - smoothstep(h, h + max(p.softness, 1e-4), m);"
+  }
+}

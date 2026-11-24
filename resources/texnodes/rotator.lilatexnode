@@ -1,0 +1,65 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "rotator",
+  "label": "Rotator",
+  "category": "Transform",
+  "doc": "Turns the input around its centre over time, Speed in turns per second: fans, vortices, spinning signs.",
+  "keywords": [
+    "rotator",
+    "spin",
+    "rotate over time",
+    "animate"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0.5,
+        0.5,
+        0.5,
+        1.0
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "speed",
+      "type": "float",
+      "default": 0.25,
+      "softMin": -2.0,
+      "softMax": 2.0,
+      "doc": "Turns per second, anticlockwise."
+    },
+    {
+      "id": "centerX",
+      "type": "float",
+      "default": 0.5,
+      "doc": "The point it turns around."
+    },
+    {
+      "id": "centerY",
+      "type": "float",
+      "default": 0.5,
+      "doc": "The point it turns around."
+    },
+    {
+      "id": "time",
+      "type": "float",
+      "default": 0.0,
+      "hidden": true,
+      "doc": "Scene time in seconds, filled in at evaluation."
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float a = -p.speed * p.time * 6.28318530718;\nfloat2 c = float2(p.centerX, p.centerY);\nfloat2 d = uv - c;\nreturn input.sample(c + float2(d.x * cos(a) - d.y * sin(a), d.x * sin(a) + d.y * cos(a)));"
+  }
+}

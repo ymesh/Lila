@@ -1,0 +1,32 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "integer",
+  "label": "Integer",
+  "category": "Input",
+  "doc": "A whole number, for counts and seeds.",
+  "keywords": [
+    "integer",
+    "int",
+    "whole number"
+  ],
+  "inputs": [],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "float"
+    }
+  ],
+  "params": [
+    {
+      "id": "value",
+      "type": "int",
+      "default": 0,
+      "doc": "The number."
+    }
+  ],
+  "cost": 0,
+  "body": {
+    "out": "return float(p.value);"
+  }
+}

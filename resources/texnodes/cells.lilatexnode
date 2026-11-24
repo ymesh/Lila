@@ -56,8 +56,17 @@
       "options": [
         "euclidean",
         "manhattan",
-        "chebyshev"
+        "chebyshev",
+        "minkowski"
       ]
+    },
+    {
+      "id": "exponent",
+      "type": "float",
+      "default": 2.0,
+      "min": 0.1,
+      "softMax": 8.0,
+      "doc": "Minkowski's exponent: 1 is manhattan, 2 euclidean, higher squarer."
     },
     {
       "id": "width",
@@ -80,8 +89,13 @@
   ],
   "code": "float cellsValue(CellResult r, int mode, float width, uint seed)\n{\n    if (mode == 0)\n        return cellRandom(r, seed);\n    if (mode == 1)\n        return 1.0 - smoothstep(0.0, max(width, 1e-4), cellEdgeDistance(r));\n    if (mode == 2)\n        return saturate(r.f2 - r.f1);\n    if (mode == 3)\n        return saturate(r.f1);\n    return saturate(r.f2 * 0.75);\n}",
   "body": {
-    "out": "CellResult r = cellular(uv, int2(p.scale, p.scale), p.jitter, p.metric, uint(p.seed));\nreturn cellsValue(r, p.mode, p.width, uint(p.seed));",
-    "random": "CellResult r = cellular(uv, int2(p.scale, p.scale), p.jitter, p.metric, uint(p.seed));\nreturn cellRandom(r, uint(p.seed));",
-    "color": "CellResult r = cellular(uv, int2(p.scale, p.scale), p.jitter, p.metric, uint(p.seed));\nreturn cellColor(r, uint(p.seed));"
-  }
+    "out": "CellResult r = cellular(uv, int2(p.scale, p.scale), p.jitter, p.metric, p.exponent, uint(p.seed));\nreturn cellsValue(r, p.mode, p.width, uint(p.seed));",
+    "random": "CellResult r = cellular(uv, int2(p.scale, p.scale), p.jitter, p.metric, p.exponent, uint(p.seed));\nreturn cellRandom(r, uint(p.seed));",
+    "color": "CellResult r = cellular(uv, int2(p.scale, p.scale), p.jitter, p.metric, p.exponent, uint(p.seed));\nreturn cellColor(r, uint(p.seed));"
+  },
+  "keywords": [
+    "minkowski",
+    "voronoi",
+    "worley"
+  ]
 }

@@ -13,6 +13,7 @@
 
 #include <QMouseEvent>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <map>
 #include <tuple>
@@ -23,6 +24,9 @@ namespace
 {
 Tool gTool = Tool::Select;
 bool gPivotEdit = false;
+bool gPivotKeyWasOn = false;
+std::chrono::steady_clock::time_point gPivotKeyDown;
+constexpr std::chrono::milliseconds kPivotTapTime{250};
 bool gCloneDrag = false;
 bool gCloneKeyUsed = false;
 unsigned gHandleResets = 0;
@@ -199,10 +203,17 @@ void registerActions()
     tool("tool.rotate", "Rotate Tool", Tool::Rotate, "Drag the rings to rotate the selection, or the outer ring to turn it in screen space.");
     tool("tool.scale", "Scale Tool", Tool::Scale, "Drag the handles to scale the selection along an axis, a plane or uniformly from the center.");
 
-    actions::add({.id = "tool.pivotEditOn", .label = "Edit Pivot (hold)", .category = "Tools", .run = [] { setPivotEdit(true); },
-                  .doc = "While held, the manipulator moves the pivot instead of the object."});
-    actions::add({.id = "tool.pivotEditOff", .label = "End Pivot Edit", .category = "Tools", .run = [] { setPivotEdit(false); },
-                  .doc = "Returns the manipulator to moving the object."});
+    actions::add({.id = "tool.pivotEditOn", .label = "Edit Pivot (tap or hold)", .category = "Tools", .run = [] {
+                      gPivotKeyWasOn = gPivotEdit;
+                      gPivotKeyDown = std::chrono::steady_clock::now();
+                      setPivotEdit(true);
+                  },
+                  .doc = "Press half of the pivot key: a tap toggles pivot editing, holding edits the pivot until release."});
+    actions::add({.id = "tool.pivotEditOff", .label = "End Pivot Edit", .category = "Tools", .run = [] {
+                      const bool tap = std::chrono::steady_clock::now() - gPivotKeyDown < kPivotTapTime;
+                      setPivotEdit(tap && !gPivotKeyWasOn);
+                  },
+                  .doc = "Release half of the pivot key: after a hold it returns the manipulator to moving the object; after a tap it leaves pivot editing toggled."});
     actions::add({.id = "tool.cloneDragOn", .label = "Clone Drag (hold)", .category = "Tools", .run = [] { setCloneDrag(true); },
                   .doc = "While held, dragging a manipulator handle duplicates the selected objects and moves the copies; on faces and edges it extrudes them and moves the extruded ones.",
                   .keywords = {"extrude drag", "shift extrude", "duplicate drag", "alt drag"}});
@@ -236,7 +247,8 @@ void registerActions()
         return [key, space] { return PrefStore::get().value<std::string>("general", key, "world") == space; };
     };
     for (const char* manip : {"move", "rotate"})
-        for (auto [space, what] : {std::pair{"world", "the world axes"}, {"object", "the object's own axes"}, {"parent", "the parent's axes"}})
+        for (auto [space, what] : {std::pair{"world", "the world axes"}, {"object", "the object's own axes"}, {"parent", "the parent's axes"},
+                                   {"custom", "the Custom axis angles in the Modeling Toolkit's Move section"}})
         {
             std::string key = std::string("/manipulator/") + manip + "Space";
             std::string label = std::string(1, char(std::toupper(space[0]))) + (space + 1);

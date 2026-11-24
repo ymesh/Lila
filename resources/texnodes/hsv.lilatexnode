@@ -15,6 +15,24 @@
         0.5,
         1
       ]
+    },
+    {
+      "id": "hueMap",
+      "type": "gray",
+      "default": 0.0,
+      "doc": "Added to Hue per pixel, in turns."
+    },
+    {
+      "id": "saturationMap",
+      "type": "gray",
+      "default": 1.0,
+      "doc": "Multiplies Saturation per pixel."
+    },
+    {
+      "id": "valueMap",
+      "type": "gray",
+      "default": 1.0,
+      "doc": "Multiplies Value per pixel."
     }
   ],
   "outputs": [
@@ -52,6 +70,12 @@
     "color"
   ],
   "body": {
-    "out": "float4 c = input.sample(uv);\nfloat3 h = rgbToHsv(saturate(c.rgb));\nh.x = frac(h.x + p.hue);\nh.y = saturate(h.y * p.saturation);\nh.z *= p.value;\nreturn float4(hsvToRgb(h), c.a);"
-  }
+    "out": "float4 c = input.sample(uv);\nfloat3 h = rgbToHsv(saturate(c.rgb));\nh.x = frac(h.x + p.hue + hueMap.sample(uv));\nh.y = saturate(h.y * p.saturation * saturationMap.sample(uv));\nh.z *= p.value * valueMap.sample(uv);\nreturn float4(hsvToRgb(h), c.a);"
+  },
+  "keywords": [
+    "hue saturation",
+    "hsv",
+    "colour variation",
+    "hue shift"
+  ]
 }

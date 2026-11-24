@@ -9,6 +9,8 @@ struct FillRegion
     int2 key;
     /** Bounding box size, in uv. */
     float2 size;
+    /** Bounding box size, in texels. */
+    float2 texels;
     /** Where the sample sits in the box: 0 to 1, v up. */
     float2 local;
 };
@@ -27,8 +29,18 @@ FillRegion fillRegion(float4 e, float2 uv)
     int2 k = int2(lo);
     r.key = ((k % ires) + ires) % ires;
     float2 texels = max(hi - lo + 1.0, float2(1.0, 1.0));
+    r.texels = texels;
     r.size = texels / res;
     float2 l = (t - lo + 0.5) / texels;
     r.local = float2(l.x, 1.0 - l.y);
     return r;
+}
+
+/** The region's bounding box centre in uv, wrapped into the texture. Exact: texel counts and halves. */
+float2 fillCentre(FillRegion r)
+{
+    float2 res = texResolution();
+    float2 c = float2(r.key) + 0.5 * r.texels;
+    c = float2(c.x >= res.x ? c.x - res.x : c.x, c.y >= res.y ? c.y - res.y : c.y);
+    return float2(c.x / res.x, 1.0 - c.y / res.y);
 }

@@ -13,4 +13,6 @@ namespace lila::tex
 LILA_SCENE_API void registerFileCommands();
 /** texGroupNodes, texUngroup, texSaveGroup and the group interface commands (texAddInput, texRenameInput, ...). */
 LILA_SCENE_API void registerGroupCommands();
+/** Graph parameters and presets: texExposeParam, texSetGraphParam, texSavePreset, texApplyPreset, ... */
+LILA_SCENE_API void registerParamCommands();
 } // namespace lila::tex

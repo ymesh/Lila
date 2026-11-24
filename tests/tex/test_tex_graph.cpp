@@ -66,7 +66,7 @@ TEST_CASE("tex: the built-in node library loads")
     }
     for (const char* h : {"noise", "voronoi", "blend", "normals"})
         CHECK(findHelper(h));
-    CHECK(findNode("voronoi")->outputs.size() == 4);
+    CHECK(findNode("voronoi")->outputs.size() == 5);
     CHECK(findNode("heightToNormal")->input("height")->taps == 4);
     CHECK(findNode("blur")->kind == NodeKind::Native);
 }

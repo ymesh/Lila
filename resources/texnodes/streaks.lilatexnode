@@ -1,0 +1,88 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "streaks",
+  "label": "Streaks",
+  "category": "Noise",
+  "doc": "Thin runs along one direction, broken into lengths: rain streaks, brushed metal, wood grain, grime running down a wall. Leaks fades each run from its start, like stains dripping from an edge.",
+  "keywords": [
+    "streaks",
+    "leaks",
+    "drips",
+    "rain",
+    "brushed",
+    "grunge",
+    "stains"
+  ],
+  "inputs": [],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "mode",
+      "type": "enum",
+      "default": "streaks",
+      "options": [
+        "streaks",
+        "leaks"
+      ],
+      "doc": "streaks: even runs. leaks: each fades out from where it starts."
+    },
+    {
+      "id": "angle",
+      "type": "float",
+      "default": -90.0,
+      "softMin": -180.0,
+      "softMax": 180.0,
+      "doc": "Which way runs go, degrees from the right, anticlockwise."
+    },
+    {
+      "id": "density",
+      "type": "int",
+      "default": 64,
+      "min": 1,
+      "softMax": 512,
+      "doc": "Runs across."
+    },
+    {
+      "id": "length",
+      "type": "int",
+      "default": 4,
+      "min": 1,
+      "softMax": 64,
+      "doc": "Breaks along each run: higher is shorter runs."
+    },
+    {
+      "id": "amount",
+      "type": "float",
+      "default": 0.5,
+      "min": 0.0,
+      "max": 1.0,
+      "doc": "How many runs show."
+    },
+    {
+      "id": "contrast",
+      "type": "float",
+      "default": 4.0,
+      "min": 0.0,
+      "softMax": 16.0,
+      "doc": "Sharpens runs against the background."
+    },
+    {
+      "id": "seed",
+      "type": "seed",
+      "default": 0
+    }
+  ],
+  "cost": 4,
+  "helpers": [
+    "noise"
+  ],
+  "body": {
+    "out": "float a = radians(p.angle);\nfloat2 along = float2(cos(a), sin(a));\nfloat2 across = float2(-along.y, along.x);\nfloat2 q = float2(dot(uv, across) * float(p.density), dot(uv, along) * float(p.length));\nuint s = uint(p.seed);\nfloat lane = floor(q.x);\nfloat n = valueNoise(float2(lane, q.y), int2(max(p.density, 1), max(p.length, 1)), s);\nfloat jitter = texRand(uint2(uint(int(lane) + 4096), 7u), s);\nfloat v = saturate((n - (1.0 - p.amount)) * p.contrast + 0.5 * jitter * p.amount);\nif (p.mode == 1)\n    v *= 1.0 - frac(q.y + jitter);\nfloat edge = abs(frac(q.x) - 0.5) * 2.0;\nreturn v * (1.0 - edge * edge);"
+  }
+}

@@ -492,3 +492,61 @@ TEST_CASE("scale plane handle scales its two axes together")
     ui::tools::setCurrent(ui::Tool::Move);
 }
 
+
+TEST_CASE("Edit Pivot on a vertex snaps to another vertex with V and undoes")
+{
+    run("newScene");
+    const std::string cube = run("polyCube", {{"width", 40}, {"height", 40}, {"depth", 40}})[0];
+    scene::Graph& g = scene::Graph::current();
+    g.evaluate();
+    const scene::MeshPtr mesh = node(cube).as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+    auto pointAt = [&](glm::dvec3 p) {
+        for (geo::Index i = 0; i < mesh->pointCapacity(); ++i)
+            if (mesh->pointValid(i) && glm::distance(mesh->position(i), p) < 1e-6)
+                return int(i);
+        return -1;
+    };
+    const int picked = pointAt({-20, -20, 20}), target = pointAt({20, 20, 20});
+    REQUIRE(picked >= 0);
+    REQUIRE(target >= 0);
+    scene::components::setMode(ComponentMode::Vertex);
+    run("selectComponents", {{"args", {cube}}, {"vertices", {picked}}});
+
+    ui::tools::setCurrent(ui::Tool::Move);
+    ui::tools::setPivotEdit(true);
+    // Looking down -Z, 1 px per cm, the world origin at pixel (50, 50); reversed Z as the viewport draws.
+    ui::ViewInfo view;
+    view.proj = glm::ortho(-50.0, 50.0, -50.0, 50.0, 100.0, -100.0);
+    view.width = view.height = 100.0;
+    view.ortho = true;
+    view.eye = {0.0, 0.0, 50.0};
+    const QPointF from = *view.project({-20, -20, 20}), to = *view.project({20, 20, 20});
+
+    {
+        ui::Manipulator m;
+        m.setView(view);
+        REQUIRE(m.visible());
+        REQUIRE(m.press(from, Qt::LeftButton, Qt::NoModifier));
+        ui::tools::setSnap(ui::SnapVertex, true);
+        m.drag(from + (to - from) * 0.5, Qt::NoModifier);
+        // Shift's fine control lags the cursor; the snap still takes what the cursor is over.
+        m.drag(to + QPointF(3, 2), Qt::ShiftModifier);
+        m.release();
+        ui::tools::setSnap(ui::SnapVertex, false);
+    }
+    // The centre handle now sits on the target vertex.
+    auto centreAt = [&](QPointF px) {
+        ui::Manipulator m;
+        m.setView(view);
+        m.visible();
+        m.hover(px);
+        return m.hovering();
+    };
+    CHECK(centreAt(to));
+    CHECK_FALSE(centreAt(from));
+    run("undo");
+    CHECK(centreAt(from));
+
+    ui::tools::setPivotEdit(false);
+    scene::components::setMode(ComponentMode::Object);
+}

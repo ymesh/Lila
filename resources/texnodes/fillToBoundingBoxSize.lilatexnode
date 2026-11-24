@@ -1,0 +1,56 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "fillToBoundingBoxSize",
+  "label": "Fill to Bounding Box Size",
+  "category": "Fill",
+  "doc": "Each Flood Fill region's bounding box width and height in uv, as separate values. Black outside the regions.",
+  "keywords": [
+    "bbox",
+    "width",
+    "height",
+    "region size",
+    "substance flood fill to bbox size"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0,
+        0,
+        -1,
+        -1
+      ],
+      "doc": "A Flood Fill output."
+    }
+  ],
+  "outputs": [
+    {
+      "id": "width",
+      "type": "gray"
+    },
+    {
+      "id": "height",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "scale",
+      "type": "float",
+      "default": 1.0,
+      "min": 0,
+      "softMax": 16,
+      "doc": "Multiplies the size."
+    }
+  ],
+  "cost": 6,
+  "helpers": [
+    "fill"
+  ],
+  "body": {
+    "width": "FillRegion r = fillRegion(input.sample(uv), uv);\nreturn r.valid ? saturate(r.size.x * p.scale) : 0.0;",
+    "height": "FillRegion r = fillRegion(input.sample(uv), uv);\nreturn r.valid ? saturate(r.size.y * p.scale) : 0.0;"
+  }
+}

@@ -7,7 +7,9 @@
 #include <QWidget>
 
 #include <functional>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 class QButtonGroup;
@@ -97,8 +99,16 @@ class LILA_UI_API SliderField : public QDoubleSpinBox
 public:
     explicit SliderField(QWidget* parent = nullptr);
 
+    /** The range the fill and a drag cover when narrower than the field's minimum..maximum; typing still reaches those. */
+    void setFillRange(double lo, double hi);
+    double fillMin() const;
+    double fillMax() const;
+
 protected:
     void paintEvent(QPaintEvent* e) override;
+
+private:
+    std::optional<std::pair<double, double>> mFill;
 };
 
 /** A value field marked with its axis letter, in the axis colour, inside its left edge. */

@@ -5,6 +5,7 @@
 #include "geo/SurfaceNets.h"
 #include "core/Log.h"
 #include "gn/Gn.h"
+#include "gn/Texture.h"
 #include "scene/Graph.h"
 #include "scene/Materials.h"
 #include "scene/MeshNodes.h"
@@ -275,6 +276,88 @@ Volume sdfToFog(const Volume& sdf, double density, double interiorBand, bool fil
     return v;
 }
 
+namespace
+{
+/** A volume material's cloud noise and edge fade, read once per grid build. */
+struct CloudShape
+{
+    double amount = 0.0, scale = 100.0, detail = 4.0, roughness = 0.5, coverage = 0.5, edgeFade = 0.0;
+    glm::dvec3 offset{0.0};
+
+    explicit CloudShape(const scene::Node& m)
+    {
+        using namespace scene::material;
+        amount = std::clamp(m.as<double>(kVolumeNoise), 0.0, 1.0);
+        scale = std::max(m.as<double>(kVolumeNoiseScale), 1e-3);
+        detail = std::clamp(m.as<double>(kVolumeNoiseDetail), 0.0, 10.0);
+        roughness = std::clamp(m.as<double>(kVolumeNoiseRoughness), 0.0, 1.0);
+        coverage = std::clamp(m.as<double>(kVolumeNoiseCoverage), 0.0, 1.0);
+        offset = m.as<glm::dvec3>(kVolumeNoiseOffset);
+        edgeFade = std::max(m.as<double>(kVolumeEdgeFade), 0.0);
+    }
+
+    bool noisy() const { return amount > 0.0; }
+
+    /** Changes whenever the shape does, so cached grids rebuild. */
+    size_t key() const
+    {
+        size_t h = 0;
+        for (double x : {amount, scale, detail, roughness, coverage, edgeFade, offset.x, offset.y, offset.z})
+            h = h * 1000003u ^ std::hash<double>{}(x);
+        return h;
+    }
+
+    /** 0..1 at a point in the grid's own space: fractal gradient noise thresholded by coverage. */
+    double at(const glm::dvec3& p) const
+    {
+        const glm::dvec3 q = (p + offset) / scale;
+        double sum = 0.0, amp = 1.0, norm = 0.0, freq = 1.0;
+        const int whole = int(detail);
+        for (int o = 0; o <= whole; ++o)
+        {
+            // The last octave fades in by the fraction of detail, so detail changes smoothly.
+            const double w = o < whole ? 1.0 : detail - whole;
+            if (w <= 0.0)
+                break;
+            sum += w * amp * tex::gradientNoise4(glm::dvec4(q * freq, o * 7.31));
+            norm += w * amp;
+            amp *= roughness;
+            freq *= 2.0;
+        }
+        const double f = std::clamp(0.5 + 0.7 * sum / std::max(norm, 1e-9), 0.0, 1.0);
+        const double t = 1.0 - coverage;
+        const double s = std::clamp((f - t) / 0.3, 0.0, 1.0);
+        return s * s * (3.0 - 2.0 * s);
+    }
+
+    /** Scales each voxel by the noise. */
+    void apply(Volume& v) const
+    {
+        if (!noisy())
+            return;
+        LILA_ZONE_N("Volume noise");
+        const size_t nx = size_t(v.dims.x), ny = size_t(v.dims.y);
+        tbb::parallel_for(size_t(0), v.values.size(), [&](size_t n) {
+            if (v.values[n] <= 0.0f)
+                return;
+            const glm::dvec3 voxel(double(n % nx), double((n / nx) % ny), double(n / (nx * ny))); // NOLINT(bugprone-integer-division)
+            v.values[n] *= float(1.0 - amount + amount * at(v.worldOf(voxel)));
+        });
+    }
+};
+
+/** A filled mesh's density: 1 inside, fading in over edgeFade from the surface. */
+Volume fillDensity(const Volume& sdf, double edgeFade)
+{
+    Volume v = sdfToFog(sdf, 1.0, 0.0, true);
+    if (edgeFade <= 0.0)
+        return v;
+    const float fade = float(edgeFade);
+    tbb::parallel_for(size_t(0), v.values.size(), [&](size_t n) { v.values[n] *= std::clamp(-sdf.values[n] / fade, 0.0f, 1.0f); });
+    return v;
+}
+} // namespace
+
 std::shared_ptr<const Volume> meshVolume(scene::Graph& g, scene::NodeId id)
 {
     using namespace scene::material;
@@ -298,14 +381,16 @@ std::shared_ptr<const Volume> meshVolume(scene::Graph& g, scene::NodeId id)
     {
         std::weak_ptr<const void> source;
         double voxel = 0.0;
+        size_t shape = 0;
         std::shared_ptr<const Volume> volume;
     };
+    const CloudShape shape(*material);
     static std::mutex mutex;
     static std::map<const void*, Entry> cache;
     auto cached = [&](const std::shared_ptr<const void>& source, double voxel, auto&& make) -> std::shared_ptr<const Volume> {
         std::lock_guard lock(mutex);
         std::erase_if(cache, [](const auto& e) { return e.second.source.expired(); });
-        if (auto it = cache.find(source.get()); it != cache.end() && it->second.voxel == voxel)
+        if (auto it = cache.find(source.get()); it != cache.end() && it->second.voxel == voxel && it->second.shape == shape.key())
             return it->second.volume;
         std::shared_ptr<const Volume> v;
         try
@@ -317,7 +402,7 @@ std::shared_ptr<const Volume> meshVolume(scene::Graph& g, scene::NodeId id)
         {
             log::warn("volume: {} cannot be filled: {}", n->name(), e.what());
         }
-        cache[source.get()] = {source, voxel, v};
+        cache[source.get()] = {source, voxel, shape.key(), v};
         return v;
     };
 
@@ -330,9 +415,13 @@ std::shared_ptr<const Volume> meshVolume(scene::Graph& g, scene::NodeId id)
                 const std::shared_ptr<const Volume>& v = geo->volume;
                 if (v->isVector())
                     return nullptr;
-                if (!v->isSdf())
+                if (!v->isSdf() && !shape.noisy())
                     return v;
-                return cached(v, 0.0, [&] { return sdfToFog(*v, 1.0, 0.0, true); });
+                return cached(v, 0.0, [&] {
+                    Volume out = v->isSdf() ? fillDensity(*v, shape.edgeFade) : *v;
+                    shape.apply(out);
+                    return out;
+                });
             }
 
     const double voxelSize = material->as<double>(kVolumeVoxelSize);
@@ -340,7 +429,11 @@ std::shared_ptr<const Volume> meshVolume(scene::Graph& g, scene::NodeId id)
         const geo::Bounds b = mesh->bounds();
         const double longest = std::max({b.size().x, b.size().y, b.size().z, 1e-3});
         const double voxel = voxelSize > 0.0 ? std::max(voxelSize, longest / 512.0) : longest / 64.0;
-        return sdfToFog(meshToSdf(*mesh, voxel, 2), 1.0, 0.0, true);
+        // The band has to reach as deep as the fade, since deeper voxels all hold the band distance.
+        const int band = std::max(2, int(std::ceil(shape.edgeFade / voxel)) + 1);
+        Volume out = fillDensity(meshToSdf(*mesh, voxel, band), shape.edgeFade);
+        shape.apply(out);
+        return out;
     });
 }
 } // namespace lila::gn

@@ -47,6 +47,8 @@ enum class ParamType : uint8_t
      * the node types it takes ("camera"). The graph itself never reads it.
      */
     Node,
+    /** Text the planner reads (a Text node's words and font); never in the source or the uniforms. */
+    String,
 };
 
 LILA_SCENE_API const char* portTypeName(PortType t);

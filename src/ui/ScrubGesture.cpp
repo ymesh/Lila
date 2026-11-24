@@ -250,7 +250,12 @@ bool ScrubGesture::move(QMouseEvent* e)
     }
     const double scale = modifierScale(e->modifiers());
     const double span = mT.span ? mT.span() : 0.0;
-    const double perPixel = span > 0.0 && mT.field ? span / std::max(20, mT.field->width()) : (mT.step ? mT.step() : 1.0) / kScrubPixelsPerStep;
+    const double perStep = (mT.step ? mT.step() : 1.0) / kScrubPixelsPerStep;
+    double perPixel = span > 0.0 && mT.field ? span / std::max(20, mT.field->width()) : perStep;
+    // Counts (subdivisions, copies) often have a huge safety range; one step per kScrubPixelsPerStep keeps a drag from
+    // building a mesh that freezes the machine.
+    if (mT.integer)
+        perPixel = std::min(perPixel, perStep);
     mTotal += dx * perPixel * scale;
     mSnap = mT.snap && span <= 0.0 ? (mT.step ? mT.step() : 1.0) * scale : 0.0;
     mT.drag(mTotal, mSnap);

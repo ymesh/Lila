@@ -168,7 +168,11 @@ uint64_t planKey(const Plan& p, const std::map<std::string, External>& externals
             if (auto it = externals.find(b.name); it != externals.end())
                 h = mix(mix(h, b.name), it->second.hash);
         if (b.kind == BufferKind::Image)
-            h = mix(mix(h, b.name), fileStamp(resolveImagePath(b.name, {})));
+        {
+            const auto [u, v] = udimOrigin(udim);
+            const float origin[2] = {float(u), float(v)};
+            h = mix(mix(h, b.name), generatedSource(b.name) ? 0 : fileStamp(resolveImagePath(imageForTile(b.name, origin), {})));
+        }
     }
     return h;
 }
@@ -563,6 +567,19 @@ json exportSet(scene::Node& set, const ExportOptions& options)
                 r = {"height", "StackRebuildHeight", "out", PortType::Gray, {}};
     std::vector<bake::TargetMap> targetMaps = target->maps;
     shading::addExportMaps(targetMaps, *target);
+    // The set's own outputs: channels neither standard nor named by the preset go out as files of their own, as computed.
+    std::set<std::string> ownOutputs;
+    for (const Channel& c : s.channels)
+    {
+        const bool standard = std::ranges::any_of(standardChannels(), [&](const auto& sc) { return sc.first == c.name; });
+        if (standard || std::ranges::any_of(targetMaps, [&](const bake::TargetMap& tm) { return tm.settings.map == c.name; }))
+            continue;
+        bake::TargetMap tm;
+        tm.settings.map = c.name;
+        tm.settings.suffix = c.suffix.empty() ? c.name : c.suffix;
+        targetMaps.push_back(tm);
+        ownOutputs.insert(c.name);
+    }
     if (fromHeight && std::ranges::none_of(targetMaps, [](const bake::TargetMap& tm) { return tm.settings.map == "height"; }))
     {
         bake::TargetMap tm;
@@ -575,7 +592,7 @@ json exportSet(scene::Node& set, const ExportOptions& options)
         const bake::MapSettings& ms = tm.settings;
         if (!ms.enabled || (tm.optional && !options.includeOptional && !(fromHeight && ms.map == "height")))
             continue;
-        const bake::MapDef* def = bake::findMap(ms.map);
+        const bake::MapDef* def = ownOutputs.contains(ms.map) ? nullptr : bake::findMap(ms.map);
         MapJob job;
         job.map = ms.map;
         // Per output channel: the set channel it reads, which component, inverted, or a constant.
@@ -600,6 +617,8 @@ json exportSet(scene::Node& set, const ExportOptions& options)
         job.suffix = !ms.suffix.empty() ? ms.suffix : def ? def->suffix : ms.map;
         job.format = ms.format.empty() ? format : ms.format;
         job.linear = !def || def->linear;
+        if (ownOutputs.contains(ms.map))
+            job.linear = s.channel(ms.map)->colorSpace != "srgb";
         const int asked = ms.bits > 0 ? ms.bits : outBits;
         int bits = asked;
         for (const bake::PackChannel& pc : job.layout)

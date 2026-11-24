@@ -803,6 +803,10 @@ void BakerPanel::refreshParams()
             f.min = *d->minValue;
         if (d->maxValue)
             f.max = *d->maxValue;
+        if (d->softMin)
+            f.softMin = *d->softMin;
+        if (d->softMax)
+            f.softMax = *d->softMax;
         if (d->step)
             f.step = *d->step;
         FlagFieldWidgets w = makeFlagField(

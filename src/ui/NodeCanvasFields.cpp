@@ -352,6 +352,52 @@ bool NodeCanvas::renameNode(const std::string& name)
     return true;
 }
 
+std::optional<NodeCanvas::InterfaceSocket> NodeCanvas::interfaceSocketAt(QPointF scenePos) const
+{
+    if (mGroup.empty() || !backend->supports("RenameInput"))
+        return std::nullopt;
+    NodeItem* n = nodeAt(scenePos);
+    if (!n || (n->type != "GroupInput" && n->type != "GroupOutput"))
+        return std::nullopt;
+    const bool groupOutput = n->type == "GroupOutput";
+    const std::vector<int>& shown = groupOutput ? n->shownIn : n->shownOut;
+    const std::vector<SocketInfo>& sockets = groupOutput ? n->inputs : n->outputs;
+    for (int i : shown)
+    {
+        const QPointF at = n->mapFromScene(n->socketPos(groupOutput, i));
+        if (std::abs(n->mapFromScene(scenePos).y() - at.y()) <= kRow * 0.5)
+            return InterfaceSocket{n->name, sockets[size_t(i)].id, i, int(sockets.size()), groupOutput};
+    }
+    return std::nullopt;
+}
+
+void NodeCanvas::renameInterfaceSocket(const InterfaceSocket& s)
+{
+    auto it = mNodes.find(s.node);
+    if (it == mNodes.end())
+        return;
+    NodeItem* n = it->second;
+    const double y = n->mapFromScene(n->socketPos(s.groupOutput, s.index)).y();
+    const QString shown = pretty(s.id);
+    editTitleInPlace(n->mapRectToScene(QRectF(0.0, y - kRow * 0.5, kNodeWidth, kRow)), shown, [this, s, shown](const QString& typed) {
+        const QString text = typed.simplified();
+        const std::string id = identifierFrom(text);
+        if (text.isEmpty() || text == shown || id.empty())
+            return;
+        UndoChunk chunk("Rename " + text.toStdString());
+        if (!s.groupOutput && text != pretty(id))
+            runVerb(*backend, "SetInputInfo", {{"args", {mGroup, s.id}}, {"label", text.toStdString()}});
+        if (id != s.id)
+            runVerb(*backend, "RenameInput", {{"args", {mGroup, s.id, id}}, {"output", s.groupOutput}});
+    });
+}
+
+void NodeCanvas::moveInterfaceSocket(const InterfaceSocket& s, int to)
+{
+    if (to >= 0 && to < s.count && to != s.index)
+        runVerb(*backend, "MoveInput", {{"args", {mGroup, s.id, to}}, {"output", s.groupOutput}});
+}
+
 void NodeCanvas::pickFieldColor(NodeItem* n, int input, QPoint global)
 {
     const SocketInfo& s = n->inputs[size_t(input)];

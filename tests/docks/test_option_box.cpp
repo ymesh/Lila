@@ -6,12 +6,14 @@
 #include "scene/Plug.h"
 #include "ui/Actions.h"
 #include "ui/ChoiceTips.h"
+#include "ui/Controls.h"
 #include "ui/FlagFields.h"
 #include "ui/OptionBox.h"
 
 #include <QApplication>
 #include <QComboBox>
 #include <QDialog>
+#include <QDoubleSpinBox>
 #include <QLabel>
 #include <QMenu>
 #include <QMouseEvent>
@@ -199,6 +201,30 @@ TEST_CASE("a number's scrub label shows the flag's doc, with the scrub and reset
     CHECK(shown.indexOf("Drag sideways to scrub") > italic);
     CHECK(shown.indexOf("Middle-click to reset to default (30") > shown.indexOf("Drag sideways to scrub"));
     QToolTip::hideText();
+}
+
+TEST_CASE("a flag's soft range is what its slider covers; typing still reaches the hard range")
+{
+    FlagDef flag{"subdivisions", "", ArgType::Int, 3, "Segments.", {}, {}, 1.0, 1000.0};
+    flag.softMax = 100.0;
+    if (!ops::find("softRangeProbe"))
+        ops::registerCommand({.name = "softRangeProbe",
+                               .doc = "Probe.",
+                               .flags = {flag},
+                               .undoable = false,
+                               .run = [](const Args&) -> json { return nullptr; }});
+    std::vector<ops::options::Field> fields = ops::options::fields("softRangeProbe");
+    REQUIRE(fields.size() == 1);
+    CHECK(fields[0].softMax == 100.0);
+    QWidget parent;
+    ui::FlagFieldWidgets w = ui::makeFlagField(fields[0], 3, [](const json&) {}, &parent);
+    auto* slider = dynamic_cast<ui::controls::SliderField*>(w.field);
+    if (!slider && w.field)
+        slider = dynamic_cast<ui::controls::SliderField*>(w.field->findChild<QDoubleSpinBox*>());
+    REQUIRE(slider);
+    CHECK(slider->maximum() == 1000.0);
+    CHECK(slider->fillMin() == 1.0);
+    CHECK(slider->fillMax() == 100.0);
 }
 
 TEST_CASE("an enum attr's choice docs: its own per-name docs first, else what its doc says")

@@ -85,6 +85,8 @@ const std::unordered_map<std::string_view, std::string_view>& defaultIcons()
     {"modify.resetTransforms", "restore"},
     {"modify.centerPivot", "focus-centered"},
     {"modify.resetPivot", "focus"},
+    {"tool.pivotEditToggle", "target"},
+    {"tool.pivotEditOn", "target"},
     {"modify.zeroPivot", "focus-2"},
     {"modify.zeroPivotX", "focus-2"},
     {"modify.zeroPivotY", "focus-2"},

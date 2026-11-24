@@ -1,5 +1,8 @@
 #include "ui/NodeCanvas.h"
 
+#include <algorithm>
+#include <functional>
+
 namespace lila::ui
 {
 namespace
@@ -17,6 +20,7 @@ QMouseEvent shiftExtends(const QMouseEvent* e)
 void NodeCanvas::drawForeground(QPainter* p, const QRectF&)
 {
     drawGhostLines(p);
+    drawTimes(p);
     if (mPrefs.minimap || mGrab != Grab::None)
     {
         p->save();
@@ -26,6 +30,74 @@ void NodeCanvas::drawForeground(QPainter* p, const QRectF&)
         drawGrab(p);
         p->restore();
     }
+}
+
+void NodeCanvas::setNodeTimes(std::map<std::string, double> ms, QString label)
+{
+    mTimes = std::move(ms);
+    mTimesLabel = std::move(label);
+    viewport()->update();
+}
+
+std::set<std::string> NodeCanvas::slowestNodes() const
+{
+    double total = 0.0;
+    std::vector<std::pair<double, std::string>> byTime;
+    for (const auto& [name, ms] : mTimes)
+    {
+        total += ms;
+        byTime.push_back({ms, name});
+    }
+    std::sort(byTime.begin(), byTime.end(), std::greater<>());
+    std::set<std::string> out;
+    for (size_t i = 0; i < byTime.size() && i < 3; ++i)
+        if (byTime[i].first > 0.0 && byTime[i].first >= total * 0.1)
+            out.insert(byTime[i].second);
+    return out;
+}
+
+void NodeCanvas::drawTimes(QPainter* p)
+{
+    if (mTimes.empty())
+        return;
+    const std::set<std::string> slow = slowestNodes();
+    p->save();
+    QFont font = p->font();
+    font.setPointSizeF(8.0);
+    double total = 0.0;
+    for (const auto& [name, ms] : mTimes)
+    {
+        total += ms;
+        auto it = mNodes.find(name);
+        if (it == mNodes.end() || !it->second->isVisible())
+            continue;
+        const bool lit = slow.contains(name);
+        font.setBold(lit);
+        p->setFont(font);
+        const QString text = ms >= 10.0 ? QString::number(ms, 'f', 0) + " ms" : QString::number(ms, 'f', 1) + " ms";
+        const double w = QFontMetricsF(font).horizontalAdvance(text) + 10.0, h = 16.0;
+        // Above the header's right end, clear of its eye and badge.
+        const QRectF tag(it->second->pos() + QPointF(kNodeWidth - w, -h - 3.0), QSizeF(w, h));
+        p->setPen(Qt::NoPen);
+        p->setBrush(lit ? themeColor("issueWarning") : gray(58));
+        p->drawRoundedRect(tag, 3.0, 3.0);
+        p->setPen(lit ? gray(18) : gray(200));
+        p->drawText(tag, Qt::AlignCenter, text);
+    }
+    p->resetTransform();
+    font.setBold(false);
+    font.setPointSizeF(9.0);
+    p->setFont(font);
+    const QString readout = "Node Timings  " + mTimesLabel + "  " + QString::number(total, 'f', 1) + " ms";
+    const QRectF box(8.0, 8.0, QFontMetricsF(font).horizontalAdvance(readout) + 16.0, 22.0);
+    QColor plate = gray(18);
+    plate.setAlpha(210);
+    p->setPen(Qt::NoPen);
+    p->setBrush(plate);
+    p->drawRoundedRect(box, 4.0, 4.0);
+    p->setPen(gray(212));
+    p->drawText(box, Qt::AlignCenter, readout);
+    p->restore();
 }
 
 void NodeCanvas::drawGhostLines(QPainter* p)
@@ -533,6 +605,12 @@ void NodeCanvas::mouseDoubleClickEvent(QMouseEvent* e)
                 editFieldText(n, f);
             else if (n->fieldKind(f) == FieldKind::Toggle)
                 pressField(n, f, e);
+            return;
+        }
+    if (e->button() == Qt::LeftButton)
+        if (auto s = interfaceSocketAt(sp))
+        {
+            renameInterfaceSocket(*s);
             return;
         }
     // A group node or a Receive keeps its own double-click; F2 and the menu still rename them.

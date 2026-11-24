@@ -1,0 +1,37 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "fillToIndex",
+  "label": "Fill to Index",
+  "category": "Fill",
+  "doc": "Numbers the Flood Fill regions from the top row down and gives each its number over the region count, so the last region is white. Black outside the regions. Runs as its own pass.",
+  "kind": "native",
+  "keywords": [
+    "region number",
+    "id",
+    "count",
+    "label",
+    "substance flood fill to index"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0,
+        0,
+        -1,
+        -1
+      ],
+      "doc": "A Flood Fill output."
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [],
+  "cost": 20
+}

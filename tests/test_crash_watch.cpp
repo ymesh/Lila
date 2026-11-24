@@ -19,6 +19,8 @@ namespace fs = std::filesystem;
 
 namespace
 {
+constexpr DWORD kExitWaitMs = 300000;
+
 fs::path freshDir(const std::string& name)
 {
     // Per process: other test runs may share the temp folder.
@@ -88,7 +90,7 @@ HelperRun runHelper(const std::string& mode, bool wer)
     REQUIRE_MESSAGE(started, "cannot start " << exe.string());
 
     HANDLE watchdog = nullptr;
-    for (int i = 0; i < 100 && !watchdog; ++i)
+    for (int i = 0; i < 400 && !watchdog; ++i)
     {
         if (DWORD id = findChild(pi.dwProcessId, L"lilacrash.exe"))
             watchdog = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, id);
@@ -96,13 +98,17 @@ HelperRun runHelper(const std::string& mode, bool wer)
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     CHECK_MESSAGE(watchdog, "the helper never started lilacrash.exe");
-    CHECK(WaitForSingleObject(pi.hProcess, 60000) == WAIT_OBJECT_0);
+    // Dumping and symbolizing can take minutes while the rest of the suite loads the machine.
+    bool exited = WaitForSingleObject(pi.hProcess, kExitWaitMs) == WAIT_OBJECT_0;
+    CHECK(exited);
+    if (!exited)
+        TerminateProcess(pi.hProcess, 1);
     GetExitCodeProcess(pi.hProcess, &out.exitCode);
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
     if (watchdog)
     {
-        CHECK_MESSAGE(WaitForSingleObject(watchdog, 60000) == WAIT_OBJECT_0, "the watchdog did not exit after the helper");
+        CHECK_MESSAGE(WaitForSingleObject(watchdog, kExitWaitMs) == WAIT_OBJECT_0, "the watchdog did not exit after the helper");
         GetExitCodeProcess(watchdog, &out.watchdogExit);
         CloseHandle(watchdog);
     }

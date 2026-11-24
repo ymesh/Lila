@@ -31,6 +31,8 @@
 #include "scene/Anim.h"
 #include "scene/Graph.h"
 #include "scene/MeshNodes.h"
+#include "scene/NodeBounds.h"
+#include "scene/Transform.h"
 #include "scene/Modifiers.h"
 #include "scene/Morphs.h"
 #include "scene/Spaces.h"
@@ -602,6 +604,21 @@ ChannelBox::ChannelBox(QWidget* parent) : QWidget(parent)
     mTable->viewport()->setAcceptDrops(true);
     mTable->installEventFilter(this);
     layout->addWidget(mTable, 1);
+
+    mSizeRow = new QWidget(this);
+    auto* sizeLay = new QHBoxLayout(mSizeRow);
+    sizeLay->setContentsMargins(4, 2, 0, 2);
+    auto* sizeLabel = new QLabel("Size", mSizeRow);
+    sizeLabel->setToolTip("The object's size along its own axes, in its world scale. Typing one scales the object to it.");
+    sizeLay->addWidget(sizeLabel);
+    sizeLay->addWidget(controls::vectorField(mSize, 0.0, 1e9, 2, "cm", mSizeRow), 1);
+    for (int axis = 0; axis < 3; ++axis)
+        connect(mSize[size_t(axis)], &QDoubleSpinBox::editingFinished, this, [this, axis] {
+            if (!mUpdating)
+                setSize(axis, mSize[size_t(axis)]->value());
+        });
+    layout->addWidget(mSizeRow);
+
     connect(mTable, &QTableWidget::itemSelectionChanged, this, [this] {
         std::vector<scene::PlugRef> plugs;
         for (int r : highlightedRows())
@@ -1149,6 +1166,53 @@ bool ChannelBox::passesFilter(const Row& row, scene::NodeId lead) const
     return true;
 }
 
+namespace
+{
+/** Object bounds along the node's own axes, times its world scale on each; negative when it has no geometry. */
+glm::dvec3 objectSize(Graph& g, scene::NodeId id)
+{
+    const scene::Node* n = g.node(id);
+    const geo::Bounds b = n && n->type().isA("transform") ? scene::objectBounds(g, id) : geo::Bounds{};
+    if (!b.valid())
+        return glm::dvec3(-1.0);
+    const glm::dmat4 w = n->as<glm::dmat4>(scene::Transform::kWorldMatrix);
+    return (b.max - b.min) * glm::dvec3(glm::length(glm::dvec3(w[0])), glm::length(glm::dvec3(w[1])), glm::length(glm::dvec3(w[2])));
+}
+} // namespace
+
+void ChannelBox::refreshSize()
+{
+    Graph& g = Graph::current();
+    const glm::dvec3 s = objectSize(g, attrView::lead());
+    mSizeRow->setVisible(s.x >= 0.0);
+    if (s.x < 0.0)
+        return;
+    for (int axis = 0; axis < 3; ++axis)
+        if (!mSize[size_t(axis)]->hasFocus())
+            mSize[size_t(axis)]->setValue(s[axis]);
+}
+
+void ChannelBox::setSize(int axis, double cm)
+{
+    Graph& g = Graph::current();
+    UndoChunk chunk("Set Size");
+    for (const std::string& path : targets())
+        try
+        {
+            const scene::NodeId id = g.plug(path + ".scale").node;
+            const double now = objectSize(g, id)[axis];
+            if (now <= 1e-9 || std::abs(now - cm) <= 1e-6 * std::max(1.0, cm))
+                continue;
+            const double v = g.node(id)->as<glm::dvec3>(scene::Transform::kScale)[axis] * cm / now;
+            ops::execute("setAttr", {{"args", {path + ".scale" + "XYZ"[axis], v}}}, CallSource::UI);
+        }
+        catch (const std::exception& e)
+        {
+            log::error("{}", e.what());
+        }
+    refreshSize();
+}
+
 void ChannelBox::refreshStrip()
 {
     Graph& g = Graph::current();
@@ -1426,6 +1490,7 @@ void ChannelBox::refresh()
     scene::NodeId lead = attrView::lead();
     scene::Node* n = g.node(lead);
     refreshStrip();
+    refreshSize();
 
     mUpdating = true;
     mNode = lead;

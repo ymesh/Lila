@@ -3,6 +3,7 @@
 #include "core/Log.h"
 #include "core/Profile.h"
 #include "gn/Routing.h"
+#include "gn/Zones.h"
 #include "link/UnrealLink.h"
 #include "ops/Command.h"
 #include "ops/CommandOptions.h"
@@ -12,6 +13,7 @@
 #include "scene/Materials.h"
 #include "scene/Node.h"
 #include "tex/Evaluate.h"
+#include "tex/Expressions.h"
 #include "tex/Generators.h"
 #include "tex/Interop.h"
 #include "tex/Layers.h"
@@ -181,9 +183,13 @@ json paramStateJson(const ParamDecl& p, const GNode* n)
         j["value"] = paramValue(*n, p);
         if (const std::string attr = sequence::driver(*n, p.id); !attr.empty())
             j["driver"] = attr;
+        if (const std::string text = expressionOf(*n, p.id); !text.empty())
+            j["expression"] = text;
     }
     if (!p.options.empty())
         j["options"] = p.options;
+    if (!p.editor.empty())
+        j["editor"] = p.editor;
     for (auto [key, v] : {std::pair{"min", &p.min}, {"max", &p.max}, {"softMin", &p.softMin}, {"softMax", &p.softMax}, {"step", &p.step}})
         if (*v)
             j[key] = **v;
@@ -220,6 +226,19 @@ json nodeJson(const GNode& n, const Graph& g, const SetSettings& s)
     j["inputs"] = ins;
     j["outputs"] = outs;
     j["params"] = prms;
+    if (p.def && (p.def->kind == NodeKind::Slang || p.def->kind == NodeKind::Native || p.def->kind == NodeKind::Buffer))
+    {
+        json settings = json::array();
+        for (const NodeSetting& ns : nodeSettings())
+            settings.push_back({{"id", ns.id},
+                                {"type", "enum"},
+                                {"label", ns.label},
+                                {"options", ns.options},
+                                {"default", ns.defaultValue},
+                                {"value", n.values.contains(ns.id) ? n.values[ns.id] : json(ns.defaultValue)},
+                                {"doc", ns.doc}});
+        j["settings"] = settings;
+    }
     // The group a Group node runs, as geometry nodes list theirs: a choice among the set's groups.
     if (n.type == kGroupType)
     {
@@ -627,6 +646,33 @@ void registerCommands()
     });
 
     ops::registerCommand({
+        .name = "texAddChannel",
+        .doc = "Add a named output to a texture set: a Material Output input of that name, evaluated and exported like the standard "
+               "channels. One the export preset doesn't name (a packed ORM, a specular or subsurface map) is written as a file of its "
+               "own, with suffix as its {map} token. Returns the set's channels.",
+        .positionalDoc = "set name",
+        .flags = {{"type", "", T::String, "color", "Port type: color, gray or vector.", {"color", "gray", "vector"}},
+                  {"bits", "", T::Int, 8, "8, 16 or 32 bits per channel."},
+                  {"suffix", "", T::String, "", "File name token for {map}; the name when empty."},
+                  {"colorSpace", "", T::String, "linear", "linear writes data, srgb encodes colour.", {"linear", "srgb"}}},
+        .run = [](const Args& a) -> json {
+            const std::string set = positionalString(a, 0, "texAddChannel", "texture set");
+            const std::string name = positionalString(a, 1, "texAddChannel", "name");
+            const SetSettings s = readSettings(setNode(set, "texAddChannel"));
+            if (s.channel(name))
+                throw CommandError("texAddChannel: " + set + " already has a channel " + name);
+            json channels = s.toJson()["channels"];
+            json c = {{"name", name}, {"type", a.get<std::string>("type", "color")}, {"bits", a.get<int>("bits", 8)},
+                      {"colorSpace", a.get<std::string>("colorSpace", "linear")}};
+            if (const std::string suffix = a.get<std::string>("suffix", ""); !suffix.empty())
+                c["suffix"] = suffix;
+            channels.push_back(c);
+            return ops::execute("texSetSettings", {{"args", {set, json{{"channels", channels}}}}})["channels"];
+        },
+        .examples = {"texAddChannel(\"RockTex\", \"orm\", suffix=\"ORM\")", "texAddChannel(\"RockTex\", \"specular\", type=\"gray\")"},
+    });
+
+    ops::registerCommand({
         .name = "texAddNode",
         .doc = "Add a node to a texture set's graph. Returns its name. texNodeTypes lists the types.",
         .positionalDoc = "set type",
@@ -644,6 +690,16 @@ void registerCommands()
                     n.position = {a.flags["position"][0].get<double>(), a.flags["position"][1].get<double>()};
                 fillBakeBounds(n, s, "texAddNode");
                 g.nodes.push_back(n);
+                // A repeat zone comes as a pair: Repeat Input on the left, its Repeat Output to the right.
+                if (type == kRepeatInputType || type == kRepeatOutputType)
+                {
+                    const bool asInput = type == kRepeatInputType;
+                    GNode other{g.uniqueNodeName(asInput ? kRepeatOutputType : kRepeatInputType), asInput ? kRepeatOutputType : kRepeatInputType,
+                                n.position + glm::dvec2(asInput ? 400.0 : -400.0, 0.0), json::object()};
+                    GNode& in = asInput ? g.nodes.back() : other;
+                    in.values["output"] = asInput ? other.name : n.name;
+                    g.nodes.push_back(other);
+                }
                 return n.name;
             });
         },
@@ -718,7 +774,9 @@ void registerCommands()
     ops::registerCommand({
         .name = "texSetValue",
         .doc = "Set a parameter or an unlinked input: texSetValue(set, 'Noise.scale', 8), texSetValue(set, 'Blend.mode', 'multiply'). "
-               "GroupInput.<input> sets an exposed input's default. Value edits never recompile the graph.",
+               "GroupInput.<input> sets an exposed input's default. Value edits never recompile the graph. Every computing node also "
+               "takes outputSize (eighth, quarter, half, set, double, quadruple: its resolution against the set's) and bitDepth (set, 8, "
+               "16, 32), which give it buffers of its own: texSetValue(set, 'Blur.outputSize', 'half').",
         .positionalDoc = "set node.id value",
         .run = [](const Args& a) -> json {
             auto [nn, id] = splitPlug(positionalString(a, 1, "texSetValue", "node.id"), "texSetValue");
@@ -760,6 +818,17 @@ void registerCommands()
                 if (n.type == kGroupType && id == "group")
                 {
                     n.values[id] = value;
+                    return nullptr;
+                }
+                if (const NodeSetting* ns = nodeSetting(id);
+                    ns && p.def && (p.def->kind == NodeKind::Slang || p.def->kind == NodeKind::Native || p.def->kind == NodeKind::Buffer))
+                {
+                    if (!value.is_string() || std::find(ns->options.begin(), ns->options.end(), value.get<std::string>()) == ns->options.end())
+                        throw CommandError("texSetValue: " + id + " takes one of " + joinIds(ns->options) + ", got " + value.dump());
+                    if (value.get<std::string>() == ns->defaultValue)
+                        n.values.erase(id);
+                    else
+                        n.values[id] = value;
                     return nullptr;
                 }
                 if (gn::isRoutingType(n.type) && id == "name")
@@ -856,6 +925,61 @@ void registerCommands()
     });
 
     ops::registerCommand({
+        .name = "texSetExpression",
+        .doc = "Compute a node's number parameter (or unlinked number input) from an expression instead of its value: texSetExpression(set, 'Noise.scale', "
+               "string='Tiles.count * 2'). Same syntax as plug expressions (the expression command): numbers, Node.param for another "
+               "node's parameter or unlinked input in the same graph, input.name for an exposed input of the graph, time (seconds) "
+               "and frame, + - * / % **, comparisons, and/or/not, `a if c else b` and the expression command's functions. An empty "
+               "string or remove=True takes the expression away and keeps the value it computed. Returns the value it computes now.",
+        .positionalDoc = "set node.param",
+        .flags = {{"string", "s", T::String, nullptr, "The expression; a leading = is optional."},
+                  {"remove", "", T::Bool, false, "Take the expression away."}},
+        .run = [](const Args& a) -> json {
+            auto [nn, id] = splitPlug(positionalString(a, 1, "texSetExpression", "node.param"), "texSetExpression");
+            const std::string text = a.get<std::string>("string", "");
+            const bool remove = a.get<bool>("remove", false) || text.find_first_not_of(" \t=") == std::string::npos;
+            json computed;
+            editGraph(a, "texSetExpression", [&](Graph& g, const SetSettings& s) -> json {
+                GNode& n = nodeIn(g, nn, "texSetExpression");
+                NodePorts p = portsChecked(g, n, s, "texSetExpression");
+                const ParamDecl* prm = p.param(id);
+                const PortDecl* in = prm ? nullptr : p.input(id);
+                const bool number = prm ? !prm->hidden && (prm->type == ParamType::Float || prm->type == ParamType::Int ||
+                                                           prm->type == ParamType::Seed || prm->type == ParamType::Bool)
+                                        : in && (in->type == PortType::Float || in->type == PortType::Gray);
+                if (!number)
+                    throw CommandError("texSetExpression: " + nn + "." + id + " isn't a number parameter or input");
+                const json fallback = prm ? prm->defaultValue : in->defaultValue;
+                const bool integer = prm && (prm->type == ParamType::Int || prm->type == ParamType::Seed);
+                if (!n.values.is_object())
+                    n.values = json::object();
+                json expressions = n.values.value(kExpressionsKey, json::object());
+                if (remove)
+                {
+                    if (!expressions.contains(id))
+                        return nullptr;
+                    n.values[id] = resolvedValue(g, n, id, fallback, graph().time());
+                    if (integer && n.values[id].is_number_float())
+                        n.values[id] = std::llround(n.values[id].get<double>());
+                    expressions.erase(id);
+                }
+                else
+                    expressions[id] = text;
+                if (expressions.empty())
+                    n.values.erase(kExpressionsKey);
+                else
+                    n.values[kExpressionsKey] = expressions;
+                std::string why;
+                computed = resolvedValue(g, n, id, fallback, graph().time(), &why);
+                if (!why.empty())
+                    throw CommandError("texSetExpression: " + why);
+                return nullptr;
+            });
+            return computed;
+        },
+    });
+
+    ops::registerCommand({
         .name = "texMoveNodes",
         .doc = "Move nodes on the canvas: texMoveNodes(set, positions={'Noise': [0, 100]}).",
         .positionalDoc = "set",
@@ -899,6 +1023,8 @@ void registerCommands()
                     if (renamed.contains(l.fromNode) && renamed.contains(l.toNode))
                         extra.push_back({renamed[l.fromNode], l.fromSocket, renamed[l.toNode], l.toSocket});
                 g.links.insert(g.links.end(), extra.begin(), extra.end());
+                for (const auto& [old, fresh] : renamed)
+                    gn::retargetZoneCopy(*g.node(fresh), renamed);
                 std::set<std::string> copied;
                 for (auto& [old, fresh] : renamed)
                     copied.insert(old);
@@ -1093,6 +1219,8 @@ void registerCommands()
                 for (const json& l : clip.value("links", json::array()))
                     if (renamed.contains(l[0].get<std::string>()) && renamed.contains(l[2].get<std::string>()))
                         g.links.push_back({renamed[l[0].get<std::string>()], l[1].get<std::string>(), renamed[l[2].get<std::string>()], l[3].get<std::string>()});
+                for (const auto& [old, fresh] : renamed)
+                    gn::retargetZoneCopy(*g.node(fresh), renamed);
                 std::set<std::string> pasted;
                 for (auto& [old, fresh] : renamed)
                     pasted.insert(old);
@@ -1239,12 +1367,26 @@ void registerCommands()
                 nodes.push_back(nodeJson(node, g, s));
                 // A driven parameter shows its attribute's value, which is what evaluates.
                 for (json& prm : nodes.back()["params"])
+                {
                     if (const int at = prm.contains("driver") ? n.type().attrIndex(prm["driver"].get<std::string>()) : -1; at >= 0)
                         prm["value"] = scene::toJson(graph().value({n.id(), at}));
+                    // An expression's field shows what it computes now.
+                    if (prm.contains("expression"))
+                    {
+                        std::string why;
+                        prm["value"] = resolvedValue(g, node, prm["id"].get<std::string>(), prm["default"], graph().time(), &why);
+                        if (!why.empty())
+                            prm["expressionError"] = why;
+                    }
+                }
                 if (auto it = problems.find(node.name); it != problems.end())
                     nodes.back()["problem"] = it->second;
             }
-            json out = {{"name", address}, {"definition", g.toJson()}, {"settings", s.toJson()}, {"nodes", nodes}};
+            json zones = json::array();
+            for (const GNode& node : g.nodes)
+                if (const GNode* o = repeatOutputOf(g, node))
+                    zones.push_back({{"input", node.name}, {"output", o->name}, {"kind", "Repeat"}, {"nodes", repeatBody(g, node.name, o->name)}});
+            json out = {{"name", address}, {"definition", g.toJson()}, {"settings", s.toJson()}, {"nodes", nodes}, {"zones", zones}};
             // A group evaluates as part of the set, so only the set's graph has a plan of its own.
             if (inGroup)
                 return out;

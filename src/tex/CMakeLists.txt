@@ -2,11 +2,15 @@ lila_module(lila_tex Scene
     BrushPresets.cpp
     Commands.cpp
     Evaluate.cpp
+    Expressions.cpp
     Generators.cpp
     Graph.cpp
     Natives.cpp
     GraphFiles.cpp
     GraphGroups.cpp
+    GraphParams.cpp
+    GraphProfile.cpp
+    GraphProfile.h
     Interop.cpp
     Interop.h
     LayerCommands.cpp
@@ -37,6 +41,7 @@ lila_module(lila_tex Scene
     SlangRt.cpp
     SmartMaterial.cpp
     TextImage.cpp
+    TextRaster.cpp
     TextureSet.cpp
     Types.cpp)
 
@@ -44,10 +49,10 @@ find_package(slang CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_package(ptex CONFIG REQUIRED)
 if(WIN32)
-    target_link_libraries(lila_tex PUBLIC lila_scene lila_geo PRIVATE slang::slang zstd::libzstd Ptex::Ptex_dynamic lila_uv lila_curve)
+    target_link_libraries(lila_tex PUBLIC lila_scene lila_geo PRIVATE slang::slang zstd::libzstd Ptex::Ptex_dynamic lila_uv lila_curve lila_rigmath)
 else()
     # The Linux triplets build ptex static, so vcpkg exports only Ptex::Ptex_static.
-    target_link_libraries(lila_tex PUBLIC lila_scene lila_geo PRIVATE slang::slang zstd::libzstd Ptex::Ptex_static lila_uv lila_curve)
+    target_link_libraries(lila_tex PUBLIC lila_scene lila_geo PRIVATE slang::slang zstd::libzstd Ptex::Ptex_static lila_uv lila_curve lila_rigmath)
 endif()
 
 # The CPU evaluator JIT-compiles through slang-llvm, which Slang loads at runtime (so app-local deployment misses it),

@@ -1,0 +1,45 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "grayscale",
+  "label": "Grayscale",
+  "category": "Filter",
+  "doc": "A colour to one value: luminance as the eye sees it, the channels' average, lightness (midway between the brightest and darkest channel) or the brightest channel.",
+  "keywords": [
+    "greyscale",
+    "desaturate",
+    "black and white",
+    "rgb to bw",
+    "luminance"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color"
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "mode",
+      "type": "enum",
+      "default": "luminance",
+      "options": [
+        "luminance",
+        "average",
+        "lightness",
+        "maximum"
+      ],
+      "doc": "How the channels combine."
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float3 c = input.sample(uv).rgb;\nswitch (p.mode)\n{\ncase 1: return (c.r + c.g + c.b) / 3.0;\ncase 2: return 0.5 * (max(c.r, max(c.g, c.b)) + min(c.r, min(c.g, c.b)));\ncase 3: return max(c.r, max(c.g, c.b));\ndefault: return dot(c, float3(0.2126, 0.7152, 0.0722));\n}"
+  }
+}

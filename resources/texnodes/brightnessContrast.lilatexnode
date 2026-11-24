@@ -1,0 +1,49 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "brightnessContrast",
+  "label": "Brightness/Contrast",
+  "category": "Filter",
+  "doc": "Lifts or lowers the colour and spreads or squeezes it around the middle.",
+  "keywords": [
+    "brightness",
+    "contrast",
+    "bright contrast",
+    "cheap contrast",
+    "exposure"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color"
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "brightness",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -1.0,
+      "softMax": 1.0,
+      "doc": "Added to every channel."
+    },
+    {
+      "id": "contrast",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -1.0,
+      "softMax": 1.0,
+      "doc": "Above 0 spreads values from 0.5, below squeezes them."
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float4 c = input.sample(uv);\nfloat a = 1.0 + p.contrast;\nfloat b = p.brightness - p.contrast * 0.5;\nreturn float4(max(a * c.rgb + b, float3(0.0)), c.a);"
+  }
+}

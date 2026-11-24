@@ -1,0 +1,60 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "mix",
+  "label": "Mix",
+  "category": "Filter",
+  "doc": "Blends A to B by Factor, for values, colours or vectors: 0 gives A, 1 gives B.",
+  "keywords": [
+    "lerp",
+    "mix rgb",
+    "linear interpolate",
+    "interpolate",
+    "blend"
+  ],
+  "inputs": [
+    {
+      "id": "a",
+      "type": "color",
+      "default": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "id": "b",
+      "type": "color",
+      "default": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "id": "factor",
+      "type": "gray",
+      "default": 0.5
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "clampFactor",
+      "type": "bool",
+      "default": true,
+      "doc": "Keeps Factor between 0 and 1."
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float f = factor.sample(uv);\nif (p.clampFactor)\n    f = saturate(f);\nreturn lerp(a.sample(uv), b.sample(uv), f);"
+  }
+}

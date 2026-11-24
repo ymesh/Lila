@@ -478,13 +478,36 @@ void registerGroupCommands()
 
     ops::registerCommand({
         .name = "texRenameInput",
-        .doc = "Rename a node group's input, keeping its links inside and on the Group nodes running the group.",
+        .doc = "Rename a node group's input (or, with output=True, its output), keeping its links inside and on the Group nodes "
+               "running the group.",
         .positionalDoc = "group name newName",
+        .flags = {{"output", "", T::Bool, false, "Rename a group output instead."}},
         .run = [](const Args& a) -> json {
             SetGraphs s = openGroup(groupArg(a, 0, "texRenameInput", "group"), "texRenameInput");
             const std::string from = groupArg(a, 1, "texRenameInput", "name"), to = groupArg(a, 2, "texRenameInput", "new name");
             if (!validName(to))
                 throw CommandError("texRenameInput: '" + to + "' can't name an input");
+            if (a.get<bool>("output", false))
+            {
+                auto out = std::find_if(s.sub.outputs.begin(), s.sub.outputs.end(), [&](const GraphOutput& o) { return o.name == from; });
+                if (out == s.sub.outputs.end())
+                    throw CommandError("texRenameInput: no output '" + from + "' in " + s.group);
+                if (from == to)
+                    return to;
+                if (s.sub.output(to))
+                    throw CommandError("texRenameInput: " + s.group + " already has an output '" + to + "'");
+                out->name = to;
+                const std::string go = nodeOfType(s.sub, kGroupOutputType);
+                for (GLink& l : s.sub.links)
+                    if (l.toNode == go && l.toSocket == from)
+                        l.toSocket = to;
+                commitGroup(s, [&](Graph& g, GNode& n) {
+                    for (GLink& l : g.links)
+                        if (l.fromNode == n.name && l.fromSocket == from)
+                            l.fromSocket = to;
+                });
+                return to;
+            }
             GraphInput& in = inputIn(s.sub, from, "texRenameInput");
             if (from == to)
                 return to;
@@ -511,13 +534,26 @@ void registerGroupCommands()
 
     ops::registerCommand({
         .name = "texMoveInput",
-        .doc = "Move a node group's input to another place in its interface, 0 first.",
+        .doc = "Move a node group's input (or, with output=True, its output) to another place in its interface, 0 first.",
         .positionalDoc = "group name index",
+        .flags = {{"output", "", T::Bool, false, "Move a group output instead."}},
         .run = [](const Args& a) -> json {
             SetGraphs s = openGroup(groupArg(a, 0, "texMoveInput", "group"), "texMoveInput");
             const std::string name = groupArg(a, 1, "texMoveInput", "name");
             if (a.positional.size() < 3 || !a.positional[2].is_number())
                 throw CommandError("texMoveInput: index required");
+            if (a.get<bool>("output", false))
+            {
+                auto it = std::find_if(s.sub.outputs.begin(), s.sub.outputs.end(), [&](const GraphOutput& o) { return o.name == name; });
+                if (it == s.sub.outputs.end())
+                    throw CommandError("texMoveInput: no output '" + name + "' in " + s.group);
+                GraphOutput moved = *it;
+                s.sub.outputs.erase(it);
+                const int to = std::clamp(a.positional[2].get<int>(), 0, int(s.sub.outputs.size()));
+                s.sub.outputs.insert(s.sub.outputs.begin() + to, std::move(moved));
+                commitGroup(s, [](Graph&, GNode&) {});
+                return to;
+            }
             inputIn(s.sub, name, "texMoveInput");
             auto it = std::find_if(s.sub.inputs.begin(), s.sub.inputs.end(), [&](const GraphInput& in) { return in.name == name; });
             GraphInput moved = *it;

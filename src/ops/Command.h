@@ -69,6 +69,9 @@ struct FlagDef
      * defaultValue it never fills calls, so commands still see the flag as not given.
      */
     json shownDefault;
+    /** The part of min..max an option box's slider covers (a node attr's soft range); typing can still go to min/max. */
+    std::optional<double> softMin;
+    std::optional<double> softMax;
 };
 
 /** `flag` as one naming a scene node of `type` (see FlagDef::nodeType). */

@@ -1,0 +1,68 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "checker",
+  "label": "Checker",
+  "category": "Pattern",
+  "doc": "A checkerboard of Count X by Count Y squares, tiling. Out is 1 on the first colour's squares.",
+  "keywords": [
+    "checkerboard",
+    "chess",
+    "squares",
+    "grid"
+  ],
+  "inputs": [],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    },
+    {
+      "id": "color",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "countX",
+      "type": "int",
+      "default": 8,
+      "min": 1,
+      "softMax": 64,
+      "doc": "Squares across."
+    },
+    {
+      "id": "countY",
+      "type": "int",
+      "default": 8,
+      "min": 1,
+      "softMax": 64,
+      "doc": "Squares down."
+    },
+    {
+      "id": "colorA",
+      "type": "color",
+      "default": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "id": "colorB",
+      "type": "color",
+      "default": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "int2 c = int2(floor(frac(uv) * float2(float(p.countX), float(p.countY)) + 1e-4));\nreturn float((c.x + c.y) & 1) < 0.5 ? 1.0 : 0.0;",
+    "color": "int2 c = int2(floor(frac(uv) * float2(float(p.countX), float(p.countY)) + 1e-4));\nreturn ((c.x + c.y) & 1) == 0 ? p.colorA : p.colorB;"
+  }
+}

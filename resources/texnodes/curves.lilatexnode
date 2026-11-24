@@ -44,5 +44,10 @@
   "cost": 20,
   "body": {
     "out": "float4 c = input.sample(uv);\nif (p.channel == 0)\n    return float4(p.curve.eval(c.r), p.curve.eval(c.g), p.curve.eval(c.b), c.a);\nif (p.channel == 1)\n    c.r = p.curve.eval(c.r);\nelse if (p.channel == 2)\n    c.g = p.curve.eval(c.g);\nelse if (p.channel == 3)\n    c.b = p.curve.eval(c.b);\nelse\n    c.a = p.curve.eval(c.a);\nreturn c;"
-  }
+  },
+  "keywords": [
+    "float curve",
+    "rgb curves",
+    "tone curve"
+  ]
 }

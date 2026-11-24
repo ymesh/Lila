@@ -64,8 +64,19 @@
         "cross",
         "dot",
         "length",
-        "distance"
-      ]
+        "distance",
+        "reflect",
+        "project",
+        "snap",
+        "mix",
+        "wrap",
+        "faceForward",
+        "refract",
+        "ceiling",
+        "round",
+        "power"
+      ],
+      "doc": "a and b by default. Reflect mirrors a off the plane b faces, Project gives a's part along b, Snap rounds a to multiples of b, Mix blends a to b by Scale, Wrap keeps a between 0 and b, Face Forward flips a to face away from b, Refract bends a through the surface b with Scale as the index ratio, Power raises a to b."
     }
   ],
   "cost": 3,
@@ -73,5 +84,5 @@
     "out": "return vecMathOp(p.operation, a.sample(uv), b.sample(uv), scale.sample(uv));",
     "value": "return vecMathOp(p.operation, a.sample(uv), b.sample(uv), scale.sample(uv)).x;"
   },
-  "code": "float3 vecMathOp(int op, float3 x, float3 y, float s)\n{\nswitch (op)\n{\ncase 1: return x - y;\ncase 2: return x * y;\ncase 3: return float3(abs(y.x) > 1e-8 ? x.x / y.x : 0.0, abs(y.y) > 1e-8 ? x.y / y.y : 0.0, abs(y.z) > 1e-8 ? x.z / y.z : 0.0);\ncase 4: return x * s;\ncase 5: return min(x, y);\ncase 6: return max(x, y);\ncase 7: return abs(x);\ncase 8: return floor(x);\ncase 9: return frac(x);\ncase 10: return float3(abs(y.x) > 1e-8 ? x.x - y.x * floor(x.x / y.x) : 0.0, abs(y.y) > 1e-8 ? x.y - y.y * floor(x.y / y.y) : 0.0, abs(y.z) > 1e-8 ? x.z - y.z * floor(x.z / y.z) : 0.0);\ncase 11: return sin(x);\ncase 12: return cos(x);\ncase 13: return length(x) > 1e-8 ? normalize(x) : float3(0.0);\ncase 14: return cross(x, y);\ncase 15: return float3(dot(x, y));\ncase 16: return float3(length(x));\ncase 17: return float3(distance(x, y));\ndefault: return x + y;\n}\n}"
+  "code": "float3 vecMathOp(int op, float3 x, float3 y, float s)\n{\nswitch (op)\n{\ncase 1: return x - y;\ncase 2: return x * y;\ncase 3: return float3(abs(y.x) > 1e-8 ? x.x / y.x : 0.0, abs(y.y) > 1e-8 ? x.y / y.y : 0.0, abs(y.z) > 1e-8 ? x.z / y.z : 0.0);\ncase 4: return x * s;\ncase 5: return min(x, y);\ncase 6: return max(x, y);\ncase 7: return abs(x);\ncase 8: return floor(x);\ncase 9: return frac(x);\ncase 10: return float3(abs(y.x) > 1e-8 ? x.x - y.x * floor(x.x / y.x) : 0.0, abs(y.y) > 1e-8 ? x.y - y.y * floor(x.y / y.y) : 0.0, abs(y.z) > 1e-8 ? x.z - y.z * floor(x.z / y.z) : 0.0);\ncase 11: return sin(x);\ncase 12: return cos(x);\ncase 13: return length(x) > 1e-8 ? normalize(x) : float3(0.0);\ncase 14: return cross(x, y);\ncase 15: return float3(dot(x, y));\ncase 16: return float3(length(x));\ncase 17: return float3(distance(x, y));\ncase 18: return reflect(x, length(y) > 1e-8 ? normalize(y) : float3(0.0, 0.0, 1.0));\ncase 19: return dot(y, y) > 1e-12 ? y * (dot(x, y) / dot(y, y)) : float3(0.0);\ncase 20: return float3(abs(y.x) > 1e-8 ? floor(x.x / y.x + 0.5) * y.x : x.x, abs(y.y) > 1e-8 ? floor(x.y / y.y + 0.5) * y.y : x.y, abs(y.z) > 1e-8 ? floor(x.z / y.z + 0.5) * y.z : x.z);\ncase 21: return lerp(x, y, s);\ncase 22: return float3(abs(y.x) > 1e-8 ? x.x - y.x * floor(x.x / y.x) : 0.0, abs(y.y) > 1e-8 ? x.y - y.y * floor(x.y / y.y) : 0.0, abs(y.z) > 1e-8 ? x.z - y.z * floor(x.z / y.z) : 0.0);\ncase 23: return dot(x, y) < 0.0 ? x : -x;\ncase 24: return refract(length(x) > 1e-8 ? normalize(x) : x, length(y) > 1e-8 ? normalize(y) : float3(0.0, 0.0, 1.0), s);\ncase 25: return ceil(x);\ncase 26: return floor(x + 0.5);\ncase 27: return pow(abs(x), y);\ndefault: return x + y;\n}\n}"
 }

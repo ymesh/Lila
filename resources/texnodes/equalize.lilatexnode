@@ -1,0 +1,48 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "equalize",
+  "label": "Equalize",
+  "category": "Filter",
+  "doc": "Spreads the values evenly from 0 to 1 (histogram equalisation): crowded ranges are pulled apart, sparse ones squeezed. Runs as its own pass.",
+  "kind": "native",
+  "keywords": [
+    "histogram equalization",
+    "histogram equalisation",
+    "equalise",
+    "flatten histogram",
+    "auto contrast",
+    "substance histogram"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0.5,
+        0.5,
+        0.5,
+        1
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "mode",
+      "type": "enum",
+      "default": "luminance",
+      "options": [
+        "luminance",
+        "perChannel"
+      ],
+      "doc": "Luminance evens out the brightness and keeps the hues; per channel evens out red, green and blue separately. Alpha is untouched."
+    }
+  ],
+  "cost": 12
+}

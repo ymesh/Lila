@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+class QComboBox;
+class QDoubleSpinBox;
 class QTimer;
 class QToolButton;
 
@@ -37,12 +39,18 @@ private:
     /** A labelled push button for a registered action, or null when it isn't one. */
     QToolButton* push(const std::string& id, const QString& label, QWidget* parent);
     QToolButton* track(QToolButton* b, const std::string& id);
+    /** The Move section: the move manipulator's axis orientation, its Custom angles, and pivot editing. */
+    QWidget* moveSettings(QWidget* parent);
     void refreshState();
 
     QTimer* mRefresh = nullptr;
+    QComboBox* mMoveAxis = nullptr;
+    QWidget* mCustomAxis = nullptr;
+    std::vector<QDoubleSpinBox*> mCustomAngles;
     std::vector<QToolButton*> mButtons;
     int mGraphListener = 0;
     int mPrefListener = 0;
+    int mToolsListener = 0;
 };
 
 /** Registers "window.modelingToolkit", which shows or hides the dock named kModelingToolkitDock. */

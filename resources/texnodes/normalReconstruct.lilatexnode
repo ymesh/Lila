@@ -1,0 +1,46 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "normalReconstruct",
+  "label": "Normal Reconstruct",
+  "category": "Normal",
+  "doc": "Rebuilds a normal map's blue channel from red and green, for two-channel normal maps (BC5) and maps whose blue was used for something else. Flip Green converts between OpenGL and DirectX.",
+  "keywords": [
+    "bc5",
+    "two channel normal",
+    "reconstruct z",
+    "normal format",
+    "directx",
+    "opengl"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0.5,
+        0.5,
+        0.5,
+        1.0
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "flipGreen",
+      "type": "bool",
+      "default": false,
+      "doc": "Inverts green, between OpenGL and DirectX."
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float2 xy = input.sample(uv).rg * 2.0 - 1.0;\nif (p.flipGreen)\n    xy.y = -xy.y;\nreturn float4(float3(xy, sqrt(saturate(1.0 - dot(xy, xy)))) * 0.5 + 0.5, 1.0);"
+  }
+}

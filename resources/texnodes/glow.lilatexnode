@@ -1,0 +1,51 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "glow",
+  "label": "Glow",
+  "category": "Filter",
+  "doc": "A soft halo spreading Radius out from a mask's shapes, the shapes themselves included.",
+  "keywords": [
+    "glow",
+    "halo",
+    "outer glow",
+    "bloom mask"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "gray",
+      "default": 0.0,
+      "taps": 48
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    }
+  ],
+  "params": [
+    {
+      "id": "radius",
+      "type": "float",
+      "default": 0.03,
+      "min": 0.0,
+      "softMax": 0.2,
+      "doc": "How far the halo reaches, uv."
+    },
+    {
+      "id": "strength",
+      "type": "float",
+      "default": 1.0,
+      "min": 0.0,
+      "softMax": 4.0,
+      "doc": "Brightness of the halo."
+    }
+  ],
+  "cost": 48,
+  "code": "float2 vogelDisk(int i, int n)\n{\n    float r = sqrt((float(i) + 0.5) / float(n));\n    float a = float(i) * 2.39996323;\n    return float2(cos(a), sin(a)) * r;\n}",
+  "body": {
+    "out": "float acc = 0.0;\nfor (int i = 0; i < 48; ++i)\n    acc += input.sample(uv + vogelDisk(i, 48) * p.radius);\nreturn max(input.sample(uv), saturate(acc / 48.0 * 2.0 * p.strength));"
+  }
+}

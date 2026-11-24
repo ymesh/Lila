@@ -16,6 +16,7 @@
 #include "scene/OrientPivot.h"
 #include "scene/Relocate.h"
 #include "scene/Rig.h"
+#include "scene/Transform.h"
 #include "geo/Mesh.h"
 #include "ui/GeometrySnap.h"
 #include "ui/GizmoMath.h"
@@ -63,6 +64,25 @@ scene::Space spaceFor(Tool t)
     return s == "object" || s == "normal" || s == "component" ? scene::Space::Object : s == "parent" ? scene::Space::Parent : scene::Space::World;
 }
 
+/** The Custom axis orientation: XYZ degrees from the Move settings. */
+glm::dmat3 customFrame()
+{
+    const json v = PrefStore::get().value("general", "/manipulator/customAxis", json::array({0.0, 0.0, 0.0}));
+    glm::dvec3 deg(0.0);
+    if (v.is_array() && v.size() == 3)
+        for (int i = 0; i < 3; ++i)
+            deg[i] = v[size_t(i)].is_number() ? v[size_t(i)].get<double>() : 0.0;
+    return glm::dmat3(scene::eulerToMatrix(deg, scene::RotateOrder::XYZ));
+}
+
+bool customSpace(Tool t)
+{
+    if (t != Tool::Move && t != Tool::Rotate)
+        return false;
+    std::string key = t == Tool::Rotate ? "/manipulator/rotateSpace" : "/manipulator/moveSpace";
+    return PrefStore::get().value<std::string>("general", key, "world") == "custom";
+}
+
 bool normalSpace() { return PrefStore::get().value<std::string>("general", "/manipulator/moveSpace", "world") == "normal"; }
 
 bool gimbalSpace() { return PrefStore::get().value<std::string>("general", "/manipulator/rotateSpace", "world") == "gimbal"; }
@@ -98,6 +118,8 @@ struct ComponentPivot
     bool placed = false;
 };
 std::optional<ComponentPivot> gComponentPivot;
+/** The component pivot as an Edit Pivot drag found it, for that drag's undo step. */
+std::optional<ComponentPivot> gComponentPivotAtPress;
 /** Where the component manipulator last sat and how it was turned, which Pin Component Pivot keeps. */
 std::optional<std::pair<glm::dvec3, glm::dmat3>> gLastComponentManip;
 const QString kBadgeText = QString::fromUtf8("Pinned pivot  ×");
@@ -105,9 +127,31 @@ const QString kBadgeText = QString::fromUtf8("Pinned pivot  ×");
 struct ComponentPivotAction final : UndoAction
 {
     std::optional<ComponentPivot> before, after;
-    void undo() override { gComponentPivot = before; }
-    void redo() override { gComponentPivot = after; }
+    void undo() override
+    {
+        gComponentPivot = before;
+        tools::changed();
+    }
+    void redo() override
+    {
+        gComponentPivot = after;
+        tools::changed();
+    }
 };
+
+/** One undo step for an Edit Pivot drag on components; a click that moved nothing leaves the pivot as it was. */
+void recordComponentPivotDrag(bool moved)
+{
+    if (!moved)
+    {
+        gComponentPivot = gComponentPivotAtPress;
+        return;
+    }
+    auto a = std::make_unique<ComponentPivotAction>();
+    a->before = gComponentPivotAtPress;
+    a->after = gComponentPivot;
+    UndoStack::get().record(std::move(a));
+}
 
 int handleAxis(H h)
 {
@@ -376,6 +420,8 @@ void Manipulator::refresh()
         }
         else if ((t == Tool::Rotate && rotateComponentSpace()) || (t == Tool::Move && moveComponentSpace()))
             mFrame = scene::selectionNormalFrame();
+        else if (customSpace(t))
+            mFrame = customFrame();
         else
             mFrame = scene::xformops::frame(g, mLead, spaceFor(t));
         if (t == Tool::Move && normalSpace() && !tools::pivotEdit())
@@ -415,6 +461,8 @@ void Manipulator::refresh()
     // Object space is the pivot's own orientation. Scale shows it too: a drag along it bakes the pivot in first.
     bool pivotAxes = (tools::pivotEdit() && t == Tool::Rotate) || (space == scene::Space::Object && (t != Tool::Scale || canBakePivot(g, mLead)));
     mFrame = pivotAxes ? scene::xformops::pivotFrame(g, mLead) : scene::xformops::frame(g, mLead, space);
+    if (customSpace(t) && !(tools::pivotEdit() && t == Tool::Rotate))
+        mFrame = customFrame();
     if (t == Tool::Rotate && !tools::pivotEdit() && gimbalSpace())
     {
         mGimbal = true;
@@ -751,6 +799,7 @@ bool Manipulator::press(QPointF px, Qt::MouseButton button, Qt::KeyboardModifier
     d.gimbal = mGimbal && h >= H::X && h <= H::Z;
     d.components = mComponents && !d.pivotEdit;
     d.componentPivot = mComponents && d.pivotEdit;
+    gComponentPivotAtPress = gComponentPivot;
     if (d.componentPivot && !gComponentPivot)
     {
         const scene::ComponentMode mode = scene::components::mode();
@@ -1008,7 +1057,8 @@ void Manipulator::update(QPointF px, Qt::KeyboardModifiers mods)
         else if (inc.enabled)
             delta = inc.absolute ? gizmo::snapAbsolute(d.startPivot, delta, d.frame, moveMask(h), inc.step)
                                  : gizmo::snapRelative(delta, d.frame, moveMask(h), inc.step);
-        std::optional<glm::dvec3> snap = snapTarget(cur, tools::snaps());
+        // Point snaps take the real cursor: a fine-control drag lags it, and the target is what the cursor is over.
+        std::optional<glm::dvec3> snap = snapTarget(px, tools::snaps());
         d.alignRotations.clear();
         if (!snap && sliding)
             snap = surfaceSlide(cur, mods & Qt::ShiftModifier);
@@ -1177,6 +1227,10 @@ std::optional<glm::dvec3> Manipulator::snapTarget(QPointF px, unsigned snaps) co
                 moving.insert(c);
         }
     geometrySnap::Nearest nearest(px, mView, 16.0);
+    // Only what the user can see is a target, unless meshes are drawn see-through.
+    const PrefStore& prefs = PrefStore::get();
+    if (!prefs.value<bool>("general", viewportDisplay::kXray, false) && prefs.value<std::string>("general", "/viewport/displayMode", "") != "wireframe")
+        nearest.hideOccluded(std::vector<NodeId>(moving.begin(), moving.end()));
     for (NodeId id : g.nodes())
     {
         scene::Node* n = g.node(id);
@@ -1416,7 +1470,10 @@ void Manipulator::commit()
         names.push_back(nameOf(s.id));
     Tool t = pivotTool(d.pivotEdit, d.tool);
     if (d.componentPivot)
+    {
+        recordComponentPivotDrag(t == Tool::Move ? glm::length(d.moveDelta) > 1e-9 : std::abs(d.angle) > 1e-9);
         return;
+    }
     std::optional<UndoChunk> cloneChunk;
     if (d.clone)
     {

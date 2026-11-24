@@ -621,8 +621,12 @@ void registerMeshCommands()
             if (a.type == PlugType::Enum)
                 flags.push_back({a.name, "", T::String, a.enumNames[std::get<int64_t>(a.defaultValue)], a.doc, a.enumNames});
             else
+            {
                 flags.push_back({a.name, "", a.type == PlugType::Bool ? T::Bool : a.type == PlugType::Int ? T::Int : T::Float, toJson(a.defaultValue), a.doc,
                                  {}, {}, a.minValue, a.maxValue});
+                flags.back().softMin = a.softMin;
+                flags.back().softMax = a.softMax;
+            }
         flags.push_back({"upAxis", "", T::String, nullptr, "Direction the primitive's up points: x, y, z, -x, -y or -z; the scene up axis when left out.",
                          kUpAxes});
         std::string type = p.type, display = p.display;

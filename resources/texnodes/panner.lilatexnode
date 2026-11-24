@@ -1,0 +1,62 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "panner",
+  "label": "Panner",
+  "category": "Transform",
+  "doc": "Slides the input over time, Speed in textures per second, tiling: flowing water, scrolling lava, conveyor belts.",
+  "keywords": [
+    "panner",
+    "scroll",
+    "pan",
+    "flow",
+    "animate uv"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0.5,
+        0.5,
+        0.5,
+        1.0
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "speedX",
+      "type": "float",
+      "default": 0.1,
+      "softMin": -2.0,
+      "softMax": 2.0,
+      "doc": "Across, textures per second."
+    },
+    {
+      "id": "speedY",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -2.0,
+      "softMax": 2.0,
+      "doc": "Down, textures per second."
+    },
+    {
+      "id": "time",
+      "type": "float",
+      "default": 0.0,
+      "hidden": true,
+      "doc": "Scene time in seconds, filled in at evaluation."
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "return input.sample(frac(uv - float2(p.speedX, p.speedY) * p.time));"
+  }
+}

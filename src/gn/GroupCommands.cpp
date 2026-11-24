@@ -959,15 +959,30 @@ void registerGroupCommands()
 
     ops::registerCommand({
         .name = "gnMoveInput",
-        .doc = "Move an exposed input to a position in the interface order (0 is first), optionally into a panel.",
+        .doc = "Move an exposed input (or, with output=True, a group output) to a position in the interface order (0 is first), "
+               "optionally into a panel.",
         .positionalDoc = "group input index",
-        .flags = {{"panel", "", Arg::String, nullptr, "Panel to put it in; empty for none."}},
+        .flags = {{"panel", "", Arg::String, nullptr, "Panel to put it in; empty for none."},
+                  {"output", "", Arg::Bool, false, "Move a group output instead."}},
         .run = [](const Args& a) -> json {
             std::string name = positional(a, 1, "gnMoveInput", "input");
             if (a.positional.size() < 3 || !a.positional[2].is_number_integer())
                 throw CommandError("gnMoveInput: index required");
             int64_t index = a.positional[2].get<int64_t>();
             return edit(a, "gnMoveInput", [&](Group& grp, auto&) -> json {
+                if (a.get<bool>("output", false))
+                {
+                    auto it = std::find_if(grp.outputs.begin(), grp.outputs.end(), [&](const GOutput& o) { return o.name == name; });
+                    if (it == grp.outputs.end())
+                        throw CommandError("gnMoveInput: no output '" + name + "'");
+                    GOutput o = *it;
+                    grp.outputs.erase(it);
+                    grp.outputs.insert(grp.outputs.begin() + std::clamp<int64_t>(index, 0, int64_t(grp.outputs.size())), o);
+                    json order = json::array();
+                    for (const GOutput& x : grp.outputs)
+                        order.push_back(x.name);
+                    return order;
+                }
                 auto it = std::find_if(grp.inputs.begin(), grp.inputs.end(), [&](const GInput& in) { return in.name == name; });
                 if (it == grp.inputs.end())
                     throw CommandError("gnMoveInput: no input '" + name + "'");

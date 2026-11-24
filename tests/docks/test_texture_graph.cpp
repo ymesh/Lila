@@ -474,3 +474,68 @@ TEST_CASE("texture graph nodes group into a node group that opens, edits its inp
     pump();
     CHECK(rock().node("NodeGroup"));
 }
+
+TEST_CASE("a node group's inputs rename on Group Input by double-click, and its outputs rename and move")
+{
+    registerTexGraphUi();
+    run("newScene");
+    run("texCreateSet", {{"args", {"Rock"}}, {"resolution", 64}});
+    run("texAddNode", {{"args", {"Rock", "math"}}, {"name", "m0"}, {"position", {-500, 0}}});
+    run("texAddNode", {{"args", {"Rock", "separateRgb"}}, {"name", "s"}, {"position", {-250, 0}}});
+    run("texConnect", {{"args", {"Rock", "m0.out", "s.input"}}});
+    run("texConnect", {{"args", {"Rock", "s.r", "Output.roughness"}}});
+    run("texConnect", {{"args", {"Rock", "s.g", "Output.metallic"}}});
+    run("texGroupNodes", {{"args", {"Rock", "s"}}});
+    auto inner = [] { return tex::Graph::fromJson(rock().subgroups.at("NodeGroup")); };
+    REQUIRE(inner().outputs.size() == 2);
+    const std::string first = inner().outputs[0].name, second = inner().outputs[1].name;
+
+    run("texRenameInput", {{"args", {"Rock/NodeGroup", first, "rough"}}, {"output", true}});
+    CHECK(inner().outputs[0].name == "rough");
+    const auto linked = [](const char* from, const char* to) {
+        const tex::Graph g = rock();
+        return std::any_of(g.links.begin(), g.links.end(), [&](const tex::GLink& l) { return l.fromNode + "." + l.fromSocket == from && l.toNode + "." + l.toSocket == to; });
+    };
+    CHECK(linked("NodeGroup.rough", "Output.roughness"));
+    run("texMoveInput", {{"args", {"Rock/NodeGroup", "rough", 1}}, {"output", true}});
+    CHECK(inner().outputs[0].name == second);
+    CHECK(inner().outputs[1].name == "rough");
+
+    QMainWindow win;
+    auto* editor = new ui::NodeEditor(&win, ui::kTextureGraphBackend);
+    win.setCentralWidget(editor);
+    win.resize(1000, 700);
+    win.show();
+    editor->setGroup("Rock/NodeGroup");
+    pump();
+    auto* view = editor->findChild<QGraphicsView*>();
+    REQUIRE(view);
+    const tex::GNode* gi = nullptr;
+    const tex::Graph g = inner();
+    for (const tex::GNode& n : g.nodes)
+        if (n.type == "GroupInput")
+            gi = &n;
+    REQUIRE(gi);
+    REQUIRE(g.inputs.size() == 1);
+    const std::string input = g.inputs[0].name;
+
+    // Down the Group Input node until a double-click opens its input's name rather than the node's title.
+    QLineEdit* edit = nullptr;
+    for (int dy = 4; dy < 120 && !edit; dy += 4)
+    {
+        viewMouse(view, QEvent::MouseButtonDblClick, QPointF(gi->position.x + 60.0, gi->position.y + dy), Qt::LeftButton);
+        pump();
+        if (auto* e = qobject_cast<QLineEdit*>(editor->inPlaceEditor()))
+        {
+            if (e->text() != "Group Input")
+                edit = e;
+            else
+                pressWithText(e, Qt::Key_Escape);
+        }
+    }
+    REQUIRE(edit);
+    edit->setText("Strength");
+    pressWithText(edit, Qt::Key_Return);
+    CHECK(inner().inputs[0].name == "strength");
+    CHECK(linked("m0.out", "NodeGroup.strength"));
+}

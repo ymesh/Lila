@@ -1,0 +1,94 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "cornerPin",
+  "label": "Corner Pin",
+  "category": "Transform",
+  "doc": "Stretches the input so its corners land on four points: perspective-like skews, fitting a decal into a panel. Clip leaves outside transparent.",
+  "keywords": [
+    "quad transform",
+    "corner pin",
+    "skew",
+    "perspective",
+    "four corners"
+  ],
+  "inputs": [
+    {
+      "id": "input",
+      "type": "color",
+      "default": [
+        0.5,
+        0.5,
+        0.5,
+        1.0
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "bottomLeftX",
+      "type": "float",
+      "default": 0.0,
+      "doc": "Where the bottom left corner lands."
+    },
+    {
+      "id": "bottomLeftY",
+      "type": "float",
+      "default": 0.0,
+      "doc": "Where the bottom left corner lands."
+    },
+    {
+      "id": "bottomRightX",
+      "type": "float",
+      "default": 1.0,
+      "doc": "Where the bottom right corner lands."
+    },
+    {
+      "id": "bottomRightY",
+      "type": "float",
+      "default": 0.0,
+      "doc": "Where the bottom right corner lands."
+    },
+    {
+      "id": "topLeftX",
+      "type": "float",
+      "default": 0.0,
+      "doc": "Where the top left corner lands."
+    },
+    {
+      "id": "topLeftY",
+      "type": "float",
+      "default": 1.0,
+      "doc": "Where the top left corner lands."
+    },
+    {
+      "id": "topRightX",
+      "type": "float",
+      "default": 1.0,
+      "doc": "Where the top right corner lands."
+    },
+    {
+      "id": "topRightY",
+      "type": "float",
+      "default": 1.0,
+      "doc": "Where the top right corner lands."
+    },
+    {
+      "id": "clip",
+      "type": "bool",
+      "default": true,
+      "doc": "Transparent outside the four corners."
+    }
+  ],
+  "cost": 2,
+  "code": "float cornerCross(float2 a, float2 b) { return a.x * b.y - a.y * b.x; }\n\n/** Inverse bilinear (Inigo Quilez): where in the quad a, b, c, d (anticlockwise from bottom left) p sits, 0 to 1 per side. */\nbool cornerPinInverse(float2 p, float2 a, float2 b, float2 c, float2 d, out float2 l)\n{\n    float2 e = b - a, f = d - a, g = a - b + c - d, h = p - a;\n    float k2 = cornerCross(g, f);\n    float k1 = cornerCross(e, f) + cornerCross(h, g);\n    float k0 = cornerCross(h, e);\n    l = float2(-1.0, -1.0);\n    float v;\n    if (abs(k2) < 1e-6)\n    {\n        if (abs(k1) < 1e-9)\n            return false;\n        v = -k0 / k1;\n    }\n    else\n    {\n        float w = k1 * k1 - 4.0 * k0 * k2;\n        if (w < 0.0)\n            return false;\n        w = sqrt(w);\n        float ik2 = 0.5 / k2;\n        v = (-k1 - w) * ik2;\n        if (v < 0.0 || v > 1.0)\n            v = (-k1 + w) * ik2;\n    }\n    float den = e.x + g.x * v;\n    float u = abs(den) > 1e-9 ? (h.x - f.x * v) / den : (h.y - f.y * v) / (e.y + g.y * v);\n    l = float2(u, v);\n    return true;\n}",
+  "body": {
+    "out": "float2 a = float2(p.bottomLeftX, p.bottomLeftY), b = float2(p.bottomRightX, p.bottomRightY);\nfloat2 c = float2(p.topRightX, p.topRightY), d = float2(p.topLeftX, p.topLeftY);\nfloat2 l;\nif (!cornerPinInverse(uv, a, b, c, d, l))\n    return float4(0.0, 0.0, 0.0, 0.0);\nif (p.clip && (any(l < 0.0) || any(l > 1.0)))\n    return float4(0.0, 0.0, 0.0, 0.0);\nreturn input.sample(l);"
+  }
+}

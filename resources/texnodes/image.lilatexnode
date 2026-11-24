@@ -4,12 +4,13 @@
   "type": "image",
   "label": "Image",
   "category": "Input",
-  "doc": "An image file sampled in uv, wrapping at the edges, repeated tiles times. Relative paths resolve against the workspace, the scene's folder, then Lila's resources (strokes/strokes_soft.png names a shipped stroke sheet). The set samples the image at the set's resolution: when the image is larger, Match Set on the node raises the set to fit. 8 and 16-bit files read as 0..1; signed, 32-bit and float files (EXR, float or int16 TIFF) read as stored, so a height map keeps its units: map it with Colorize's Low and High. To show an image on an object without authoring maps, set it as a material's map in the Material Editor instead.",
+  "doc": "An image file sampled in uv, repeated tiles times. An SVG is drawn at the set's resolution, transparent outside its shapes. Relative paths resolve against the workspace, the scene's folder, then Lila's resources (strokes/strokes_soft.png names a shipped stroke sheet). The set samples the image at the set's resolution: when the image is larger, Match Set on the node raises the set to fit. 8 and 16-bit files read as 0..1; signed, 32-bit and float files (EXR, float or int16 TIFF) read as stored, so a height map keeps its units: map it with Colorize's Low and High. To show an image on an object without authoring maps, set it as a material's map in the Material Editor instead.",
   "keywords": [
     "texture",
     "file",
     "bitmap",
-    "alpha"
+    "alpha",
+    "svg"
   ],
   "inputs": [
     {
@@ -17,7 +18,8 @@
       "type": "vector",
       "label": "UV",
       "implicit": "uv",
-      "doc": "Where to read the image: the mesh's uvs unless linked (Projection, Mapping)."
+      "doc": "Where to read the image: the mesh's uvs unless linked (Projection, Mapping).",
+      "reach": 1
     }
   ],
   "outputs": [
@@ -35,7 +37,8 @@
     {
       "id": "file",
       "type": "image",
-      "default": ""
+      "default": "",
+      "doc": "The image. A <UDIM> or <UVTILE> token in the name (rock_<UDIM>.png) reads each UDIM tile's own file in that tile."
     },
     {
       "id": "tiles",
@@ -43,7 +46,30 @@
       "default": 1,
       "min": 1,
       "softMax": 16,
-      "doc": "Repeats across the texture."
+      "doc": "Repeats across the texture. Repeated or read through a scaled UV, the image is read from prefiltered smaller copies, so detail finer than a texel averages instead of aliasing."
+    },
+    {
+      "id": "wrap",
+      "type": "enum",
+      "default": "repeat",
+      "options": [
+        "repeat",
+        "extend",
+        "mirror",
+        "clip"
+      ],
+      "doc": "Past the image's edge. repeat: tiles it. extend: stretches the edge pixels. mirror: tiles it flipped every other time. clip: transparent black."
+    },
+    {
+      "id": "filter",
+      "type": "enum",
+      "default": "linear",
+      "options": [
+        "linear",
+        "closest",
+        "cubic"
+      ],
+      "doc": "Between pixels. linear: blends the four nearest. closest: the nearest pixel, hard-edged, for pixel art and ID maps. cubic: smoother when the image is enlarged."
     },
     {
       "id": "colorSpace",
@@ -54,12 +80,23 @@
         "srgb"
       ],
       "doc": "How the file's colour values are read. linear: as stored, for data maps (roughness, normal, height) and EXR. srgb: decoded from sRGB to linear, for colour maps saved as 8 or 16-bit PNG, JPEG, TGA or TIFF. Alpha is never decoded."
+    },
+    {
+      "id": "alphaMode",
+      "label": "Alpha",
+      "type": "enum",
+      "default": "straight",
+      "options": [
+        "straight",
+        "premultiplied"
+      ],
+      "doc": "How the file stores colour against alpha. straight: colour as is (PNG, TGA, most paint exports). premultiplied: colour already multiplied by alpha (EXR renders), divided back out on read so the output is straight."
     }
   ],
   "cost": 3,
-  "code": "float3 imageSrgbToLinear(float3 c)\n{\n    float3 lo = c / 12.92;\n    float3 hi = pow(max((c + 0.055) / 1.055, float3(0.0)), float3(2.4));\n    return lerp(hi, lo, step(c, float3(0.04045)));\n}",
+  "code": "float3 imageSrgbToLinear(float3 c)\n{\n    float3 lo = c / 12.92;\n    float3 hi = pow(max((c + 0.055) / 1.055, float3(0.0)), float3(2.4));\n    return lerp(hi, lo, step(c, float3(0.04045)));\n}\nfloat4 imageStraight(float4 c, int alphaMode)\n{\n    return alphaMode == 1 && c.a > 0.0 ? float4(c.rgb / c.a, c.a) : c;\n}",
   "body": {
-    "out": "float4 c = file.sample(coord.sample(uv).xy * float(p.tiles));\nreturn p.colorSpace == 1 ? float4(imageSrgbToLinear(c.rgb), c.a) : c;",
-    "alpha": "return file.sample(coord.sample(uv).xy * float(p.tiles)).a;"
+    "out": "float2 at = coord.sample(uv).xy * float(p.tiles);\nfloat2 dx = texWrapDelta(coord.sample(uv + float2(texel().x, 0.0)).xy * float(p.tiles) - at);\nfloat2 dy = texWrapDelta(coord.sample(uv + float2(0.0, texel().y)).xy * float(p.tiles) - at);\nfloat4 c = imageStraight(file.sampleImage(coord.sample(uv).xy * float(p.tiles), p.wrap, p.filter, dx, dy), p.alphaMode);\nreturn p.colorSpace == 1 ? float4(imageSrgbToLinear(c.rgb), c.a) : c;",
+    "alpha": "float2 at = coord.sample(uv).xy * float(p.tiles);\nfloat2 dx = texWrapDelta(coord.sample(uv + float2(texel().x, 0.0)).xy * float(p.tiles) - at);\nfloat2 dy = texWrapDelta(coord.sample(uv + float2(0.0, texel().y)).xy * float(p.tiles) - at);\nreturn file.sampleImage(coord.sample(uv).xy * float(p.tiles), p.wrap, p.filter, dx, dy).a;"
   }
 }

@@ -1,0 +1,153 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "radialSplatter",
+  "label": "Radial Splatter",
+  "category": "Scatter",
+  "doc": "Copies of the pattern spaced around a circle, in one or more rings toward the centre: bolt circles, flower petals, clock marks, vents. Follow Angle turns each copy to face out from the centre.",
+  "keywords": [
+    "circular splatter",
+    "radial array",
+    "ring",
+    "bolt circle",
+    "polar scatter"
+  ],
+  "inputs": [
+    {
+      "id": "pattern",
+      "type": "gray",
+      "default": 1.0,
+      "taps": 24
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "gray"
+    },
+    {
+      "id": "random",
+      "type": "gray"
+    },
+    {
+      "id": "instanceUv",
+      "type": "vector"
+    }
+  ],
+  "params": [
+    {
+      "id": "count",
+      "type": "int",
+      "default": 8,
+      "min": 1,
+      "softMax": 64,
+      "doc": "Copies around each ring."
+    },
+    {
+      "id": "rings",
+      "type": "int",
+      "default": 1,
+      "min": 1,
+      "max": 8,
+      "doc": "Rings, from the outer one toward the centre."
+    },
+    {
+      "id": "radius",
+      "type": "float",
+      "default": 0.35,
+      "min": 0.0,
+      "softMax": 0.5,
+      "doc": "The outer ring's radius, in uv."
+    },
+    {
+      "id": "size",
+      "type": "float",
+      "default": 0.12,
+      "min": 0.0,
+      "softMax": 0.5,
+      "doc": "Each copy's size, in uv."
+    },
+    {
+      "id": "sizeRandom",
+      "type": "float",
+      "default": 0.0,
+      "min": 0.0,
+      "max": 1.0,
+      "doc": "Shrinks copies by up to this much at random."
+    },
+    {
+      "id": "ringShrink",
+      "type": "float",
+      "default": 0.0,
+      "min": 0.0,
+      "max": 1.0,
+      "doc": "Each inner ring's copies are this much smaller."
+    },
+    {
+      "id": "ringTwist",
+      "type": "float",
+      "default": 0.0,
+      "softMin": 0.0,
+      "softMax": 1.0,
+      "doc": "Turns each inner ring by this fraction of the gap between copies."
+    },
+    {
+      "id": "followAngle",
+      "type": "bool",
+      "default": true,
+      "doc": "Turns each copy to face out from the centre."
+    },
+    {
+      "id": "rotation",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -180.0,
+      "softMax": 180.0,
+      "doc": "Added turn, in degrees."
+    },
+    {
+      "id": "rotationRandom",
+      "type": "float",
+      "default": 0.0,
+      "min": 0.0,
+      "max": 1.0,
+      "doc": "Random turn, up to a full one at 1."
+    },
+    {
+      "id": "valueRandom",
+      "type": "float",
+      "default": 0.0,
+      "min": 0.0,
+      "max": 1.0,
+      "doc": "Darkens copies by up to this much at random."
+    },
+    {
+      "id": "centerX",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -0.5,
+      "softMax": 0.5,
+      "doc": "Moves the centre, from the middle."
+    },
+    {
+      "id": "centerY",
+      "type": "float",
+      "default": 0.0,
+      "softMin": -0.5,
+      "softMax": 0.5,
+      "doc": "Moves the centre, from the middle."
+    },
+    {
+      "id": "seed",
+      "type": "seed",
+      "default": 0
+    }
+  ],
+  "cost": 24,
+  "code": "struct RadialHit\n{\n    float value;\n    float2 local;\n    float random;\n};\n\nRadialHit radialSplat<P : ITexFloat>(float2 uv, P pattern, TexP_radialSplatter p)\n{\n    RadialHit hit;\n    hit.value = 0.0;\n    hit.local = float2(0.0, 0.0);\n    hit.random = 0.0;\n    float2 d = uv - 0.5 - float2(p.centerX, p.centerY);\n    float theta = atan2(d.y, d.x);\n    int n = max(p.count, 1);\n    float step = 6.28318530718 / float(n);\n    for (int ring = 0; ring < clamp(p.rings, 1, 8); ++ring)\n    {\n        float radius = p.radius * (1.0 - float(ring) / float(clamp(p.rings, 1, 8)));\n        float size = p.size * (1.0 - float(ring) * p.ringShrink);\n        if (size <= 1e-5 || radius < 0.0)\n            continue;\n        float twist = float(ring) * p.ringTwist * step;\n        int k0 = int(floor((theta - twist) / step + 0.5));\n        for (int dk = -1; dk <= 1; ++dk)\n        {\n            int k = ((k0 + dk) % n + n) % n;\n            uint2 key = uint2(uint(k), uint(ring));\n            float a = float(k) * step + twist;\n            float s = size * (1.0 - p.sizeRandom * texRand(key, uint(p.seed) ^ 0x51edu));\n            float turn = (p.followAngle ? degrees(a) : 0.0) + p.rotation + (texRand(key, uint(p.seed) ^ 0x2b79u) - 0.5) * 360.0 * p.rotationRandom;\n            float2 c = float2(cos(a), sin(a)) * radius;\n            float r = radians(turn);\n            float2 o = d - c;\n            float2 l = float2(cos(r) * o.x + sin(r) * o.y, -sin(r) * o.x + cos(r) * o.y) / max(s, 1e-5) + 0.5;\n            if (any(l < 0.0) || any(l > 1.0))\n                continue;\n            float v = pattern.sample(l) * (1.0 - p.valueRandom * texRand(key, uint(p.seed) ^ 0x9e37u));\n            if (v > hit.value)\n            {\n                hit.value = v;\n                hit.local = l;\n                hit.random = texRand(key, uint(p.seed) ^ 0x7f4au);\n            }\n        }\n    }\n    return hit;\n}",
+  "body": {
+    "out": "return radialSplat(uv, pattern, p).value;",
+    "random": "RadialHit h = radialSplat(uv, pattern, p);\nreturn h.value > 0.0 ? h.random : 0.0;",
+    "instanceUv": "RadialHit h = radialSplat(uv, pattern, p);\nreturn float3(h.local, h.value > 0.0 ? 1.0 : 0.0);"
+  }
+}

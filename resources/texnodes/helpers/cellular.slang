@@ -12,16 +12,26 @@ struct CellResult
     int2 cell;
 };
 
-float cellMetric(float2 d, int metric)
+/** 0 euclidean, 1 manhattan, 2 chebyshev, 3 Minkowski with the exponent (1 is manhattan, 2 euclidean, large is chebyshev). */
+float cellMetric(float2 d, int metric, float exponent)
 {
     if (metric == 1)
         return abs(d.x) + abs(d.y);
     if (metric == 2)
         return max(abs(d.x), abs(d.y));
+    if (metric == 3)
+    {
+        float e = max(exponent, 0.1);
+        return pow(pow(abs(d.x), e) + pow(abs(d.y), e), 1.0 / e);
+    }
     return length(d);
 }
 
-CellResult cellular(float2 uv, int2 scale, float jitter, int metric, uint seed)
+float cellMetric(float2 d, int metric) { return cellMetric(d, metric, 2.0); }
+
+CellResult cellular(float2 uv, int2 scale, float jitter, int metric, uint seed) { return cellular(uv, scale, jitter, metric, 2.0, seed); }
+
+CellResult cellular(float2 uv, int2 scale, float jitter, int metric, float exponent, uint seed)
 {
     float2 q = uv * float2(scale);
     float2 i = floor(q);
@@ -40,7 +50,7 @@ CellResult cellular(float2 uv, int2 scale, float jitter, int metric, uint seed)
             int2 n = c + int2(x, y);
             int2 w = ((n % scale) + scale) % scale;
             float2 o = float2(float(x), float(y)) + 0.5 + (texRand2(uint2(w), seed) - 0.5) * jitter - f;
-            float d = cellMetric(o, metric);
+            float d = cellMetric(o, metric, exponent);
             if (d < r.f1)
             {
                 r.f2 = r.f1;

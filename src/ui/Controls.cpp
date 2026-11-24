@@ -45,6 +45,7 @@ QString labelFor(const std::string& actionId, const QString& label)
     return a ? QString::fromStdString(actions::displayLabel(actionId)) : QString::fromStdString(actionId);
 }
 
+constexpr int kValueFieldMinWidth = 44;
 constexpr int kRowHeight = 30;
 constexpr int kRowIcon = 18;
 constexpr int kRowPad = 10;
@@ -387,6 +388,8 @@ QDoubleSpinBox* valueField(double lo, double hi, int decimals, const QString& un
     if (!unit.isEmpty())
         s->setSuffix(" " + unit);
     s->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    // Qt sizes a spin box's minimum to fit its largest value, which pins panels wide; values scroll in a narrow field.
+    s->setMinimumWidth(kValueFieldMinWidth);
     return s;
 }
 
@@ -396,9 +399,20 @@ SliderField::SliderField(QWidget* parent) : QDoubleSpinBox(parent)
     setButtonSymbols(QAbstractSpinBox::NoButtons);
     setKeyboardTracking(false);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    setMinimumWidth(kValueFieldMinWidth);
     setRole(this, "slider");
     connect(this, &QDoubleSpinBox::valueChanged, this, qOverload<>(&QWidget::update));
 }
+
+void SliderField::setFillRange(double lo, double hi)
+{
+    mFill = std::pair{lo, hi};
+    update();
+}
+
+double SliderField::fillMin() const { return mFill ? std::max(mFill->first, minimum()) : minimum(); }
+
+double SliderField::fillMax() const { return mFill ? std::min(mFill->second, maximum()) : maximum(); }
 
 void SliderField::paintEvent(QPaintEvent* e)
 {
@@ -410,8 +424,8 @@ void SliderField::paintEvent(QPaintEvent* e)
         clip.addRoundedRect(r, 4, 4);
         p.setClipPath(clip);
         p.fillRect(rect(), underMouse() ? themeColor("hover") : themeColor("input"));
-        const double span = maximum() - minimum();
-        const double f = span > 0 ? std::clamp((value() - minimum()) / span, 0.0, 1.0) : 0.0;
+        const double span = fillMax() - fillMin();
+        const double f = span > 0 ? std::clamp((value() - fillMin()) / span, 0.0, 1.0) : 0.0;
         p.fillRect(QRectF(0, 0, width() * f, height()), themeColor("sliderFill"));
     }
     QDoubleSpinBox::paintEvent(e);

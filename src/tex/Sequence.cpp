@@ -3,6 +3,7 @@
 #include "core/Paths.h"
 #include "scene/Anim.h"
 #include "tex/Evaluate.h"
+#include "tex/Expressions.h"
 
 #include <algorithm>
 #include <cctype>
@@ -166,21 +167,28 @@ std::string driverName(std::string_view node, std::string_view param)
     return name;
 }
 
+namespace
+{
+/** Node types with a hidden time parameter that evaluation fills with the scene time in seconds. */
+bool takesTime(const std::string& type) { return type == "time" || type == "panner" || type == "rotator"; }
+} // namespace
+
 bool animated(const Graph& g)
 {
     for (const GNode& n : g.nodes)
     {
-        if (n.type == kType)
+        if (n.type == kType || takesTime(n.type))
             return true;
         if (auto d = n.values.find(kDriversKey); d != n.values.end() && d->is_object() && !d->empty())
             return true;
     }
-    return false;
+    return expressionsUseTime(g);
 }
 
 bool followTime(Graph& g, scene::Graph& scene, const scene::Node& set, double seconds, const fs::path& root)
 {
     bool changed = false;
+    g.time = seconds;
     auto put = [&](GNode& n, const std::string& id, json v) {
         if (!n.values.is_object())
             n.values = json::object();
@@ -203,6 +211,8 @@ bool followTime(Graph& g, scene::Graph& scene, const scene::Node& set, double se
             const double v = driven(scene, set, attr, seconds, number(was, 0.0));
             put(n, param, was.is_number_integer() ? json(std::llround(v)) : json(v));
         }
+        if (takesTime(n.type))
+            put(n, "time", seconds);
         if (n.type != kType)
             continue;
 

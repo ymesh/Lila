@@ -1,0 +1,93 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "cobblestones",
+  "label": "Cobblestones",
+  "category": "Pattern",
+  "doc": "Rounded stones packed in irregular cells with gaps between: cobbles, flagstones, pebble paving. Height is each stone's rounded top; Mask fills the stones.",
+  "keywords": [
+    "cobblestone",
+    "pavement",
+    "flagstones",
+    "paving",
+    "stones",
+    "pebbles",
+    "stone wall"
+  ],
+  "inputs": [],
+  "outputs": [
+    {
+      "id": "height",
+      "type": "gray"
+    },
+    {
+      "id": "mask",
+      "type": "gray"
+    },
+    {
+      "id": "random",
+      "type": "gray"
+    },
+    {
+      "id": "color",
+      "type": "color"
+    }
+  ],
+  "params": [
+    {
+      "id": "scale",
+      "type": "int",
+      "default": 6,
+      "min": 1,
+      "softMax": 64,
+      "doc": "Stones across."
+    },
+    {
+      "id": "jitter",
+      "type": "float",
+      "default": 1.0,
+      "min": 0.0,
+      "max": 1.0,
+      "doc": "How irregular the stones are."
+    },
+    {
+      "id": "gap",
+      "type": "float",
+      "default": 0.06,
+      "min": 0.0,
+      "softMax": 0.5,
+      "doc": "Space between stones, in cells."
+    },
+    {
+      "id": "roundness",
+      "type": "float",
+      "default": 0.3,
+      "min": 0.001,
+      "softMax": 1.0,
+      "doc": "How far in from the edge the top rounds off, in cells."
+    },
+    {
+      "id": "heightRandom",
+      "type": "float",
+      "default": 0.3,
+      "min": 0.0,
+      "max": 1.0,
+      "doc": "Lowers stones by up to this much at random."
+    },
+    {
+      "id": "seed",
+      "type": "seed",
+      "default": 0
+    }
+  ],
+  "cost": 30,
+  "helpers": [
+    "cellular"
+  ],
+  "body": {
+    "height": "CellResult r = cellular(uv, int2(p.scale, p.scale), p.jitter, 0, uint(p.seed));\nfloat e = cellEdgeDistance(r) - p.gap * 0.5;\nif (e <= 0.0)\n    return 0.0;\nfloat t = saturate(e / max(p.roundness, 1e-3));\nfloat dome = sqrt(saturate(1.0 - (1.0 - t) * (1.0 - t)));\nreturn dome * (1.0 - p.heightRandom * cellRandom(r, uint(p.seed)));",
+    "mask": "CellResult r = cellular(uv, int2(p.scale, p.scale), p.jitter, 0, uint(p.seed));\nreturn cellEdgeDistance(r) > p.gap * 0.5 ? 1.0 : 0.0;",
+    "random": "CellResult r = cellular(uv, int2(p.scale, p.scale), p.jitter, 0, uint(p.seed));\nreturn cellRandom(r, uint(p.seed));",
+    "color": "CellResult r = cellular(uv, int2(p.scale, p.scale), p.jitter, 0, uint(p.seed));\nreturn cellColor(r, uint(p.seed));"
+  }
+}

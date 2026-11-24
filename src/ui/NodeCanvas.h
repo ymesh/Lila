@@ -802,6 +802,21 @@ public:
     bool renameNode(const std::string& name);
     /** The node to rename: the one selected, else the one under the cursor; empty for none. */
     std::string renameTarget() const;
+    /** A row of the group's interface under a scene point: one of Group Input's outputs or Group Output's inputs. */
+    struct InterfaceSocket
+    {
+        std::string node;
+        std::string id;
+        /** Its place in the interface, and how many there are. */
+        int index = -1;
+        int count = 0;
+        bool groupOutput = false;
+    };
+    std::optional<InterfaceSocket> interfaceSocketAt(QPointF scenePos) const;
+    /** Opens a box over an interface row to type its name in; the typed text becomes its label where it isn't a plain name. */
+    void renameInterfaceSocket(const InterfaceSocket& s);
+    /** Moves an interface row to place to, 0 first. */
+    void moveInterfaceSocket(const InterfaceSocket& s, int to);
     /** A note box at scene point at to type in; Ctrl+Enter or clicking away adds it as a note, Esc adds nothing. */
     void addNote(QPointF at);
     /** A node renamed by a backend whose labels are names (the scene's): its new name, to keep it selected. */
@@ -854,8 +869,19 @@ public:
 
     void frame(bool selectedOnly);
 
+    /**
+     * The timing overlay: each node's time in ms as a tag on its header, the slowest lit, and how they were measured
+     * ("CPU, 256 px") with the total in the corner. Empty times hide it.
+     */
+    void setNodeTimes(std::map<std::string, double> ms, QString label);
+    const std::map<std::string, double>& nodeTimes() const { return mTimes; }
+    /** The nodes the overlay lights: up to three of the slowest, each taking at least a tenth of the total. */
+    std::set<std::string> slowestNodes() const;
+
 protected:
     void drawForeground(QPainter* p, const QRectF&) override;
+    /** The timing overlay's tags, in scene coordinates, and its corner readout, in view coordinates. */
+    void drawTimes(QPainter* p);
 
     void drawGhostLines(QPainter* p);
     /** The active grab's locked-axis line and spacing readout, in view coordinates. */
@@ -1099,6 +1125,8 @@ private:
     bool mThumbsQueued = false;
     std::map<std::string, NodeItem*> mNodes;
     std::vector<LinkItem*> mLinks;
+    std::map<std::string, double> mTimes;
+    QString mTimesLabel;
     std::map<std::string, QPointF> mPressPositions;
     QGraphicsPathItem* mTemp = nullptr;
     NodeItem* mWireFrom = nullptr;

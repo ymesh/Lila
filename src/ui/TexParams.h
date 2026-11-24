@@ -7,6 +7,7 @@
 #include <functional>
 #include <string>
 
+class QAction;
 class QWidget;
 
 /** Side-panel editors for texture-graph node parameters and unlinked inputs. */
@@ -18,14 +19,17 @@ using json = nlohmann::json;
 using SetFn = std::function<void(const std::string& id, const json& value)>;
 /** Makes the input with this id an input of the node group the node is in. */
 using ExposeFn = std::function<void(const std::string& id)>;
+/** An action for a parameter's right-click menu (owned by owner, the row's label), or null for none. */
+using ParamActionFn = std::function<QAction*(const std::string& id, QWidget* owner)>;
 
 /**
  * Editors for one node as texGraphInfo lists it ("nodes" entry): its parameters (float and int sliders, enums, bools,
  * colour swatches, gradient and curve editors, seeds with a randomise button, image pickers, code editors, scene node pickers),
- * then its unlinked inputs. A graph node's parameters are its exposed ones. Every edit goes to set. node's "set", when given,
- * names the texture set, for editors that read its bake (a camera picker filling position-map bounds).
+ * then its unlinked inputs, then its "settings" (output size and bit depth) under Output. A graph node's parameters are its
+ * exposed ones. Every edit goes to set. node's "set", when given, names the texture set, for editors that read its bake (a
+ * camera picker filling position-map bounds). An empty title (no title, label or type) leaves the heading out.
  */
-LILA_UI_API QWidget* nodePanel(QWidget* parent, const json& node, SetFn set, ExposeFn expose = {});
+LILA_UI_API QWidget* nodePanel(QWidget* parent, const json& node, SetFn set, ExposeFn expose = {}, ParamActionFn paramAction = {});
 
 /** Colour stops on a bar: click the bar to add one, drag to move, double-click to pick its colour, right-click to remove. */
 LILA_UI_API QWidget* gradientEditor(QWidget* parent, const json& value, std::function<void(const json&)> changed);

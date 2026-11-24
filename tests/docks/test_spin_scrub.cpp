@@ -85,6 +85,23 @@ TEST_CASE("a spin box and its form label drag it with either button, a step per 
     CHECK(box->value() == doctest::Approx(5.0));
 }
 
+TEST_CASE("a whole-number slider with a wide range still drags a step per ten pixels")
+{
+    installOnce();
+    QWidget panel;
+    auto* form = new QFormLayout(&panel);
+    auto* box = new QDoubleSpinBox(&panel);
+    box->setProperty("role", "slider");
+    box->setDecimals(0);
+    box->setRange(1.0, 1000.0);
+    box->setValue(1.0);
+    box->setFixedWidth(110);
+    form->addRow("Subdivisions", box);
+
+    dragScrub(form->labelForField(box), Qt::LeftButton, 40);
+    CHECK(box->value() == doctest::Approx(5.0));
+}
+
 TEST_CASE("a click on a spin box types; Esc, Enter or a click elsewhere ends typing")
 {
     installOnce();
