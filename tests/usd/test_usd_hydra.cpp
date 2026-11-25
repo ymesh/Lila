@@ -679,7 +679,7 @@ TEST_CASE("hydra: delegates other than Storm get smooth preview meshes subdivide
     std::unique_ptr<vr::Session> session = embree->open(kPanel);
     REQUIRE(session);
     Storm requests;
-    // The coverage of the frame Embree settles on, once half a second passes without a new one.
+    // The coverage of the frame Embree settles on: one with something drawn, then two seconds without a new one.
     auto covered = [&] {
         std::optional<vr::Frame> frame;
         uint64_t frames = 0;
@@ -693,7 +693,8 @@ TEST_CASE("hydra: delegates other than Storm get smooth preview meshes subdivide
         session->render(r);
         auto quietSince = std::chrono::steady_clock::now();
         const auto start = quietSince;
-        for (uint64_t seen = 0; std::chrono::steady_clock::now() - quietSince < std::chrono::milliseconds(500) &&
+        int coverage = 0;
+        for (uint64_t seen = 0; (coverage == 0 || std::chrono::steady_clock::now() - quietSince < std::chrono::seconds(2)) &&
                                 std::chrono::steady_clock::now() - start < std::chrono::seconds(30);)
         {
             mainq::drain();
@@ -701,11 +702,12 @@ TEST_CASE("hydra: delegates other than Storm get smooth preview meshes subdivide
             {
                 seen = frames;
                 quietSince = std::chrono::steady_clock::now();
+                coverage = coveredIn(resolved(*frame), 0, kSize);
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         REQUIRE(frame);
-        return coveredIn(resolved(*frame), 0, kSize);
+        return coverage;
     };
     const int cage = covered();
     graph().setValue({node("Round").id(), scene::MeshNode::kSmoothPreview, -1}, int64_t(2));

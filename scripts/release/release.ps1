@@ -44,6 +44,8 @@ if (-not $SkipBuild) {
     if ($LASTEXITCODE -ne 0) { throw "Release build failed. If Lila is running from $BuildDir\bin\Release, close it." }
 }
 if (-not $SkipTests) {
+    # Other sessions share this machine, so groom wall-clock budgets are reported only here; the nightly enforces them.
+    $env:GROOMLAB_ENFORCE_BUDGETS = "0"
     cmd /c "scripts\env.cmd >nul 2>&1 && python scripts\quiet.py test $BuildDir Release -LE known_failing"
     if ($LASTEXITCODE -ne 0) { throw "Tests failed, full log in $BuildDir\last_test.log" }
 }

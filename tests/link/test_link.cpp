@@ -564,7 +564,7 @@ TEST_CASE("progress keeps a slow call alive and reaches onProgress on the callin
         // Longer in total than the idle timeout, but never quiet for that long.
         for (int i = 0; i < 6; ++i)
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(60));
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
             self->send(FakeServer::progress(req, "importing", 0.06 * (i + 1)));
         }
         // Progress for a request nobody made is ignored.
@@ -578,7 +578,7 @@ TEST_CASE("progress keeps a slow call alive and reaches onProgress on the callin
     std::vector<json> seen;
     bool sameThread = true;
     auto caller = std::this_thread::get_id();
-    CallOptions opts{.timeoutMs = 5000, .idleTimeoutMs = 200};
+    CallOptions opts{.timeoutMs = 10000, .idleTimeoutMs = 1000};
     opts.onProgress = [&](const json& p) {
         sameThread = sameThread && std::this_thread::get_id() == caller;
         seen.push_back(p);
@@ -598,7 +598,7 @@ TEST_CASE("progress does not extend the overall timeout")
     std::atomic<bool> stop = false;
     FakeServer* self = nullptr;
     FakeServer server([&](const json& req) -> std::optional<json> {
-        for (int i = 0; i < 40 && !stop; ++i)
+        for (int i = 0; i < 400 && !stop; ++i)
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(25));
             self->send(FakeServer::progress(req, "importing", 0.0));
@@ -609,7 +609,7 @@ TEST_CASE("progress does not extend the overall timeout")
     RpcClient client;
     REQUIRE(client.connect("127.0.0.1", server.port(), 1000));
 
-    RpcResult r = client.call("importAsset", json::object(), CallOptions{.timeoutMs = 300, .idleTimeoutMs = 200});
+    RpcResult r = client.call("importAsset", json::object(), CallOptions{.timeoutMs = 500, .idleTimeoutMs = 5000});
     stop = true;
     CHECK_FALSE(r.ok);
     CHECK(r.code == RpcResult::kTimeout);

@@ -21,6 +21,7 @@
 #include <set>
 #include <string>
 #include <tuple>
+#include <vector>
 
 #if GROOMLAB_HAS_TBB
 #include <tbb/task_arena.h>
@@ -217,7 +218,7 @@ double brushDabMs(const std::string& graph, const char* label) {
     brush.radius = 0.3f;
     brush.level = 0;
     brush.propagate = true;
-    double worst = 0.0;
+    std::vector<double> dabs;
     for (int i = 0; i < 5; ++i) {
         const float x = -0.2f + 0.1f * static_cast<float>(i);
         const auto t0 = std::chrono::steady_clock::now();
@@ -226,10 +227,13 @@ double brushDabMs(const std::string& graph, const char* label) {
         preview();
         const double totalMs = msSince(t0);
         std::printf("[ budget ]   dab %d: stroke %.1f ms + preview %.1f ms\n", i, strokeMs, totalMs - strokeMs);
-        worst = std::max(worst, totalMs);
+        dabs.push_back(totalMs);
     }
-    std::printf("[ budget ] brush dab on 2000 guides + 10%% preview of %s: %.1f ms worst of 5\n", label, worst);
-    return worst;
+    // The median, so one dab preempted by another process on the machine does not decide the budget.
+    std::sort(dabs.begin(), dabs.end());
+    std::printf("[ budget ] brush dab on 2000 guides + 10%% preview of %s: %.1f ms median of 5, %.1f ms worst\n", label,
+                dabs[2], dabs[4]);
+    return dabs[2];
 }
 
 TEST(Budget, AParamTweakThroughTheGraphText) {

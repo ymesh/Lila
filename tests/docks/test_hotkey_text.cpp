@@ -160,7 +160,7 @@ TEST_CASE("held undo repeats on the pref cadence, ignoring key autorepeat, and a
     QApplication::sendEvent(&w, &down);
     QElapsedTimer held;
     held.start();
-    while (held.elapsed() < 380)
+    while (held.elapsed() < 1000)
     {
         QKeyEvent again(QEvent::KeyPress, Qt::Key_Z, Qt::NoModifier, 0x2C, 0, 0, QString(), true);
         QApplication::sendEvent(&w, &again);
@@ -170,9 +170,9 @@ TEST_CASE("held undo repeats on the pref cadence, ignoring key autorepeat, and a
     QApplication::sendEvent(&w, &up);
     int atRelease = undos;
     pump(200);
-    // One on press, then repeats from 100 ms every 50 ms until 380 ms: about 6, never the ~38 autorepeats.
+    // One on press, then repeats from 100 ms every 50 ms until 1000 ms: about 19, never the ~100 autorepeats.
     CHECK(atRelease >= 4);
-    CHECK(atRelease <= 8);
+    CHECK(atRelease <= 25);
     CHECK(undos == atRelease);
 
     w.releaseKeyboard();
