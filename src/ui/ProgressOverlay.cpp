@@ -163,7 +163,7 @@ protected:
         const QRect elapsedRect(int(bar.left()), c.bottom() - 12 - mCancel->sizeHint().height(), 200, mCancel->sizeHint().height());
         p.setPen(mConfirming ? kTitle : kFaint);
         p.drawText(elapsedRect, Qt::AlignLeft | Qt::AlignVCenter,
-                   mConfirming ? QStringLiteral("Abort? Nothing is kept.") : QString::fromStdString(progress::formatElapsed(mState.elapsed)));
+                   mConfirming ? QStringLiteral("Abort?") : QString::fromStdString(progress::formatElapsed(mState.elapsed)));
     }
 
 private:

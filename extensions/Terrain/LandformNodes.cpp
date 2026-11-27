@@ -366,7 +366,9 @@ std::vector<gn::NodeDecl> decls()
                  .props = {deviceProp()},
                  .sockets = {.inputs = {hfIn(), num("preset", Socket::String, "natural", "natural, alpine, desert or hills."),
                                         num("age", Socket::Float, 0.5, "0 is off, 1 is very old.", 0.0, 2.0), num("seed", Socket::Int, 0, "Random seed."),
-                                        num("hardnessMask", Socket::String, "", "Mask of hard rock (1).")},
+                                        num("hardnessMask", Socket::String, "", "Mask of hard rock (1)."),
+                                        num("keepForm", Socket::Bool, false, "Keep landforms wider than formRadius as they are (real elevation)."),
+                                        num("formRadius", Socket::Float, 30000.0, "Widest landform the chain may change, cm.", 100.0)},
                              .outputs = {hfOut()}},
                  .exec = [](ExecContext& c) {
                      LILA_ZONE();
@@ -379,6 +381,8 @@ std::vector<gn::NodeDecl> decls()
                      p.age = c.f("age");
                      p.seed = seedOf(c);
                      p.hardnessMask = c.s("hardnessMask");
+                     p.keepForm = c.b("keepForm");
+                     p.formRadius = c.f("formRadius");
                      p.gpu = wantsGpu(c);
                      PresetReport report;
                      erodePreset(h, p, &report);

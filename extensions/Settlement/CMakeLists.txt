@@ -4,7 +4,7 @@ lila_add_extension(lila_settlement_extension ID Settlement MANIFEST extension.js
             Names.cpp RoadMesh.cpp Furniture.cpp Lanes.cpp StreetscapeCommands.cpp
             Blocks.cpp Parcels.cpp Envelopes.cpp LotCommands.cpp
             Siting.cpp Plan.cpp Inspect.cpp TerrainLink.cpp
-            GenUtil.cpp GenSpec.cpp Tensor.cpp Eras.cpp Fortify.cpp OsmStreets.cpp ContourStreets.cpp Levels.cpp Verify.cpp GenCommands.cpp
+            GenUtil.cpp GenSpec.cpp Tensor.cpp Eras.cpp Fortify.cpp OsmStreets.cpp OsmBuildings.cpp ContourStreets.cpp Levels.cpp Verify.cpp GenCommands.cpp
             Settlement.h SettlementCore.h Streetscape.h Parcels.h SettlementTerrain.h Generators.h)
 foreach(_host lila lilabatch)
     if(TARGET ${_host})

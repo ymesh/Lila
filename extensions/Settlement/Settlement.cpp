@@ -11,7 +11,11 @@
 #include <lila/Profile.h>
 
 #include <algorithm>
+#include <cstring>
+#include <deque>
 #include <map>
+#include <mutex>
+#include <span>
 #include <stdexcept>
 
 using namespace lila;
@@ -116,6 +120,76 @@ std::vector<Vec2> flatPoints(const std::vector<glm::dvec3>& pts)
     return out;
 }
 
+uint64_t mixKey(uint64_t h, uint64_t v) { return (h ^ (v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2))) * 1099511628211ull; }
+uint64_t mixKey(uint64_t h, double v)
+{
+    uint64_t bits = 0;
+    std::memcpy(&bits, &v, sizeof bits);
+    return mixKey(h, bits);
+}
+uint64_t mixPts(uint64_t h, std::span<const Vec2> pts)
+{
+    h = mixKey(h, uint64_t(pts.size()));
+    for (const Vec2& p : pts)
+        h = mixKey(mixKey(h, p.x), p.y);
+    return h;
+}
+
+/** A mesh's points and faces as a key: the ground and walkable meshes' shape, whatever their other attributes say. */
+uint64_t meshShapeKey(const gn::Geometry& g)
+{
+    uint64_t h = 0x5E77;
+    if (!g.mesh)
+        return h;
+    const geo::Mesh& m = *g.mesh;
+    h = mixKey(mixKey(h, uint64_t(m.pointCapacity())), uint64_t(m.numFaces()));
+    for (geo::Index p = 0; p < m.pointCapacity(); ++p)
+        if (m.pointValid(p))
+        {
+            const glm::dvec3 q = m.position(p);
+            h = mixKey(mixKey(mixKey(h, q.x), q.y), q.z);
+        }
+    return h;
+}
+
+/** Everything the layout and its meshes are made from: the site, every value input, the ground's and walkable mesh's shape. */
+uint64_t execKey(ExecContext& c, const Site& site, double planeY)
+{
+    uint64_t h = mixKey(uint64_t(0xC17E), planeY);
+    h = mixPts(h, site.outline);
+    for (const auto* lines : {&site.streets, &site.roads})
+        for (const std::vector<Vec2>& s : *lines)
+            h = mixPts(h, s);
+    for (const WaterLine& w : site.water)
+        h = mixKey(mixPts(h, w.pts), w.width);
+    h = mixKey(mixPts(h, site.attractors), uint64_t(site.hasCenter));
+    for (const Exclusion& x : site.exclusions)
+        h = mixKey(mixPts(h, x.pts), x.margin);
+    for (const gn::SocketDecl& s : c.decl.sockets.inputs)
+        switch (s.type)
+        {
+        case Socket::String: h = mixKey(h, uint64_t(std::hash<std::string>{}(c.s(s.id)))); break;
+        case Socket::Float: h = mixKey(h, c.f(s.id)); break;
+        case Socket::Int: h = mixKey(h, uint64_t(c.i(s.id))); break;
+        case Socket::Bool: h = mixKey(h, uint64_t(c.b(s.id))); break;
+        default: break;
+        }
+    h = mixKey(h, meshShapeKey(*c.geometry("ground")));
+    return mixKey(h, meshShapeKey(*c.geometry("walkable")));
+}
+
+/** Each node's last meshes by execKey: a terrain whose paint or masks changed (not its shape) gives the same settlement. */
+struct ExecCache
+{
+    std::mutex lock;
+    std::map<uint64_t, std::pair<uint64_t, std::pair<Parts, GeometryPtr>>> entries; // by node: key, parts, joined geometry
+};
+ExecCache& execCache()
+{
+    static ExecCache c;
+    return c;
+}
+
 void settlementExec(ExecContext& c)
 {
     LILA_ZONE();
@@ -123,6 +197,25 @@ void settlementExec(ExecContext& c)
     double planeY = 0.0;
     Site site = siteFrom(*c.geometry("site"), &planeY);
     site.size = std::max(100.0, c.f("size"));
+    const uint64_t key = execKey(c, site, planeY);
+    {
+        ExecCache& cache = execCache();
+        std::lock_guard lock(cache.lock);
+        for (const auto& [owner, entry] : cache.entries)
+            if (owner == c.env.owner && entry.first == key)
+            {
+                const auto& made = entry.second;
+                const Parts& parts = made.first;
+                c.out("streets", parts.streets);
+                c.out("lots", parts.lots);
+                c.out("buildings", parts.buildings);
+                c.out("water", parts.water);
+                c.out("levels", parts.levels);
+                c.out("ground", parts.ground);
+                c.out("geometry", made.second);
+                return;
+            }
+    }
     Options o;
     try
     {
@@ -145,12 +238,21 @@ void settlementExec(ExecContext& c)
     {
         throw gn::ExecError(std::string("Settlement: ") + e.what());
     }
-    const Parts parts = toGeometry(l, ground);
+    // Parts neither shown nor wired on are not made: a city's lots, footprints and ground are millions of points.
+    auto wired = [&](const char* socket) {
+        return std::ranges::any_of(c.group.links, [&](const gn::GLink& k) { return k.fromNode == c.node.name && k.fromSocket == socket; });
+    };
+    OutputOptions out;
+    out.ground = c.b("showGround") || wired("ground");
+    out.lots = c.b("showLots") || wired("lots");
+    out.envelopes = c.b("showBuildings") || wired("buildings");
+    const Parts parts = toGeometry(l, ground, out);
     c.out("streets", parts.streets);
     c.out("lots", parts.lots);
     c.out("buildings", parts.buildings);
     c.out("water", parts.water);
     c.out("levels", parts.levels);
+    c.out("ground", parts.ground);
     std::vector<GeometryPtr> shown;
     if (c.b("showStreets"))
     {
@@ -158,11 +260,20 @@ void settlementExec(ExecContext& c)
         shown.push_back(parts.water);
         shown.push_back(parts.levels);
     }
+    if (c.b("showGround"))
+        shown.push_back(parts.ground);
     if (c.b("showLots"))
         shown.push_back(parts.lots);
     if (c.b("showBuildings"))
         shown.push_back(parts.buildings);
-    c.out("geometry", gn::makeGeometry(gn::join(shown)));
+    const GeometryPtr joined = gn::makeGeometry(gn::join(shown));
+    c.out("geometry", joined);
+    ExecCache& cache = execCache();
+    std::lock_guard lock(cache.lock);
+    cache.entries[c.env.owner] = {key, {parts, joined}};
+    // Nodes deleted since leave entries behind: the oldest ids go first.
+    while (cache.entries.size() > 16)
+        cache.entries.erase(cache.entries.begin());
 }
 
 gn::NodeDecl settlementDecl()
@@ -180,8 +291,10 @@ gn::NodeDecl settlementDecl()
                "streets and a building envelope on each lot (the space a building may fill: footprint, floors, height, roof). "
                "Exclusions (closed loops with int edge attribute exclude, or in edits) stay clear of all of it; edits add "
                "streets and routes, routed over the ground or across the walkable mesh. "
-               "Streets are ribbons with face attributes street, class (0 arterial, 1 collector, 2 local, 3 alley, 4 path) and "
-               "path (the edit id, -1 when generated); lots are "
+               "Streets are carriageway and sidewalk strips with face attributes street, class (0 arterial, 1 collector, 2 local, "
+               "3 alley, 4 path), path (the edit id, -1 when generated) and material (asphalt, sidewalk, earth, paving or concrete "
+               "slots); ground is each block's yards, park or square and the lots that show their own ground (vacant lots, works "
+               "yards, fields, graveyards), face attributes block and material; lots are "
                "outlines with an edge attribute lot; envelopes are closed volumes with face attributes lot, use (0 residential, "
                "1 commercial, 2 civic), floors and part (0 wall, 1 roof, 2 floor). Curves carry the centrelines, lot outlines "
                "and footprints. Lengths are cm, Y up.",
@@ -211,6 +324,7 @@ gn::NodeDecl settlementDecl()
                                in("showStreets", Socket::Bool, true, "Include streets in geometry."),
                                in("showLots", Socket::Bool, true, "Include lot outlines in geometry."),
                                in("showBuildings", Socket::Bool, true, "Include building envelopes in geometry."),
+                               in("showGround", Socket::Bool, true, "Include the ground of blocks and lots in geometry."),
                                in("generators", Socket::String, "", "Tensor fields, eras, districts, walls, imported streets and levels as "
                                                                "JSON (settlementCreate's generator flags write it).")},
                     .outputs = {geoSocket("geometry", "What the show inputs select, joined."),
@@ -218,6 +332,7 @@ gn::NodeDecl settlementDecl()
                                 geoSocket("lots", "Lot outlines as loose edges and closed curves."),
                                 geoSocket("buildings", "Building envelopes as closed meshes, footprints as closed curves."),
                                 geoSocket("water", "River ribbons."),
+                                geoSocket("ground", "Ground of blocks and lots: yards, parks, squares, vacant lots, works yards."),
                                 geoSocket("levels", "Levels above the ground as curves: deck streets and outlines, elevated roads, ramps, "
                                                     "skybridges and air lanes, with class, layer and kind (0 deck, 1 elevated, 2 ramp, "
                                                     "3 skybridge, 4 air, 5 deck outline).")}},
@@ -390,11 +505,11 @@ Options optionsFrom(const std::function<double(const char*)>& f, const std::func
     return o;
 }
 
-Parts toGeometry(const Layout& l, const Ground& ground)
+Parts toGeometry(const Layout& l, const Ground& ground, const OutputOptions& o)
 {
     LILA_ZONE();
 
-    MeshParts meshes = toMeshes(l, ground);
+    MeshParts meshes = toMeshes(l, ground, o);
     for (const std::string& w : meshes.warnings)
         lila::log::warn("Settlement: {}", w);
 
@@ -411,7 +526,7 @@ Parts toGeometry(const Layout& l, const Ground& ground)
 
     gn::CurveSet lotCurves;
     std::vector<int32_t> lotId, lotUse;
-    for (const Lot& lot : l.lots)
+    for (const Lot& lot : o.lots ? std::span<const Lot>(l.lots) : std::span<const Lot>())
     {
         lotCurves.addCurve(draped(lot.outline, ground, 3.0), true);
         lotId.push_back(lot.id);
@@ -421,7 +536,7 @@ Parts toGeometry(const Layout& l, const Ground& ground)
 
     gn::CurveSet footprints;
     std::vector<int32_t> fpLot, fpUse, fpFloors;
-    for (const Envelope& env : l.envelopes)
+    for (const Envelope& env : o.envelopes ? std::span<const Envelope>(l.envelopes) : std::span<const Envelope>())
     {
         std::vector<glm::dvec3> pts;
         for (const Vec2& q : env.footprint.pts)
@@ -467,7 +582,7 @@ Parts toGeometry(const Layout& l, const Ground& ground)
     };
     return {pack(std::move(meshes.streets), std::move(centre)), pack(std::move(meshes.lots), std::move(lotCurves)),
             pack(std::move(meshes.envelopes), std::move(footprints)), pack(std::move(meshes.water), gn::CurveSet()),
-            pack(geo::Mesh(), std::move(levels))};
+            pack(geo::Mesh(), std::move(levels)), pack(std::move(meshes.ground), gn::CurveSet())};
 }
 
 bool registerNodes(ext::Context& ctx) { return gn::registerDecl(ctx, settlementDecl()) != nullptr; }

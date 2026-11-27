@@ -1027,7 +1027,18 @@ void erodePreset(Heightfield& h, const PresetParams& p, PresetReport* report)
     macro.age = def.macroAge * age;
     macro.hardnessMask = p.hardnessMask;
     macro.writeMasks = false;
-    if (factor == 1)
+    if (p.keepForm)
+    {
+        const std::vector<float> shaped = h.heights;
+        AnalyticParams fine = macro;
+        fine.age = def.fineAge * age;
+        fine.keepRange = false;
+        erodeAnalytic(h, fine, &drains);
+        const double radius = p.formRadius > 0.0 ? p.formRadius : 30000.0;
+        restoreLarge(h, shaped, std::max(1, int(std::lround(radius / h.cell))));
+        timer.step("fine");
+    }
+    else if (factor == 1)
     {
         erodeAnalytic(h, macro);
         timer.step("macro");

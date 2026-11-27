@@ -660,7 +660,7 @@ void registerRuleCommands(ext::Context& ctx)
                "under the ones above it, so the weights (masks layer_<name>) always sum to 1.\n\n"
                "A layer is {name, material (a library id; Meadowlight's by default for the usual names), color ([r, g, b] "
                "linear, else the material's mean colour), roughness, tileSize (cm), opacity, when: {input: [min, max] or "
-               "{range, fade, invert}, biome: name(s)}, noise: {amount, scale (cm)}}. Inputs: height (cm), slope and aspect "
+               "{range, fade, invert, blur (cm)}, biome: name(s)}, noise: {amount, scale (cm)}}. Inputs: height (cm), slope and aspect "
                "(degrees), curvature, nearCliff, temperature (C), moisture, flow, wear, deposit, lakes, wet and every other "
                "mask, painted ones included. With no layers it uses defaults fitted to the terrain (sand only with seaLevel=).\n\n"
                "Adds a Terrain Layers node at the end of the terrain's group, or updates it. Returns each layer's coverage "
@@ -1006,7 +1006,7 @@ void registerCoverCommand(ext::Context& ctx)
                "Returns the mesh, group and per rule the pieces placed, per hectare, those blocked by footprints, and the "
                "thinning when maxCount was reached.",
         .positionalDoc = "terrain mesh or its modifier",
-        .flags = {{"rules", "r", MT::Any, nullptr, "The rules (or preset names: scree, ledgePlants, hangingRoots); 'default' (the default) for rocks, trees, debris and grass."},
+        .flags = {{"rules", "r", MT::Any, nullptr, "The rules (or preset names: scree, ledgePlants, hangingRoots); 'default' (the default) for rocks, trees, debris and grass. A rule's slot field names the slot type its pieces get (\"tree.palm\"); without one it is plant.<rule name>."},
                   {"items", "it", MT::Any, nullptr, "{item name: mesh} for the rules' items."},
                   {"seed", "sd", MT::Int, int64_t(1), "Another seed gives another scatter."},
                   {"density", "d", MT::Float, 1.0, "Multiplies every rule's density.", {}, {}, 0.0},
@@ -1093,6 +1093,29 @@ void registerCoverCommand(ext::Context& ctx)
                 links.push_back(last + " -> Settle.instances");
                 links.push_back("Colliders.geometry -> Settle.colliders");
                 last = "Settle.instances";
+            }
+            // Every piece becomes a slot: its rule picks the type, the rule's grid cell is its stable path.
+            {
+                const json raw = a.flags.value("rules", json());
+                std::string types;
+                for (size_t r = 0; r < spec.rules.size(); ++r)
+                {
+                    std::string type = "plant." + surfIdentifier(spec.rules[r].name);
+                    if (raw.is_object() && raw.contains("rules") && raw["rules"].is_array() && r < raw["rules"].size() && raw["rules"][r].contains("slot"))
+                        type = raw["rules"][r]["slot"].get<std::string>();
+                    types += (types.empty() ? "" : ",") + type;
+                }
+                nodes.push_back({{"name", "Slots"},
+                                 {"type", "Slots"},
+                                 {"position", json::array({600, 0})},
+                                 {"values",
+                                  {{"type", types.empty() ? std::string("plant") : types},
+                                   {"owner", "terrain:" + stem + "/cover"},
+                                   {"typeAttribute", "rule"},
+                                   {"pathAttributes", "rule,cellX,cellZ"},
+                                   {"tags", "groundcover"}}}});
+                links.push_back(last + " -> Slots.instances");
+                last = "Slots.instances";
             }
             links.push_back(last + " -> GroupOutput.geometry");
             json inputs = json::array({{{"name", "seed"}, {"type", "int"}, {"default", 0}, {"description", "Another seed gives another scatter."}},

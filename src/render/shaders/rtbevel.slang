@@ -18,7 +18,7 @@ struct TraceInstance
     float4 rows[3];
     uint64_t sections; // rtreflect.slang's hit materials
     uint sectionCount;
-    uint pad;
+    uint tint;
 };
 
 [[vk::push_constant]] BevelPush bp;

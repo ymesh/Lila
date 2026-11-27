@@ -2,10 +2,13 @@
 
 #include "TestUtil.h"
 
+#include "core/ImageIO.h"
 #include "core/MainQueue.h"
+#include "core/Paths.h"
 #include "core/PrefStore.h"
 #include "gn/Gn.h"
 #include "ops/Command.h"
+#include "scene/Anim.h"
 #include "scene/Graph.h"
 #include "scene/Node.h"
 #include "scene/SceneCommands.h"
@@ -34,6 +37,8 @@
 #include <QToolButton>
 
 #include <chrono>
+#include <filesystem>
+#include <format>
 #include <map>
 
 using namespace lila;
@@ -538,4 +543,32 @@ TEST_CASE("a node group's inputs rename on Group Input by double-click, and its 
     pressWithText(edit, Qt::Key_Return);
     CHECK(inner().inputs[0].name == "strength");
     CHECK(linked("m0.out", "NodeGroup.strength"));
+}
+
+TEST_CASE("texture previews show an Image Sequence at the scene's current frame")
+{
+    registerTexGraphUi();
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "lila_docks_preview_sequence";
+    std::filesystem::create_directories(dir);
+    for (int i = 0; i < 3; ++i)
+    {
+        const float v = 0.1f + 0.2f * float(i);
+        image::write(dir / std::format("heat_{:04}.exr", i + 1), image::Image{2, 2, std::vector<float>{v, v, v, 1, v, v, v, 1, v, v, v, 1, v, v, v, 1}}, 32);
+    }
+    run("newScene");
+    run("texCreateSet", {{"args", {"Fx"}}, {"resolution", 8}});
+    run("texAddNode", {{"args", {"Fx", "imageSequence"}}, {"name", "Seq"}});
+    run("texSetValue", {{"args", {"Fx", "Seq.file", paths::toUtf8(dir / "heat_0001.exr")}}});
+    run("texConnect", {{"args", {"Fx", "Seq.out", "Output.baseColor"}}});
+    CHECK(ui::texPreview::animated("Fx"));
+
+    auto shown = [](double frame) {
+        run("currentTime", {{"args", {scene::anim::secondsOf(frame)}}});
+        const ui::texPreview::Result r = ui::texPreview::render({"Fx", "Seq", {}, {}, 8});
+        REQUIRE(r.image);
+        return r.image->rgba[0];
+    };
+    CHECK(shown(1.0) == doctest::Approx(0.1).epsilon(0.01));
+    CHECK(shown(3.0) == doctest::Approx(0.5).epsilon(0.01));
+    CHECK(shown(2.0) == doctest::Approx(0.3).epsilon(0.01));
 }

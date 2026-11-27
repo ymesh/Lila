@@ -1,5 +1,6 @@
 #include "TestUtil.h"
 
+#include "core/Release.h"
 #include "geo/Heightfield.h"
 #include "geo/Primitives.h"
 #include "render/HeightfieldRenderer.h"
@@ -678,4 +679,71 @@ TEST_CASE("terrain display commands: options and paint layers round trip, layers
     run("undo");
     CHECK(run("terrainDisplayLayers", {{"args", {t["mesh"]}}})["layers"].empty());
     CHECK_THROWS(run("terrainDisplayLayers", {{"args", {t["mesh"]}}, {"layers", {{{"name", "bad"}, {"color", "green"}}}}}));
+}
+
+TEST_CASE("mesh cache: render and wireless copies built in parallel up front match the ones built on demand, and are reused")
+{
+    std::vector<std::pair<scene::MeshPtr, bool>> wanted;
+    for (int i = 0; i < 40; ++i)
+    {
+        geo::SphereOptions o;
+        o.subdivAxis = 8 + i;
+        o.subdivHeight = 6 + i % 5;
+        wanted.emplace_back(std::make_shared<const geo::Mesh>(geo::makeSphere(o)), i % 2 == 0);
+    }
+    ui::prewarmRenderMeshes(wanted);
+    for (const auto& [mesh, tangents] : wanted)
+    {
+        const auto warm = ui::renderMeshFor(mesh, tangents);
+        REQUIRE(warm);
+        CHECK(ui::renderMeshFor(mesh, tangents) == warm);
+        // The same mesh again, never prewarmed: built on demand, the same draw data.
+        const auto copy = std::make_shared<const geo::Mesh>(*mesh);
+        const auto cold = ui::renderMeshFor(copy, tangents);
+        REQUIRE(cold);
+        CHECK(cold != warm);
+        CHECK(cold->indices == warm->indices);
+        CHECK(cold->vertices.size() == warm->vertices.size());
+        CHECK(cold->sections.size() == warm->sections.size());
+        CHECK(cold->edgeIndices == warm->edgeIndices);
+    }
+    // Their wireless copies too: every triangle, no wire, the same copy when asked again.
+    ui::prewarmWirelessMeshes(wanted);
+    for (const auto& [mesh, tangents] : wanted)
+    {
+        const auto wireless = ui::wirelessMeshFor(mesh, tangents);
+        REQUIRE(wireless);
+        CHECK(ui::wirelessMeshFor(mesh, tangents) == wireless);
+        CHECK(wireless->indices == ui::renderMeshFor(mesh, tangents)->indices);
+        CHECK(wireless->edgePoints.empty());
+    }
+}
+
+TEST_CASE("mesh cache: the render copies of meshes that are gone go when swept, without anything new cached")
+{
+    geo::SphereOptions o;
+    o.subdivAxis = 24;
+    auto mesh = std::make_shared<const geo::Mesh>(geo::makeSphere(o));
+    auto kept = std::make_shared<const geo::Mesh>(geo::makeSphere(o));
+    std::weak_ptr<const render::RenderMesh> whole = ui::renderMeshFor(mesh), wireless = ui::wirelessMeshFor(mesh);
+    const auto keptCopy = ui::renderMeshFor(kept);
+    // Other layouts after it, so the few kept for deforming meshes to reuse no longer hold its copy.
+    std::vector<std::shared_ptr<const geo::Mesh>> others;
+    for (int i = 0; i < 10; ++i)
+    {
+        geo::SphereOptions other;
+        other.subdivAxis = 30 + i;
+        others.push_back(std::make_shared<const geo::Mesh>(geo::makeSphere(other)));
+        ui::renderMeshFor(others.back());
+    }
+    REQUIRE(!whole.expired());
+    REQUIRE(!wireless.expired());
+    mesh.reset();
+    // The cache holds its copies until it sweeps: nothing else holds them.
+    CHECK(!whole.expired());
+    ui::dropExpiredRenderMeshes();
+    lila::release::drain();
+    CHECK(whole.expired());
+    CHECK(wireless.expired());
+    CHECK(ui::renderMeshFor(kept) == keptCopy);
 }

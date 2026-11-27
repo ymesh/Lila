@@ -477,9 +477,16 @@ TEST_CASE("stagehand: fillShelf realized puts books on every board, and live bui
     CAPTURE(check["issues"].dump());
     CHECK(check["ok"].get<bool>());
 
-    const json live = run("fillShelf", {{"args", {b1}}, {"items", json::array({book})}, {"seed", 4}});
+    const json live = run("fillShelf", {{"args", {b1}}, {"items", json::array({book})}, {"seed", 4}, {"slotType", "prop.book"}});
     CHECK(live.contains("modifier"));
     CHECK(live.contains("group"));
+    // A live arrangement's pieces are slots under its own owner; a rule can hide them all.
+    scene::Graph::current().evaluate();
+    const json books = run("slotFind", {{"type", "prop.book"}, {"limit", 0}});
+    REQUIRE(books["count"].get<int>() > 0);
+    CHECK(books["slots"][0]["owner"].get<std::string>().starts_with("arrange:"));
+    run("slotRule", {{"args", {"add"}}, {"type", "prop.book"}, {"hidden", true}});
+    CHECK(run("slotReport", {{"validate", false}})["hidden"] == books["count"]);
 }
 
 TEST_CASE("kit: two wall pieces join end to end by their snap points, and open points are reported")

@@ -365,7 +365,7 @@ void registerLotCommands(ext::Context& ctx)
         types.emplace_back(blockTypeName(BlockType(t)));
     for (int m = 0; m <= int(LotMethod::Whole); ++m)
         methods.emplace_back(lotMethodName(LotMethod(m)));
-    for (int r = 0; r <= int(BuildingRoute::Unreal); ++r)
+    for (int r = 0; r <= int(BuildingRoute::Buildings); ++r)
         routes.emplace_back(routeName(BuildingRoute(r)));
     for (int u = 0; u <= int(Use::Cemetery); ++u)
         uses.emplace_back(useName(Use(u)));
@@ -724,10 +724,15 @@ void registerLotCommands(ext::Context& ctx)
                "settlement's buildings output. library: Stagehand library assets fitted to each lot by footprint, era and use "
                "tags, turned to face the street (lots nothing fits are listed). masonry: Masonry stone buildings, landmark lots "
                "only unless landmarksOnly=False. unreal: envelopes go as PCG data with settlementSendToUnreal (send=True sends "
-               "now). contacts=True adds Seamwork contact skirts, strips or scatter where placed buildings meet the ground. "
+               "now). buildings: procedural buildings through the Buildings extension (style= forces one style, else each "
+               "envelope's style guess and program pick it), live meshes per World Partition cell with every window, door and "
+               "sign a slot. via= is another name for route=. contacts=True adds Seamwork contact skirts, strips or scatter where placed buildings meet the ground. "
                "Placed objects are grouped under <settlement>_<route> and replaced when the route is built again.",
         .positionalDoc = "settlement mesh or its modifier",
         .flags = {{"route", "r", LotT::String, "outline", "How buildings are made.", routes},
+                  {"via", "v", LotT::String, nullptr, "Same as route.", routes},
+                  {"style", "sy", LotT::String, nullptr, "buildings: one Buildings style for every building (buildingStyles lists them)."},
+                  {"cell", "ce", LotT::Float, 6400.0, "buildings: cell size, cm (one live mesh per cell, four per World Partition cell).", {}, {}, 0.0},
                   {"polygon", "pg", LotT::List, nullptr, "A district, [[x, z], ...]: the route applies to lots whose centre is inside."},
                   {"name", "n", LotT::String, nullptr, "The district's name; the same name replaces its route."},
                   {"build", "bd", LotT::Bool, true, "Place the library or Masonry buildings now."},
@@ -746,14 +751,17 @@ void registerLotCommands(ext::Context& ctx)
             const char* cmd = "settlementBuildings";
             const Rebuilt r = lotSettlementOf(a, cmd);
             BuildingRoute route;
-            if (!parseRoute(a.get<std::string>("route", "outline"), &route))
-                throw CommandError(std::string(cmd) + ": unknown route '" + a.get<std::string>("route") + "' (outline, massing, library, masonry, unreal)");
+            const std::string routeArg = a.has("via") ? a.get<std::string>("via") : a.get<std::string>("route", "outline");
+            if (!parseRoute(routeArg, &route))
+                throw CommandError(std::string(cmd) + ": unknown route '" + routeArg + "' (outline, massing, library, masonry, unreal, buildings)");
             const bool build = a.get<bool>("build", true);
             if (build && route == BuildingRoute::Library)
                 for (const char* need : {"librarySearch", "place"})
                     lotNeedCommand(need, "Stagehand", cmd);
             if (build && route == BuildingRoute::Masonry)
                 lotNeedCommand("masonryBuilding", "Masonry", cmd);
+            if (build && route == BuildingRoute::Buildings)
+                lotNeedCommand("buildingCreate", "Buildings", cmd);
             if (build && a.get<bool>("contacts", false) && (route == BuildingRoute::Library || route == BuildingRoute::Masonry))
             {
                 lotNeedCommand("seamFind", "Seamwork", cmd);
@@ -839,6 +847,17 @@ void registerLotCommands(ext::Context& ctx)
                     out["group"] = ops::execute("group", {{"args", args}, {"name", groupName}});
                 }
             }
+            else if (route == BuildingRoute::Buildings && build)
+            {
+                json lots = json::array();
+                for (const Envelope* env : envs)
+                    lots.push_back(env->key);
+                json call = {{"settlement", after.mesh.empty() ? after.modifier : after.mesh}, {"lots", lots}, {"cell", a.get<double>("cell", 6400.0)}};
+                if (a.has("style"))
+                    call["style"] = a.get<std::string>("style");
+                out["buildings"] = ops::execute("buildingCreate", call);
+                out["group"] = out["buildings"]["group"];
+            }
             else if (route == BuildingRoute::Unreal)
             {
                 if (a.get<bool>("send", false))
@@ -851,7 +870,7 @@ void registerLotCommands(ext::Context& ctx)
             out["objects"] = made;
             return out;
         },
-        .examples = {"settlementBuildings('Settlement', route='massing')",
+        .examples = {"settlementBuildings('Settlement', route='massing')", "settlementBuildings('Settlement', via='buildings', style='colonial')",
                      "settlementBuildings('Settlement', route='library', tags=['medieval', 'house'], contacts=True)",
                      "settlementBuildings('Settlement', route='masonry', polygon=[[-5000, -5000], [5000, -5000], [5000, 5000], [-5000, 5000]], name='old_town')"},
     });

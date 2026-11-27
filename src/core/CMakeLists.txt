@@ -30,6 +30,7 @@ lila_module(lila_core Foundation
     Progress.cpp
     ProjectTextures.cpp
     Registry.cpp
+    Release.cpp
     ResourceKey.cpp
     SystemMemory.cpp
     TextMatch.cpp

@@ -1,0 +1,14 @@
+{
+    "id": "OpenWorld",
+    "name": "Open World",
+    "version": "0.1.0",
+    "vendor": "Lila",
+    "description": "Open-world maps from real places, remixed: real elevation, OSM and land cover scaled, cut, moved and warped onto one map before they become terrain and settlements.",
+    "sdk": "1.0",
+    "entry": {
+        "windows": "OpenWorld.dll",
+        "linux": "OpenWorld.so",
+        "macos": "OpenWorld.dylib"
+    },
+    "enabledByDefault": true
+}

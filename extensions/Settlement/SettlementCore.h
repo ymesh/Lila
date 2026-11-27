@@ -82,8 +82,8 @@ struct Mask
     void fillPolygon(std::span<const Vec2> pts);
     /** Sets every cell within r of a set one. */
     void dilate(double r);
-    /** Outer outlines of the set cells, holes filled, simplified to within about a cell. */
-    std::vector<Polygon> outlines() const;
+    /** Outer outlines of the set cells, holes filled, simplified to within tolerance (0: three quarters of a cell). */
+    std::vector<Polygon> outlines(double tolerance = 0.0) const;
 };
 
 /** What a mesh covers seen from above, grown by margin: one polygon per separate piece. */
@@ -122,7 +122,22 @@ public:
     bool solid(Vec2 p) const;
     bool isPlane() const { return mHeights.empty(); }
 
+    /** A mesh that is one grid of quads, every quad split on the same diagonal as the renderer draws it. */
+    struct Lattice
+    {
+        Vec2 origin{0.0};
+        Vec2 cell{0.0};
+        bool mainDiagonal = true; // split from its low x, low z corner to the opposite one; else the other two
+    };
+    /**
+     * The mesh's grid when it is one: a polygon cut on its lines and diagonals lies flat on the surface drawn, so a
+     * draped piece cannot dip under it. Null for a plane or any other mesh.
+     */
+    const Lattice* lattice() const { return mHasLattice ? &mLattice : nullptr; }
+
 private:
+    Lattice mLattice;
+    bool mHasLattice = false;
     double mPlane = 0.0;
     Vec2 mOrigin{0.0};
     double mCell = 100.0;
@@ -344,6 +359,11 @@ struct Profile
     double foundation = 50.0; // cm below the lowest ground under a footprint
     std::string roof = "gable";
     double commercial = 0.35; // lots on main streets within this fraction of the radius are commercial
+    int shopHouseFloors = 0;  // commercial buildings of up to this many floors are houses with a shop below (residential style)
+    // A settlement that is a piece of a larger town: heights, uses and styles rank by distance from that town's centre
+    // (x, z) over its radius instead of the piece's own, and heights take average street access (the piece's streets
+    // rank only against each other). 0 ranks from the piece itself.
+    double townRadius = 0.0, townCentreX = 0.0, townCentreZ = 0.0;
     std::string era;                // medieval, early, industrial, modern or future; empty takes it from the style's name and pattern
     std::string blockType = "auto"; // the type ordinary blocks take (blockTypeName), auto chooses by era and block shape
     std::string lotMethod = "auto"; // how ordinary blocks are cut into lots (lotMethodName), auto chooses by block type and era
@@ -518,6 +538,7 @@ enum class BuildingRoute : uint8_t
     Library, // prebuilt assets placed through Stagehand
     Masonry, // stone buildings through Masonry
     Unreal,  // envelopes sent as PCG data for Unreal to build
+    Buildings, // procedural buildings through the Buildings extension
 };
 
 /** A change to a block found by its stable id: another type, another lot method. */
@@ -642,6 +663,15 @@ struct Block
     int era = 0;
 };
 
+/** A business or institution on a lot's ground floor, from an imported point of interest: fictional name, what it is, where. */
+struct Business
+{
+    std::string name;
+    std::string program; // pharmacy, taqueria, carParts, ... (lila::names::programs)
+    std::string osmId;   // the imported place it came from ("n123")
+    Vec2 at{0.0};
+};
+
 struct Lot
 {
     int id = 0;
@@ -660,6 +690,10 @@ struct Lot
     std::vector<std::string> reasons; // why a landmark is where it is
     BuildingRoute route = BuildingRoute::Outline;
     int era = 0;
+    std::string osmId;   // the imported OpenStreetMap building it is ("w123", "r9.1"); empty for a lot Settlement cut
+    std::string name;    // fictional name of the building or its main business; empty for none
+    std::string program; // what it is for, finer than use: pharmacy, school, cathedral, warehouse, ...
+    std::vector<Business> businesses;
 };
 
 /** The space a building may fill on its lot, and what it is for. Buildings themselves are made elsewhere. */
@@ -682,6 +716,10 @@ struct Envelope
     {
         Polygon footprint;
         double bottom = 0.0, top = 0.0;
+        /** The tier's own roof (an imported building:part's roof:shape drawn as gable, hip, mansard, dome or flat) and its
+         * height above top; empty when the tier has none of its own. */
+        std::string roof;
+        double roofHeight = 0.0;
     };
     std::vector<Tier> tiers;
     std::vector<int> partyWith;    // per footprint side: the lot across a party wall, -1 none
@@ -699,6 +737,12 @@ struct Envelope
     int wealth = 1;
     BuildingRoute route = BuildingRoute::Outline;
     int era = 0; // the era its lot was laid out in; floors and roof follow that era's profile
+    /** The program a building generator builds: name, what it is for, the style it is guessed to be, its ground floor units. */
+    std::string name, program, style, styleFrom;
+    std::vector<Business> businesses;
+    /** Imported buildings: the OSM id, where height and roof came from (height, levels, district, profile; tag or profile), tagged colours and material. */
+    std::string osmId, heightSource, roofSource, roofShape, colour, roofColour, material, roofMaterial;
+    std::vector<Polygon> holes; // courtyards inside the footprint (imported multipolygons), counter-clockwise
 };
 
 /** A path off the ground: on the walkable surface, across ramps, terraces and floors at any height. */
@@ -847,7 +891,8 @@ json toJson(const Layout& l);
 
 struct MeshParts
 {
-    geo::Mesh streets;   // ribbons on the ground, face attrs street, class
+    geo::Mesh streets;   // carriageway and sidewalk strips on the ground, face attrs street, class, material
+    geo::Mesh ground;    // block and lot ground (yards, parks, plazas, vacant lots) draped on the ground, face attrs block, material
     geo::Mesh lots;      // lot outlines as loose edges, edge attr lot
     geo::Mesh envelopes; // closed volumes, face attrs lot, use, floors
     geo::Mesh water;     // river ribbons, face attr water
@@ -858,9 +903,27 @@ struct OutputOptions
 {
     double segment = 500.0; // ribbons and outlines are draped at about this spacing
     double lift = 2.0;      // cm above the ground, so streets do not z-fight it
+    bool ground = true;     // the ground mesh of blocks and lots
+    bool lots = true;       // lot outlines
+    bool envelopes = true;  // envelope volumes and footprints
 };
 
+/** cm: the street mesh's carriageway stands this far over the lift, and its sidewalks a curb higher. */
+inline constexpr double kRoadRise = 6.0, kCurbHeight = 12.0;
+/** cm over the ground of the default street mesh's carriageway and sidewalk tops, where street props stand. */
+inline constexpr double kRoadTop = OutputOptions{}.lift + kRoadRise, kSidewalkTop = kRoadTop + kCurbHeight;
+
 MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o = {});
+
+/** A material the street and ground meshes name by slot: its name (Settlement_Asphalt, ...), colour and roughness. */
+struct SurfaceMaterial
+{
+    const char* name;
+    glm::vec3 color;
+    float roughness;
+};
+/** Every slot the street and ground meshes use, in slot order. */
+std::span<const SurfaceMaterial> surfaceMaterials();
 
 /**
  * Street centrelines joined through plain junctions (the same class, profile and path on both sides), then the surface

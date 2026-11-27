@@ -10,6 +10,7 @@ const POSTHOG_BATCH = "https://eu.i.posthog.com/batch/";
 const EVENTS = new Set(["session_start", "session_end", "onboarding"]);
 const MAX_BYTES = 512 * 1024;
 const MAX_EVENTS = 500;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export default {
   async fetch(request, env) {
@@ -40,7 +41,11 @@ export default {
       properties.$geoip_disable = true;
       if (country && country !== "XX" && country !== "T1")
         properties.$geoip_country_code = country;
-      events.push({ event: e.event, distinct_id: e.distinct_id, timestamp: e.timestamp, properties });
+      const event = { event: e.event, distinct_id: e.distinct_id, timestamp: e.timestamp, properties };
+      // PostHog keeps one copy per uuid, so an event the client sends twice counts once.
+      if (typeof e.uuid === "string" && UUID.test(e.uuid))
+        event.uuid = e.uuid;
+      events.push(event);
     }
     // Malformed events are dropped rather than retried forever by the client.
     if (events.length === 0)

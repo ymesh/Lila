@@ -254,6 +254,8 @@ LILA_SCENE_API std::vector<Index> gridFillFaces(Mesh& mesh, std::span<const Inde
 LILA_SCENE_API std::vector<Index> gridFillHoles(Mesh& mesh, std::span<const Index> edges, const GridFillOptions& opts = {},
                                                const SymmetryMap* sym = nullptr);
 LILA_SCENE_API void flipNormals(Mesh& mesh, std::span<const Index> faces);
+/** Positions by m, stored normals by its inverse transpose, tangents by m, and faces flipped when it mirrors. */
+LILA_SCENE_API void transformMesh(Mesh& mesh, const glm::dmat4& m);
 /** Makes winding consistent within each connected part; closed parts face outward. All faces when empty. */
 LILA_SCENE_API void conformNormals(Mesh& mesh, std::span<const Index> faces = {});
 LILA_SCENE_API std::vector<Index> triangulateFaces(Mesh& mesh, std::span<const Index> faces, const TriangulateOptions& opts = {});

@@ -88,6 +88,7 @@ web-ifc 0.78 and the CDT it bundles are statically linked and unmodified; their 
 | Studio Small 09 HDRI | CC0-1.0 | Sergej Majboroda, Poly Haven | https://polyhaven.com/a/studio_small_09 |
 | SOMA skeleton (`resources/motion/soma_skeleton.json`, converted from MotionBricks `soma_base_skel_minimal_no_root.usd`) | CC-BY-4.0 | NVIDIA Corporation & Affiliates | https://github.com/NVlabs/motionbricks |
 | Gait and spot poses (`resources/motion/gaits.json`, `resources/motion/spots`), retargeted from the Open Motion Project | CC-BY-3.0 | ACCAD, The Ohio State University | https://accad.ohio-state.edu/research/motion-lab/mocap-system-and-data |
+| Name suggestion index brand and operator names (`resources/names/brands.txt`, the real-name blocklist) | BSD-3-Clause | name-suggestion-index contributors | https://github.com/osmlab/name-suggestion-index |
 
 ## Models
 

@@ -113,7 +113,7 @@ QString fileId(const QString& name)
         {"Tabler Icons", "tabler-icons"}, {"OpenVDB", "openvdb"}, {"MaterialX", "materialx"}, {"GroomLab", "groomlab"},
         {"GoogleTest", "gtest"}, {"MD4C", "md4c"}, {"SQLite", "sqlite3"}, {"OpenSSL", "openssl"}, {"ONNX Runtime", "onnx-runtime"}, {"DirectML", "directml"},
         {"MotionBricks SOMA", "motionbricks-soma-model"}, {"MotionBricks", "motionbricks"}, {"SOMA skeleton", "motionbricks"},
-        {"Gait and spot poses", "open-motion-project"}, {"PROJ", "proj"}, {"Xerces-C++", "xerces-c"}, {"web-ifc", "web-ifc"}, {"CRCpp", "crcpp"},
+        {"Gait and spot poses", "open-motion-project"}, {"PROJ", "proj"}, {"Xerces-C++", "xerces-c"}, {"web-ifc", "web-ifc"}, {"CRCpp", "crcpp"}, {"Name suggestion index", "name-suggestion-index"},
     };
     for (const auto& [prefix, id] : kIds)
         if (name.startsWith(QLatin1String(prefix)))

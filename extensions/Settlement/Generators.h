@@ -5,6 +5,8 @@
 
 #include "SettlementCore.h"
 
+#include <lila/Names.h>
+
 #include <functional>
 #include <limits>
 #include <optional>
@@ -121,12 +123,38 @@ struct DistrictSpec
     std::vector<EraSpec> eras;
 };
 
-/** A street read from OpenStreetMap (or anywhere): points and class. */
+/** A street read from OpenStreetMap (or anywhere): points and class, and the (fictional) name and OSM id it came with. */
 struct ImportedStreet
 {
     std::vector<Vec2> pts;
     StreetClass cls = StreetClass::Local;
     std::string name;
+    std::string osmId;
+};
+
+/**
+ * A building read from OpenStreetMap (a building curve terrainImportOsm made): footprint and what the tags say. Lengths and
+ * heights cm, NaN when not tagged; levels -1. name is already fictional.
+ */
+struct OsmBuildingIn
+{
+    std::string id; // "w123", "r9.1"
+    std::vector<Vec2> outer;
+    std::vector<std::vector<Vec2>> holes;
+    bool part = false;
+    std::string building, program, kind, name;
+    double height = std::numeric_limits<double>::quiet_NaN(), minHeight = std::numeric_limits<double>::quiet_NaN();
+    double roofHeight = std::numeric_limits<double>::quiet_NaN();
+    int levels = -1, minLevel = -1, roofLevels = -1;
+    std::string roofShape, colour, roofColour, material, roofMaterial, startDate;
+};
+
+/** A place read from OpenStreetMap: a point (shop, office, town) or an area (cemetery, farmland, port, school grounds). */
+struct OsmPlaceIn
+{
+    std::string id, key, value, program, kind, name;
+    Vec2 at{0.0};
+    std::vector<std::vector<Vec2>> rings; // empty for a point
 };
 
 /** What a street network looks like in numbers: steers a new layout towards the same character. */
@@ -183,6 +211,13 @@ struct GenSpec
     std::vector<EraSpec> eras;
     std::vector<DistrictSpec> districts;
     std::vector<ImportedStreet> osm;
+    std::vector<OsmBuildingIn> osmBuildings;
+    std::vector<OsmPlaceIn> osmPlaces;
+    /** Blocks OSM buildings cover less than osmCoverage of get Settlement's own lots around them: sparse, all (always) or none. */
+    std::string osmFill = "sparse";
+    double osmCoverage = 0.25;
+    /** Real names (as hashes) the names Settlement makes must not match. */
+    lila::names::NameHashes avoid;
     StreetStats example;
     std::vector<ContourStreet> contour;
     std::optional<LevelsSpec> levels;
@@ -190,8 +225,10 @@ struct GenSpec
 
 /**
  * Reads the generators JSON: {"tensor": {...}, "walls": {...}, "eras": [...] or a preset name, "districts": [...], "osm":
- * [{points, class}], "example": {...}, "contour": [{points, kind}], "levels": {...}}. Throws std::runtime_error naming
- * what is wrong.
+ * [{points, class}], "osmBuildings": [{id, outer, holes, part, building, program, kind, name, height, minHeight, roofHeight,
+ * levels, minLevel, roofLevels, roofShape, colour, roofColour, material, roofMaterial, startDate}], "osmPlaces": [{id, key,
+ * value, program, kind, name, at, rings}], "osmFill": {mode, coverage}, "avoid": {exact, contained, longest}, "example":
+ * {...}, "contour": [{points, kind}], "levels": {...}}. Throws std::runtime_error naming what is wrong.
  */
 GenSpec parseGenerators(const json& j);
 /** The era presets: walledTown, medievalToModern, gridToSprawl. */
@@ -272,6 +309,19 @@ struct Megablock
     double base = 0.0, top = 0.0;
 };
 
+struct OsmIndex;
+
+/** An imported place as the settlement placed it: the lots it covers or stands on, and the landmark it made. */
+struct OsmSite
+{
+    std::string id, kind, program, name;
+    Vec2 at{0.0};
+    std::vector<Polygon> rings;
+    std::vector<uint64_t> lots; // stable lot ids
+    uint64_t landmarkLot = 0;   // 0 for none
+    std::string placed;         // building, lot, area, district, site (stands on nothing the settlement made)
+};
+
 struct GenLayout
 {
     std::vector<WallLine> walls;
@@ -289,8 +339,13 @@ struct GenLayout
     std::vector<Polygon> cleared; // corridors axes were cut through
     int demolishedStreets = 0;   // older streets removed by axes
     int imported = 0;            // imported streets laid
+    std::vector<ImportedStreet> importedRuns; // as laid (clipped to the outline), for naming the streets they made
     std::vector<std::string> warnings; // fallbacks taken, and why
     std::shared_ptr<const GenSpec> spec;
+    std::vector<OsmSite> osmSites;
+    /** OSM buildings made lots, lots Settlement cut beside them, blocks taken whole (dense) or filled (sparse), buildings off every block. */
+    int osmLots = 0, osmFillLots = 0, osmDenseBlocks = 0, osmSparseBlocks = 0, osmOutside = 0, osmParts = 0, osmOverlapping = 0;
+    std::shared_ptr<OsmIndex> osmIndex;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -308,6 +363,23 @@ void afterPattern(Layout& l, const Ground& g, const Options& o);
 void afterStreets(Layout& l, const Ground& g, const Options& o);
 /** After envelopes: eras on blocks, lots and envelopes (with their era's style), megablocks and skybridges. */
 void afterLots(Layout& l, const Site& site, const Ground& g, const Options& o);
+
+/**
+ * Imported OpenStreetMap buildings and places onto the blocks from firstBlock on: each building becomes a lot (stable id
+ * from its OSM id) with use and program from its tags, dense blocks lose the lots Settlement cut, sparse ones keep those not
+ * under a building; points of interest become businesses on the building or lot they stand on, areas set the use of the
+ * lots inside and a landmark. fresh (when given) grows with the lots added, marked 1. Tags on lots are still edge ids.
+ */
+void placeOsmBuildings(Layout& l, const Site& site, const Ground& g, const Options& o, size_t firstBlock, std::vector<char>* fresh);
+/** True when the layout has imported OSM buildings to place. */
+bool hasOsmBuildings(const Layout& l);
+/** The envelope of an imported building's lot: its own footprint, heights from tags or the district's default by use, tiers from its parts, roof from roof:shape. */
+Envelope osmEnvelope(const Lot& lot, const Layout& l, const Ground& g, const Options& o, const Site& site);
+/** Program, name, businesses and a style guess onto an envelope from its lot (any envelope, imported or cut). */
+void finishProgram(Envelope& env, const Lot& lot, const Layout& l);
+json osmSitesJson(const Layout& l);
+/** settlementCheck's realName issues: street and district names against the imported real names, building, business and place names against those and the brand blocklist. */
+json realNameIssues(const Layout& l, const lila::names::RealNames& real);
 
 /** Streets traced along a tensor field inside the layout's outline. */
 void layTensor(Layout& l, const Ground& g, const Options& o, const TensorSpec& spec, double limit = 0.0);

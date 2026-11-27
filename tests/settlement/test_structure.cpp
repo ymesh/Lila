@@ -344,7 +344,11 @@ TEST_CASE("settlement: the ground grid grows with the terrain and ribbons follow
     const Ground ground = Ground::fromMesh(hills, 200.0);
     CHECK(ground.gridWidth() > 1024);
     CHECK(ground.cellSize() < 300.0);
-    geo::MeshBvh bvh(hills);
+    // Split the way the ground and the heightfield renderer split the quads.
+    geo::TriangulateOptions split;
+    split.quads = geo::QuadSplit::FirstCorner;
+    geo::MeshBvh bvh;
+    bvh.build(hills, geo::triangulate(hills, split));
     auto meshY = [&](double x, double z) {
         geo::BvhHit hit;
         REQUIRE(bvh.raycast({x, 1e5, z}, {0, -1, 0}, hit, 2e5));
@@ -372,7 +376,7 @@ TEST_CASE("settlement: the ground grid grows with the terrain and ribbons follow
     checkClear(l);
     const MeshParts parts = toMeshes(l, ground);
     REQUIRE(parts.streets.numFaces() > 100);
-    // Between draped points the ribbon stays within a few cm of the hills: no road dives into a hillside.
+    // Between draped points the ribbon stays within a few cm of its lift over the hills: no road dives into a hillside.
     double worst = 0.0;
     for (geo::Index f = 0; f < parts.streets.faceCapacity(); ++f)
     {
@@ -380,9 +384,10 @@ TEST_CASE("settlement: the ground grid grows with the terrain and ribbons follow
             continue;
         const std::vector<geo::Index> pts = parts.streets.facePoints(f);
         const glm::dvec3 m = (parts.streets.position(pts[0]) + parts.streets.position(pts[1])) * 0.5;
-        worst = std::max(worst, std::abs(m.y - 2.0 - meshY(m.x, m.z)));
+        const double above = m.y - meshY(m.x, m.z);
+        worst = std::max({worst, -above, above - 20.0});
     }
-    CHECK(worst < 20.0);
+    CHECK(worst < 5.0);
 }
 
 TEST_CASE("settlement: km-scale routes around and up a 300 m structure")

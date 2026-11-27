@@ -833,6 +833,12 @@ std::vector<float> Analysis::compute(const std::string& name) const
     return {};
 }
 
+void forgetAnalyses()
+{
+    std::lock_guard lock(analysisMutex());
+    analysisCache().clear();
+}
+
 std::shared_ptr<const Analysis> analyse(std::shared_ptr<const Heightfield> h, const AnalysisParams& p)
 {
     const std::string key = revision(*h) + "|" + p.key();

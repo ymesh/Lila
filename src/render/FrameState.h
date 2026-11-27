@@ -651,4 +651,33 @@ struct FrameState
     std::vector<OverlayVertex> overlayTris; // drawn after everything else
     std::shared_ptr<const OverlayAtlas> atlas;
 };
+
+/**
+ * Moves from's per-frame vertex lists into to, emptied with their capacity kept, so the next frame fills them without
+ * allocating. A list holding far more than it last used lets its memory go instead.
+ */
+inline void reuseBuffers(FrameState& to, FrameState& from)
+{
+    auto take = [](auto& dst, auto& src) {
+        constexpr size_t kKeepBytes = size_t(16) << 20;
+        if (src.capacity() * sizeof(src[0]) > kKeepBytes && src.size() * 4 < src.capacity())
+            std::remove_reference_t<decltype(src)>().swap(src);
+        src.clear();
+        dst = std::move(src);
+    };
+    take(to.lines, from.lines);
+    take(to.linesOnTop, from.linesOnTop);
+    take(to.selectedEdges, from.selectedEdges);
+    take(to.seamLines, from.seamLines);
+    take(to.symmetryLines, from.symmetryLines);
+    take(to.highlightEdges, from.highlightEdges);
+    take(to.curveHalo, from.curveHalo);
+    take(to.curveLines, from.curveLines);
+    take(to.curveHaloBold, from.curveHaloBold);
+    take(to.curveLinesBold, from.curveLinesBold);
+    take(to.tris3d, from.tris3d);
+    take(to.linesXray, from.linesXray);
+    take(to.overlay, from.overlay);
+    take(to.overlayTris, from.overlayTris);
+}
 } // namespace lila::render

@@ -44,6 +44,7 @@
 #include "ui/DisplayLayersPanel.h"
 #include "ui/AnimLayersPanel.h"
 #include "ui/OffsetsPanel.h"
+#include "ui/SlotsUi.h"
 #include "ui/RetargetUi.h"
 #include "ui/RenamePanel.h"
 #include "ui/UnfrozenTransforms.h"

@@ -1,5 +1,6 @@
 #include "UsdAttributes.h"
 
+#include <lila/Names.h>
 #include <lila/Node.h>
 
 #include <pxr/base/gf/matrix4d.h>
@@ -613,7 +614,9 @@ void exportComponents(const scene::Graph& g, scene::NodeId id, const UsdPrim& pr
     {
         const AttrDef& def = attrs[size_t(i)];
         // A compound's children ("group.child") have no USD name.
-        if (!(def.flags & scene::AttrUser) || def.name == kSchemasAttr || def.name == "lilaComponentExport" || def.name.find('.') != std::string::npos)
+        // The real names an import replaced stay in the scene for the real-name check and never leave it.
+        if (!(def.flags & scene::AttrUser) || def.name == kSchemasAttr || def.name == "lilaComponentExport" || def.name == lila::names::kSourceAttr ||
+            def.name.find('.') != std::string::npos)
             continue;
         const TfToken name(def.name);
         UsdPrimDefinition::Attribute schemaDef;

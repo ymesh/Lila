@@ -1,0 +1,96 @@
+{
+  "id": "seafront",
+  "label": "Seafront",
+  "description": "Two to five storey blocks along a waterfront: light render, iron balconies, awnings over restaurants, arcades here and there.",
+  "tags": [
+    "seafront",
+    "promenade",
+    "coast",
+    "malecon"
+  ],
+  "floors": {
+    "min": 2,
+    "max": 5,
+    "groundHeight": 450,
+    "height": 330,
+    "plinth": 20
+  },
+  "bays": {
+    "width": 320,
+    "min": 220,
+    "cornerWidth": 40
+  },
+  "openings": {
+    "window": {
+      "width": 0.45,
+      "height": 0.58,
+      "sill": 0.25,
+      "kind": "window.residential"
+    },
+    "door": {
+      "width": 0.45,
+      "height": 0.78,
+      "kind": "door.house"
+    },
+    "shopfront": {
+      "width": 0.82,
+      "height": 0.8
+    },
+    "reveal": 22
+  },
+  "groundFloor": {
+    "street": "window",
+    "arcade": 0.3,
+    "arcadeDepth": 320,
+    "shopfronts": true,
+    "shutters": 0.1,
+    "awnings": 0.5
+  },
+  "modules": {
+    "balconies": 0.55,
+    "balconyKind": "iron",
+    "grilles": 0.4,
+    "acUnits": 0.3,
+    "pilasters": false,
+    "cornice": "light",
+    "bands": true,
+    "corner": "none",
+    "drainpipes": true
+  },
+  "roof": {
+    "kind": "flat",
+    "parapet": 90,
+    "waterTanks": 0.6,
+    "clutter": 0.5
+  },
+  "palette": {
+    "render": [
+      "#f2ebe0",
+      "#e3ddd2",
+      "#d9cbb5",
+      "#c9d3d6",
+      "#e8e1c9",
+      "#fdf9f2"
+    ],
+    "trim": [
+      "#ffffff",
+      "#f4f1de"
+    ],
+    "roof": [
+      "#8a8178"
+    ],
+    "base": [
+      "#9a8f84"
+    ],
+    "dirt": [
+      0.1,
+      0.35
+    ]
+  },
+  "moduleTones": {
+    "arcade": [
+      "render",
+      "trim"
+    ]
+  }
+}

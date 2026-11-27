@@ -34,9 +34,12 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <chrono>
+#include <future>
 #include <cstdlib>
 #include <fstream>
 #include <memory>
+#include <thread>
 
 namespace lila::telemetry
 {
@@ -46,6 +49,7 @@ namespace
 constexpr const char* kEndpoint = "https://lila-telemetry.lila3d.workers.dev/e";
 constexpr int kFlushIntervalMs = 30 * 60 * 1000;
 constexpr int kFirstFlushDelayMs = 10 * 1000;
+constexpr int kExitFlushMs = 2000;
 
 bool envSet(const char* name)
 {
@@ -266,7 +270,8 @@ json makeEvent(std::string_view name, const std::string& distinctId, int64_t tim
     properties["version"] = version::number();
     // Events arrive from the ingest Worker's address, so PostHog's own lookup would place everyone there.
     properties["$geoip_disable"] = true;
-    return {{"event", name}, {"distinct_id", distinctId}, {"timestamp", isoTime(timeMs)}, {"properties", std::move(properties)}};
+    // PostHog keeps one copy of an event sent twice (exit send cut short, then the queue at the next start).
+    return {{"event", name}, {"uuid", newUuid()}, {"distinct_id", distinctId}, {"timestamp", isoTime(timeMs)}, {"properties", std::move(properties)}};
 }
 
 json sessionEndEvent(const Session& s, const std::string& distinctId, bool crashed)
@@ -340,10 +345,16 @@ void Store::writeSession(const Session& s)
     writeJson(mDir / "sessions" / (std::to_string(s.pid) + ".json"), s.toJson());
 }
 
+void Store::writeCrashEvent(int64_t pid, const std::string& url, const json& event)
+{
+    writeJson(mDir / crash::upload::kCrashEventsDir / (std::to_string(pid) + ".json"), {{"url", url}, {"event", event}});
+}
+
 void Store::removeSession(int64_t pid)
 {
     std::error_code ec;
     fs::remove(mDir / "sessions" / (std::to_string(pid) + ".json"), ec);
+    fs::remove(mDir / crash::upload::kCrashEventsDir / (std::to_string(pid) + ".json"), ec);
 }
 
 std::vector<Session> Store::takeStaleSessions(int64_t selfPid, const std::function<bool(int64_t, int64_t)>& alive)
@@ -359,6 +370,7 @@ std::vector<Session> Store::takeStaleSessions(int64_t selfPid, const std::functi
             continue;
         std::error_code rm;
         fs::remove(it->path(), rm);
+        fs::remove(mDir / crash::upload::kCrashEventsDir / it->path().filename(), rm);
         if (!s.id.empty())
             out.push_back(std::move(s));
     }
@@ -498,6 +510,14 @@ void flush()
     });
 }
 
+/** The session file for the next start, and the crashed session_end for the watchdog if Lila dies first. */
+void saveSession()
+{
+    State& st = state();
+    st.store->writeSession(st.session);
+    st.store->writeCrashEvent(st.session.pid, endpoint(), sessionEndEvent(st.session, installId(), true));
+}
+
 void tickMinute()
 {
     State& st = state();
@@ -507,7 +527,7 @@ void tickMinute()
     if (st.activity && now - st.activity->lastInputMs < 60 * 1000)
         ++st.session.activeMinutes;
     st.session.updatedMs = now;
-    st.store->writeSession(st.session);
+    saveSession();
 }
 
 void beginSession()
@@ -520,7 +540,7 @@ void beginSession()
     st.session.id = newUuid();
     st.session.pid = io::recovery::currentPid();
     st.session.startedMs = st.session.updatedMs = io::recovery::nowMs();
-    st.store->writeSession(st.session);
+    saveSession();
     // GPU details are filled once the renderer has picked a device.
     QTimer::singleShot(kFirstFlushDelayMs, qApp, [] {
         State& s = state();
@@ -624,12 +644,44 @@ void start()
         st.store->clear();
 }
 
+/**
+ * Sends the queue once more as Lila exits, off the event loop (which must not run during teardown), waiting at most
+ * kExitFlushMs. What doesn't go in time stays queued for the next start.
+ */
+void sendBeforeExit()
+{
+#ifdef _WIN32
+    State& st = state();
+    std::string url = endpoint();
+    if (url.empty() || !enabled())
+        return;
+    json q = st.store->queue();
+    if (q.empty())
+        return;
+    json batch = json::array();
+    for (const json& e : q)
+    {
+        json clean = e;
+        clean.erase("attempts");
+        batch.push_back(std::move(clean));
+    }
+    // A send outliving the wait is left to finish or die with the process; it shares nothing with Lila.
+    std::packaged_task<bool()> task([url, body = json{{"batch", batch}}.dump()] { return crash::upload::postJson(url, body); });
+    std::future<bool> sent = task.get_future();
+    std::thread(std::move(task)).detach();
+    if (sent.wait_for(std::chrono::milliseconds(kExitFlushMs)) == std::future_status::ready && sent.get())
+        st.store->dequeue(q.size());
+#endif
+}
+
 void stop()
 {
     State& st = state();
     if (!st.store)
         return;
     endSession(enabled());
+    // An exit while the startup send is still out could send its events twice; their uuids make PostHog keep one.
+    sendBeforeExit();
     ops::removeExecuteListener(st.listener);
     PrefStore::get().removeOnChanged(st.prefsListener);
     delete st.minute;

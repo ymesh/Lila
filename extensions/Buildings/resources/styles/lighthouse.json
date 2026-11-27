@@ -1,0 +1,79 @@
+{
+  "id": "lighthouse",
+  "label": "Lighthouse",
+  "description": "Lighthouse towers and keepers' houses: whitewashed render, small windows, a heavy band under the top, the roof the envelope asks for.",
+  "tags": [
+    "lighthouse",
+    "coast",
+    "tower"
+  ],
+  "floors": {
+    "min": 1,
+    "max": 12,
+    "groundHeight": 380,
+    "height": 340,
+    "plinth": 60
+  },
+  "bays": {
+    "width": 300,
+    "min": 150,
+    "cornerWidth": 40
+  },
+  "openings": {
+    "window": {
+      "width": 0.3,
+      "height": 0.45,
+      "sill": 0.35,
+      "kind": "window.residential"
+    },
+    "door": {
+      "width": 0.45,
+      "height": 0.75,
+      "kind": "door.house"
+    },
+    "shopfront": {
+      "width": 0.5,
+      "height": 0.75
+    },
+    "reveal": 30
+  },
+  "groundFloor": {
+    "street": "window",
+    "shopfronts": false
+  },
+  "modules": {
+    "balconies": 0.0,
+    "grilles": 0.0,
+    "acUnits": 0.0,
+    "cornice": "heavy",
+    "bands": true,
+    "corner": "strip",
+    "drainpipes": false
+  },
+  "roof": {
+    "kind": "envelope",
+    "parapet": 90,
+    "waterTanks": 0.0,
+    "clutter": 0.0
+  },
+  "palette": {
+    "render": [
+      "#f7f5ef",
+      "#ffffff"
+    ],
+    "trim": [
+      "#b2322b",
+      "#2b2b2b"
+    ],
+    "roof": [
+      "#b2322b"
+    ],
+    "base": [
+      "#8a8a85"
+    ],
+    "dirt": [
+      0.05,
+      0.25
+    ]
+  }
+}

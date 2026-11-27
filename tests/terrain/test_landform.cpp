@@ -432,6 +432,43 @@ TEST_CASE("landform: Erode presets write every mask, drain, do nothing at age 0,
     CHECK(one == many);
 }
 
+TEST_CASE("landform: Erode preset keepForm carves along the input's drainage and keeps its wider landforms")
+{
+    // Real-elevation ranges: the preset's macro step would rebuild them; keepForm only works below formRadius.
+    const Heightfield start = landRanges(257, 4, 120000.0);
+    Heightfield kept = start, rebuilt = start;
+    terrain::PresetParams p;
+    p.age = 0.6;
+    p.keepForm = true;
+    p.formRadius = 6000.0;
+    terrain::PresetReport r;
+    terrain::erodePreset(kept, p, &r);
+    terrain::PresetParams macro = p;
+    macro.keepForm = false;
+    terrain::erodePreset(rebuilt, macro);
+    bool fine = false, hasMacro = false;
+    for (const auto& [name, ms] : r.steps)
+        fine = fine || name == "fine", hasMacro = hasMacro || name == "macro";
+    CHECK(fine);
+    CHECK_FALSE(hasMacro);
+    // Low-passed past the form radius, the kept ground stays close to the input; the rebuilt one moves far more.
+    const int radius = int(std::lround(2.0 * p.formRadius / start.cell));
+    const std::vector<float> a = terrain::boxBlurred(start.heights, start.nx, start.nz, radius);
+    const std::vector<float> b = terrain::boxBlurred(kept.heights, start.nx, start.nz, radius);
+    const std::vector<float> c = terrain::boxBlurred(rebuilt.heights, start.nx, start.nz, radius);
+    double keptMoved = 0.0, rebuiltMoved = 0.0, carved = 0.0;
+    for (size_t k = 0; k < start.size(); ++k)
+    {
+        keptMoved += std::abs(b[k] - a[k]);
+        rebuiltMoved += std::abs(c[k] - a[k]);
+        carved += std::abs(kept.heights[k] - start.heights[k]);
+    }
+    MESSAGE("large-form change: keepForm " << keptMoved / start.size() << " cm, macro " << rebuiltMoved / start.size() << " cm; carved " << carved / start.size() << " cm");
+    CHECK(carved > 0.0);
+    CHECK(keptMoved * 3.0 < rebuiltMoved);
+    requireDrains(kept);
+}
+
 TEST_CASE("landform: preset timing at 1K")
 {
     Heightfield h = landRanges(1025, 1, 400000.0);

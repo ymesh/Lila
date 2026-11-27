@@ -1,0 +1,87 @@
+{
+  "id": "residential",
+  "label": "Residential",
+  "description": "Painted concrete-block houses: barred windows, roll-up shutters where there is a shop, water tanks and rebar on flat roofs.",
+  "tags": [
+    "residential",
+    "casa"
+  ],
+  "floors": {
+    "min": 1,
+    "max": 3,
+    "groundHeight": 300,
+    "height": 290,
+    "plinth": 20
+  },
+  "bays": {
+    "width": 300,
+    "min": 200,
+    "cornerWidth": 20
+  },
+  "openings": {
+    "window": {
+      "width": 0.4,
+      "height": 0.5,
+      "sill": 0.32,
+      "kind": "window.residential"
+    },
+    "door": {
+      "width": 0.4,
+      "height": 0.75,
+      "kind": "door.house"
+    },
+    "shopfront": {
+      "width": 0.8,
+      "height": 0.82
+    },
+    "reveal": 15
+  },
+  "groundFloor": {
+    "street": "window",
+    "shopfronts": true,
+    "shutters": 0.6,
+    "awnings": 0.1
+  },
+  "modules": {
+    "balconies": 0.2,
+    "balconyKind": "concrete",
+    "grilles": 0.8,
+    "acUnits": 0.35,
+    "cornice": "none",
+    "bands": false,
+    "drainpipes": false
+  },
+  "roof": {
+    "kind": "flat",
+    "parapet": 40,
+    "waterTanks": 0.85,
+    "clutter": 0.3,
+    "rebar": 0.35
+  },
+  "palette": {
+    "render": [
+      "#e9c46a",
+      "#f4a261",
+      "#e76f51",
+      "#90be6d",
+      "#43aa8b",
+      "#577590",
+      "#f9c74f",
+      "#d8c3a5"
+    ],
+    "trim": [
+      "#ffffff",
+      "#e9e4d8"
+    ],
+    "roof": [
+      "#7f7a74"
+    ],
+    "base": [
+      "#8a8178"
+    ],
+    "dirt": [
+      0.15,
+      0.5
+    ]
+  }
+}

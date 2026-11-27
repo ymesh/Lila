@@ -1,9 +1,13 @@
 // Settlement: the plan's verification checks on a layout, and why each part is where it is.
 
 #include "Streetscape.h"
+#include "Generators.h"
 #include "SettlementTerrain.h"
 
 #include <lila/Profile.h>
+
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
 
 #include <algorithm>
 #include <cmath>
@@ -121,9 +125,16 @@ const char* useLabel(Use u) { return useName(u); }
 
 bool polygonsShareArea(const Polygon& a, const Polygon& b, double tol) { return shareArea(a, b, tol); }
 
+/**
+ * Lanes that can't reach each other or an exit are errors in a network Settlement laid, warnings in imported streets:
+ * real networks have islands, gated estates and streets clipped at the settlement's edge.
+ */
+static const char* reachSeverity(const Layout& l) { return l.gen && l.gen->imported > 0 ? "warning" : "error"; }
+
 json streetscapeLaneChecks(const Layout& l, const Ground& ground)
 {
     const json r = checkLanes(l, ground);
+    const char* reach = reachSeverity(l);
     json issues = json::array();
     if (!r.is_object())
         return issues;
@@ -134,12 +145,12 @@ json streetscapeLaneChecks(const Layout& l, const Ground& ground)
     for (const auto& [mode, m] : modes.items())
     {
         if (m.value("components", 0) > 1)
-            add("error", nullptr, std::format("{} lanes split into {} groups; {} lanes cannot reach the rest", mode, m.value("components", 0),
-                                              m.value("isolatedCount", 0)));
+            add(reach, nullptr, std::format("{} lanes split into {} groups; {} lanes cannot reach the rest", mode, m.value("components", 0),
+                                            m.value("isolatedCount", 0)));
         for (const json& x : m.value("cannotReachExit", json::array()))
-            add("error", x, std::format("{} lane {} cannot reach an exit", mode, x.dump()));
+            add(reach, x, std::format("{} lane {} cannot reach an exit", mode, x.dump()));
         for (const json& x : m.value("unreachableExits", json::array()))
-            add("error", x, std::format("{} exit lane {} cannot be reached", mode, x.dump()));
+            add(reach, x, std::format("{} exit lane {} cannot be reached", mode, x.dump()));
     }
     for (const json& c : r.contains("conflictingGreens") ? r["conflictingGreens"] : json::array())
     {
@@ -198,7 +209,8 @@ json checkLayout(const Layout& l, const Ground& ground, const Options& o, const 
     };
 
     for (const Lot& lot : l.lots)
-        if (lot.frontages == 0 && lot.use != Use::Plaza && lot.use != Use::Open)
+        // Imported buildings stand where they stand: a back building off the street is real.
+        if (lot.frontages == 0 && lot.use != Use::Plaza && lot.use != Use::Open && lot.use != Use::Park && lot.osmId.empty())
             issue("frontage", "error", "lot:" + std::to_string(lot.id), std::format("{} lot {} has no street frontage", useLabel(lot.use), lot.id),
                   at(centroid(lot.outline)));
 
@@ -216,19 +228,27 @@ json checkLayout(const Layout& l, const Ground& ground, const Options& o, const 
                 for (int x = int(std::floor(lo.x / cell)); x <= int(std::floor(hi.x / cell)); ++x)
                     bins[key(x, y)].push_back(i);
         }
-        std::map<std::pair<size_t, size_t>, bool> seen;
+        std::vector<std::pair<size_t, size_t>> pairs;
         for (const auto& [k, list] : bins)
             for (size_t m = 0; m < list.size(); ++m)
                 for (size_t n = m + 1; n < list.size(); ++n)
-                {
-                    const auto pr = std::minmax(list[m], list[n]);
-                    if (seen.contains(pr))
-                        continue;
-                    seen[pr] = true;
-                    const Lot &a = l.lots[pr.first], &b = l.lots[pr.second];
-                    if (a.outline.pts.size() >= 3 && b.outline.pts.size() >= 3 && shareArea(a.outline, b.outline, 2.0))
-                        issue("overlap", "error", std::format("lot:{}", a.id), std::format("lots {} and {} overlap", a.id, b.id), at(centroid(a.outline)));
-                }
+                    pairs.push_back(std::minmax(list[m], list[n]));
+        std::sort(pairs.begin(), pairs.end());
+        pairs.erase(std::unique(pairs.begin(), pairs.end()), pairs.end());
+        std::vector<char> overlaps(pairs.size(), 0);
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, pairs.size()), [&](const tbb::blocked_range<size_t>& r) {
+            for (size_t i = r.begin(); i < r.end(); ++i)
+            {
+                const Lot &a = l.lots[pairs[i].first], &b = l.lots[pairs[i].second];
+                overlaps[i] = a.outline.pts.size() >= 3 && b.outline.pts.size() >= 3 && shareArea(a.outline, b.outline, 2.0);
+            }
+        });
+        for (size_t i = 0; i < pairs.size(); ++i)
+            if (overlaps[i])
+            {
+                const Lot &a = l.lots[pairs[i].first], &b = l.lots[pairs[i].second];
+                issue("overlap", "error", std::format("lot:{}", a.id), std::format("lots {} and {} overlap", a.id, b.id), at(centroid(a.outline)));
+            }
     }
 
     std::map<uint64_t, std::pair<double, int>> steepest;
@@ -346,7 +366,7 @@ json checkLayout(const Layout& l, const Ground& ground, const Options& o, const 
             for (int v = 0; v < n; ++v)
                 if (used[size_t(v)] && sizes[comp[size_t(v)]] < biggest && parts.size() < 8)
                     parts.push_back(at(l.graph.nodes[size_t(v)].p));
-            issue("lanes", "error", std::string("mode:") + mode,
+            issue("lanes", reachSeverity(l), std::string("mode:") + mode,
                   std::format("the {} lane graph splits into {} parts that cannot all reach each other", mode, sizes.size()), parts);
         }
     }

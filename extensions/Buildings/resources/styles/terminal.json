@@ -1,0 +1,81 @@
+{
+  "id": "terminal",
+  "label": "Terminal",
+  "description": "Cruise and ferry terminal halls: tall glazed ground floor, ribbon windows, flat roof with a deep parapet.",
+  "tags": [
+    "terminal",
+    "transport",
+    "port"
+  ],
+  "floors": {
+    "min": 1,
+    "max": 3,
+    "groundHeight": 600,
+    "height": 450,
+    "plinth": 20
+  },
+  "bays": {
+    "width": 600,
+    "min": 400,
+    "cornerWidth": 60
+  },
+  "openings": {
+    "window": {
+      "width": 0.85,
+      "height": 0.6,
+      "sill": 0.25,
+      "kind": "window.glazing"
+    },
+    "door": {
+      "width": 0.5,
+      "height": 0.7,
+      "kind": "door.service"
+    },
+    "shopfront": {
+      "width": 0.92,
+      "height": 0.85
+    },
+    "reveal": 20
+  },
+  "groundFloor": {
+    "street": "shopfront",
+    "shopfronts": true,
+    "shutters": 0.0,
+    "awnings": 0.0
+  },
+  "modules": {
+    "balconies": 0.0,
+    "grilles": 0.0,
+    "acUnits": 0.1,
+    "cornice": "light",
+    "bands": true,
+    "drainpipes": false
+  },
+  "roof": {
+    "kind": "flat",
+    "parapet": 160,
+    "waterTanks": 0.0,
+    "clutter": 0.4
+  },
+  "palette": {
+    "render": [
+      "#f2f2ee",
+      "#e6ebee",
+      "#dfe6e9"
+    ],
+    "trim": [
+      "#2f6f8f",
+      "#ffffff"
+    ],
+    "roof": [
+      "#8a8f94"
+    ],
+    "base": [
+      "#6d7378"
+    ],
+    "dirt": [
+      0.02,
+      0.15
+    ]
+  }
+}

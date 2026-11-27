@@ -21,6 +21,7 @@
 #include <lila/Graph.h>
 #include <lila/Log.h>
 #include <lila/Math.h>
+#include <lila/Names.h>
 #include <lila/Node.h>
 #include <lila/Paths.h>
 #include <lila/Prefs.h>
@@ -561,10 +562,21 @@ Georef georefFor(const TerrainRef& t, const Args& a, const std::string& cmd)
         const json o = a.flags["origin"];
         if (!o.is_array() || o.size() != 2)
             throw CommandError(cmd + ": origin is [latitude, longitude] of the terrain's centre");
+        // An option box's list field hands the numbers over as text.
+        auto degrees = [&](const json& v) {
+            if (v.is_number())
+                return v.get<double>();
+            char* end = nullptr;
+            const std::string text = v.is_string() ? v.get<std::string>() : std::string();
+            const double d = std::strtod(text.c_str(), &end);
+            if (text.empty() || end == text.c_str())
+                throw CommandError(cmd + ": origin is [latitude, longitude] of the terrain's centre");
+            return d;
+        };
         Georef g;
         g.kind = ProjectionKind::Local;
-        g.latMid = o[0].get<double>();
-        g.x0 = o[1].get<double>();
+        g.latMid = degrees(o[0]);
+        g.x0 = degrees(o[1]);
         g.y0 = g.latMid;
         const glm::dvec2 centre = t.local->origin + t.local->extent() * 0.5;
         // One degree in metres at that latitude, as Local data is flattened.
@@ -826,11 +838,17 @@ json runImportDem(const Args& a)
         r.dataset = a.get<std::string>("dataset", "COP30");
         r.cache = cacheDir;
         r.offline = offline;
-        r.apiKey = a.get<std::string>("apiKey", "");
-        if (!r.apiKey.empty() && a.get<bool>("saveKey", false))
+        std::string keyNote;
+        try
+        {
+            r.apiKey = chooseApiKey(a.get<std::string>("apiKey", ""), PrefStore::get().value<std::string>(kPrefsFile, kKeyPref, std::string()), &keyNote);
+        }
+        catch (const std::exception& e)
+        {
+            throw CommandError(cmd + ": " + e.what());
+        }
+        if (a.has("apiKey") && !r.apiKey.empty() && a.get<bool>("saveKey", false))
             PrefStore::get().set(kPrefsFile, kKeyPref, r.apiKey);
-        if (r.apiKey.empty())
-            r.apiKey = PrefStore::get().value<std::string>(kPrefsFile, kKeyPref, std::string());
         FetchResult res;
         try
         {
@@ -838,7 +856,7 @@ json runImportDem(const Args& a)
         }
         catch (const std::exception& e)
         {
-            throw CommandError(cmd + ": " + e.what());
+            throw CommandError(cmd + ": " + e.what() + (r.apiKey.empty() && !keyNote.empty() ? "; " + keyNote : std::string()));
         }
         notes = res.notes;
         for (const std::string& n : notes)
@@ -917,17 +935,6 @@ json runImportDem(const Args& a)
     return out;
 }
 
-/** Overpass query for everything terrainImportOsm reads, inside the box. */
-std::string overpassQuery(const GeoBox& b)
-{
-    char box[160];
-    std::snprintf(box, sizeof box, "(%.7f,%.7f,%.7f,%.7f)", b.south, b.west, b.north, b.east);
-    const std::string bb = box;
-    return "[out:json][timeout:180];(way[\"highway\"]" + bb + ";way[\"waterway\"]" + bb + ";way[\"natural\"]" + bb + ";way[\"landuse\"]" + bb +
-           ";way[\"leisure\"=\"park\"]" + bb + ";relation[\"type\"=\"multipolygon\"][\"natural\"]" + bb + ";relation[\"type\"=\"multipolygon\"][\"landuse\"]" +
-           bb + ";);out body;>;out skel qt;";
-}
-
 json runImportOsm(const Args& a)
 {
     LILA_ZONE();
@@ -956,7 +963,7 @@ json runImportOsm(const Args& a)
         file = dataDir / "osm" / (safeName(t.mesh ? t.mesh->name() : std::string("terrain")) + ".json");
         fs::create_directories(file.parent_path());
         std::string why;
-        const int status = httpGet("https://overpass-api.de/api/interpreter?data=" + urlEncode(overpassQuery(b)), file, &why);
+        const int status = httpGet(overpassUrl(b), file, &why);
         if (status != 200)
         {
             std::error_code ec;
@@ -981,16 +988,131 @@ json runImportOsm(const Args& a)
     std::set<std::string> kinds;
     if (a.has("kinds"))
         for (const json& k : a.flags["kinds"])
-            kinds.insert(k.get<std::string>());
+        {
+            const std::string name = k.get<std::string>();
+            const auto& known = osmFeatureKindNames();
+            if (name != "building" && name != "place" && std::ranges::find(known, name) == known.end())
+                throw CommandError(cmd + ": unknown kind '" + name + "' (road, path, river, stream, lake, coastline, pier, breakwater, quay, dam, building, place)");
+            kinds.insert(name);
+        }
+    auto wanted = [&](const std::string& kind) { return kinds.empty() || kinds.count(kind); };
     const double lift = a.get<double>("lift", 0.0);
     const double step = a.get<double>("step", 0.0) > 0.0 ? a.get<double>("step", 0.0) : hf.cell * 2.0;
     const bool perFeature = a.get<bool>("perFeature", false);
     const std::string prefix = a.get<std::string>("name", safeName(t.mesh ? t.mesh->name() : std::string("Terrain")) + "_OSM");
 
+    // Every name comes out fictional: real ones only reach the hidden sourceNames attribute of the curve that holds them.
+    std::string culture = a.get<std::string>("culture", "");
+    json cultureFrom = "given";
+    if (culture.empty())
+    {
+        std::string why;
+        const LatLon mid = geo.toGeographic(hf.origin + hf.extent() * 0.5);
+        culture = names::cultureForLocation(mid.lat, mid.lon, &why);
+        cultureFrom = why;
+    }
+    else if (!names::hasCulture(culture))
+    {
+        std::string known;
+        for (const std::string& c : names::cultures())
+            known += (known.empty() ? "" : ", ") + c;
+        throw CommandError(cmd + ": unknown culture '" + culture + "' (" + known + ")");
+    }
+    auto real = std::make_shared<names::RealNames>(names::sceneRealNames(g));
+    for (const OsmFeature& f : x->features)
+        real->add(f.name, "osm");
+    for (const OsmBuilding& b : x->buildings)
+        for (const std::string& n : b.realNames)
+            real->add(n, "osm");
+    for (const OsmPlace& p : x->places)
+        for (const std::string& n : p.realNames)
+            real->add(n, "osm");
+    names::NameBook book(culture, real);
+    size_t named = 0;
+    auto streetClassOf = [](const OsmFeature& f) {
+        const std::string& c = f.cls;
+        return f.kind == OsmFeatureKind::Path                                                         ? 4
+               : c.starts_with("motorway") || c.starts_with("trunk") || c.starts_with("primary") ? 0
+               : c.starts_with("secondary")                                                  ? 1
+               : c == "service" || c == "living_street"                                       ? 3
+                                                                                              : 2;
+    };
+    auto featureKey = [](const OsmFeature& f) { return names::textKey(std::string(osmFeatureKindNames()[size_t(f.kind)]) + "|" + names::normalize(f.name)); };
+    {
+        // One name per real street: its ways can carry several classes, so it takes its highest, and streets are named in
+        // key order, so the name doesn't depend on which way the data lists first. Settlement reads these names back.
+        std::map<uint64_t, int> streets;
+        for (const OsmFeature& f : x->features)
+            if (!f.name.empty() && (f.kind == OsmFeatureKind::Road || f.kind == OsmFeatureKind::Path))
+            {
+                const auto [it, fresh] = streets.try_emplace(featureKey(f), streetClassOf(f));
+                it->second = std::min(it->second, streetClassOf(f));
+            }
+        for (const auto& [key, cls] : streets)
+            book.street(cls, key);
+    }
+    auto osmKey = [](char type, int64_t id) { return std::string(1, type) + std::to_string(id); };
+    auto featureName = [&](const OsmFeature& f) -> std::string {
+        if (f.name.empty())
+            return {};
+        ++named;
+        const uint64_t key = featureKey(f);
+        switch (f.kind)
+        {
+        case OsmFeatureKind::Road:
+        case OsmFeatureKind::Path: return book.street(streetClassOf(f), key);
+        case OsmFeatureKind::River: return book.place(names::Kind::River, "", key);
+        case OsmFeatureKind::Stream: return book.place(names::Kind::Stream, "", key);
+        case OsmFeatureKind::Lake: return book.place(f.cls == "reservoir" ? names::Kind::Reservoir : names::Kind::Lake, "", key);
+        case OsmFeatureKind::Dam: return book.place(names::Kind::Dam, "", key);
+        case OsmFeatureKind::Pier:
+        case OsmFeatureKind::Breakwater:
+        case OsmFeatureKind::Quay: return book.place(names::Kind::Port, "port", key);
+        default: return book.place(names::Kind::Landmark, "", key);
+        }
+    };
+    /** Named things, and businesses and institutions without a name in the data, get a fictional name; plain buildings none. */
+    auto thingName = [&](const std::string& kind, const std::string& program, char type, int64_t id, const std::vector<std::string>& realNames,
+                         const std::string& chain) -> std::string {
+        names::Kind k = names::Kind::Building;
+        names::parseKind(kind, &k);
+        const bool institution = k != names::Kind::Building && k != names::Kind::Park;
+        if (realNames.empty() && !(institution && !program.empty()) && !(k == names::Kind::Building && !program.empty() && program != "apartments"))
+            return {};
+        ++named;
+        // Branches of one chain share a fictional chain name; named places of one real name share one too.
+        const uint64_t key = !chain.empty()                                                                  ? names::textKey("chain|" + chain)
+                             : (k == names::Kind::Town || k == names::Kind::District || k == names::Kind::Island) && !realNames.empty()
+                                 ? names::textKey(kind + "|" + names::normalize(realNames.front()))
+                                 : names::textKey(osmKey(type, id));
+        return book.place(k, program, key);
+    };
+    auto drape = [&](const glm::dvec2& p) {
+        const glm::dvec3 w = t.toWorld(p.x, hf.heightAt(p.x, p.y) + lift, p.y);
+        return json::array({w.x, w.y, w.z});
+    };
+    auto inside = [&](const glm::dvec2& p) {
+        const glm::dvec2 hi = hf.origin + hf.extent();
+        return p.x >= hf.origin.x && p.y >= hf.origin.y && p.x <= hi.x && p.y <= hi.y;
+    };
+    auto ringJson = [&](const std::vector<LatLon>& ring, bool* allInside) {
+        json pts = json::array();
+        for (const LatLon& q : ring)
+        {
+            const glm::dvec2 p = geo.toLocal(q);
+            *allInside = *allInside && inside(p);
+            pts.push_back(drape(p));
+        }
+        return pts;
+    };
+    auto metres = [](double m) { return std::isfinite(m) ? json(m * 100.0) : json(); };
+
     struct Made
     {
         json splines = json::array();
         json info = json::array();
+        json source = json::object();
+        json points = json::array();
         size_t count = 0;
         double length = 0.0;
     };
@@ -1000,7 +1122,7 @@ json runImportOsm(const Args& a)
     for (const OsmFeature& f : x->features)
     {
         const std::string kind = osmFeatureKindNames()[size_t(f.kind)];
-        if (!kinds.empty() && !kinds.count(kind))
+        if (!wanted(kind))
             continue;
         std::vector<glm::dvec2> local;
         for (const LatLon& p : f.points)
@@ -1013,6 +1135,7 @@ json runImportOsm(const Args& a)
         }
         Made& m = byKind[kind];
         ++m.count;
+        const std::string name = featureName(f);
         for (const std::vector<glm::dvec2>& run : runs)
         {
             // Dense enough to follow the ground between OSM's nodes.
@@ -1030,21 +1153,115 @@ json runImportOsm(const Args& a)
                 dense.pop_back();
             json pts = json::array();
             for (const glm::dvec2& p : dense)
-            {
-                const glm::dvec3 w = t.toWorld(p.x, hf.heightAt(p.x, p.y) + lift, p.y);
-                pts.push_back({w.x, w.y, w.z});
-            }
+                pts.push_back(drape(p));
             const json spline = {{"type", "poly"}, {"closed", closed}, {"points", pts}};
-            const json info = {{"id", std::to_string(f.id)}, {"name", f.name}, {"class", f.cls}, {"width", f.width}};
+            const json info = {{"id", std::to_string(f.id)}, {"name", name}, {"class", f.cls}, {"width", f.width}};
+            const json source = f.name.empty() ? json::object() : json{{std::to_string(f.id), f.name}};
             if (perFeature)
-                singles.push_back({kind, {{"spline", spline}, {"info", info}}});
+                singles.push_back({kind, {{"spline", spline}, {"info", info}, {"source", source}}});
             else
             {
                 m.splines.push_back(spline);
                 m.info.push_back(info);
+                m.source.update(source);
             }
         }
     }
+
+    if (wanted("building"))
+        for (const OsmBuilding& b : x->buildings)
+        {
+            bool in = true;
+            const json outer = ringJson(b.outer, &in);
+            std::vector<json> holes;
+            for (const auto& h : b.holes)
+                holes.push_back(ringJson(h, &in));
+            // A footprint is kept whole or not at all: half a building is no building.
+            if (!in)
+            {
+                ++outside;
+                continue;
+            }
+            Made& m = byKind["building"];
+            ++m.count;
+            const std::string id = osmKey(b.type, b.id) + (b.piece ? "." + std::to_string(b.piece) : std::string());
+            json info = {{"id", id},
+                         {"osmId", b.id},
+                         {"ring", "outer"},
+                         {"part", b.part},
+                         {"building", b.building},
+                         {"program", b.program},
+                         {"kind", b.kind},
+                         {"name", thingName(b.kind, b.program, b.type, b.id, b.realNames, b.chain)},
+                         {"height", metres(b.height)},
+                         {"minHeight", metres(b.minHeight)},
+                         {"roofHeight", metres(b.roofHeight)},
+                         {"levels", b.levels},
+                         {"minLevel", b.minLevel},
+                         {"roofLevels", b.roofLevels},
+                         {"roofShape", b.roofShape},
+                         {"colour", b.colour},
+                         {"roofColour", b.roofColour},
+                         {"material", b.material},
+                         {"roofMaterial", b.roofMaterial},
+                         {"startDate", b.startDate}};
+            if (!b.realNames.empty())
+                m.source[id] = b.realNames;
+            const size_t outerIndex = m.splines.size();
+            m.splines.push_back({{"type", "poly"}, {"closed", true}, {"points", outer}});
+            m.info.push_back(info);
+            for (const json& h : holes)
+            {
+                m.splines.push_back({{"type", "poly"}, {"closed", true}, {"points", h}});
+                m.info.push_back({{"id", id}, {"ring", "inner"}, {"outer", outerIndex}});
+            }
+        }
+
+    if (wanted("place"))
+        for (const OsmPlace& p : x->places)
+        {
+            const std::string id = osmKey(p.type, p.id);
+            const json name = thingName(p.kind, p.program, p.type, p.id, p.realNames, p.chain);
+            const json info = {{"id", id}, {"osmId", p.id}, {"key", p.key}, {"value", p.value}, {"program", p.program}, {"kind", p.kind}, {"name", name}};
+            if (p.rings.empty())
+            {
+                const glm::dvec2 q = geo.toLocal(p.at);
+                if (!inside(q))
+                {
+                    ++outside;
+                    continue;
+                }
+                Made& m = byKind["place"];
+                ++m.count;
+                json pt = info;
+                pt["at"] = drape(q);
+                m.points.push_back(pt);
+                if (!p.realNames.empty())
+                    m.source[id] = p.realNames;
+                continue;
+            }
+            bool in = true;
+            std::vector<json> rings;
+            for (const auto& r : p.rings)
+                rings.push_back(ringJson(r, &in));
+            // Areas larger than the terrain (a whole town's boundary) are cut by nothing: keep their centre if it is on it.
+            if (!in && !inside(geo.toLocal(p.at)))
+            {
+                ++outside;
+                continue;
+            }
+            Made& m = byKind["place"];
+            ++m.count;
+            if (!p.realNames.empty())
+                m.source[id] = p.realNames;
+            for (size_t k = 0; k < rings.size(); ++k)
+            {
+                m.splines.push_back({{"type", "poly"}, {"closed", true}, {"points", rings[k]}});
+                json ri = info;
+                ri["ring"] = k == 0 ? "outer" : "other";
+                m.info.push_back(ri);
+            }
+        }
 
     json curves = json::object();
     if (a.get<bool>("curves", true) && !byKind.empty())
@@ -1052,31 +1269,48 @@ json runImportOsm(const Args& a)
         const json grp = ops::execute("group", {{"empty", true}, {"name", prefix}});
         const std::string groupPath = grp.is_array() ? grp[0].get<std::string>() : grp.get<std::string>();
         Node* groupNode = g.find(groupPath);
-        auto make = [&](const std::string& kind, const json& splines, const json& info, const std::string& name) {
-            const json made = ops::execute("curve", {{"splines", splines}, {"name", name}});
+        auto make = [&](const std::string& kind, const json& splines, const json& info, const json& source, const json& points, const std::string& name) {
+            json made;
+            if (!splines.empty())
+                made = ops::execute("curve", {{"splines", splines}, {"name", name}});
+            else
+                made = ops::execute("group", {{"empty", true}, {"name", name}});
             Node* n = g.find(made.is_array() ? made[0].get<std::string>() : made.get<std::string>());
             ops::execute("parent", {{"args", {n->path(), groupNode->path()}}});
             n = g.node(n->id());
             ops::execute("addAttr", {{"args", {n->path()}}, {"longName", "terrainFeature"}, {"dataType", "string"}, {"doc", "Terrain feature kind."}});
             ops::execute("setAttr", {{"args", {n->path() + ".terrainFeature", kind}}});
             ops::execute("addAttr", {{"args", {n->path()}}, {"longName", "osmFeatures"}, {"dataType", "string"},
-                                     {"doc", "Per spline: OSM id, name, class and width (cm), as JSON."}});
+                                     {"doc", "Per spline: OSM id, fictional name, class and width (cm), and for buildings and places what they "
+                                             "are, heights and roofs, as JSON."}});
             ops::execute("setAttr", {{"args", {n->path() + ".osmFeatures", info.dump()}}});
+            if (!points.empty())
+            {
+                ops::execute("addAttr", {{"args", {n->path()}}, {"longName", "osmPlaces"}, {"dataType", "string"},
+                                         {"doc", "Places that are points (shops, offices, towns, peaks): OSM id, what they are, fictional name and where (world cm), as JSON."}});
+                ops::execute("setAttr", {{"args", {n->path() + ".osmPlaces", points.dump()}}});
+            }
+            if (!source.empty())
+            {
+                ops::execute("addAttr", {{"args", {n->path()}}, {"longName", names::kSourceAttr}, {"dataType", "string"}, {"hidden", true},
+                                         {"doc", "Real names the import replaced, by OSM id: for the real-name check only. Never exported."}});
+                ops::execute("setAttr", {{"args", {n->path() + "." + names::kSourceAttr, source.dump()}}});
+            }
             return n->path();
         };
         for (auto& [kind, m] : byKind)
-            if (!perFeature && !m.splines.empty())
-                curves[kind] = make(kind, m.splines, m.info, kind);
-        size_t k = 0;
+            if (!perFeature || kind == "building" || kind == "place")
+                if (!m.splines.empty() || !m.points.empty())
+                    curves[kind] = make(kind, m.splines, m.info, m.source, m.points, kind);
         for (auto& [kind, s] : singles)
         {
             const json& info = s["info"];
             std::string nm = info["name"].get<std::string>();
-            const std::string path = make(kind, json::array({s["spline"]}), json::array({info}), safeName(kind + "_" + (nm.empty() ? info["id"].get<std::string>() : nm)));
+            const std::string path = make(kind, json::array({s["spline"]}), json::array({info}), s["source"], json::array(),
+                                          safeName(kind + "_" + (nm.empty() ? info["id"].get<std::string>() : nm)));
             if (!curves.contains(kind))
                 curves[kind] = json::array();
             curves[kind].push_back(path);
-            ++k;
         }
         curves["group"] = g.node(groupNode->id())->path();
     }
@@ -1106,6 +1340,8 @@ json runImportOsm(const Args& a)
         throw CommandError(cmd + ": " + e.what());
     }
 
+    if (book.coined())
+        log::info("{}: {} names coined from the {} words, every listed one matching a real name in the data", cmd, book.coined(), culture);
     json counts = json::object(), lengths = json::object();
     for (const auto& [kind, m] : byKind)
     {
@@ -1118,6 +1354,10 @@ json runImportOsm(const Args& a)
                 {"lengths", lengths},
                 {"outside", outside},
                 {"curves", curves},
+                {"culture", culture},
+                {"cultureFrom", cultureFrom},
+                {"named", named},
+                {"coinedNames", book.coined()},
                 {"landcover", landcover},
                 {"georef", georefJson(geo)},
                 {"attribution", osmAttribution()},
@@ -1453,20 +1693,34 @@ bool registerInputs(ext::Context& ctx)
 
     ctx.registerCommand({
         .name = "terrainImportOsm",
-        .doc = "Put OpenStreetMap data on a terrain: roads, paths, rivers, streams, lakes and coastline become curves draped on "
-               "the ground (one curve per kind under a group, or one per feature with perFeature=True), each with attributes "
-               "terrainFeature and osmFeatures (OSM id, name, class and width in cm per spline); land cover becomes masks "
+        .doc = "Put OpenStreetMap data on a terrain: roads, paths, rivers, streams, lakes, coastline, piers, breakwaters, quays "
+               "and dams become curves draped on the ground (one curve per kind under a group, or one per feature with "
+               "perFeature=True), each with attributes terrainFeature and osmFeatures (OSM id, name, class and width in cm per "
+               "spline). Buildings and building parts become closed footprints (holes as inner rings) on a building curve whose "
+               "osmFeatures carry what each is (program), heights, levels, roof shape, colours and material; places (shops, "
+               "offices, schools, cemeteries, ports, farmland, towns, beaches, islands) become a place curve of their areas, "
+               "with point places in its osmPlaces. Every name is fictional, from the naming culture (default from where the "
+               "data lies), stable by OSM id or by real name; real names are kept only in a hidden sourceNames attribute for "
+               "realNameCheck. Land cover becomes masks "
                "landcover_<class> through an OSM Land Cover node in the terrain's group. Reads .osm XML, Overpass .json and "
                ".osm.pbf, or fetch=True asks the Overpass API for the terrain's area. Writes the ODbL attribution to the "
                "workspace's terrain/ATTRIBUTION.txt.\n\n"
                "The terrain must come from real elevation (terrainImportDem, or terrainImport of a DEM file), or give origin= "
                "[latitude, longitude] of its centre. Returns feature counts and lengths (cm) by kind, curves made, land cover "
-               "fractions and how many features lay outside.",
+               "fractions, how many features lay outside, the culture names came from and how many things were named.",
         .positionalDoc = "OSM file (.osm, .json, .osm.pbf)",
         .flags = {nodeFlag({"terrain", "t", T::String, nullptr, "The terrain."}, "mesh"),
                   {"origin", "o", T::List, nullptr, "[latitude, longitude] of the terrain's centre, for terrains not from real data."},
                   {"fetch", "f", T::Bool, false, "Download the terrain's area from the Overpass API."},
-                  {"kinds", "k", T::List, nullptr, "Feature kinds to bring in (road, path, river, stream, lake, coastline); default all."},
+                  {"kinds", "k", T::List, nullptr, "Feature kinds to bring in (road, path, river, stream, lake, coastline, pier, breakwater, "
+                                                   "quay, dam, building, place); default all."},
+                  {"culture", "cu", T::String, "", "Naming culture for the fictional names (namingCultures); empty chooses one from where the data lies.",
+                   [] {
+                       std::vector<std::string> c = {""};
+                       for (const std::string& n : names::cultures())
+                           c.push_back(n);
+                       return c;
+                   }()},
                   {"curves", "cv", T::Bool, true, "Make curves for the features."},
                   {"perFeature", "pf", T::Bool, false, "One curve per feature instead of one per kind."},
                   {"landcover", "lc", T::Bool, true, "Land cover into masks."},

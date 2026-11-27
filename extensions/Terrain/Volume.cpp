@@ -5,6 +5,7 @@
 #include "Volume.h"
 
 #include <lila/GeometryNodes.h>
+#include <lila/Graph.h>
 #include <lila/Log.h>
 #include <lila/Mesh.h>
 #include <lila/Profile.h>
@@ -2139,6 +2140,13 @@ void publishVolumeResult(uint64_t modifier, const std::string& node, std::shared
 {
     std::lock_guard lock(volumePublishedMutex());
     volumePublished()[modifier][node] = std::move(r);
+}
+
+void forgetGoneVolumeResults()
+{
+    const lila::scene::Graph& g = lila::scene::Graph::current();
+    std::lock_guard lock(volumePublishedMutex());
+    std::erase_if(volumePublished(), [&](const auto& e) { return !g.node(lila::scene::NodeId(e.first)); });
 }
 
 std::shared_ptr<const VolumeResult> volumeResult(uint64_t modifier, const std::string& node)

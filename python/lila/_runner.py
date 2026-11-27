@@ -17,7 +17,8 @@ def run(code, filename="<script>"):
             value = eval(compile(last, filename, "eval"), ns)
             if value is not None:
                 text = repr(value)
-                print(text)
+                if text:
+                    print(text)
                 return True, text
         return True, ""
     except SystemExit:

@@ -2,6 +2,7 @@
 
 #include "core/PrefStore.h"
 #include "ui/Controls.h"
+#include "ui/ViewOverlays.h"
 #include "ui/ViewportDisplay.h"
 #include "ui/ViewportHeader.h"
 #include "ui/ViewportHeaderConfig.h"
@@ -230,4 +231,49 @@ TEST_CASE("viewport header settles at every width instead of flipping labels on 
         CHECK_MESSAGE(styles() == settled, "width " << w);
     }
     CHECK(labelSwaps > 0);
+}
+
+TEST_CASE("Overlays > Show lists every registered view overlay, checked per view; a hidden view skips its drawers")
+{
+    viewOverlays::add({.id = "test.lines", .label = "Test Lines", .doc = "Lines for the test.", .drawers = {"test.linesDrawer"}});
+    ViewportWidget view;
+    ViewportHeader header(&view);
+    header.resize(1600, header.sizeHint().height());
+    header.show();
+    QToolButton* overlays = buttonWithText(header, "Overlays");
+    REQUIRE(overlays);
+    auto row = [&]() -> QAction* {
+        Q_EMIT overlays->menu()->aboutToShow();
+        bool inShow = false;
+        for (QAction* a : overlays->menu()->actions())
+        {
+            if (a->isSeparator())
+                inShow = a->text() == "Show";
+            if (a->data().toString() == "viewport.overlay.test.lines")
+                return inShow ? a : nullptr;
+        }
+        return nullptr;
+    };
+    QAction* a = row();
+    REQUIRE(a);
+    CHECK(a->text() == "Show Test Lines");
+    CHECK(a->isCheckable());
+    CHECK(a->isChecked());
+
+    const std::string name = view.viewName();
+    viewOverlays::setShown("test.lines", name, false);
+    a = row();
+    REQUIRE(a);
+    CHECK_FALSE(a->isChecked());
+    CHECK_FALSE(viewOverlays::drawerShown("test.linesDrawer", name));
+    CHECK(viewOverlays::drawerShown("test.linesDrawer", name + "Other"));
+    CHECK(viewOverlays::drawerShown("someOtherDrawer", name));
+    // Remembered in prefs, like the image plane toggle.
+    CHECK(lila::PrefStore::get().value("general", "/viewport/overlays/test.lines/hidden", nlohmann::json()) == nlohmann::json::array({name}));
+
+    viewOverlays::setShown("test.lines", name, true);
+    CHECK(row()->isChecked());
+    CHECK(viewOverlays::remove("test.lines"));
+    CHECK_FALSE(row());
+    lila::PrefStore::get().remove("general", "/viewport/overlays/test.lines");
 }

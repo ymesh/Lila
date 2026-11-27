@@ -1,10 +1,13 @@
 #include "LilaLinkPlacements.h"
 
 #include "LilaInstanceData.h"
+#include "LilaSlotTable.h"
+#include "LilaLinkAssets.h"
 #include "LilaLinkComponents.h"
 #include "LilaLinkLog.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
 #include "Components/DirectionalLightComponent.h"
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
@@ -29,11 +32,19 @@
 #include "Engine/StaticMeshActor.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "UObject/UObjectIterator.h"
+#include "UObject/Linker.h"
+#include "Engine/Level.h"
+#include "ExternalPackageHelper.h"
 #include "FileHelpers.h"
 #include "GameFramework/WorldSettings.h"
 #include "HAL/FileManager.h"
+#include "DataLayer/DataLayerEditorSubsystem.h"
 #include "LevelInstance/LevelInstanceActor.h"
+#include "WorldPartition/DataLayer/DataLayerAsset.h"
+#include "WorldPartition/DataLayer/DataLayerInstance.h"
 #include "LevelInstance/LevelInstanceInterface.h"
+#include "LevelInstance/LevelInstanceSubsystem.h"
 #include "LevelInstance/LevelInstanceTypes.h"
 #include "Misc/PackageName.h"
 #include "ObjectTools.h"
@@ -43,6 +54,7 @@
 #include "PhysicsEngine/BodySetup.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "ScopedTransaction.h"
+#include "WorldPartition/HLOD/CustomHLODActor.h"
 #include "WorldPartition/HLOD/HLODLayer.h"
 #include "WorldPartition/WorldPartition.h"
 
@@ -55,6 +67,7 @@ const TCHAR* NodePrefix = TEXT("LilaNode:");
 const FName InstancedTag(TEXT("LilaInstanced"));
 const FName LightTag(TEXT("LilaLight"));
 const TCHAR* AssemblyPrefix = TEXT("LilaAssembly:");
+const TCHAR* HashPrefix = TEXT("LilaHash:");
 
 TSharedPtr<FJsonValue> Obj(const TSharedRef<FJsonObject>& O) { return MakeShared<FJsonValueObject>(O); }
 
@@ -166,12 +179,20 @@ FTransform TransformOf(const TSharedPtr<FJsonObject>& P)
 	return FTransform(Rotation, VectorField(P, TEXT("location"), FVector::ZeroVector), VectorField(P, TEXT("scale"), FVector::OneVector));
 }
 
+/** An actor of a loaded Level Instance's level: part of that instance, edited only by rebuilding it (makeLevelInstance). */
+bool InsideLevelInstance(UWorld* World, const AActor* Actor)
+{
+	const ULevelInstanceSubsystem* Instances = World->GetSubsystem<ULevelInstanceSubsystem>();
+	return Instances && Actor->GetLevel() != World->PersistentLevel && Instances->GetOwningLevelInstance(Actor->GetLevel());
+}
+
+/** The level's actors with Tag, leaving out those inside Level Instances. */
 TArray<AActor*> TaggedActors(UWorld* World, const FName& Tag)
 {
 	TArray<AActor*> Out;
 	for (TActorIterator<AActor> It(World); It; ++It)
 	{
-		if (It->Tags.Contains(Tag))
+		if (It->Tags.Contains(Tag) && !InsideLevelInstance(World, *It))
 		{
 			Out.Add(*It);
 		}
@@ -201,6 +222,101 @@ int32 DestroyActors(UWorld* World, const TArray<AActor*>& Actors)
 		World->EditorDestroyActor(Actor, true);
 	}
 	return Removed;
+}
+
+TSharedPtr<FJsonValue> StringArray(const TArray<FString>& Strings)
+{
+	TArray<TSharedPtr<FJsonValue>> Values;
+	for (const FString& S : Strings)
+	{
+		Values.Add(MakeShared<FJsonValueString>(S));
+	}
+	return MakeShared<FJsonValueArray>(Values);
+}
+
+/**
+ * Deletes the level files (with their external actors and objects) of removed Level Instances that no instance left in
+ * World or in another level shows; OutKept says which stayed and why. Returns the packages deleted.
+ */
+TArray<FString> DeleteUnusedAssemblyLevels(UWorld* World, const TArray<FString>& Levels, TArray<FString>& OutKept, TArray<FString>& OutErrors)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkPlacements::DeleteUnusedAssemblyLevels);
+
+	TArray<FString> Unused;
+	for (const FString& Level : Levels)
+	{
+		bool bInUse = Level.IsEmpty() || !FPackageName::DoesPackageExist(Level);
+		for (TActorIterator<ALevelInstance> It(World); It && !bInUse; ++It)
+		{
+			bInUse = IsValid(*It) && It->GetWorldAsset().GetLongPackageName() == Level;
+		}
+		// Another level's Level Instance of the same interior (sends to several levels share its level) keeps it too.
+		if (const FString By = bInUse ? FString() : LilaLink::UsedOutside(World, Level); !By.IsEmpty())
+		{
+			bInUse = true;
+			OutKept.Add(FString::Printf(TEXT("%s: %s uses it"), *Level, *By));
+		}
+		if (!bInUse)
+		{
+			Unused.Add(Level);
+		}
+	}
+	if (Unused.IsEmpty())
+	{
+		return {};
+	}
+	// The level and its external packages are known unused: nothing to load or scan for references, so the files go
+	// directly once no package in memory (the unloaded instance's /Temp copy included) still reads them.
+	auto Folders = [](const FString& Level) {
+		TArray<FString> Out = ULevel::GetExternalActorsPaths(Level);
+		Out.Add(FExternalPackageHelper::GetExternalObjectsPath(Level));
+		return Out;
+	};
+	TArray<UPackage*> InMemory;
+	for (TObjectIterator<UPackage> It; It; ++It)
+	{
+		const FString Name = It->GetName(), From = It->GetLoadedPath().GetPackageName();
+		for (const FString& Level : Unused)
+		{
+			const bool bOwn = Name == Level || From == Level ||
+							  Folders(Level).ContainsByPredicate([&Name](const FString& F) { return Name.StartsWith(F + TEXT("/")); });
+			if (bOwn)
+			{
+				InMemory.Add(*It);
+				break;
+			}
+		}
+	}
+	for (UPackage* Package : InMemory)
+	{
+		ResetLoaders(Package);
+	}
+	TArray<FString> Deleted;
+	for (const FString& Level : Unused)
+	{
+		FString File;
+		const bool bFile = FPackageName::DoesPackageExist(Level, &File);
+		if (bFile && !IFileManager::Get().Delete(*File, /*RequireExists=*/false, /*EvenReadOnly=*/true))
+		{
+			OutErrors.Add(FString::Printf(TEXT("%s could not be deleted (in use); delete it in the Content Browser"), *Level));
+			continue;
+		}
+		IAssetRegistry::GetChecked().ScanModifiedAssetFiles({File});
+		for (const FString& Folder : Folders(Level))
+		{
+			FString Dir;
+			if (FPackageName::TryConvertLongPackageNameToFilename(Folder, Dir) && IFileManager::Get().DirectoryExists(*Dir))
+			{
+				if (!IFileManager::Get().DeleteDirectory(*Dir, /*RequireExists=*/false, /*Tree=*/true))
+				{
+					OutErrors.Add(FString::Printf(TEXT("%s: some of %s could not be deleted"), *Level, *Folder));
+				}
+				IAssetRegistry::GetChecked().ScanPathsSynchronous({Folder}, /*bForceRescan=*/true);
+			}
+		}
+		Deleted.Add(Level);
+	}
+	return Deleted;
 }
 
 FString ShortGroupName(const FString& Group)
@@ -327,6 +443,97 @@ void ApplyMeshCollision(UStaticMesh* Mesh, const TArray<TSharedPtr<FJsonValue>>&
 	}
 }
 
+/** Replaces the actor's Lila slot tags (LilaSlot:, LilaSlotType:, LilaSlotData:) with the placement's tags. */
+void ApplySlotTags(AActor* Actor, const TSharedPtr<FJsonObject>& P)
+{
+	Actor->Tags.RemoveAll([](const FName& Tag) { return Tag.ToString().StartsWith(TEXT("LilaSlot")); });
+	const TArray<TSharedPtr<FJsonValue>>* Tags = nullptr;
+	if (!P->TryGetArrayField(TEXT("tags"), Tags))
+	{
+		return;
+	}
+	for (const TSharedPtr<FJsonValue>& T : *Tags)
+	{
+		FString Tag;
+		if (T.IsValid() && T->TryGetString(Tag) && !Tag.IsEmpty())
+		{
+			Actor->Tags.AddUnique(FName(*Tag));
+		}
+	}
+}
+
+/**
+ * An actor of Class per placement (a slot's Blueprint: an interactable door, a lamp with a light), matched to the
+ * existing ones by node id; an actor of another class under the same id is replaced.
+ */
+void PlaceClassActors(UWorld* World, const FString& Group, const FString& Label, UClass* Class, const TArray<TSharedPtr<FJsonValue>>& Placements,
+	TArray<AActor*> Existing, int32& Spawned, int32& Updated, int32& Removed, FComponentSink& Sink)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkPlacements::PlaceClassActors);
+
+	TMap<FString, AActor*> ByNode;
+	for (AActor* A : Existing)
+	{
+		if (A->GetClass() != Class || A->Tags.Contains(InstancedTag))
+		{
+			World->EditorDestroyActor(A, true);
+			++Removed;
+			continue;
+		}
+		ByNode.Add(TagValue(A, NodePrefix), A);
+	}
+	const FName Folder(*(TEXT("Lila/") + ShortGroupName(Label)));
+	TSet<FString> Sent;
+	for (const TSharedPtr<FJsonValue>& V : Placements)
+	{
+		const TSharedPtr<FJsonObject>* P = nullptr;
+		if (!V.IsValid() || !V->TryGetObject(P))
+		{
+			continue;
+		}
+		const FString Id = IdOf(*P);
+		Sent.Add(Id);
+		const FTransform Transform = TransformOf(*P);
+		AActor*& Actor = ByNode.FindOrAdd(Id);
+		if (!Actor)
+		{
+			FActorSpawnParameters Params;
+			Params.ObjectFlags |= RF_Transactional;
+			Actor = World->SpawnActor<AActor>(Class, Transform, Params);
+			if (!Actor)
+			{
+				Sink.Warnings.Add(FString::Printf(TEXT("%s: could not spawn %s"), *Id, *Class->GetName()));
+				continue;
+			}
+			Actor->Tags.Add(GroupTag(Group));
+			Actor->Tags.Add(NodeTag(Id));
+			++Spawned;
+		}
+		else
+		{
+			Actor->Modify();
+			Actor->SetActorTransform(Transform);
+			++Updated;
+		}
+		Actor->SetFolderPath(Folder);
+		FString Name;
+		if ((*P)->TryGetStringField(TEXT("name"), Name))
+		{
+			Actor->SetActorLabel(Name);
+		}
+		ApplySlotTags(Actor, *P);
+		ApplyPlacementComponents(Actor, *P, Sink);
+	}
+	for (const TPair<FString, AActor*>& Pair : ByNode)
+	{
+		if (Pair.Value && !Sent.Contains(Pair.Key))
+		{
+			World->EditorDestroyActor(Pair.Value, true);
+			++Removed;
+		}
+	}
+}
+
 /** An actor per placement, matched to the existing ones by node id. */
 void PlaceActors(UWorld* World, const FString& Group, const FString& Label, UStaticMesh* Mesh, bool bCollide, const TArray<TSharedPtr<FJsonValue>>& Placements,
 	TArray<AActor*> Existing, int32& Spawned, int32& Updated, int32& Removed, FComponentSink& Sink)
@@ -395,6 +602,7 @@ void PlaceActors(UWorld* World, const FString& Group, const FString& Label, USta
 		{
 			Actor->GetStaticMeshComponent()->SetLightingChannels(Channels->bChannel0, Channels->bChannel1, Channels->bChannel2);
 		}
+		ApplySlotTags(Actor, *P);
 		ApplyPlacementComponents(Actor, *P, Sink);
 		ApplyPhysics(Actor->GetStaticMeshComponent(), *P, Sink.Folder, false, Label, Sink);
 	}
@@ -462,6 +670,24 @@ void WriteInstanceData(AActor* Holder, const TSharedPtr<FJsonObject>& Params, co
 			continue;
 		}
 		Data->InstanceIds.Add(IdOf(*P));
+		// Slots: their type and gameplay data, so game code reads an instanced door's data like an actor's tags.
+		FString SlotType;
+		if ((*P)->TryGetStringField(TEXT("slotType"), SlotType))
+		{
+			FLilaInstanceColumn& Column = Data->Columns.FindOrAdd(TEXT("slotType"));
+			Column.Values.SetNum(Count);
+			Column.Values[Index] = SlotType;
+		}
+		const TSharedPtr<FJsonObject>* SlotData = nullptr;
+		if ((*P)->TryGetObjectField(TEXT("slotData"), SlotData))
+		{
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Value : (*SlotData)->Values)
+			{
+				FLilaInstanceColumn& Column = Data->Columns.FindOrAdd(FName(*(TEXT("slot.") + Value.Key)));
+				Column.Values.SetNum(Count);
+				Column.Values[Index] = LilaLink::ComponentValueText(Value.Value);
+			}
+		}
 		TArray<LilaLink::FLilaComponent> Components;
 		LilaLink::ParseComponents(*P, Components);
 		for (const LilaLink::FLilaComponent& C : Components)
@@ -605,17 +831,392 @@ void PlaceInstanced(UWorld* World, const TSharedPtr<FJsonObject>& Params, const 
 	}
 }
 
+/** placeInstances with an actorClass: an actor of that class per placement, no mesh. */
+/** Tags the group's actors with the signature Lila sent (params.hash), which placementHashes reads back. */
+void StampHash(UWorld* World, const FString& Group, const TSharedPtr<FJsonObject>& Params)
+{
+	FString Hash;
+	if (!Params->TryGetStringField(TEXT("hash"), Hash) || Hash.IsEmpty())
+	{
+		return;
+	}
+	const FName Tag(*(FString(HashPrefix) + Hash));
+	for (AActor* Actor : TaggedActors(World, GroupTag(Group)))
+	{
+		if (Actor->Tags.Contains(Tag))
+		{
+			continue;
+		}
+		Actor->Tags.RemoveAll([](const FName& T) { return T.ToString().StartsWith(HashPrefix); });
+		Actor->Tags.Add(Tag);
+	}
+}
+
+/**
+ * placementHashes {}: per Lila group in the open level, the signature its last placeInstances carried and how many
+ * actors carry the group: {groups: {group: {hash, actors}}}. Lila skips groups whose signature and count still match.
+ */
+TSharedPtr<FJsonValue> PlacementHashes(const TSharedPtr<FJsonObject>& Params, FString& OutError)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkPlacements::PlacementHashes);
+
+	UWorld* World = EditorWorld();
+	if (!World)
+	{
+		OutError = TEXT("placementHashes: no level is open");
+		return nullptr;
+	}
+	TMap<FString, TPair<FString, int32>> ByGroup;
+	for (TActorIterator<AActor> It(World); It; ++It)
+	{
+		const FString Group = TagValue(*It, GroupPrefix);
+		if (Group.IsEmpty())
+		{
+			continue;
+		}
+		TPair<FString, int32>& Entry = ByGroup.FindOrAdd(Group);
+		FString Hash = TagValue(*It, HashPrefix);
+		// A mesh that no longer loads (an import never saved) needs the group sent again.
+		if (const UStaticMeshComponent* Mesh = It->FindComponentByClass<UStaticMeshComponent>(); Mesh && !Mesh->GetStaticMesh())
+		{
+			Hash.Reset();
+		}
+		// One actor without the signature (placed by an older send) makes the group's signature unknown.
+		Entry.Key = Entry.Value == 0 || Entry.Key == Hash ? Hash : FString();
+		++Entry.Value;
+	}
+	TSharedRef<FJsonObject> Groups = MakeShared<FJsonObject>();
+	for (const TPair<FString, TPair<FString, int32>>& G : ByGroup)
+	{
+		TSharedRef<FJsonObject> E = MakeShared<FJsonObject>();
+		E->SetStringField(TEXT("hash"), G.Value.Key);
+		E->SetNumberField(TEXT("actors"), G.Value.Value);
+		Groups->SetObjectField(G.Key, E);
+	}
+	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
+	Out->SetObjectField(TEXT("groups"), Groups);
+	return Obj(Out);
+}
+
+/**
+ * The layer a Custom HLOD Actor layer links to: Path as it is, or the level's default HLOD layer for "default". Only a
+ * layer the level's runtime partition generates HLODs for gives the custom actors a cell to show for; a Custom HLOD Actor
+ * layer never does.
+ */
+UHLODLayer* LinkedHlodLayer(UWorld* World, const FString& Path, TArray<FString>& OutWarnings)
+{
+	if (Path == TEXT("default"))
+	{
+		UWorldPartition* Partition = World->GetWorldPartition();
+		UHLODLayer* Default = Partition ? Partition->GetDefaultHLODLayer() : nullptr;
+		if (!Default)
+		{
+			OutWarnings.Add(TEXT("the level has no default HLOD layer (World Settings, World Partition) to link to: these show whenever their source cell is unloaded"));
+		}
+		return Default;
+	}
+	const FString Object = Path.Contains(TEXT(".")) ? Path : Path + TEXT(".") + FPackageName::GetShortName(Path);
+	UHLODLayer* Layer = LoadObject<UHLODLayer>(nullptr, *Object, nullptr, LOAD_NoWarn | LOAD_Quiet);
+	if (!Layer)
+	{
+		OutWarnings.Add(TEXT("no HLOD layer ") + Path + TEXT(" to link to"));
+	}
+	else if (Layer->GetLayerType() == EHLODLayerType::CustomHLODActor)
+	{
+		OutWarnings.Add(Path + TEXT(" is a Custom HLOD Actor layer, which World Partition gives no cells: link to a layer it builds HLODs for"));
+	}
+	return Layer;
+}
+
+/**
+ * The Custom HLOD Actor layer at Path, made when missing (and turned into one when it is another type). Linked names the
+ * layer whose unloading shows this one's actors (LinkedHlodLayer: "default" for the level's own, so far proxies show once
+ * its HLODs unload); empty leaves it unset, and they show once their source cell unloads.
+ */
+UHLODLayer* CustomHlodLayer(UWorld* World, const FString& Path, const FString& Linked, TArray<FString>& OutWarnings)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkPlacements::CustomHlodLayer);
+
+	const FString Package = Path.Contains(TEXT(".")) ? FPackageName::ObjectPathToPackageName(Path) : Path;
+	if (!FPackageName::IsValidLongPackageName(Package))
+	{
+		OutWarnings.Add(FString::Printf(TEXT("%s is not a content path like /Game/Lila/HLOD/HL_Buildings"), *Path));
+		return nullptr;
+	}
+	const FString Name = FPackageName::GetShortName(Package);
+	UHLODLayer* Layer = LoadObject<UHLODLayer>(nullptr, *(Package + TEXT(".") + Name), nullptr, LOAD_NoWarn | LOAD_Quiet);
+	bool bDirty = false;
+	if (!Layer)
+	{
+		Layer = NewObject<UHLODLayer>(CreatePackage(*Package), *Name, RF_Public | RF_Standalone | RF_Transactional);
+		FAssetRegistryModule::AssetCreated(Layer);
+		bDirty = true;
+	}
+	if (Layer->GetLayerType() != EHLODLayerType::CustomHLODActor)
+	{
+		Layer->Modify();
+		Layer->SetLayerType(EHLODLayerType::CustomHLODActor);
+		bDirty = true;
+	}
+	if (!Linked.IsEmpty())
+	{
+		UHLODLayer* LinkedLayer = LinkedHlodLayer(World, Linked, OutWarnings);
+		// LinkedLayer has no setter; it is an editor-only property of the layer.
+		if (FObjectProperty* Prop = FindFProperty<FObjectProperty>(UHLODLayer::StaticClass(), TEXT("LinkedLayer")); Prop && LinkedLayer)
+		{
+			if (Prop->GetObjectPropertyValue_InContainer(Layer) != LinkedLayer)
+			{
+				Layer->Modify();
+				Prop->SetObjectPropertyValue_InContainer(Layer, LinkedLayer);
+				bDirty = true;
+			}
+		}
+	}
+	if (bDirty)
+	{
+		Layer->MarkPackageDirty();
+		UEditorLoadingAndSavingUtils::SavePackages({Layer->GetPackage()}, true);
+	}
+	return Layer;
+}
+
+/**
+ * A Custom HLOD actor per placement showing Mesh while its World Partition cell is unloaded (a building block's HLOD
+ * proxy), in a Custom HLOD Actor layer; matched to the existing ones by node id.
+ */
+void PlaceCustomHlods(UWorld* World, const FString& Group, const FString& Label, UStaticMesh* Mesh, UHLODLayer* Layer,
+	const TArray<TSharedPtr<FJsonValue>>& Placements, TArray<AActor*> Existing, int32& Spawned, int32& Updated, int32& Removed)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkPlacements::PlaceCustomHlods);
+
+	TMap<FString, AWorldPartitionCustomHLOD*> ByNode;
+	for (AActor* A : Existing)
+	{
+		if (AWorldPartitionCustomHLOD* H = Cast<AWorldPartitionCustomHLOD>(A))
+		{
+			ByNode.Add(TagValue(H, NodePrefix), H);
+		}
+		else
+		{
+			World->EditorDestroyActor(A, true);
+			++Removed;
+		}
+	}
+	const FName Folder(*(TEXT("Lila/HLOD/") + ShortGroupName(Label)));
+	TSet<FString> Sent;
+	for (const TSharedPtr<FJsonValue>& V : Placements)
+	{
+		const TSharedPtr<FJsonObject>* P = nullptr;
+		if (!V.IsValid() || !V->TryGetObject(P))
+		{
+			continue;
+		}
+		const FString Id = IdOf(*P);
+		Sent.Add(Id);
+		const FTransform Transform = TransformOf(*P);
+		AWorldPartitionCustomHLOD*& Actor = ByNode.FindOrAdd(Id);
+		if (!Actor)
+		{
+			FActorSpawnParameters Params;
+			Params.ObjectFlags |= RF_Transactional;
+			Actor = World->SpawnActor<AWorldPartitionCustomHLOD>(AWorldPartitionCustomHLOD::StaticClass(), Transform, Params);
+			if (!Actor)
+			{
+				continue;
+			}
+			Actor->Tags.Add(GroupTag(Group));
+			Actor->Tags.Add(NodeTag(Id));
+			++Spawned;
+		}
+		else
+		{
+			Actor->Modify();
+			Actor->SetActorTransform(Transform);
+			++Updated;
+		}
+		Actor->SetFolderPath(Folder);
+		FString Name;
+		if ((*P)->TryGetStringField(TEXT("name"), Name))
+		{
+			Actor->SetActorLabel(Name);
+		}
+		if (UStaticMeshComponent* Component = Actor->FindComponentByClass<UStaticMeshComponent>())
+		{
+			Component->Modify();
+			Component->SetStaticMesh(Mesh);
+			Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		}
+		Actor->SetHLODLayer(Layer);
+	}
+	for (const TPair<FString, AWorldPartitionCustomHLOD*>& Pair : ByNode)
+	{
+		if (Pair.Value && !Sent.Contains(Pair.Key))
+		{
+			World->EditorDestroyActor(Pair.Value, true);
+			++Removed;
+		}
+	}
+}
+
+TSharedPtr<FJsonValue> PlaceSlotClass(const TSharedPtr<FJsonObject>& Params, const FString& Group, const FString& ClassPath,
+	const TArray<TSharedPtr<FJsonValue>>& Placements, FString& OutError)
+{
+	UClass* Class = StaticLoadClass(AActor::StaticClass(), nullptr, *ClassPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
+	if (!Class && !ClassPath.EndsWith(TEXT("_C")))
+	{
+		Class = StaticLoadClass(AActor::StaticClass(), nullptr, *(ClassPath + TEXT("_C")), nullptr, LOAD_NoWarn | LOAD_Quiet);
+	}
+	if (!Class)
+	{
+		OutError = FString::Printf(TEXT("placeInstances: no actor class at %s"), *ClassPath);
+		return nullptr;
+	}
+	UWorld* World = EditorWorld();
+	if (!World)
+	{
+		OutError = TEXT("placeInstances: no level is open");
+		return nullptr;
+	}
+	FString Label = Group;
+	Params->TryGetStringField(TEXT("label"), Label);
+	FScopedTransaction Transaction(LOCTEXT("PlaceSlotActors", "Lila: Place Slot Actors"));
+	int32 Spawned = 0, Updated = 0, Removed = 0;
+	FComponentSink Sink;
+	PlaceClassActors(World, Group, Label, Class, Placements, TaggedActors(World, GroupTag(Group)), Spawned, Updated, Removed, Sink);
+	StampHash(World, Group, Params);
+	for (const FString& W : Sink.Warnings)
+	{
+		UE_LOG(LogLilaLink, Warning, TEXT("placeInstances %s: %s"), *Label, *W);
+	}
+	if (ULevel* Level = World->GetCurrentLevel())
+	{
+		Level->MarkPackageDirty();
+	}
+	UE_LOG(LogLilaLink, Log, TEXT("placeInstances %s: %d spawned, %d updated, %d removed (%s)"), *Label, Spawned, Updated, Removed, *Class->GetName());
+	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
+	Out->SetNumberField(TEXT("spawned"), Spawned);
+	Out->SetNumberField(TEXT("updated"), Updated);
+	Out->SetNumberField(TEXT("removed"), Removed);
+	Out->SetStringField(TEXT("mode"), TEXT("actors"));
+	Out->SetStringField(TEXT("actorClass"), Class->GetPathName());
+	TArray<TSharedPtr<FJsonValue>> Warnings;
+	for (const FString& W : Sink.Warnings)
+	{
+		Warnings.Add(MakeShared<FJsonValueString>(W));
+	}
+	Out->SetArrayField(TEXT("warnings"), Warnings);
+	return MakeShared<FJsonValueObject>(Out);
+}
+
+/**
+ * writeSlotTable {path, rows: [{id, type, owner, group, actorClass, mesh, item, data, location, rotation, scale}], sources?}
+ * writes the rows into the ULilaSlotTable data asset at path (made when missing), replacing the rows whose group starts
+ * with one of sources (every row when sources is missing). Returns {path, rows}.
+ */
+TSharedPtr<FJsonValue> WriteSlotTable(const TSharedPtr<FJsonObject>& Params, FString& OutError)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkPlacements::WriteSlotTable);
+
+	FString Path;
+	const TArray<TSharedPtr<FJsonValue>>* Rows = nullptr;
+	if (!Params->TryGetStringField(TEXT("path"), Path) || !Params->TryGetArrayField(TEXT("rows"), Rows))
+	{
+		OutError = TEXT("writeSlotTable: give path and rows");
+		return nullptr;
+	}
+	if (!FPackageName::IsValidLongPackageName(Path))
+	{
+		OutError = FString::Printf(TEXT("writeSlotTable: %s is not a content path like /Game/Lila/Slots/DA_LilaSlotTable"), *Path);
+		return nullptr;
+	}
+	const FString ObjectPath = Path + TEXT(".") + FPackageName::GetShortName(Path);
+	// Found in memory first: a load mid-send flushes async loading, which can catch World Partition registering actors.
+	ULilaSlotTable* Table = FindObject<ULilaSlotTable>(nullptr, *ObjectPath);
+	if (!Table && FPackageName::DoesPackageExist(Path))
+	{
+		Table = LoadObject<ULilaSlotTable>(nullptr, *ObjectPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
+	}
+	if (!Table)
+	{
+		UPackage* Package = CreatePackage(*Path);
+		Table = NewObject<ULilaSlotTable>(Package, *FPackageName::GetShortName(Path), RF_Public | RF_Standalone | RF_Transactional);
+		FAssetRegistryModule::AssetCreated(Table);
+	}
+	Table->Modify();
+	// sources: the group prefixes this send covers; their rows are replaced and every other row stays. Without it the
+	// table is rewritten whole.
+	const TArray<TSharedPtr<FJsonValue>>* Sources = nullptr;
+	if (Params->TryGetArrayField(TEXT("sources"), Sources))
+	{
+		TArray<FString> Prefixes;
+		for (const TSharedPtr<FJsonValue>& S : *Sources)
+		{
+			FString Prefix;
+			if (S.IsValid() && S->TryGetString(Prefix) && !Prefix.IsEmpty())
+			{
+				Prefixes.Add(Prefix);
+			}
+		}
+		Table->Rows.RemoveAll([&Prefixes](const FLilaSlotRow& Row) {
+			return Prefixes.ContainsByPredicate([&Row](const FString& P) { return Row.Group.StartsWith(P, ESearchCase::CaseSensitive); });
+		});
+	}
+	else
+	{
+		Table->Rows.Reset(Rows->Num());
+	}
+	for (const TSharedPtr<FJsonValue>& V : *Rows)
+	{
+		const TSharedPtr<FJsonObject>* R = nullptr;
+		if (!V.IsValid() || !V->TryGetObject(R))
+		{
+			continue;
+		}
+		FLilaSlotRow& Row = Table->Rows.AddDefaulted_GetRef();
+		(*R)->TryGetStringField(TEXT("id"), Row.Id);
+		(*R)->TryGetStringField(TEXT("type"), Row.Type);
+		(*R)->TryGetStringField(TEXT("owner"), Row.Owner);
+		(*R)->TryGetStringField(TEXT("group"), Row.Group);
+		(*R)->TryGetStringField(TEXT("actorClass"), Row.ActorClass);
+		(*R)->TryGetStringField(TEXT("mesh"), Row.Mesh);
+		(*R)->TryGetStringField(TEXT("item"), Row.Item);
+		const TSharedPtr<FJsonObject>* Data = nullptr;
+		if ((*R)->TryGetObjectField(TEXT("data"), Data))
+		{
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Value : (*Data)->Values)
+			{
+				Row.Data.Add(Value.Key, LilaLink::ComponentValueText(Value.Value));
+			}
+		}
+		Row.Transform = TransformOf(*R);
+	}
+	Table->RebuildIndex();
+	Table->MarkPackageDirty();
+	UEditorLoadingAndSavingUtils::SavePackages({Table->GetPackage()}, true);
+	UE_LOG(LogLilaLink, Log, TEXT("writeSlotTable %s: %d rows"), *Path, Table->Rows.Num());
+	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
+	Out->SetStringField(TEXT("path"), ObjectPath);
+	Out->SetNumberField(TEXT("rows"), Table->Rows.Num());
+	return MakeShared<FJsonValueObject>(Out);
+}
+
 TSharedPtr<FJsonValue> PlaceInstances(const TSharedPtr<FJsonObject>& Params, FString& OutError)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkPlacements::PlaceInstances);
 
-	FString Group, MeshPath, Mode = TEXT("actors");
+	FString Group, MeshPath, Mode = TEXT("actors"), ActorClass;
 	const TArray<TSharedPtr<FJsonValue>>* Placements = nullptr;
-	if (!Params->TryGetStringField(TEXT("group"), Group) || !Params->TryGetStringField(TEXT("mesh"), MeshPath) ||
+	Params->TryGetStringField(TEXT("actorClass"), ActorClass);
+	Params->TryGetStringField(TEXT("mesh"), MeshPath);
+	if (!Params->TryGetStringField(TEXT("group"), Group) || (MeshPath.IsEmpty() && ActorClass.IsEmpty()) ||
 		!Params->TryGetArrayField(TEXT("placements"), Placements))
 	{
-		OutError = TEXT("placeInstances: give group, mesh and placements");
+		OutError = TEXT("placeInstances: give group, mesh (or actorClass) and placements");
 		return nullptr;
+	}
+	if (!ActorClass.IsEmpty())
+	{
+		return PlaceSlotClass(Params, Group, ActorClass, *Placements, OutError);
 	}
 	Params->TryGetStringField(TEXT("mode"), Mode);
 	FString Collision;
@@ -623,9 +1224,9 @@ TSharedPtr<FJsonValue> PlaceInstances(const TSharedPtr<FJsonObject>& Params, FSt
 	const bool bCollide = Collision != TEXT("none");
 	FString Label = Group;
 	Params->TryGetStringField(TEXT("label"), Label);
-	if (Mode != TEXT("actors") && Mode != TEXT("ism") && Mode != TEXT("hism"))
+	if (Mode != TEXT("actors") && Mode != TEXT("ism") && Mode != TEXT("hism") && Mode != TEXT("customHlod"))
 	{
-		OutError = FString::Printf(TEXT("placeInstances: mode is actors, ism or hism, not '%s'"), *Mode);
+		OutError = FString::Printf(TEXT("placeInstances: mode is actors, ism, hism or customHlod, not '%s'"), *Mode);
 		return nullptr;
 	}
 	const FString ObjectPath = MeshPath.Contains(TEXT(".")) ? MeshPath : MeshPath + TEXT(".") + FPackageName::GetShortName(MeshPath);
@@ -652,7 +1253,22 @@ TSharedPtr<FJsonValue> PlaceInstances(const TSharedPtr<FJsonObject>& Params, FSt
 	{
 		ApplyMeshCollision(Mesh, *Placements);
 	}
-	if (Mode == TEXT("actors"))
+	FString HlodPath;
+	Params->TryGetStringField(TEXT("hlodLayer"), HlodPath);
+	if (Mode == TEXT("customHlod"))
+	{
+		if (!World->IsPartitionedWorld())
+		{
+			OutError = TEXT("placeInstances: custom HLOD actors need a World Partition level; this level is not one");
+			return nullptr;
+		}
+		FString Linked;
+		Params->TryGetStringField(TEXT("linkedHlodLayer"), Linked);
+		UHLODLayer* Layer = CustomHlodLayer(World, HlodPath.IsEmpty() ? TEXT("/Game/Lila/HLOD/HL_LilaCustom") : HlodPath, Linked, Sink.Warnings);
+		PlaceCustomHlods(World, Group, Label, Mesh, Layer, *Placements, Existing, Spawned, Updated, Removed);
+		HlodPath.Reset();
+	}
+	else if (Mode == TEXT("actors"))
 	{
 		PlaceActors(World, Group, Label, Mesh, bCollide, *Placements, Existing, Spawned, Updated, Removed, Sink);
 	}
@@ -660,8 +1276,20 @@ TSharedPtr<FJsonValue> PlaceInstances(const TSharedPtr<FJsonObject>& Params, FSt
 	{
 		PlaceInstanced(World, Params, Group, Label, Mesh, Mode == TEXT("hism"), bCollide, *Placements, Existing, Spawned, Updated, Removed, Sink);
 	}
-	FString HlodPath;
-	if (Params->TryGetStringField(TEXT("hlodLayer"), HlodPath) && !HlodPath.IsEmpty())
+	StampHash(World, Group, Params);
+	if (HlodPath == TEXT("none"))
+	{
+		// Left out of HLOD generation: something else (Custom HLOD actors) stands in for them.
+		for (AActor* Actor : TaggedActors(World, GroupTag(Group)))
+		{
+			if (Actor->bEnableAutoLODGeneration)
+			{
+				Actor->Modify();
+				Actor->bEnableAutoLODGeneration = false;
+			}
+		}
+	}
+	else if (!HlodPath.IsEmpty())
 	{
 		const FString HlodObject = HlodPath.Contains(TEXT(".")) ? HlodPath : HlodPath + TEXT(".") + FPackageName::GetShortName(HlodPath);
 		if (UHLODLayer* Layer = LoadObject<UHLODLayer>(nullptr, *HlodObject, nullptr, LOAD_NoWarn | LOAD_Quiet))
@@ -967,6 +1595,10 @@ TSharedPtr<FJsonValue> RemovePlacements(const TSharedPtr<FJsonObject>& Params, F
 	TArray<AActor*> Doomed;
 	for (TActorIterator<AActor> It(World); It; ++It)
 	{
+		if (InsideLevelInstance(World, *It))
+		{
+			continue;
+		}
 		const FString Group = Prefixes.IsEmpty() ? FString() : TagValue(*It, GroupPrefix);
 		if (!Group.IsEmpty() && !Keep.Contains(Group) && Prefixes.ContainsByPredicate([&Group](const FString& P) { return Group.StartsWith(P); }))
 		{
@@ -979,6 +1611,56 @@ TSharedPtr<FJsonValue> RemovePlacements(const TSharedPtr<FJsonObject>& Params, F
 			{
 				Doomed.Add(*It);
 				break;
+			}
+		}
+	}
+	// levelInstances: a Lila Level Instance whose every group is being removed goes too (its contents are never edited in place).
+	bool bLevelInstances = false;
+	Params->TryGetBoolField(TEXT("levelInstances"), bLevelInstances);
+	int32 LevelInstancesRemoved = 0;
+	TArray<const UDataLayerAsset*> InteriorLayers;
+	TArray<FString> InteriorLevels;
+	TArray<const ULevel*> InteriorContents;
+	if (bLevelInstances && !Tags.IsEmpty())
+	{
+		if (ULevelInstanceSubsystem* Instances = World->GetSubsystem<ULevelInstanceSubsystem>())
+		{
+			for (TActorIterator<ALevelInstance> It(World); It; ++It)
+			{
+				const ULevel* Inner = TagValue(*It, AssemblyPrefix).IsEmpty() ? nullptr : Instances->GetLevelInstanceLevel(*It);
+				if (!Inner)
+				{
+					continue;
+				}
+				bool bAny = false, bAll = true;
+				for (const AActor* Actor : Inner->Actors)
+				{
+					const FString Group = Actor ? TagValue(Actor, GroupPrefix) : FString();
+					if (Group.IsEmpty())
+					{
+						continue;
+					}
+					bAny = true;
+					if (!Tags.Contains(GroupTag(Group)))
+					{
+						bAll = false;
+						break;
+					}
+				}
+				if (bAny && bAll)
+				{
+					Doomed.Add(*It);
+					++LevelInstancesRemoved;
+					InteriorLevels.AddUnique(It->GetWorldAsset().GetLongPackageName());
+					InteriorContents.Add(Inner);
+					for (const UDataLayerAsset* Asset : It->GetDataLayerAssets())
+					{
+						if (Asset && Asset->GetName().StartsWith(TEXT("DL_Interior_")))
+						{
+							InteriorLayers.AddUnique(Asset);
+						}
+					}
+				}
 			}
 		}
 	}
@@ -996,7 +1678,18 @@ TSharedPtr<FJsonValue> RemovePlacements(const TSharedPtr<FJsonObject>& Params, F
 	if (bDeleteMeshes)
 	{
 		const FString Prefix = MeshFolder.EndsWith(TEXT("/")) ? MeshFolder : MeshFolder + TEXT("/");
-		for (AActor* Actor : Doomed)
+		TArray<AActor*> Showing = Doomed;
+		for (const ULevel* Inner : InteriorContents)
+		{
+			for (AActor* A : Inner->Actors)
+			{
+				if (A)
+				{
+					Showing.Add(A);
+				}
+			}
+		}
+		for (AActor* Actor : Showing)
 		{
 			TArray<UStaticMeshComponent*> Components;
 			Actor->GetComponents(Components);
@@ -1012,6 +1705,29 @@ TSharedPtr<FJsonValue> RemovePlacements(const TSharedPtr<FJsonObject>& Params, F
 	}
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetNumberField(TEXT("removed"), DestroyActors(World, Doomed));
+	// The removed Level Instances unload now rather than on the next tick, so their level files are free to delete
+	// below; the subsystem skips its update while a transaction records, and this one is only removals.
+	if (ULevelInstanceSubsystem* Instances = InteriorLevels.IsEmpty() ? nullptr : World->GetSubsystem<ULevelInstanceSubsystem>())
+	{
+		TGuardValue<ITransaction*> NoUndo(GUndo, nullptr);
+		Instances->OnUpdateStreamingState();
+	}
+	if (bLevelInstances)
+	{
+		// An interior's own data layer and its level go with its last actor.
+		TArray<FString> Errors, Kept;
+		Out->SetNumberField(TEXT("levelInstances"), LevelInstancesRemoved);
+		Out->SetNumberField(TEXT("dataLayers"), LilaLink::DeleteUnusedDataLayers(World, InteriorLayers, Errors));
+		Out->SetField(TEXT("levelsDeleted"), StringArray(DeleteUnusedAssemblyLevels(World, InteriorLevels, Kept, Errors)));
+		if (!Kept.IsEmpty())
+		{
+			Out->SetField(TEXT("levelsKept"), StringArray(Kept));
+		}
+		if (!Errors.IsEmpty())
+		{
+			Out->SetField(TEXT("errors"), StringArray(Errors));
+		}
+	}
 	if (bDeleteMeshes)
 	{
 		for (TActorIterator<AActor> It(World); It && !Meshes.IsEmpty(); ++It)
@@ -1030,10 +1746,15 @@ TSharedPtr<FJsonValue> RemovePlacements(const TSharedPtr<FJsonObject>& Params, F
 		TArray<TSharedPtr<FJsonValue>> Deleted;
 		for (UStaticMesh* Mesh : Meshes)
 		{
+			// Another level's actors showing it (sends to several levels share meshes) keep it.
+			if (!LilaLink::UsedOutside(World, Mesh->GetOutermost()->GetName()).IsEmpty())
+			{
+				continue;
+			}
 			Assets.Add(Mesh);
 			Deleted.Add(MakeShared<FJsonValueString>(Mesh->GetOutermost()->GetName()));
 		}
-		Out->SetNumberField(TEXT("meshesDeleted"), Assets.IsEmpty() ? 0 : ObjectTools::ForceDeleteObjects(Assets, false));
+		Out->SetNumberField(TEXT("meshesDeleted"), Assets.IsEmpty() ? 0 : LilaLink::ForceDeleteAssets(Assets));
 		Out->SetArrayField(TEXT("meshes"), Deleted);
 	}
 	return Obj(Out);
@@ -1203,10 +1924,25 @@ TSharedPtr<FJsonValue> MakeLevelInstance(const TSharedPtr<FJsonObject>& Params, 
 		OutError = TEXT("makeLevelInstance: no level is open");
 		return nullptr;
 	}
+	// Only actors loose in the level: a resend that left every group unchanged placed none, and the instance stands as it is.
 	TArray<AActor*> Actors;
 	for (const TSharedPtr<FJsonValue>& G : *Groups)
 	{
 		Actors.Append(TaggedActors(World, GroupTag(G->AsString())));
+	}
+	const FName Tag(*(FString(AssemblyPrefix) + Key));
+	TArray<AActor*> Previous = TaggedActors(World, Tag);
+	if (Actors.IsEmpty() && !Previous.IsEmpty())
+	{
+		TSharedRef<FJsonObject> Same = MakeShared<FJsonObject>();
+		Same->SetStringField(TEXT("actor"), Previous[0]->GetActorLabel());
+		if (const ILevelInstanceInterface* Instance = Cast<ILevelInstanceInterface>(Previous[0]))
+		{
+			Same->SetStringField(TEXT("level"), Instance->GetWorldAsset().GetLongPackageName());
+		}
+		Same->SetStringField(TEXT("kind"), Kind);
+		Same->SetBoolField(TEXT("unchanged"), true);
+		return Obj(Same);
 	}
 	if (Actors.IsEmpty())
 	{
@@ -1214,8 +1950,6 @@ TSharedPtr<FJsonValue> MakeLevelInstance(const TSharedPtr<FJsonObject>& Params, 
 		return nullptr;
 	}
 
-	const FName Tag(*(FString(AssemblyPrefix) + Key));
-	TArray<AActor*> Previous = TaggedActors(World, Tag);
 	// A resend refills the level the assembly was sent as before, so its file and name stay.
 	FString PackageName;
 	for (AActor* Old : Previous)
@@ -1234,7 +1968,13 @@ TSharedPtr<FJsonValue> MakeLevelInstance(const TSharedPtr<FJsonObject>& Params, 
 	}
 	if (PackageName.IsEmpty())
 	{
-		PackageName = FreePackageName(Level);
+		// The level a removed instance left behind is reused rather than numbered past.
+		bool bInUse = false;
+		for (TActorIterator<ALevelInstance> It(World); It && !bInUse; ++It)
+		{
+			bInUse = It->GetWorldAsset().GetLongPackageName() == Level;
+		}
+		PackageName = bInUse ? FreePackageName(Level) : Level;
 	}
 	const FVector Pivot = AssemblyPivot(Actors);
 	if (!SaveActorsAsLevel(World, Actors, PackageName, Pivot, OutError))
@@ -1278,7 +2018,14 @@ TSharedPtr<FJsonValue> MakeLevelInstance(const TSharedPtr<FJsonObject>& Params, 
 		return nullptr;
 	}
 	Instance->SetWorldAsset(WorldAsset);
-	Instance->LoadLevelInstance();
+	// load=false: the caller tags the actor and puts it on its data layer first (buildingInteriors), then loads it; an
+	// actor modified while its level's actors register trips World Partition.
+	bool bLoad = true;
+	Params->TryGetBoolField(TEXT("load"), bLoad);
+	if (bLoad)
+	{
+		Instance->LoadLevelInstance();
+	}
 	Actor->Tags.Add(Tag);
 	Actor->SetActorLabel(Name.IsEmpty() ? AssetName : Name);
 	Actor->SetFolderPath(FName(TEXT("Lila/Assemblies")));
@@ -1348,6 +2095,78 @@ TSharedPtr<FJsonValue> ListPlacements(const TSharedPtr<FJsonObject>& Params, FSt
 }
 } // namespace
 
+FString LilaLink::UsedOutside(UWorld* World, const FString& Package)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkPlacements::UsedOutside);
+
+	TArray<FString> Own = ULevel::GetExternalActorsPaths(Package);
+	Own.Add(FExternalPackageHelper::GetExternalObjectsPath(Package));
+	TArray<FName> Referencers;
+	IAssetRegistry::GetChecked().GetReferencers(FName(*Package), Referencers);
+	for (const FName& Ref : Referencers)
+	{
+		const FString Name = Ref.ToString();
+		if (Own.ContainsByPredicate([&Name](const FString& P) { return Name.StartsWith(P + TEXT("/")); }))
+		{
+			continue;
+		}
+		// This world's own packages are judged by what is in memory: actors just removed still list it until saved.
+		const UPackage* Loaded = FindPackage(nullptr, *Name);
+		const AActor* Actor = Loaded ? AActor::FindActorInPackage(const_cast<UPackage*>(Loaded)) : nullptr;
+		if (Actor && (!IsValid(Actor) || Actor->GetWorld() == World))
+		{
+			continue;
+		}
+		if (World && Loaded == World->GetPackage())
+		{
+			continue;
+		}
+		return Name;
+	}
+	return FString();
+}
+
+int32 LilaLink::DeleteUnusedDataLayers(UWorld* World, const TArray<const UDataLayerAsset*>& Assets, TArray<FString>& OutErrors)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkPlacements::DeleteUnusedDataLayers);
+
+	UDataLayerEditorSubsystem* Layers = UDataLayerEditorSubsystem::Get();
+	if (!Layers)
+	{
+		return 0;
+	}
+	int32 Removed = 0;
+	TArray<UObject*> Files;
+	for (const UDataLayerAsset* Asset : Assets)
+	{
+		bool bUsed = !Asset;
+		for (TActorIterator<AActor> It(World); It && !bUsed; ++It)
+		{
+			bUsed = IsValid(*It) && It->GetDataLayerAssets().Contains(Asset);
+		}
+		if (bUsed)
+		{
+			continue;
+		}
+		if (UDataLayerInstance* Instance = Layers->GetDataLayerInstance(Asset))
+		{
+			Layers->DeleteDataLayer(Instance);
+			++Removed;
+		}
+		// Another level's data layer of the same asset (sends to several levels share it) keeps the asset.
+		if (LilaLink::UsedOutside(World, Asset->GetPackage()->GetName()).IsEmpty())
+		{
+			Files.Add(const_cast<UDataLayerAsset*>(Asset));
+		}
+	}
+	if (!Files.IsEmpty() && LilaLink::ForceDeleteAssets(Files) < Files.Num())
+	{
+		OutErrors.Add(TEXT("some data layer assets could not be deleted; delete them in the Content Browser"));
+	}
+	return Removed;
+}
+
+
 void LilaLink::AddPlacementMethods(TMap<FString, FLilaLinkMethod>& Methods)
 {
 	Methods.Add(TEXT("placeInstances"), LilaLink::Sync(&PlaceInstances));
@@ -1355,6 +2174,8 @@ void LilaLink::AddPlacementMethods(TMap<FString, FLilaLinkMethod>& Methods)
 	Methods.Add(TEXT("removePlacements"), LilaLink::Sync(&RemovePlacements));
 	Methods.Add(TEXT("listPlacements"), LilaLink::Sync(&ListPlacements));
 	Methods.Add(TEXT("makeLevelInstance"), LilaLink::Sync(&MakeLevelInstance));
+	Methods.Add(TEXT("writeSlotTable"), LilaLink::Sync(&WriteSlotTable));
+	Methods.Add(TEXT("placementHashes"), LilaLink::Sync(&PlacementHashes));
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -872,8 +872,12 @@ void MaterialEditor::rebuild()
     mUpdaters.clear();
     while (QLayoutItem* item = mBodyLayout->takeAt(0))
     {
+        // Hidden now: a deferred delete leaves the old body drawn over the new one until the event loop runs.
         if (QWidget* w = item->widget())
+        {
+            w->hide();
             w->deleteLater();
+        }
         delete item;
     }
     scene::Node* n = current();
@@ -1368,6 +1372,11 @@ void MaterialEditor::rebuild()
     });
     color("Base Color", kBaseColor);
     texture("Base Color Map", "baseColor", kBaseColorMap);
+    check("Instance Color", kInstanceColor)
+        ->setToolTip("Colours instances carry (liveries, building palettes) replace the base colour or tint the base colour map. "
+                     "Off keeps this material's own colour.");
+    check("Second Tone", kInstanceColor2)
+        ->setToolTip("Takes the instances' second colour instead: the other tone of a two-tone piece, such as trim against walls.");
     slider("Metallic", kMetallic, 0.0, 1.0);
     texture("Metallic Map", "metallic", kMetallicMap);
     slider("Specular", kSpecular, 0.0, 1.0);

@@ -220,6 +220,14 @@ TEST_CASE("settlement export: live sync resends only the cells whose ids changed
     moved.settings = "folder=/Game/Elsewhere";
     const SyncDiff all = diffSync(syncManifest(second, elementHashes(l, net)), syncItems(l, net, cells, moved), elementHashes(l, net));
     CHECK(all.changed.size() == second.size());
+
+    // A road-only setting (a landscape paint layer) resends the ground roads alone.
+    SyncOptions repainted = o;
+    repainted.roadSettings = "roadLayer=roadAsphalt";
+    const SyncDiff roads = diffSync(syncManifest(second, elementHashes(l, net)), syncItems(l, net, cells, repainted), elementHashes(l, net));
+    CHECK(roads.changed == std::vector<std::string>{"Town/roads"});
+    CHECK(roads.added.empty());
+    CHECK(roads.removed.empty());
 }
 
 TEST_CASE("settlement export: GeoJSON holds every street, block, lot, envelope, lane and placement")

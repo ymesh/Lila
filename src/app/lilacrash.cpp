@@ -306,8 +306,24 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS);
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
 
+    const DWORD pid = GetProcessId(o.process);
     watch::Result res = watch::run(o);
-    if (!res.crashed || res.reportDir.empty())
+    if (!res.crashed)
+        return 0;
+    // Counts the crash in usage statistics now: the next start would, but a user a crash drives away never starts again.
+    std::thread usage;
+    if (!consentFile.empty())
+        usage = std::thread([dir = consentFile.parent_path(), pid] { upload::sendCrashedSession(dir, pid); });
+    struct JoinOnExit
+    {
+        std::thread& t;
+        ~JoinOnExit()
+        {
+            if (t.joinable())
+                t.join();
+        }
+    } joinUsage{usage};
+    if (res.reportDir.empty())
         return 0;
     upload::Consent consent = consentFile.empty() ? upload::Consent{} : upload::readConsent(consentFile);
     if (ui)

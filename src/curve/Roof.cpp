@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <set>
 
@@ -19,6 +20,9 @@ namespace lila::curve
 namespace
 {
 using geo::Index;
+
+/** Sine of the least turn (10 degrees) at both corners of an edge gableEnds gables. */
+constexpr double kEndCornerSine = 0.17;
 
 /** Closed curves as regions of clean 2D loops on their plane. */
 struct Regions
@@ -85,6 +89,23 @@ std::vector<D2> grow(const std::vector<D2>& loop, double d)
     return out;
 }
 
+/** Whether every skeleton node lies within the loops' bounding box (a hair over): a skeleton is always inside its region. */
+bool insideBox(const StraightSkeleton& sk, const std::vector<std::vector<D2>>& polys)
+{
+    D2 lo(std::numeric_limits<double>::infinity()), hi(-std::numeric_limits<double>::infinity());
+    for (const std::vector<D2>& l : polys)
+        for (const D2& p : l)
+        {
+            lo = glm::min(lo, p);
+            hi = glm::max(hi, p);
+        }
+    const double margin = 1e-3 * std::max(hi.x - lo.x, hi.y - lo.y);
+    for (const D2& p : sk.nodes)
+        if (!(p.x >= lo.x - margin && p.x <= hi.x + margin && p.y >= lo.y - margin && p.y <= hi.y + margin))
+            return false;
+    return true;
+}
+
 /** Edge flags for the gables: listed edges (as point pairs) and, with ends, every short edge between two convex corners. */
 std::vector<std::vector<double>> roofWeights(const std::vector<std::vector<D2>>& polys, const std::set<std::pair<std::pair<double, double>, std::pair<double, double>>>& listed,
                                              bool ends)
@@ -103,7 +124,9 @@ std::vector<std::vector<double>> roofWeights(const std::vector<std::vector<D2>>&
                 continue;
             D2 prev = l[i] - l[(i + n - 1) % n], cur = b - a, next = l[(i + 2) % n] - b;
             double lp = glm::length(prev), lc = glm::length(cur), ln = glm::length(next);
-            if (cross2(prev, cur) > 0.0 && cross2(cur, next) > 0.0 && lc < lp * (1.0 - 1e-9) && lc < ln * (1.0 - 1e-9))
+            // Real corners only: a still edge nearly in line with a moving neighbour sends their corner off along the line.
+            const double corner = kEndCornerSine * lc;
+            if (cross2(prev, cur) > corner * lp && cross2(cur, next) > corner * ln && lc < lp * (1.0 - 1e-9) && lc < ln * (1.0 - 1e-9))
                 lw[i] = 0.0;
         }
         w.push_back(std::move(lw));
@@ -175,6 +198,17 @@ RoofResult roof(const Splines& footprint, const RoofOptions& o)
         SkeletonOptions so;
         so.weights = roofWeights(polys0, listed, o.gableEnds);
         StraightSkeleton sk = straightSkeleton(polys, so);
+        if (!insideBox(sk, polys))
+        {
+            so.weights.clear();
+            sk = straightSkeleton(polys, so);
+            if (!insideBox(sk, polys))
+            {
+                res.warnings.push_back("roof: the skeleton of a footprint left it; that part has no roof");
+                continue;
+            }
+            res.warnings.push_back("roof: the gables of a footprint sent its ridge outside it; it is hipped instead");
+        }
         if (!sk.ok())
             res.warnings.push_back("roof: " + sk.error);
         double rise = slope;

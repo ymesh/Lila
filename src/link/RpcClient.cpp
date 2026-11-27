@@ -185,6 +185,16 @@ RpcResult RpcClient::call(const std::string& method, const json& params, const C
     }
 }
 
+std::vector<RpcResult> RpcClient::callMany(const std::vector<Request>& requests, size_t window)
+{
+    LILA_ZONE();
+
+    RpcPipeline p(*this, window);
+    for (const Request& r : requests)
+        p.send(r.method, r.params, r.timeoutMs);
+    return p.finish();
+}
+
 void RpcClient::readLoop()
 {
     LILA_THREAD_NAME("Unreal link");
@@ -336,4 +346,58 @@ void RpcClient::failAll(int code, const std::string& message)
     for (auto& [id, p] : pending)
         p.done({.ok = false, .code = code, .error = message});
 }
+struct RpcPipeline::State
+{
+    std::mutex m;
+    std::condition_variable cv;
+    std::vector<RpcResult> results;
+    size_t inFlight = 0, done = 0;
+};
+
+RpcPipeline::RpcPipeline(RpcClient& client, size_t window) : mClient(client), mWindow(std::max<size_t>(1, window)), mState(std::make_shared<State>()) {}
+
+RpcPipeline::~RpcPipeline()
+{
+    // Replies still on their way write into the shared state, which outlives this.
+    std::unique_lock lock(mState->m);
+    mState->cv.wait(lock, [&] { return mState->inFlight == 0; });
+}
+
+size_t RpcPipeline::send(const std::string& method, const json& params, int timeoutMs)
+{
+    return send(method, params, CallOptions{.timeoutMs = timeoutMs});
+}
+
+size_t RpcPipeline::send(const std::string& method, const json& params, CallOptions opts)
+{
+    size_t i;
+    {
+        std::unique_lock lock(mState->m);
+        mState->cv.wait(lock, [&] { return mState->inFlight < mWindow; });
+        ++mState->inFlight;
+        i = mState->results.size();
+        mState->results.emplace_back();
+    }
+    mClient.callAsync(method, params, std::move(opts), [st = mState, i](RpcResult r) {
+        std::scoped_lock lock(st->m);
+        st->results[i] = std::move(r);
+        --st->inFlight;
+        ++st->done;
+        st->cv.notify_all();
+    });
+    return i;
+}
+
+std::vector<RpcResult> RpcPipeline::finish()
+{
+    LILA_ZONE();
+
+    std::unique_lock lock(mState->m);
+    mState->cv.wait(lock, [&] { return mState->inFlight == 0; });
+    std::vector<RpcResult> out = std::move(mState->results);
+    mState->results.clear();
+    mState->done = 0;
+    return out;
+}
+
 } // namespace lila::link

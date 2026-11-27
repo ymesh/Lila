@@ -11,6 +11,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <mutex>
 #include <stdexcept>
 
 namespace terrain
@@ -180,18 +181,18 @@ std::map<std::string, double> rasterizeWorldCover(Heightfield& h, const Dem& cod
     const Georef dg = georefOf(codes);
     if (!dg.geographicOk())
         throw std::runtime_error("the land cover is in a projection Lila doesn't convert (EPSG " + std::to_string(codes.epsg) + ")");
+    auto codeAt = [&](glm::dvec2 p) -> uint8_t {
+        const glm::dvec2 xy = dg.project(g.toGeographic(p));
+        const int64_t c = std::llround((xy.x - codes.x0) / codes.dx), r = std::llround((codes.y0 - xy.y) / codes.dy);
+        if (c < 0 || r < 0 || c >= codes.width || r >= codes.height)
+            return 0;
+        const float v = codes.metres[size_t(r) * size_t(codes.width) + size_t(c)];
+        return std::isfinite(v) ? uint8_t(std::clamp<long>(std::lround(v), 0, 255)) : uint8_t(0);
+    };
     std::vector<uint8_t> code(h.size(), 0);
     tbb::parallel_for(0, h.nz, [&](int z) {
         for (int x = 0; x < h.nx; ++x)
-        {
-            const glm::dvec2 xy = dg.project(g.toGeographic(h.origin + glm::dvec2(x, z) * h.cell));
-            const int64_t c = std::llround((xy.x - codes.x0) / codes.dx), r = std::llround((codes.y0 - xy.y) / codes.dy);
-            if (c < 0 || r < 0 || c >= codes.width || r >= codes.height)
-                continue;
-            const float v = codes.metres[size_t(r) * size_t(codes.width) + size_t(c)];
-            if (std::isfinite(v))
-                code[h.index(x, z)] = uint8_t(std::clamp<long>(std::lround(v), 0, 255));
-        }
+            code[h.index(x, z)] = codeAt(h.samplePos(x, z));
     });
 
     std::map<int, size_t> count;
@@ -208,18 +209,60 @@ std::map<std::string, double> rasterizeWorldCover(Heightfield& h, const Dem& cod
         const std::string cls = worldCoverClass(c);
         share[cls.empty() ? "nodata" : cls] += double(k) / n;
     }
-    if (classes)
-        for (const auto& [cls, s] : share)
+    if (!classes)
+        return share;
+    // Class masks are the share of each sample's cell the class covers: a grid coarser than the 10 m pixels gets
+    // fractions instead of whichever pixel its centre lands on, so edges don't step along the grid.
+    const double pixelCm = std::abs(codes.dy) * (codes.geographic ? 11113200.0 : 100.0);
+    const int sub = std::clamp(int(std::ceil(h.cell / std::max(pixelCm, 1.0) - 1e-6)), 1, 5);
+    std::vector<int> slot(256, -1);
+    std::vector<std::string> names;
+    for (int c = 0; c < 256; ++c)
+        if (const std::string cls = worldCoverClass(c); !cls.empty())
         {
-            if (cls == "nodata")
-                continue;
-            std::array<bool, 256> in{};
-            for (int c = 0; c < 256; ++c)
-                in[size_t(c)] = worldCoverClass(c) == cls;
-            std::vector<float>& cm = h.mask("landcover_" + cls);
-            for (size_t i = 0; i < code.size(); ++i)
-                cm[i] = in[code[i]] ? 1.0f : 0.0f;
+            const auto it = std::find(names.begin(), names.end(), cls);
+            slot[size_t(c)] = int(it - names.begin());
+            if (it == names.end())
+                names.push_back(cls);
         }
+    std::vector<std::vector<float>> frac(names.size());
+    std::vector<uint8_t> seen(names.size(), 0);
+    for (const auto& [c, k] : count)
+        if (slot[size_t(c)] >= 0)
+            seen[size_t(slot[size_t(c)])] = 1;
+    std::mutex lock;
+    tbb::parallel_for(0, h.nz, [&](int z) {
+        std::vector<float> row(names.size() * size_t(h.nx), 0.0f);
+        std::vector<uint8_t> rowSeen(names.size(), 0);
+        for (int x = 0; x < h.nx; ++x)
+        {
+            const glm::dvec2 p = h.samplePos(x, z);
+            for (int sz = 0; sz < sub; ++sz)
+                for (int sx = 0; sx < sub; ++sx)
+                {
+                    const glm::dvec2 o = sub == 1 ? glm::dvec2(0.0) : (glm::dvec2(sx, sz) + 0.5) / double(sub) - 0.5;
+                    const int k = slot[codeAt(p + o * h.cell)];
+                    if (k >= 0)
+                    {
+                        row[size_t(k) * size_t(h.nx) + size_t(x)] += 1.0f / float(sub * sub);
+                        rowSeen[size_t(k)] = 1;
+                    }
+                }
+        }
+        std::lock_guard l(lock);
+        for (size_t k = 0; k < names.size(); ++k)
+        {
+            if (!rowSeen[k] && !seen[k])
+                continue;
+            seen[k] = 1;
+            if (frac[k].empty())
+                frac[k].assign(h.size(), 0.0f);
+            std::copy(row.begin() + std::ptrdiff_t(k * size_t(h.nx)), row.begin() + std::ptrdiff_t((k + 1) * size_t(h.nx)), frac[k].begin() + std::ptrdiff_t(h.index(0, z)));
+        }
+    });
+    for (size_t k = 0; k < names.size(); ++k)
+        if (seen[k])
+            h.masks["landcover_" + names[k]] = frac[k].empty() ? std::vector<float>(h.size(), 0.0f) : std::move(frac[k]);
     return share;
 }
 } // namespace terrain

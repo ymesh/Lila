@@ -216,7 +216,7 @@ gn::NodeDecl coverDecl()
         .doc = "Scatters items over a terrain by rules: each rule's items go where its ranges, biomes and layers fit, as densely "
                "as it asks, kept clear of each other by their footprints (the item's size across, or the rule's footprint). The "
                "terrain comes from the Object Info node named in terrain, each item from the Object Info node Item_<name>. "
-               "Outputs instances with rule, item, fit and random attributes, ready for Settle Instances and for "
+               "Outputs instances with rule, item, fit, random, cellX and cellZ attributes, ready for Settle Instances and for "
                "unrealPlaceInstances (HISM). terrainGroundCover builds the group.",
         .props = {surfaceProp("rules", "", "The rules, JSON: {seed, maxCount, rules: [{name, items, density, footprint, when, scale, align, turn, sink, solid}]}."),
                   surfaceProp("terrain", "Terrain", "The Object Info node reading the terrain.", "")},
@@ -303,6 +303,8 @@ gn::NodeDecl coverDecl()
                 auto randomAttr = inst->attrs.getOrAdd<float>("random");
                 auto slopeAttr = inst->attrs.getOrAdd<float>("slope");
                 auto downhillAttr = inst->attrs.getOrAdd<glm::vec3>("downhill");
+                auto cellXAttr = inst->attrs.getOrAdd<int32_t>("cellX");
+                auto cellZAttr = inst->attrs.getOrAdd<int32_t>("cellZ");
                 for (size_t k = 0; k < kept.size(); ++k)
                 {
                     ruleAttr[k] = kept[k]->rule;
@@ -310,6 +312,8 @@ gn::NodeDecl coverDecl()
                     fitAttr[k] = kept[k]->fit;
                     randomAttr[k] = kept[k]->random;
                     slopeAttr[k] = float(kept[k]->slope);
+                    cellXAttr[k] = kept[k]->cellX;
+                    cellZAttr[k] = kept[k]->cellZ;
                     downhillAttr[k] = glm::vec3(glm::normalize(glm::dvec3(terrainWorld * glm::dvec4(kept[k]->downhill, 0.0))));
                 }
 

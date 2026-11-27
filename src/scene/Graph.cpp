@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <mutex>
 #include <stdexcept>
@@ -388,6 +389,7 @@ bool Graph::validName(std::string_view name)
 
 std::string Graph::uniqueName(std::string_view wanted, NodeId parent, NodeId self, bool global) const
 {
+    LILA_ZONE();
     auto taken = [&](const std::string& n) {
         auto [b, e] = mNames.equal_range(n);
         for (auto it = b; it != e; ++it)
@@ -1934,6 +1936,22 @@ void Graph::evaluateWith(const std::vector<NodeId>* only)
 
 void Graph::evaluateUpstream(const std::vector<NodeId>& nodes) { evaluateDirty(&nodes); }
 
+namespace
+{
+/** A few nodes are worth computing in parallel when they took long last time, or have not computed yet (a scene just opened). */
+bool worthSpreading(const std::vector<Node*>& level)
+{
+    if (level.size() < 2)
+        return false;
+    constexpr uint64_t kWorthUs = 2000;
+    uint64_t us = 0;
+    for (const Node* n : level)
+        if ((us += n->lastComputeUs()) >= kWorthUs)
+            return true;
+    return false;
+}
+} // namespace
+
 void Graph::evaluateDirty(const std::vector<NodeId>* only)
 {
     LILA_ZONE();
@@ -2073,7 +2091,10 @@ void Graph::evaluateDirty(const std::vector<NodeId>* only)
             if (!mDisplayTurns.empty() && n->type().dag)
                 if (auto turn = mDisplayTurns.find(n->id()); turn != mDisplayTurns.end())
                     n->mValues[Transform::kParentMatrix] = turn->second * n->as<glm::dmat4>(Transform::kParentMatrix);
+            const auto computeStart = std::chrono::steady_clock::now();
             n->compute(mCtx);
+            n->mComputeUs = uint32_t(std::min<int64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - computeStart).count(), Node::kUnknownCost - 1));
             // Computed from a placeholder upstream means a placeholder too.
             if (cacheNode)
                 n->mPlayback = upstream < 2 && keepCached(*n) ? 1 : 2;
@@ -2081,11 +2102,11 @@ void Graph::evaluateDirty(const std::vector<NodeId>* only)
             n->mEvaluatedPass = pass;
         };
 
-        if (level.size() < 16)
+        if (level.size() < 16 && !worthSpreading(level))
             for (Node* n : level)
                 pull(n);
         else
-            tbb::parallel_for(size_t(0), level.size(), [&](size_t i) { pull(level[i]); });
+            tbb::parallel_for(size_t(0), level.size(), [&](size_t i) { pull(level[i]); }, tbb::simple_partitioner());
 
         std::vector<Node*> next;
         for (Node* n : level)
@@ -2144,9 +2165,9 @@ bool Graph::isSelected(NodeId id) const
     return std::find(mSelection.begin(), mSelection.end(), id) != mSelection.end();
 }
 
-int Graph::addListener(Listener fn, bool immediate)
+int Graph::addListener(Listener fn, bool immediate, std::source_location where)
 {
-    mListeners.emplace(mNextListener, ListenerEntry{std::move(fn), immediate});
+    mListeners.emplace(mNextListener, ListenerEntry{std::move(fn), immediate, where});
     return mNextListener++;
 }
 
@@ -2167,6 +2188,58 @@ bool Graph::changesVisibility(Change c, NodeId id, const PlugRef* plug) const
     return plug->attr == Transform::kVisibility || plug->attr == Transform::kDisplayLayer;
 }
 
+namespace
+{
+/**
+ * While a performance trace records: time spent in each graph listener (by where it was added) and in the change
+ * events, written to the trace as messages every few thousand changes, so the costly ones show by name.
+ */
+struct ListenerTimes
+{
+    struct Total
+    {
+        uint64_t calls = 0;
+        std::chrono::steady_clock::duration time{};
+    };
+    std::map<std::pair<std::string_view, uint32_t>, Total> totals;
+    uint64_t changes = 0;
+    std::mutex mutex;
+
+    void add(const std::source_location& where, std::chrono::steady_clock::duration d)
+    {
+        std::lock_guard lock(mutex);
+        Total& t = totals[{where.file_name(), where.line()}];
+        ++t.calls;
+        t.time += d;
+    }
+
+    void report()
+    {
+        constexpr uint64_t kEvery = 20000;
+        std::lock_guard lock(mutex);
+        if (++changes % kEvery != 0)
+            return;
+        std::vector<std::pair<double, std::string>> rows;
+        for (const auto& [where, t] : totals)
+            rows.emplace_back(std::chrono::duration<double, std::milli>(t.time).count(),
+                              std::string(where.first) + ":" + std::to_string(where.second) + " " + std::to_string(t.calls) + " calls");
+        std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        rows.resize(std::min<size_t>(rows.size(), 10));
+        for (const auto& [ms, what] : rows)
+        {
+            const std::string text = "listener total " + std::to_string(int64_t(ms)) + " ms " + what + " (" + std::to_string(changes) + " changes)";
+            LILA_MESSAGE(text.data(), text.size());
+        }
+    }
+};
+
+ListenerTimes& listenerTimes()
+{
+    static ListenerTimes t;
+    return t;
+}
+} // namespace
+
 void Graph::changed(Change c, NodeId id, const PlugRef* plug)
 {
     mVersion.fetch_add(1, std::memory_order_relaxed);
@@ -2175,14 +2248,28 @@ void Graph::changed(Change c, NodeId id, const PlugRef* plug)
     if (c != Change::Selection && !sim::sampling())
         clearPlaybackCache();
     const PlugRef* outer = std::exchange(mChangedPlug, plug);
+    LILA_ZONE_N("graph.listeners");
+    const bool timed = LILA_PROFILER_CONNECTED();
     for (auto& [lid, l] : mListeners)
         if (mBatchDepth == 0 || l.immediate)
+        {
+            const auto t0 = timed ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
             l.fn(c, id);
+            if (timed)
+                listenerTimes().add(l.where, std::chrono::steady_clock::now() - t0);
+        }
         else
             mBatchPending = true;
     mChangedPlug = outer;
     if (mBatchDepth == 0 && this == &current())
+    {
+        const auto t0 = timed ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         forwardEvent(c, id);
+        if (timed)
+            listenerTimes().add(std::source_location::current(), std::chrono::steady_clock::now() - t0);
+    }
+    if (timed)
+        listenerTimes().report();
 }
 
 void Graph::forwardEvent(Change c, NodeId id)

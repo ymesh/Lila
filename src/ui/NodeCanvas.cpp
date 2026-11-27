@@ -1,4 +1,5 @@
 #include "ui/NodeCanvas.h"
+#include "core/Events.h"
 #include "ui/ColorPopup.h"
 #include "ui/Hotkeys.h"
 
@@ -688,6 +689,11 @@ NodeCanvas::NodeCanvas(QWidget* parent) : QGraphicsView(parent)
         const std::vector<std::string> sel = selectedNames();
         onSelect(sel.size() == 1 && mScene.selectedItems().size() == 1 ? sel[0] : std::string());
     });
+    const events::SubscriptionId time = events::subscribe(events::Event::TimeChanged, [self = QPointer<NodeCanvas>(this)](const events::EventData&) {
+        if (self && self->backend && self->isVisible() && self->backend->thumbnailsFollowTime(self->mGroup))
+            self->refreshThumbs();
+    });
+    connect(this, &QObject::destroyed, [time] { events::unsubscribe(time); });
 }
 
 std::vector<std::pair<std::string, std::string>> NodeCanvas::outputsOf(const std::string& node) const
@@ -731,6 +737,8 @@ void NodeCanvas::build(const std::string& group, const json& info, const std::se
     mLazyFrom = nullptr;
     mHoverNode = nullptr;
     mHotFieldNode = nullptr;
+    mHotPropNode = nullptr;
+    mWireFrom = nullptr;
     mTieDrag = -1;
     mTieStroke = false;
     mHotTie = -1;

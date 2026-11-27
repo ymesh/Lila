@@ -1,0 +1,83 @@
+{
+  "id": "policeStation",
+  "label": "Police Station",
+  "description": "Police and security headquarters: small barred windows, AC units, a perimeter wall and gate, flat roof.",
+  "tags": [
+    "civic",
+    "police",
+    "security"
+  ],
+  "floors": {
+    "min": 1,
+    "max": 3,
+    "groundHeight": 400,
+    "height": 340,
+    "plinth": 30
+  },
+  "bays": {
+    "width": 360,
+    "min": 250,
+    "cornerWidth": 40
+  },
+  "openings": {
+    "window": {
+      "width": 0.35,
+      "height": 0.4,
+      "sill": 0.4,
+      "kind": "window.residential"
+    },
+    "door": {
+      "width": 0.45,
+      "height": 0.72,
+      "kind": "door.service"
+    },
+    "shopfront": {
+      "width": 0.6,
+      "height": 0.8
+    },
+    "reveal": 25
+  },
+  "groundFloor": {
+    "street": "window",
+    "shopfronts": false
+  },
+  "modules": {
+    "balconies": 0.0,
+    "grilles": 1.0,
+    "acUnits": 0.5,
+    "cornice": "light",
+    "bands": true,
+    "drainpipes": true
+  },
+  "roof": {
+    "kind": "flat",
+    "parapet": 100,
+    "waterTanks": 0.5,
+    "clutter": 0.6
+  },
+  "palette": {
+    "render": [
+      "#e5e5e5",
+      "#d0d8de",
+      "#dfe7ec"
+    ],
+    "trim": [
+      "#1d3557",
+      "#ffffff"
+    ],
+    "roof": [
+      "#6e6e6e"
+    ],
+    "base": [
+      "#1d3557"
+    ],
+    "dirt": [
+      0.05,
+      0.3
+    ]
+  },
+  "extras": {
+    "perimeterWall": 300,
+    "gate": true
+  }
+}

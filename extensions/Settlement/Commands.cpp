@@ -11,6 +11,7 @@
 #include <lila/Command.h>
 #include <lila/Curves.h>
 #include <lila/Deformer.h>
+#include <lila/Events.h>
 #include <lila/Extension.h>
 #include <lila/GeometryNodes.h>
 #include <lila/Graph.h>
@@ -19,6 +20,7 @@
 #include <lila/Profile.h>
 
 #include <algorithm>
+#include <mutex>
 #include <cctype>
 #include <cmath>
 #include <filesystem>
@@ -48,7 +50,7 @@ struct Exposed
 };
 
 constexpr Exposed kInputs[] = {
-    {"profile", "string", "Style", 0, 0, "hamlet, streetVillage, medievalTown, usTown, manhattan, europeanCity, modernCity or scifiMegacity."},
+    {"profile", "string", "Style", 0, 0, "hamlet, streetVillage, medievalTown, usTown, mexicanCity, manhattan, europeanCity, modernCity or scifiMegacity."},
     {"pattern", "string", "Style", 0, 0, "Empty for the profile's; else organic, grid, radial, linear, organicGrid, none, tensor, contour, osm or example."},
     {"overrides", "string", "Style", 0, 0, "JSON object of profile fields to change, such as {\"maxFloors\": 6}."},
     {"growth", "float", "Layout", 0, 1, "How far the settlement has grown, 0 to 1."},
@@ -65,6 +67,7 @@ constexpr Exposed kInputs[] = {
     {"showStreets", "bool", "Display", 0, 0, "Show street ribbons."},
     {"showLots", "bool", "Display", 0, 0, "Show lot outlines."},
     {"showBuildings", "bool", "Display", 0, 0, "Show building envelopes."},
+    {"showGround", "bool", "Display", 0, 0, "Show the ground of blocks and lots: yards, parks, squares."},
     {"generators", "string", "Style", 0, 0, "Tensor fields, eras, districts, walls, imported streets and levels as JSON."},
 };
 
@@ -89,6 +92,7 @@ std::vector<FlagDef> layoutFlags()
         {"showStreets", "ss", T::Bool, true, "Show street ribbons."},
         {"showLots", "sl", T::Bool, true, "Show lot outlines."},
         {"showBuildings", "sb", T::Bool, true, "Show building envelopes."},
+        {"showGround", "sgd", T::Bool, true, "Show the ground of blocks and lots: yards, parks, squares."},
         {"generators", "gen", T::String, "", "Tensor fields, eras, districts, walls, imported streets and levels as JSON."},
     };
 }
@@ -254,11 +258,24 @@ Node* settlementModifier(Graph& g, const std::string& name, const char* cmd)
     throw CommandError(std::string(cmd) + ": " + n->path() + " has no settlement (make one with settlementCreate)");
 }
 
+/** The materials the street and ground meshes name by slot, made where the scene has none of that name. */
+void ensureSurfaceMaterials(Graph& g)
+{
+    for (const SurfaceMaterial& s : surfaceMaterials())
+        if (!scene::materials::find(g, s.name))
+            ops::execute("createMaterial", {{"args", {s.name}}, {"baseColor", {s.color.r, s.color.g, s.color.b}}, {"roughness", s.roughness}});
+}
+
 json modifierValues(const Node& mod)
 {
     json values = json::object();
     for (const Exposed& e : kInputs)
+    {
+        // Settlements made before an input existed leave it out; their node takes its default.
+        if (mod.type().attrIndex(e.name) < 0)
+            continue;
         values[e.name] = ops::execute("getAttr", {{"args", {mod.path() + "." + e.name}}});
+    }
     for (const char* extra : {"ground", "walkable"})
         values[extra] = ops::execute("getAttr", {{"args", {mod.path() + "." + extra}}});
     return values;
@@ -313,7 +330,77 @@ Polygon regionOutline(Graph& g, const Args& a, const std::string& groundName, co
     return p;
 }
 
+/**
+ * Layouts already rebuilt, by what went into them: a big settlement takes minutes to lay out and the commands that read
+ * it (envelopes, names, checks) ask in turn. The meshes it read are held, so their identity can't be reused.
+ */
+struct RebuildCache
+{
+    struct Entry
+    {
+        uint64_t key = 0;
+        std::vector<scene::MeshPtr> inputs;
+        std::shared_ptr<const Rebuilt> rebuilt;
+    };
+    std::mutex lock;
+    std::vector<Entry> entries;
+};
+RebuildCache& rebuildCache()
+{
+    static RebuildCache c;
+    return c;
+}
+
+/** The evaluated mesh of a node and its world matrix, for the rebuild cache's key. */
+scene::MeshPtr evaluatedMesh(Graph& g, const std::string& name, uint64_t& key)
+{
+    Node* n = name.empty() ? nullptr : g.find(name);
+    if (!n || !n->type().isA("mesh"))
+        return nullptr;
+    const scene::PlugValue mv = g.value({n->id(), scene::MeshNode::kOutMesh, -1});
+    const scene::PlugValue xv = g.value({n->id(), scene::Transform::kWorldMatrix, -1});
+    const scene::MeshPtr* mesh = std::get_if<scene::MeshPtr>(&mv);
+    key = (key ^ uint64_t(reinterpret_cast<uintptr_t>(mesh ? mesh->get() : nullptr))) * 1099511628211ull;
+    if (const glm::dmat4* xf = std::get_if<glm::dmat4>(&xv))
+        for (int c = 0; c < 4; ++c)
+            for (int k = 0; k < 4; ++k)
+                key = (key ^ std::hash<double>{}((*xf)[c][k])) * 1099511628211ull;
+    return mesh ? *mesh : nullptr;
+}
+
+Rebuilt rebuildUncached(Graph& g, const std::string& name, const char* cmd, const json* editsOverride);
+
 Rebuilt rebuild(Graph& g, const std::string& name, const char* cmd, const json* editsOverride = nullptr)
+{
+    Node* mod = settlementModifier(g, name, cmd);
+    const scene::NodeId meshId = scene::modifiers::meshOf(g, mod->id());
+    Node* mesh = meshId != scene::kNoNode ? g.node(meshId) : g.find(name);
+    const json values = modifierValues(*mod);
+    uint64_t key = std::hash<std::string>{}(values.dump() + "|" + (editsOverride ? editsOverride->dump() : std::string()) + "|" + mod->path());
+    std::vector<scene::MeshPtr> inputs;
+    inputs.push_back(evaluatedMesh(g, textOf(values.at("ground")), key));
+    inputs.push_back(evaluatedMesh(g, textOf(values.at("walkable")), key));
+    if (auto base = mesh ? scene::modifiers::cage(g, mesh->id()) : nullptr)
+    {
+        key = (key ^ uint64_t(reinterpret_cast<uintptr_t>(base.get()))) * 1099511628211ull;
+        inputs.push_back(std::const_pointer_cast<const geo::Mesh>(base));
+    }
+    RebuildCache& c = rebuildCache();
+    {
+        std::lock_guard l(c.lock);
+        for (const RebuildCache::Entry& e : c.entries)
+            if (e.key == key)
+                return *e.rebuilt;
+    }
+    auto made = std::make_shared<const Rebuilt>(rebuildUncached(g, name, cmd, editsOverride));
+    std::lock_guard l(c.lock);
+    if (c.entries.size() >= 4)
+        c.entries.erase(c.entries.begin());
+    c.entries.push_back({key, std::move(inputs), made});
+    return *made;
+}
+
+Rebuilt rebuildUncached(Graph& g, const std::string& name, const char* cmd, const json* editsOverride)
 {
     Node* mod = settlementModifier(g, name, cmd);
     const scene::NodeId meshId = scene::modifiers::meshOf(g, mod->id());
@@ -594,6 +681,16 @@ static std::vector<Vec2> generatorRegion(const Args& a)
 
 void registerCommands(ext::Context& ctx)
 {
+    // Layouts are keyed by the meshes they read and hold them (gigabytes of terrain): a replaced scene's can never match again.
+    for (const lila::events::Event e : {lila::events::Event::SceneNew, lila::events::Event::SceneOpened})
+        lila::events::subscribe(
+            e,
+            [](const lila::events::EventData&) {
+                RebuildCache& c = rebuildCache();
+                std::lock_guard l(c.lock);
+                c.entries.clear();
+            },
+            "Settlement");
     std::vector<FlagDef> flags = {
         {"outline", "o", T::List, nullptr, "Closed outline, [[x, z], ...] or [[x, y, z], ...] in cm. Omit for a square of size."},
         {"streets", "st", T::List, nullptr, "Streets to keep as they are: a list of polylines."},
@@ -609,6 +706,9 @@ void registerCommands(ext::Context& ctx)
         {"exclusionMargin", "xm", T::Float, 0.0, "Clearance around exclusions, cm.", {}, {}, 0.0},
         {"name", "n", T::String, "Settlement", "Name of the mesh made to hold the site."},
         {"terrainWater", "tw", T::Bool, true, "On a Terrain ground with no water of its own: the terrain's rivers crossing the outline become the settlement's water."},
+        {"buildingRoute", "br", T::String, "outline", "How buildings are made once laid out (settlementBuildings route=); buildings makes procedural ones.",
+         {"outline", "massing", "library", "masonry", "unreal", "buildings"}},
+        {"buildingStyle", "bs", T::String, nullptr, "buildings route: one Buildings style for every building; empty picks per envelope."},
     };
     for (FlagDef& f : layoutFlags())
         flags.push_back(std::move(f));
@@ -712,6 +812,7 @@ void registerCommands(ext::Context& ctx)
             ops::execute("setAttr", {{"args", {modName + ".walkable", walkName}}});
 
             const json onTerrain = followTerrain(g, modName, groundName, a.get<bool>("terrainWater", true), "settlementCreate");
+            ensureSurfaceMaterials(g);
             Rebuilt r = rebuild(g, host, "settlementCreate");
             json out = stats(r.layout);
             if (!onTerrain.is_null())
@@ -721,6 +822,13 @@ void registerCommands(ext::Context& ctx)
             out["mesh"] = host;
             out["modifier"] = mod;
             out["group"] = group;
+            if (const std::string route = a.get<std::string>("buildingRoute", "outline"); route != "outline")
+            {
+                json call = {{"args", {host}}, {"route", route}};
+                if (a.has("buildingStyle") && !a.get<std::string>("buildingStyle").empty())
+                    call["style"] = a.get<std::string>("buildingStyle");
+                out["buildingRoute"] = ops::execute("settlementBuildings", call);
+            }
             return out;
         },
         .examples = {"settlementCreate(profile='medievalTown', size=60000)",

@@ -1,5 +1,6 @@
 #include "LilaLinkSequence.h"
 
+#include "LilaLinkAssets.h"
 #include "LilaLinkLog.h"
 #include "LilaLinkMethods.h"
 
@@ -10,7 +11,6 @@
 #include "NiagaraEmitterHandle.h"
 #include "NiagaraMeshRendererProperties.h"
 #include "NiagaraSystem.h"
-#include "ObjectTools.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 
 namespace
@@ -73,7 +73,7 @@ TSharedPtr<FJsonValue> DeleteAssets(const TSharedPtr<FJsonObject>& Params, FStri
 		}
 	}
 	// Forced, without the confirmation dialog: references to the frames (a Niagara renderer was updated first) are cleared.
-	const int32 Deleted = Objects.IsEmpty() ? 0 : ObjectTools::ForceDeleteObjects(Objects, false);
+	const int32 Deleted = Objects.IsEmpty() ? 0 : LilaLink::ForceDeleteAssets(Objects);
 	UE_LOG(LogLilaLink, Log, TEXT("deleteAssets: deleted %d of %d"), Deleted, Paths.Num());
 
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();

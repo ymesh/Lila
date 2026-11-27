@@ -1,5 +1,6 @@
 #include "core/CrashUpload.h"
 
+#include "core/CrashCapture.h"
 #include "core/CrashReport.h"
 
 #include <nlohmann/json.hpp>
@@ -188,7 +189,8 @@ void addPart(std::string& body, const std::string& boundary, const std::string& 
     body += "\r\n\r\n" + data + "\r\n";
 }
 
-bool post(const std::string& contentType, const std::string& body, std::string* response, std::string* error)
+bool post(const std::wstring& host, INTERNET_PORT port, const std::wstring& path, bool secure, const std::string& contentType,
+          const std::string& body, std::string* response, std::string* error)
 {
     auto fail = [&](const char* what) {
         if (error)
@@ -199,9 +201,9 @@ bool post(const std::string& contentType, const std::string& body, std::string* 
     if (!session)
         return fail("WinHttpOpen");
     WinHttpSetTimeouts(session, 10000, 10000, 30000, 30000);
-    HINTERNET connect = WinHttpConnect(session, kSentryHost, INTERNET_DEFAULT_HTTPS_PORT, 0);
-    HINTERNET request = connect ? WinHttpOpenRequest(connect, L"POST", kSentryPath, nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
-                                                     WINHTTP_FLAG_SECURE)
+    HINTERNET connect = WinHttpConnect(session, host.c_str(), port, 0);
+    HINTERNET request = connect ? WinHttpOpenRequest(connect, L"POST", path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                                     secure ? WINHTTP_FLAG_SECURE : 0)
                                 : nullptr;
     bool ok = false;
     if (request)
@@ -280,7 +282,7 @@ bool send(const fs::path& reportDir, std::string* eventId, std::string* error)
     body += "--" + boundary + "--\r\n";
 
     std::string response;
-    if (!post("multipart/form-data; boundary=" + boundary, body, &response, error))
+    if (!post(kSentryHost, INTERNET_DEFAULT_HTTPS_PORT, kSentryPath, true, "multipart/form-data; boundary=" + boundary, body, &response, error))
         return false;
     json parsed = json::parse(response, nullptr, false);
     std::string id = parsed.is_object() ? parsed.value("id", std::string()) : response;
@@ -288,6 +290,38 @@ bool send(const fs::path& reportDir, std::string* eventId, std::string* error)
     writeTextAtomic(reportDir / ".sent", id);
     if (eventId)
         *eventId = id;
+    return true;
+}
+
+bool postJson(const std::string& url, const std::string& body, std::string* error)
+{
+    std::wstring wide = widen(url);
+    URL_COMPONENTS parts{};
+    parts.dwStructSize = sizeof(parts);
+    parts.dwHostNameLength = parts.dwUrlPathLength = parts.dwExtraInfoLength = DWORD(-1);
+    if (!WinHttpCrackUrl(wide.c_str(), 0, 0, &parts))
+    {
+        if (error)
+            *error = "bad url";
+        return false;
+    }
+    std::wstring host(parts.lpszHostName, parts.dwHostNameLength);
+    std::wstring path(parts.lpszUrlPath, parts.dwUrlPathLength + parts.dwExtraInfoLength);
+    return post(host, parts.nPort, path.empty() ? L"/" : path, parts.nScheme == INTERNET_SCHEME_HTTPS, "application/json", body, nullptr, error);
+}
+
+bool sendCrashedSession(const fs::path& telemetryDir, unsigned long pid, std::string* error)
+{
+    const fs::path file = telemetryDir / kCrashEventsDir / (std::to_string(pid) + ".json");
+    json pending = readJsonFile(file);
+    if (!pending.is_object() || !pending["url"].is_string() || !pending["event"].is_object())
+        return false;
+    json batch = {{"batch", json::array({pending["event"]})}};
+    if (!postJson(pending["url"].get<std::string>(), batch.dump(), error))
+        return false;
+    std::error_code ec;
+    fs::remove(file, ec);
+    fs::remove(telemetryDir / "sessions" / (std::to_string(pid) + ".json"), ec);
     return true;
 }
 #endif

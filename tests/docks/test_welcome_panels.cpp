@@ -15,6 +15,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
@@ -262,6 +263,35 @@ TEST_CASE("material editor lists the read-only Default and filters unused and se
     CHECK(shown() == QStringList{"Default", "M_Spare", "M_Used"});
     opaque->setChecked(false);
     CHECK(shown().size() == 4);
+}
+
+TEST_CASE("material editor shows the read-only note only while Default is current")
+{
+    registerWelcomeUi();
+    ops::execute("newScene", json::object());
+    ops::execute("createMaterial", {{"args", {"Crate"}}});
+    ui::MaterialEditor editor;
+    editor.show();
+    pump();
+    auto notes = [&] {
+        int visible = 0;
+        for (QLabel* l : editor.findChildren<QLabel*>())
+            if (l->text().startsWith("Built-in neutral") && l->isVisible())
+                ++visible;
+        return visible;
+    };
+    editor.showMaterial("Default");
+    pump();
+    CHECK(notes() == 1);
+    // Checked before the event loop runs, as a script that switches and grabs in one call sees it.
+    editor.showMaterial("Crate");
+    CHECK(editor.findChild<QListWidget*>()->currentItem()->text() == "Crate");
+    CHECK(notes() == 0);
+    pump();
+    CHECK(notes() == 0);
+    editor.showMaterial("Default");
+    pump();
+    CHECK(notes() == 1);
 }
 
 TEST_CASE("display layers panel marks empty layers")

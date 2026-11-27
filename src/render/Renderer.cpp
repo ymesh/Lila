@@ -3,6 +3,7 @@
 #include "core/Log.h"
 #include "core/Paths.h"
 #include "core/Profile.h"
+#include "core/Release.h"
 #include "render/Atmosphere.h"
 #include "render/Backdrop.h"
 #include "render/CameraRelative.h"
@@ -35,6 +36,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <format>
 #include <fstream>
 #include <functional>
 #include <future>
@@ -112,6 +114,7 @@ constexpr uint32_t kOneSidedLighting = 1u << 16;
 constexpr uint32_t kNormalXY = 1u << 17; // two-channel normal map: Z rebuilt in the shader
 constexpr uint32_t kGreyBase = 1u << 18;  // base colour map supplies opacity only
 constexpr uint32_t kGrunge = 1u << 19;    // a grunge block follows the draw's style block
+constexpr uint32_t kInstanceColor = 1u << 20; // the shader reads each placement's GpuInstance::tint
 
 // Placeholder textures bound where a material has no map; never evicted.
 constexpr uint64_t kWhiteSrgbKey = ~uint64_t(0);
@@ -310,6 +313,9 @@ struct AerialPush
 constexpr double kWorldPatternPeriod = 65536.0;
 static_assert(sizeof(GpuFrame) == sizeof(GpuLight), "the light buffer's header is one light long");
 
+constexpr uint32_t kTraceInstanceColor = 1u << 0; // reflection hits show the placement's instance colour
+constexpr uint32_t kTraceBaseColorMap = 1u << 1;  // the colour multiplies in rather than replacing
+
 /** A traced placement's mesh for rtbevel.slang and rtreflect.slang: its buffers' addresses, world matrix rows and materials. */
 struct TraceInstance
 {
@@ -318,7 +324,7 @@ struct TraceInstance
     glm::vec4 rows[3]{};
     uint64_t sections = 0; // TraceSection per material section
     uint32_t sectionCount = 0;
-    uint32_t pad = 0;
+    uint32_t tint = 0; // instance colour, unorm rgba8: linear rgb, amount
 };
 
 /** A section's material for reflection hits; matches rtreflect.slang. */
@@ -327,7 +333,7 @@ struct TraceSection
     uint32_t endTriangle = 0;
     float roughness = 0.5f;
     float metallic = 0.0f;
-    float pad = 0.0f;
+    uint32_t flags = kTraceInstanceColor; // kTraceInstanceColor, kTraceBaseColorMap
     glm::vec4 baseColor{0.5f, 0.5f, 0.5f, 1.0f};
     glm::vec4 emissive{0.0f};
 };
@@ -802,7 +808,14 @@ struct Viewport
     bool hasState = false; // nothing is drawn before the first submit
     int retries = 0;       // redraws in a row after an out-of-date swapchain
     int msaaGeneration = -1; // Impl::msaaGeneration the targets were made for
-    FrameState state;
+    /** The last frame submitted; the render thread draws it without copying it, so nothing changes it once submitted. */
+    std::shared_ptr<FrameState> state;
+    /** The frame the render thread draws (it rebases it in place). Changed under the mutex, by the render thread only. */
+    std::shared_ptr<FrameState> drawing;
+    /** Frames the render thread let go of, for the main thread to recycle and free. */
+    std::vector<std::shared_ptr<FrameState>> retired;
+    /** The replaced frame's vertex lists, for the main thread's next frame. */
+    FrameState spare;
     /** The last frame's mesh draws and their batches, reused while a new frame draws the same list. Render thread only. */
     DrawList keptMeshes;
     DrawBatches keptBatches;
@@ -1105,8 +1118,9 @@ struct Renderer::Impl
     std::vector<SectionRecord> offscreenRecords;
     std::vector<SectionRecord>* frameRecords = &offscreenRecords;
     PathTracer pathTracer;
-    /** Per instance of the scene's top-level structure, the shaded batch it places and its trace table entry. */
+    /** Per instance of the scene's top-level structure, the shaded batch it places, its colour and its trace table entry. */
     std::vector<uint32_t> frameTlasBatches;
+    std::vector<glm::vec4> frameTlasTints;
     std::vector<TraceInstance> frameTraceInstances;
     /** Bumped whenever a bottom-level structure is built or refit: traced geometry changed. */
     uint64_t blasEpoch = 0;
@@ -1537,25 +1551,64 @@ struct Renderer::Impl
             vkDestroySurfaceKHR(vk.instance, v.surface, nullptr);
     }
 
-    void ensureLines(Frame& f, size_t bytes)
+    /** The most one frame's line and overlay vertices may take; more is cut with a message, never written past the buffer. */
+    static constexpr size_t kMaxLineBytes = size_t(1) << 30;
+    /** The last problem reported for the lines buffer, so a problem lasting many frames is logged once. */
+    std::string linesProblem;
+
+    void reportLines(std::string problem)
     {
-        if (bytes <= f.linesCapacity)
+        if (problem == linesProblem)
             return;
+        if (!problem.empty())
+            log::warn("render: {}", problem);
+        else if (!linesProblem.empty())
+            log::info("render: lines and overlay draw in full again");
+        linesProblem = std::move(problem);
+    }
+
+    /** A mapped lines buffer of at least bytes (at most kMaxLineBytes) for f; false, with nothing mapped, when it can't be made. */
+    bool ensureLines(Frame& f, size_t bytes)
+    {
+        if (bytes <= f.linesCapacity && f.linesMapped)
+            return true;
         if (f.lines)
         {
-            vmaUnmapMemory(vk.allocator, f.linesAlloc);
+            if (f.linesMapped)
+                vmaUnmapMemory(vk.allocator, f.linesAlloc);
             vmaDestroyBuffer(vk.allocator, f.lines, f.linesAlloc);
         }
-        size_t cap = std::max<size_t>(bytes * 2, 64 * 1024);
+        f.lines = VK_NULL_HANDLE;
+        f.linesAlloc = VK_NULL_HANDLE;
+        f.linesMapped = nullptr;
+        f.linesCapacity = 0;
+        const size_t cap = std::clamp<size_t>(bytes + bytes / 2, std::min<size_t>(64 * 1024, kMaxLineBytes), kMaxLineBytes);
+        if (bytes > cap)
+            return false;
         VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         bci.size = cap;
         bci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
         VmaAllocationCreateInfo aci{};
         aci.usage = VMA_MEMORY_USAGE_AUTO;
         aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-        vmaCreateBuffer(vk.allocator, &bci, &aci, &f.lines, &f.linesAlloc, nullptr);
-        vmaMapMemory(vk.allocator, f.linesAlloc, &f.linesMapped);
+        if (VkResult r = vmaCreateBuffer(vk.allocator, &bci, &aci, &f.lines, &f.linesAlloc, nullptr); r != VK_SUCCESS)
+        {
+            f.lines = VK_NULL_HANDLE;
+            f.linesAlloc = VK_NULL_HANDLE;
+            reportLines(std::format("no {} MB buffer for lines and overlay ({}); they are not drawn", cap >> 20, vkResultName(r)));
+            return false;
+        }
+        if (VkResult r = vmaMapMemory(vk.allocator, f.linesAlloc, &f.linesMapped); r != VK_SUCCESS || !f.linesMapped)
+        {
+            vmaDestroyBuffer(vk.allocator, f.lines, f.linesAlloc);
+            f.lines = VK_NULL_HANDLE;
+            f.linesAlloc = VK_NULL_HANDLE;
+            f.linesMapped = nullptr;
+            reportLines(std::format("the {} MB lines and overlay buffer could not be mapped ({}); they are not drawn", cap >> 20, vkResultName(r)));
+            return false;
+        }
         f.linesCapacity = cap;
+        return true;
     }
 
     void initDescriptors()
@@ -3435,6 +3488,9 @@ struct Renderer::Impl
             const glm::uvec2 range = frameTlasBatches[i] < batchSections.size() ? batchSections[frameTlasBatches[i]] : glm::uvec2(0);
             pi.firstSection = range.x;
             pi.sectionCount = range.y;
+            const glm::vec4 tint = i < frameTlasTints.size() ? frameTlasTints[i] : glm::vec4(0.0f);
+            pi.tint[0] = glm::packHalf2x16(glm::vec2(tint.r, tint.g));
+            pi.tint[1] = glm::packHalf2x16(glm::vec2(tint.b, tint.a));
         }
 
         PathTracer::Inputs in;
@@ -4714,6 +4770,7 @@ struct Renderer::Impl
         std::vector<VkAccelerationStructureInstanceKHR> instances;
         std::vector<TraceInstance> table;
         frameTlasBatches.clear();
+        frameTlasTints.clear();
         std::vector<TraceSection> sections;
         bool built = false;
         for (const DrawBatch& b : frameBatches.shaded)
@@ -4745,6 +4802,7 @@ struct Renderer::Impl
             for (uint32_t i = 0; i < b.count; ++i)
             {
                 frameTlasBatches.push_back(uint32_t(&b - frameBatches.shaded.data()));
+                frameTlasTints.push_back(frameBatches.instances[b.first + i].tint);
                 const glm::mat4& w = frameBatches.instances[b.first + i].world;
                 VkAccelerationStructureInstanceKHR inst{};
                 for (int r = 0; r < 3; ++r)
@@ -4762,6 +4820,7 @@ struct Renderer::Impl
                     ti.rows[r] = glm::vec4(w[0][r], w[1][r], w[2][r], w[3][r]);
                 ti.sections = firstSection; // an index until the buffer's address is known
                 ti.sectionCount = sectionCount;
+                ti.tint = glm::packUnorm4x8(glm::clamp(frameBatches.instances[b.first + i].tint, 0.0f, 1.0f));
                 table.push_back(ti);
             }
         }
@@ -4880,6 +4939,7 @@ struct Renderer::Impl
                 t.emissive = glm::vec4(m.emissive, 0.0f);
                 t.roughness = m.roughness;
                 t.metallic = m.metallic;
+                t.flags = (m.flags & MatNoInstanceColor ? 0u : kTraceInstanceColor) | (m.flags & MatBaseColorMap ? kTraceBaseColorMap : 0u);
             }
             else
             {
@@ -6299,10 +6359,20 @@ struct Renderer::Impl
         return v.refreshInterval;
     }
 
+    /** Under the mutex: the view draws the last submitted frame from now on, handing the one it drew back to the main thread. */
+    static void takeLatest(Viewport& v)
+    {
+        if (v.drawing == v.state)
+            return;
+        if (v.drawing)
+            v.retired.push_back(std::move(v.drawing));
+        v.drawing = v.state;
+    }
+
     /** The shortest time between two of the view's frames under its frame cap; zero when uncapped. */
     std::chrono::steady_clock::duration frameInterval(Viewport& v)
     {
-        const int cap = v.state.frameCap;
+        const int cap = v.state ? v.state->frameCap : kFrameCapRefresh;
         const std::chrono::duration<double> d = cap == kFrameCapRefresh ? refreshPeriod(v)
                                                 : cap > 0               ? std::chrono::duration<double>(1.0 / cap)
                                                                         : std::chrono::duration<double>(0.0);
@@ -6363,16 +6433,16 @@ struct Renderer::Impl
      * True when the frame could not be shown and should be drawn again straight away. latch runs once the frame's
      * fence and swapchain image are in hand, and may swap in a newer state submitted while the thread was blocked.
      */
-    bool render(Viewport& v, FrameState& s, const std::function<void(FrameState&)>& latch = {})
+    bool render(Viewport& v, std::shared_ptr<FrameState>& held, const std::function<void(std::shared_ptr<FrameState>&)>& latch = {})
     {
         LILA_ZONE();
 
-        applyMsaa(s);
+        applyMsaa(*held);
         if (v.msaaGeneration != msaaGeneration)
             v.needsRecreate = true;
-        if (v.vsync != s.vsync && !v.offscreen)
+        if (v.vsync != held->vsync && !v.offscreen)
         {
-            v.vsync = s.vsync;
+            v.vsync = held->vsync;
             v.needsRecreate = true;
         }
 
@@ -6421,7 +6491,8 @@ struct Renderer::Impl
         vkResetFences(vk.device, 1, &f.fence);
         // Waiting above can take a whole vblank; draw what the user is doing now, not what they did before it.
         if (latch)
-            latch(s);
+            latch(held);
+        FrameState& s = *held;
         if (s.cameraRelative && glm::length(s.eye) > kRebaseBeyond)
             rebaseOnEye(s);
         if (s.externalScene)
@@ -6450,10 +6521,29 @@ struct Renderer::Impl
             const std::vector<LineVertex>* verts = i < debugBatches ? &(*s.debugLines)[i].vertices : s.debugTris.get();
             lineBytes += verts ? verts->size() * sizeof(GpuLineVertex) : 0;
         }
-        size_t trisBytes = s.overlayTris.size() * sizeof(OverlayVertex);
-        if (lineBytes + trisBytes)
+        // Past kMaxLineBytes the overlay's last triangles are cut, or with too many lines nothing from the buffer is drawn.
+        size_t trisDrawn = s.overlayTris.size();
+        bool linesOk = lineBytes <= kMaxLineBytes;
+        if (!linesOk)
         {
-            ensureLines(f, lineBytes + trisBytes);
+            trisDrawn = 0;
+            reportLines(std::format("{} MB of lines in one frame, more than {} MB; lines and overlay are not drawn", lineBytes >> 20, kMaxLineBytes >> 20));
+        }
+        else if (lineBytes + trisDrawn * sizeof(OverlayVertex) > kMaxLineBytes)
+        {
+            trisDrawn = (kMaxLineBytes - lineBytes) / sizeof(OverlayVertex) / 3 * 3;
+            reportLines(std::format("{} MB of overlay in one frame, more than {} MB; the rest is not drawn", s.overlayTris.size() * sizeof(OverlayVertex) >> 20,
+                                    kMaxLineBytes >> 20));
+        }
+        else
+            reportLines({});
+        const size_t trisBytes = trisDrawn * sizeof(OverlayVertex);
+        if (linesOk && lineBytes + trisBytes)
+            linesOk = ensureLines(f, lineBytes + trisBytes);
+        if (!linesOk)
+            trisDrawn = 0;
+        if (linesOk && lineBytes + trisBytes)
+        {
             GpuLineVertex* mapped = static_cast<GpuLineVertex*>(f.linesMapped);
             const glm::dmat4 clipViewProj = s.proj * s.view;
             const glm::vec3 behind(s.eye + glm::dvec3(s.view[0][2], s.view[1][2], s.view[2][2]));
@@ -6996,7 +7086,7 @@ struct Renderer::Impl
         }
         drawOverScene(cmd, s, vpF);
 
-        if (linesPipeline && !s.lines.empty())
+        if (linesOk && linesPipeline && !s.lines.empty())
         {
             const LinesPush lp{vpF};
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, linesPipeline);
@@ -7022,7 +7112,7 @@ struct Renderer::Impl
         for (const Biased& b : biased)
         {
             const std::vector<LineVertex>& verts = *lineSets[b.set];
-            if (!b.pipeline || verts.empty())
+            if (!linesOk || !b.pipeline || verts.empty())
                 continue;
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, b.pipeline);
             if (b.width > 0.0f)
@@ -7040,7 +7130,7 @@ struct Renderer::Impl
             {
                 const LineBatch& batch = (*s.debugLines)[i];
                 VkPipeline pipeline = onTop ? linesOverPipeline : linesOnTopPipeline;
-                if (batch.onTop != onTop || batch.vertices.empty() || !pipeline)
+                if (!linesOk || batch.onTop != onTop || batch.vertices.empty() || !pipeline)
                     continue;
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
                 vkCmdSetLineWidth(cmd, lineWidth(batch.width));
@@ -7052,7 +7142,7 @@ struct Renderer::Impl
                 vkCmdDraw(cmd, uint32_t(batch.vertices.size()), 1, debugFirst[i], 0);
             }
         };
-        if (s.debugTris && !s.debugTris->empty() && tris3dPipeline)
+        if (linesOk && s.debugTris && !s.debugTris->empty() && tris3dPipeline)
         {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tris3dPipeline);
             const LinesPush lp{vpF, depthPull(s.proj, v.extent.height, kLinePullPixels)};
@@ -7063,7 +7153,7 @@ struct Renderer::Impl
         }
         drawDebugLines(false);
 
-        if (overlayPipeline && !s.linesXray.empty())
+        if (linesOk && overlayPipeline && !s.linesXray.empty())
         {
             const LinesPush lp{vpF};
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayPipeline);
@@ -7074,7 +7164,7 @@ struct Renderer::Impl
         }
         drawDebugLines(true);
 
-        if (overlayPipeline && !s.overlay.empty())
+        if (linesOk && overlayPipeline && !s.overlay.empty())
         {
             const LinesPush lp{glm::mat4(1.0f)};
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayPipeline);
@@ -7084,7 +7174,7 @@ struct Renderer::Impl
             vkCmdDraw(cmd, uint32_t(s.overlay.size()), 1, lineFirst[3], 0);
         }
 
-        if (overlayTrisPipeline && !s.overlayTris.empty())
+        if (overlayTrisPipeline && trisDrawn)
         {
             glm::vec2 invSize(1.0f / float(v.extent.width), 1.0f / float(v.extent.height));
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayTrisPipeline);
@@ -7092,7 +7182,7 @@ struct Renderer::Impl
             vkCmdPushConstants(cmd, overlayTrisLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::vec2), &invSize);
             VkDeviceSize offset = lineBytes;
             vkCmdBindVertexBuffers(cmd, 0, 1, &f.lines, &offset);
-            vkCmdDraw(cmd, uint32_t(s.overlayTris.size()), 1, 0, 0);
+            vkCmdDraw(cmd, uint32_t(trisDrawn), 1, 0, 0);
         }
 
         vkCmdEndRendering(cmd);
@@ -7550,7 +7640,7 @@ struct Renderer::Impl
             {
                 // Timing runs read every frame back, so each one's timestamps are collected.
                 v.readbackWanted = ++drawn == total || job.repeat > 1;
-                FrameState s = frame;
+                auto s = std::make_shared<FrameState>(frame);
                 render(v, s);
                 runs.push_back(v.timing);
             }
@@ -8001,6 +8091,9 @@ struct Renderer::Impl
             p.flags = MatTwoSided;
         }
         p.extra.z = std::clamp(s.envLightSaturation, 0.0f, 1.0f);
+        if (b.tinted && !(p.flags & (MatNoInstanceColor | kGreyBase)))
+            p.flags |= kInstanceColor;
+        p.flags &= ~uint32_t(MatNoInstanceColor);
         if (d.vertexColors != VertexColorMode::Off)
             p.flags |= (d.vertexColors == VertexColorMode::Unlit ? kVertexColorUnlit : kVertexColorShaded) |
                        (uint32_t(d.colorChannel) << kColorChannelShift);
@@ -8813,12 +8906,13 @@ struct Renderer::Impl
                     {
                         initFrames(v);
                         // The main thread can be busy for a while after the window shows; until the first frame the window would show white.
-                        fillWindow(v.window, v.state.background.r, v.state.background.g, v.state.background.b);
+                        if (v.state)
+                            fillWindow(v.window, v.state->background.r, v.state->background.g, v.state->background.b);
                     }
                 }
                 if (!v.surface)
                     continue;
-                std::unique_ptr<EnvironmentData> env = pollEnvironment(v.state.envPath);
+                std::unique_ptr<EnvironmentData> env = pollEnvironment(v.state->envPath);
                 // Until the first environment arrives there is nothing to light with; the worker re-queues every viewport.
                 if (!env && !envLoaded)
                 {
@@ -8832,22 +8926,22 @@ struct Renderer::Impl
                         }
                     continue;
                 }
-                FrameState s = v.state;
+                takeLatest(v);
                 v.renderingSerial = v.submitted;
                 lock.unlock();
                 if (env)
                     uploadEnvironment(*env);
-                auto latch = [&](FrameState& latest) {
+                auto latch = [&](std::shared_ptr<FrameState>& latest) {
                     std::scoped_lock relock(mutex);
                     // A new environment or sample count needs the setup that ran before the wait, so it waits a frame.
-                    if (v.pending && v.state.envPath == latest.envPath && v.state.msaaSamples == latest.msaaSamples)
+                    if (v.pending && v.state->envPath == latest->envPath && v.state->msaaSamples == latest->msaaSamples)
                     {
-                        latest = v.state;
+                        takeLatest(v);
                         v.renderingSerial = v.submitted;
                         v.pending = false;
                     }
                 };
-                bool retry = render(v, s, latch);
+                bool retry = render(v, v.drawing, latch);
                 LILA_FRAME_MARK();
                 plotFrame(v.timing);
                 lock.lock();
@@ -8998,18 +9092,45 @@ void Renderer::resize(ViewportId id, int width, int height)
 
 void Renderer::submit(ViewportId id, FrameState state)
 {
+    LILA_ZONE();
+    auto next = std::make_shared<FrameState>(std::move(state));
+    std::vector<std::shared_ptr<FrameState>> done;
     {
         std::scoped_lock lock(m->mutex);
+        LILA_ZONE_N("renderer.submit locked");
         auto it = m->viewports.find(id);
         if (it == m->viewports.end())
             return;
-        it->second->state = std::move(state);
-        ++it->second->submitted;
-        it->second->pending = true;
-        it->second->hasState = true;
-        it->second->retries = 0;
+        Viewport& v = *it->second;
+        std::shared_ptr<FrameState> previous = std::exchange(v.state, std::move(next));
+        done.swap(v.retired);
+        // The render thread may still be drawing the replaced frame; it hands it back through retired once it lets go.
+        if (previous && previous != v.drawing)
+            done.push_back(std::move(previous));
+        for (std::shared_ptr<FrameState>& f : done)
+        {
+            render::reuseBuffers(v.spare, *f);
+            // Draws the new frame shares cost nothing to let go; a list of its own can hold a replaced scene's last references.
+            if (f->meshes.sameList(v.state->meshes))
+                f->meshes.clear();
+        }
+        ++v.submitted;
+        v.pending = true;
+        v.hasState = true;
+        v.retries = 0;
     }
     m->cv.notify_all();
+    // The frames before can hold the last references to a replaced scene's draws: gigabytes, freed off the main thread.
+    for (std::shared_ptr<FrameState>& f : done)
+        if (constexpr size_t kOnItsOwn = 1000; f->meshes.size() >= kOnItsOwn)
+            release::later(std::move(f));
+}
+
+void Renderer::reuseBuffers(ViewportId id, FrameState& state)
+{
+    std::scoped_lock lock(m->mutex);
+    if (auto it = m->viewports.find(id); it != m->viewports.end())
+        render::reuseBuffers(state, it->second->spare);
 }
 
 Renderer::FrameStats Renderer::stats(ViewportId id) const

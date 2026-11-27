@@ -1,4 +1,5 @@
 #include "ui/MeshCache.h"
+#include "core/Release.h"
 
 #include "core/Log.h"
 #include "core/PrefStore.h"
@@ -18,7 +19,11 @@
 #include <cmath>
 #include <map>
 #include <numbers>
+#include <thread>
+#include <tuple>
+#include <optional>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace lila::ui
 {
@@ -461,6 +466,23 @@ Entry build(const scene::MeshPtr& source, bool tangents)
     return {source, out, pick, tangents};
 }
 
+/** Drops the entries whose meshes are gone; a whole scene's worth is freed on a thread of its own, off the frame. */
+void dropExpired(std::unordered_map<const geo::Mesh*, Entry>& c)
+{
+    std::vector<Entry> doomed;
+    for (auto it = c.begin(); it != c.end();)
+        if (it->second.source.expired())
+        {
+            doomed.push_back(std::move(it->second));
+            it = c.erase(it);
+        }
+        else
+            ++it;
+    constexpr size_t kOnItsOwn = 64;
+    if (doomed.size() >= kOnItsOwn)
+        release::laterEach(std::move(doomed));
+}
+
 const Entry* entryFor(const scene::MeshPtr& mesh, bool tangents = false, scene::NodeId owner = scene::kNoNode)
 {
     if (!mesh)
@@ -476,7 +498,7 @@ const Entry* entryFor(const scene::MeshPtr& mesh, bool tangents = false, scene::
         return &it->second;
     }
     // Entries of deleted meshes hold gigabytes on dense meshes, so they go as soon as anything new is cached.
-    std::erase_if(c, [](const auto& kv) { return kv.second.source.expired(); });
+    dropExpired(c);
     std::erase_if(staticCopies(), [](const auto& kv) { return kv.second.source.expired(); });
     // A mesh too big for the memory left stays undrawn, reported once, rather than taking the app down.
     // Never destroyed: at exit the meshes' owners (extension DLLs among them) may already be unloaded.
@@ -505,6 +527,46 @@ const Entry* entryFor(const scene::MeshPtr& mesh, bool tangents = false, scene::
 }
 } // namespace
 
+void prewarmRenderMeshes(const std::vector<std::pair<scene::MeshPtr, bool>>& meshes)
+{
+    LILA_ZONE();
+
+    auto& c = cache();
+    std::vector<std::pair<scene::MeshPtr, bool>> todo;
+    std::unordered_set<const geo::Mesh*> seen;
+    for (const auto& [mesh, tangents] : meshes)
+    {
+        if (!mesh || mesh->numFaces() == 0 || !seen.insert(mesh.get()).second)
+            continue;
+        if (auto it = c.find(mesh.get()); it != c.end() && it->second.source.lock() == mesh && (it->second.tangents || !tangents))
+            continue;
+        todo.emplace_back(mesh, tangents);
+    }
+    constexpr size_t kWorthIt = 16;
+    if (todo.size() < kWorthIt)
+        return;
+    std::vector<std::optional<Entry>> built(todo.size());
+    std::vector<uint64_t> keys(todo.size());
+    tbb::parallel_for(size_t(0), todo.size(), [&](size_t i) {
+        try
+        {
+            keys[i] = layoutKey(*todo[i].first);
+            built[i] = build(todo[i].first, todo[i].second);
+        }
+        catch (const std::bad_alloc&)
+        {
+            // entryFor tries this one again on its own and reports it.
+        }
+    });
+    dropExpired(c);
+    for (size_t i = 0; i < todo.size(); ++i)
+        if (built[i])
+        {
+            rememberLayout(keys[i], *built[i]);
+            c[todo[i].first.get()] = std::move(*built[i]);
+        }
+}
+
 std::shared_ptr<const render::RenderMesh> renderMeshFor(const scene::MeshPtr& mesh, bool tangents, scene::NodeId owner)
 {
     const Entry* e = entryFor(mesh, tangents, owner);
@@ -529,36 +591,51 @@ bool reuseRenderMesh(const scene::MeshPtr& from, const scene::MeshPtr& to, const
     return true;
 }
 
-std::shared_ptr<const MaskedMesh> maskedRenderMeshFor(const scene::MeshPtr& mesh, uint64_t maskKey, const std::function<std::vector<uint8_t>()>& shownFaces,
-                                                      bool tangents, const SmoothCage* cageWire)
+namespace
 {
-    LILA_ZONE();
+struct Masked
+{
+    std::weak_ptr<const geo::Mesh> source;
+    std::shared_ptr<const render::RenderMesh> base;
+    std::shared_ptr<const MaskedMesh> result;
+};
+using MaskedKey = std::tuple<const geo::Mesh*, uint64_t, const SmoothCage*>;
 
-    const Entry* full = entryFor(mesh, tangents);
-    if (!full || !(full->pick || full->pickLayout))
-        return nullptr;
-    struct Masked
-    {
-        std::weak_ptr<const geo::Mesh> source;
-        std::shared_ptr<const render::RenderMesh> base;
-        std::shared_ptr<const MaskedMesh> result;
-    };
+std::map<MaskedKey, Masked>& maskedCache()
+{
     // Never destroyed: at exit the meshes' owners (extension DLLs among them) may already be unloaded.
-    static auto& cache = *new std::map<std::tuple<const geo::Mesh*, uint64_t, const SmoothCage*>, Masked>();
-    auto key = std::make_tuple(mesh.get(), maskKey, cageWire);
-    if (auto it = cache.find(key); it != cache.end() && it->second.source.lock() == mesh && it->second.base == full->built)
-        return it->second.result;
-    // Entries of deleted meshes hold gigabytes on dense meshes, so they go as soon as anything new is cached.
-    std::erase_if(cache, [](const auto& kv) { return kv.second.source.expired(); });
+    static auto& cache = *new std::map<MaskedKey, Masked>();
+    return cache;
+}
 
+/** Entries of deleted meshes hold gigabytes on dense meshes, so they go as soon as anything new is cached; many at once on a thread of their own. */
+void dropExpiredMasked()
+{
+    auto& cache = maskedCache();
+    std::vector<Masked> doomed;
+    for (auto it = cache.begin(); it != cache.end();)
+        if (it->second.source.expired())
+        {
+            doomed.push_back(std::move(it->second));
+            it = cache.erase(it);
+        }
+        else
+            ++it;
+    constexpr size_t kOnItsOwn = 64;
+    if (doomed.size() >= kOnItsOwn)
+        release::laterEach(std::move(doomed));
+}
+
+/** The subset of full's triangles and wire that faces (null: all) shows; reads only, so meshes can be masked in parallel. */
+std::shared_ptr<MaskedMesh> buildMasked(const geo::Mesh& mesh, const Entry& full, const std::vector<uint8_t>* faces, const SmoothCage* cageWire)
+{
     // Only the layout is read: which face each triangle and edge each line came from.
-    const geo::RenderMesh& pd = full->pick ? *full->pick : *full->pickLayout;
-    const render::RenderMesh& rm = *full->built;
-    const std::vector<uint8_t> faces = shownFaces ? shownFaces() : std::vector<uint8_t>();
-    auto shown = [&](geo::Index f) { return !shownFaces || (f < faces.size() && faces[f]); };
+    const geo::RenderMesh& pd = full.pick ? *full.pick : *full.pickLayout;
+    const render::RenderMesh& rm = *full.built;
+    auto shown = [&](geo::Index f) { return !faces || (f < faces->size() && (*faces)[f]); };
     auto out = std::make_shared<MaskedMesh>();
     auto sub = std::make_shared<render::RenderMesh>();
-    sub->shareVertices = full->built;
+    sub->shareVertices = full.built;
     sub->boundsMin = rm.boundsMin;
     sub->boundsMax = rm.boundsMax;
     const size_t tris = rm.indices.size() / 3;
@@ -568,6 +645,7 @@ std::shared_ptr<const MaskedMesh> maskedRenderMeshFor(const scene::MeshPtr& mesh
     std::vector<render::MeshSection> sections = rm.sections;
     if (sections.empty())
         sections.push_back({0, 0, uint32_t(rm.indices.size())});
+    sub->indices.reserve(rm.indices.size());
     for (const render::MeshSection& sec : sections)
     {
         render::MeshSection kept{sec.material, uint32_t(sub->indices.size()), 0};
@@ -582,10 +660,10 @@ std::shared_ptr<const MaskedMesh> maskedRenderMeshFor(const scene::MeshPtr& mesh
     std::vector<uint8_t> edgeShown;
     if (!pd.lineEdges.empty())
     {
-        edgeShown.assign(mesh->edgeCapacity(), 0);
-        for (geo::Index f = 0; f < mesh->faceCapacity(); ++f)
-            if (shown(f) && mesh->faceValid(f))
-                mesh->forEachFaceCorner(f, [&](geo::Index c) { edgeShown[mesh->cornerEdge(c)] = 1; });
+        edgeShown.assign(mesh.edgeCapacity(), 0);
+        for (geo::Index f = 0; f < mesh.faceCapacity(); ++f)
+            if (shown(f) && mesh.faceValid(f))
+                mesh.forEachFaceCorner(f, [&](geo::Index c) { edgeShown[mesh.cornerEdge(c)] = 1; });
     }
     for (size_t l = 0; l < pd.lineEdges.size() && 2 * l + 1 < rm.edgeVertexCount(); ++l)
         if (pd.lineEdges[l] < edgeShown.size() && edgeShown[pd.lineEdges[l]] &&
@@ -595,8 +673,72 @@ std::shared_ptr<const MaskedMesh> maskedRenderMeshFor(const scene::MeshPtr& mesh
             sub->edgePoints.push_back(rm.edgePoint(2 * l + 1));
         }
     out->mesh = std::move(sub);
+    return out;
+}
+
+/** No edge maps onto it, so a mask with it keeps every triangle and drops every wire line. */
+const SmoothCage& noEdges()
+{
+    static const SmoothCage& none = *new SmoothCage();
+    return none;
+}
+} // namespace
+
+std::shared_ptr<const MaskedMesh> maskedRenderMeshFor(const scene::MeshPtr& mesh, uint64_t maskKey, const std::function<std::vector<uint8_t>()>& shownFaces,
+                                                      bool tangents, const SmoothCage* cageWire)
+{
+    LILA_ZONE();
+
+    const Entry* full = entryFor(mesh, tangents);
+    if (!full || !(full->pick || full->pickLayout))
+        return nullptr;
+    auto& cache = maskedCache();
+    const MaskedKey key = std::make_tuple(mesh.get(), maskKey, cageWire);
+    if (auto it = cache.find(key); it != cache.end() && it->second.source.lock() == mesh && it->second.base == full->built)
+        return it->second.result;
+    dropExpiredMasked();
+    const std::vector<uint8_t> faces = shownFaces ? shownFaces() : std::vector<uint8_t>();
+    std::shared_ptr<const MaskedMesh> out = buildMasked(*mesh, *full, shownFaces ? &faces : nullptr, cageWire);
     cache[key] = {mesh, full->built, out};
     return out;
+}
+
+void dropExpiredRenderMeshes()
+{
+    LILA_ZONE();
+    dropExpired(cache());
+    dropExpired(staticCopies());
+    dropExpiredMasked();
+}
+
+void prewarmWirelessMeshes(const std::vector<std::pair<scene::MeshPtr, bool>>& meshes)
+{
+    LILA_ZONE();
+
+    auto& cache = maskedCache();
+    const SmoothCage* none = &noEdges();
+    std::vector<std::pair<scene::MeshPtr, const Entry*>> todo;
+    std::unordered_set<const geo::Mesh*> seen;
+    for (const auto& [mesh, tangents] : meshes)
+    {
+        if (!mesh || !seen.insert(mesh.get()).second)
+            continue;
+        const Entry* full = entryFor(mesh, tangents);
+        if (!full || !(full->pick || full->pickLayout))
+            continue;
+        if (auto it = cache.find(std::make_tuple(mesh.get(), uint64_t(0), none));
+            it != cache.end() && it->second.source.lock() == mesh && it->second.base == full->built)
+            continue;
+        todo.emplace_back(mesh, full);
+    }
+    constexpr size_t kWorthIt = 16;
+    if (todo.size() < kWorthIt)
+        return;
+    std::vector<std::shared_ptr<MaskedMesh>> built(todo.size());
+    tbb::parallel_for(size_t(0), todo.size(), [&](size_t i) { built[i] = buildMasked(*todo[i].first, *todo[i].second, nullptr, none); });
+    dropExpiredMasked();
+    for (size_t i = 0; i < todo.size(); ++i)
+        cache[std::make_tuple(todo[i].first.get(), uint64_t(0), none)] = {todo[i].first, todo[i].second->built, built[i]};
 }
 
 scene::MeshPtr smoothedFor(const scene::MeshPtr& mesh, int level)
@@ -802,9 +944,7 @@ ModifierWire modifierWireFor(const scene::MeshPtr& cage, const scene::MeshPtr& r
 
 std::shared_ptr<const render::RenderMesh> wirelessMeshFor(const scene::MeshPtr& mesh, bool tangents)
 {
-    // No edge maps onto it, so the mask keeps every triangle and drops every wire line.
-    static const SmoothCage& noEdges = *new SmoothCage();
-    auto masked = maskedRenderMeshFor(mesh, 0, {}, tangents, &noEdges);
+    auto masked = maskedRenderMeshFor(mesh, 0, {}, tangents, &noEdges());
     return masked ? masked->mesh : nullptr;
 }
 

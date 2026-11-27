@@ -4,6 +4,7 @@
 #include "Materials.h"
 
 #include "Analysis.h"
+#include "Shaping.h"
 
 #include <lila/ImageIO.h>
 #include <lila/Profile.h>
@@ -109,6 +110,7 @@ Term termFromJson(const std::string& input, const json& v)
         t.hi = matBound(v.value("below", json(nullptr)), t.hi);
         t.fade = std::max(0.0, v.value("fade", t.fade));
         t.invert = v.value("invert", false);
+        t.blur = std::max(0.0, v.value("blur", 0.0));
     }
     else if (v.is_number())
         t.lo = v.get<double>();
@@ -249,6 +251,8 @@ json Term::toJson() const
     json j = {{"range", r}, {"fade", fade}};
     if (invert)
         j["invert"] = true;
+    if (blur > 0.0)
+        j["blur"] = blur;
     return j;
 }
 
@@ -468,6 +472,18 @@ const std::vector<float>* SurfaceFields::get(const std::string& name)
     return &mDerived.emplace(name, std::move(out)).first->second;
 }
 
+const std::vector<float>* SurfaceFields::blurred(const std::string& name, double radius)
+{
+    const std::vector<float>* v = get(name);
+    const int r = int(std::lround(radius / mH.cell));
+    if (!v || r < 1)
+        return v;
+    const std::string key = name + "#blur" + std::to_string(r);
+    if (auto it = mDerived.find(key); it != mDerived.end())
+        return &it->second;
+    return &mDerived.emplace(key, boxBlurred(*v, mH.nx, mH.nz, r, 3)).first->second;
+}
+
 // ---------------------------------------------------------------------------------------------------- layer weights
 
 namespace
@@ -485,7 +501,7 @@ ResolvedRule resolveRule(SurfaceFields& f, const std::vector<Term>& terms, const
     ResolvedRule r;
     for (const Term& t : terms)
     {
-        const std::vector<float>* g = f.get(t.input);
+        const std::vector<float>* g = t.blur > 0.0 ? f.blurred(t.input, t.blur) : f.get(t.input);
         if (!g)
         {
             missing.insert(t.input);
@@ -577,7 +593,8 @@ RulesResult applyMaterialRules(Heightfield& h, const MaterialRules& r)
                 {
                     const LayerRule& l = r.layers[i];
                     double a = l.opacity * ruleAt(rules[i], k);
-                    if (l.noise.amount > 0.0)
+                    // Noise breaks up the edges of where the rule holds; it never lays the layer where the rule is off.
+                    if (l.noise.amount > 0.0 && a > 0.0)
                         a = matSmooth(a + l.noise.amount * matBreakupNoise(p.x / l.noise.scale, p.y / l.noise.scale, r.seed ^ matNameSeed(l.name)));
                     const double wi = a * remaining;
                     remaining -= wi;
@@ -922,6 +939,9 @@ RulesResult applyBiomes(Heightfield& h, const BiomeSpec& s)
 
 // ---------------------------------------------------------------------------------------------------- default layers
 
+/** Lowest default snow above the sea when the terrain has no temperature: 3 km, so hills and tropical ranges stay clear. */
+constexpr double kDefaultSnowlineCm = 300000.0;
+
 MaterialRules defaultMaterialRules(const Heightfield& h, std::optional<double> seaLevel)
 {
     auto term = [](const char* input, double lo, double hi, double fade) {
@@ -937,14 +957,33 @@ MaterialRules defaultMaterialRules(const Heightfield& h, std::optional<double> s
         l.name = name;
         l.material = defaultMaterialFor(name);
         l.color = defaultColorFor(name);
+        // A library material with no measured colour draws in the layer's own.
+        l.colorGiven = !l.material.empty() && !knownMaterialColor(l.material);
         l.terms = std::move(terms);
         l.noise = {noise, scale};
         return l;
     };
     MaterialRules r;
     r.layers.push_back(layer("grass", {}));
-    r.layers.push_back(layer("dirt", {term("wear", 0.25, kMatInf, 0.15)}, 0.25, 4000.0));
-    r.layers.push_back(layer("gravel", {term("deposit", 0.3, kMatInf, 0.15)}, 0.2, 2500.0));
+    if (h.findMask(biomeMask("forest")))
+    {
+        LayerRule l = layer("forest", {}, 0.2, 6000.0);
+        l.biomes = {"forest"};
+        r.layers.push_back(std::move(l));
+    }
+    else
+    {
+        // Wooded hillsides over grassy flats; the coast's first metres stay open.
+        std::vector<Term> where = {term("slope", 10.0, 38.0, 4.0)};
+        if (seaLevel)
+            where.push_back(term("height", *seaLevel + 1500.0, kMatInf, 1000.0));
+        r.layers.push_back(layer("forest", std::move(where), 0.35, 6000.0));
+    }
+    // Erosion's masks: a terrain never eroded has neither.
+    if (h.findMask("wear"))
+        r.layers.push_back(layer("dirt", {term("wear", 0.25, kMatInf, 0.15)}, 0.25, 4000.0));
+    if (h.findMask("deposit"))
+        r.layers.push_back(layer("gravel", {term("deposit", 0.3, kMatInf, 0.15)}, 0.2, 2500.0));
     if (seaLevel)
         r.layers.push_back(layer("sand", {term("height", -kMatInf, *seaLevel + 300.0, 200.0), term("slope", -kMatInf, 15.0, 5.0)}, 0.15, 3000.0));
     r.layers.push_back(layer("riverbed", {term("flow", 0.82, kMatInf, 0.04)}));
@@ -953,9 +992,16 @@ MaterialRules defaultMaterialRules(const Heightfield& h, std::optional<double> s
     const double span = std::max(1.0, range.y - range.x);
     if (h.findMask("temperature"))
         r.layers.push_back(layer("snow", {term("temperature", -kMatInf, -2.0, 2.0), term("slope", -kMatInf, 50.0, 5.0)}, 0.2, 5000.0));
+    else if (seaLevel)
+    {
+        // Measured up from the sea, not the seabed, and never below a snowline: low coasts and hills stay clear.
+        const double land = std::max(0.0, range.y - *seaLevel);
+        const double line = *seaLevel + std::max(kDefaultSnowlineCm, 0.82 * land);
+        r.layers.push_back(layer("snow", {term("height", line, kMatInf, std::max(2000.0, 0.04 * land)), term("slope", -kMatInf, 50.0, 5.0)}, 0.2, 5000.0));
+    }
     else
         r.layers.push_back(layer("snow", {term("height", range.x + 0.82 * span, kMatInf, 0.04 * span), term("slope", -kMatInf, 50.0, 5.0)}, 0.2, 5000.0));
-    for (const char* road : {"road", "roads", "path", "paths"})
+    for (const char* road : {"road", "roads", "roadSurface", "path", "paths"})
         if (h.findMask(road))
         {
             LayerRule l = layer("road", {term(road, 0.5, kMatInf, 0.2)});

@@ -59,8 +59,9 @@ LILA_UI_API void show(QPoint globalPos, Options options);
 LILA_UI_API std::optional<Value> exec(QPoint globalPos, Options options);
 
 /**
- * The QColorDialog::getColor shape for code holding sRGB QColors: an invalid QColor on cancel. changed reports live and
- * gets the initial colour back on cancel.
+ * The QColorDialog::getColor shape for code holding sRGB QColors: an invalid QColor on cancel, or when anchor was
+ * deleted while the popup was open. changed reports live, stops once anchor is gone, and gets the initial colour back
+ * on cancel.
  */
 LILA_UI_API QColor getColor(const QColor& initial, QWidget* anchor, const QString& title = {}, bool alpha = false,
                             std::function<void(const QColor&)> changed = {});

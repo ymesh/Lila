@@ -21,6 +21,10 @@ foreach(exe lila lilabatch)
     add_dependencies(${exe} lila_version)
 endforeach()
 if(WIN32)
+    # The segment heap: a world is tens of millions of blocks, and on the default heap freeing or reusing them slows to
+    # microseconds a block as its free lists grow; the segment heap also returns freed memory to the system.
+    target_sources(lila PRIVATE lila.manifest)
+    target_sources(lilabatch PRIVATE lila.manifest)
     # The crash watchdog and the WER helper it relies on for fail-fast crashes; see src/core/CrashWatch.h.
     add_executable(lilacrash WIN32 lilacrash.cpp)
     target_link_libraries(lilacrash PRIVATE lila_crashkit)

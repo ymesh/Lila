@@ -1,6 +1,6 @@
 #pragma once
 
-/** The viewport: drawers and pickers, render copies of meshes (renderMeshFor), per node type draw overrides and handles, the colour popup, the Drone Camera (drone::), render passes, renderers, selection handlers, display prefs, the Scene Lights switch (sceneLights::) and toasts. */
+/** The viewport: drawers and pickers, render copies of meshes (renderMeshFor), per node type draw overrides and handles, the colour popup, the Drone Camera (drone::), render passes, renderers, named overlays with per-view Show toggles (viewOverlays::), selection handlers, display prefs, the Scene Lights switch (sceneLights::) and toasts. */
 #include "ui/ColorPopup.h"
 #include "ui/DroneCamera.h"
 #include "ui/DrawOverrides.h"
@@ -10,6 +10,7 @@
 #include "ui/SceneLights.h"
 #include "ui/SelectionHandlers.h"
 #include "ui/SurfaceSnap.h"
+#include "ui/ViewOverlays.h"
 #include "ui/ViewportDisplay.h"
 #include "ui/ViewportHooks.h"
 #include "ui/ViewportRenderers.h"

@@ -187,6 +187,45 @@ TEST_CASE("roof: complex footprint with gables, overhang and thickness")
     checkUp(r.mesh);
 }
 
+TEST_CASE("roof: gable ends over an irregular footprint stay over the footprint")
+{
+    // A warehouse lot from real map data: one street side is a straight line in three pieces, the last shorter than its neighbours. It is
+    // no gable end: a still edge in line with a moving one sends their corner off along the line.
+    const std::vector<glm::dvec2> ring = {{262963.12566250208, 635720.43529067282}, {264155.07367990603, 635104.31100167369},
+                                          {264694.73687898059, 634825.35621507734}, {264699.35019978386, 635605.56442395842},
+                                          {264221.19960842817, 635608.39169755683}, {264026.83020637278, 635929.79858141229},
+                                          {263306.3990770806, 635925.7517459665},   {263150.47653497668, 636227.93815907836},
+                                          {262556.71762608667, 635930.50977280119}};
+    const double y = 3543.351313;
+    std::vector<D3> pts;
+    for (const glm::dvec2& q : ring)
+        pts.push_back(D3(q.x, y, q.y));
+    curve::RoofOptions o;
+    o.pitch = 12.0;
+    o.overhang = 40.0;
+    o.gableEnds = true;
+    curve::RoofResult r = curve::roof({footprint(pts)}, o);
+    REQUIRE(r.mesh.numFaces() > 0);
+    CHECK(r.warnings.empty());
+    const geo::Bounds b = r.mesh.bounds();
+    CHECK(b.min.x > 262556.7 - 200.0);
+    CHECK(b.max.x < 264699.4 + 200.0);
+    CHECK(b.min.z > 634825.4 - 200.0);
+    CHECK(b.max.z < 636227.9 + 200.0);
+    CHECK(b.max.y < y + 400.0);
+    checkUp(r.mesh);
+
+    // Asked for by index, that piece's gable would do the same: the roof is hipped and says so.
+    o.gableEnds = false;
+    o.gables = {1};
+    r = curve::roof({footprint(pts)}, o);
+    REQUIRE(r.mesh.numFaces() > 0);
+    REQUIRE(r.warnings.size() == 1);
+    CHECK(r.warnings[0].find("hipped") != std::string::npos);
+    CHECK(r.mesh.bounds().max.y < y + 400.0);
+    CHECK(faces(r.mesh, 1) == 0);
+}
+
 TEST_CASE("polyInsetRegion insets a flat region as one, splitting where it pinches")
 {
     run("newScene");

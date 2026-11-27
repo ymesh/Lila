@@ -81,6 +81,8 @@ void frontageFit(const Envelope& env, double& width, double& depth, Vec2& centre
 void applyBuildingRoutes(Layout& l, const Site& site);
 /** A library building on its lot as an engine placement: centred on the footprint at the ground, turned to the street. */
 Placement libraryPlacement(const Envelope& env, const LibraryPick& pick);
+/** A lot's street sides, corner, best street class and access from its side tags (street edge ids, -1 none). */
+void finishOsmLot(Lot& lot, const Layout& l);
 /** Two touching polygons as one (both counter-clockwise, sharing part of their boundary). Empty when they do not join into one ring. */
 Polygon joinPolygons(const Polygon& a, const Polygon& b, double tolerance = 2.0);
 /** Marks footprint sides that coincide with a neighbour's as party walls on both, with the lot across. */

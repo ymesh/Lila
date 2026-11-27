@@ -165,6 +165,12 @@ struct PresetParams
     std::string hardnessMask;
     /** Run the steps that have a GPU version there. */
     bool gpu = false;
+    /**
+     * Keep the input's landforms wider than formRadius (cm; 0 is 300 m) as they are: no macro reshaping, only the
+     * fine-scale stream power (along the input's own drainage), debris, thermal, rills and deposition. For real elevation.
+     */
+    bool keepForm = false;
+    double formRadius = 0.0;
 };
 
 const std::vector<std::string>& erodePresetNames();

@@ -75,6 +75,34 @@ Index sumHard(const Mesh& m)
 }
 } // namespace
 
+TEST_CASE("mesh: compacting a compact mesh changes nothing; a mesh with holes or split corners still compacts")
+{
+    Mesh cube = makeCube();
+    REQUIRE(cube.alreadyCompact());
+    const Mesh before = cube;
+    cube.compact();
+    CHECK(cube.alreadyCompact());
+    CHECK(cube.numFaces() == before.numFaces());
+    for (Index p = 0; p < cube.pointCapacity(); ++p)
+        CHECK(cube.position(p) == before.position(p));
+
+    deleteFaces(cube, std::vector<Index>{faceFacing(cube, {0, 1, 0})});
+    CHECK(!cube.alreadyCompact());
+    cube.compact();
+    CHECK(isValid(cube));
+    CHECK(cube.alreadyCompact());
+    CHECK(cube.numFaces() == 5);
+    CHECK(cube.faceCapacity() == 5);
+
+    // Extruding adds faces and corners where it finds room, so corners stop following faces in order.
+    Mesh extruded = makeCube();
+    extrudeFaces(extruded, std::vector<Index>{0});
+    CHECK(isValid(extruded));
+    extruded.compact();
+    CHECK(isValid(extruded));
+    CHECK(extruded.alreadyCompact());
+}
+
 TEST_CASE("ops: delete")
 {
     Mesh cube = makeCube();

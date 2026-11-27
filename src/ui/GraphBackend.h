@@ -162,6 +162,8 @@ public:
     {
         return {};
     }
+    /** Whether the group's thumbnails change with the scene time, so the editor asks for them again on each new time. */
+    virtual bool thumbnailsFollowTime(const std::string& /*group*/) const { return false; }
 
     /** The side panel's editor for the selected node (an entry of GroupInfo's "nodes"); null uses the editor's own. */
     virtual QWidget* nodePanel(QWidget* /*parent*/, NodeEditor& /*editor*/, const nlohmann::json& /*node*/) const { return nullptr; }

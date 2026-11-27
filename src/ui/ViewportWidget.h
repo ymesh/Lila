@@ -222,6 +222,8 @@ private:
     bool inSelectRegion(const QRectF& box, QPointF p) const;
     /** Whether a screen-space outline (two points: a segment) overlaps the marquee or lasso anywhere. */
     bool touchesSelectRegion(const QRectF& box, const std::vector<glm::dvec2>& shape) const;
+    /** Whether a mesh drawn at world overlaps the marquee or lasso: a point inside, an edge across or a face under it. */
+    bool meshTouchesSelectRegion(const render::RenderMesh& rm, const glm::dmat4& world, const QRectF& box) const;
     /** Selects with the lasso drawn in mLasso, or clicks at the press when it is too small to enclose anything. */
     void pickLasso(Qt::KeyboardModifiers mods);
     /** Whether what a Tab press at the point would land on is selected; nullopt over nothing. */
@@ -354,6 +356,8 @@ private:
     /** The last two components clicked, newest first: Shift+double-click selects the path between them. */
     scene::componentPick::Hover mClicked[2];
     bool mFrameQueued = false;
+    /** A frame asked for while a scene loads, drawn once the load is done. */
+    bool mLoadWaitQueued = false;
     bool mFramePickArmed = false; // the next click frames the surface under it
     int mGraphListener = 0;
     int mPrefListener = 0;

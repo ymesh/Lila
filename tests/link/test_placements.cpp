@@ -19,8 +19,10 @@
 
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <set>
+#include <thread>
 
 using namespace lila;
 using namespace lila::link;
@@ -251,6 +253,172 @@ TEST_CASE("unrealPlaceInstances exports each source once, imports it and places 
     unregisterExporter("fbx:instanceSource");
     Link::get().disconnect();
     fs::remove_all(dir);
+}
+
+TEST_CASE("unrealPlaceInstances: assets using a material named in naniteOffMaterials go without Nanite")
+{
+    setupPlacementTest();
+    buildKit();
+    run("createMaterial", {{"args", {"Glass"}}, {"blendMode", "translucent"}, {"opacity", 0.3}});
+    run("assignMaterial", {{"args", {"Glass", "Bolt"}}});
+    fs::path dir = fs::temp_directory_path() / "lila_link_placements_nanite";
+    fs::remove_all(dir);
+    PrefStore::get().set("unreal", "/cacheDir", dir.generic_string());
+    registerExporter("fbx:instanceSource", [&](const std::vector<scene::NodeId>&, const fs::path& path, std::string*) {
+        std::ofstream(path) << "fbx";
+        return true;
+    });
+    FakeServer server([](const json& req) -> std::optional<json> {
+        const std::string m = req["method"];
+        if (m == "hello")
+            return FakeServer::reply(req, {{"project", "TestGame"}, {"features", {"progress", "placements"}}});
+        if (m == "importAsset")
+            return FakeServer::reply(req, {{"assets", {req["params"]["contentPath"].get<std::string>() + ".Imported"}},
+                                           {"warnings", json::array()},
+                                           {"errors", json::array()}});
+        if (m == "placeInstances")
+            return FakeServer::reply(req, {{"spawned", req["params"]["placements"].size()}, {"updated", 0}, {"removed", 0}});
+        return std::nullopt;
+    });
+    Link::ConnectOptions o;
+    o.port = server.port();
+    Link::get().connect(o);
+
+    const json done = run("unrealPlaceInstances", {{"args", {"BoltB", "Crate"}}, {"wait", true}, {"folder", "/Game/Kit"}, {"nanite", true},
+                                                   {"naniteOffMaterials", {"Glass"}}, {"resend", true}});
+    CHECK(done["naniteOff"] == 1);
+    std::map<std::string, bool> nanite;
+    for (const json& r : server.requests())
+        if (r["method"] == "importAsset")
+            nanite[r["params"]["contentPath"].get<std::string>()] = r["params"]["options"]["nanite"].get<bool>();
+    CHECK(nanite["/Game/Kit/SM_Bolt"] == false);
+    CHECK(nanite["/Game/Kit/SM_Crate"] == true);
+
+    unregisterExporter("fbx:instanceSource");
+    Link::get().disconnect();
+    fs::remove_all(dir);
+}
+
+TEST_CASE("unrealPlaceInstances mode=customHlod: hidden proxies placed as Custom HLOD actors in the named layers")
+{
+    setupPlacementTest();
+    run("newScene");
+    run("polyCube", {{"name", "Block_HLOD"}});
+    run("hide", {{"args", {"Block_HLOD"}}});
+    fs::path dir = fs::temp_directory_path() / "lila_link_custom_hlod";
+    fs::remove_all(dir);
+    PrefStore::get().set("unreal", "/cacheDir", dir.generic_string());
+    registerExporter("fbx:instanceSource", [](const std::vector<scene::NodeId>&, const fs::path& path, std::string*) {
+        std::ofstream(path) << "fbx";
+        return true;
+    });
+    auto serve = [](json features) {
+        return [features](const json& req) -> std::optional<json> {
+            const std::string m = req["method"];
+            if (m == "hello")
+                return FakeServer::reply(req, {{"project", "TestGame"}, {"features", features}});
+            if (m == "importAsset")
+                return FakeServer::reply(req, {{"assets", {req["params"]["contentPath"]}}, {"warnings", json::array()}, {"errors", json::array()}});
+            if (m == "placeInstances")
+                return FakeServer::reply(req, {{"spawned", req["params"]["placements"].size()}, {"updated", 0}, {"removed", 0}});
+            return std::nullopt;
+        };
+    };
+    const json flags = {{"args", {"Block_HLOD"}}, {"mode", "customHlod"}, {"hlodLayer", "/Game/Lila/HLOD/HL_Near"},
+                        {"linkedHlodLayer", "/Game/Lila/HLOD/HL_Base"}, {"validate", false}, {"wait", true}};
+    {
+        // A plugin without Custom HLOD actors is told so instead of getting plain actors.
+        FakeServer old(serve({"progress", "placements"}));
+        Link::ConnectOptions o;
+        o.port = old.port();
+        Link::get().connect(o);
+        CHECK_THROWS_AS(run("unrealPlaceInstances", flags), CommandError);
+        Link::get().disconnect();
+    }
+    FakeServer server(serve({"progress", "placements", "customHlod"}));
+    Link::ConnectOptions o;
+    o.port = server.port();
+    Link::get().connect(o);
+
+    // Hidden in Lila (a proxy) and still placed.
+    const json done = run("unrealPlaceInstances", flags);
+    REQUIRE(done["groups"].size() == 1);
+    CHECK(done["groups"][0]["mode"] == "customHlod");
+    json place;
+    for (const json& r : server.requests())
+        if (r["method"] == "placeInstances")
+            place = r["params"];
+    REQUIRE(place.is_object());
+    CHECK(place["mode"] == "customHlod");
+    CHECK(place["hlodLayer"] == "/Game/Lila/HLOD/HL_Near");
+    CHECK(place["linkedHlodLayer"] == "/Game/Lila/HLOD/HL_Base");
+    CHECK(place["placements"].size() == 1);
+    CHECK_THROWS_AS(run("unrealPlaceInstances", {{"args", {"Block_HLOD"}}, {"mode", "lod"}, {"dryRun", true}}), CommandError);
+
+    unregisterExporter("fbx:instanceSource");
+    Link::get().disconnect();
+    fs::remove_all(dir);
+}
+
+TEST_CASE("slot table: a send replaces only its own sources' rows")
+{
+    setupPlacementTest();
+    run("newScene");
+    const json lamp = {{"unrealClass", "/Game/BP/BP_Lamp.BP_Lamp_C"}};
+    run("slotPublish", {{"args", {"Lamps"}},
+                        {"slots", {{{"id", "street/1/lamp/0"}, {"type", "lamp.street"}, {"position", {0, 0, 0}}, {"payload", lamp}},
+                                   {{"id", "street/1/lamp/1"}, {"type", "lamp.street"}, {"position", {500, 0, 0}}, {"payload", lamp}}}}});
+    registerExporter("fbx:instanceSource", [](const std::vector<scene::NodeId>&, const fs::path& path, std::string*) {
+        std::ofstream(path) << "fbx";
+        return true;
+    });
+    FakeServer server([](const json& req) -> std::optional<json> {
+        const std::string m = req["method"];
+        if (m == "hello")
+            return FakeServer::reply(req, {{"project", "TestGame"}, {"features", {"progress", "placements", "slots"}}});
+        if (m == "placeInstances")
+            return FakeServer::reply(req, {{"spawned", req["params"]["placements"].size()}, {"updated", 0}, {"removed", 0}});
+        if (m == "writeSlotTable")
+            return FakeServer::reply(req, {{"rows", req["params"]["rows"].size()}});
+        if (m == "removePlacements")
+            return FakeServer::reply(req, {{"removed", 0}});
+        return std::nullopt;
+    });
+    Link::ConnectOptions o;
+    o.port = server.port();
+    Link::get().connect(o);
+    run("unrealPlaceInstances", {{"args", {"Lamps"}}, {"wait", true}, {"validate", false}, {"folder", "/Game/Kit"}, {"mode", "actors"}});
+    json table;
+    for (const json& r : server.requests())
+        if (r["method"] == "writeSlotTable")
+            table = r["params"];
+    REQUIRE(table.is_object());
+    REQUIRE(table["rows"].size() == 2);
+    REQUIRE(table["sources"].size() == 1);
+    // Every row's group starts with a source the send names, so Unreal keeps every other send's rows.
+    for (const json& row : table["rows"])
+        CHECK(row["group"].get<std::string>().starts_with(table["sources"][0].get<std::string>()));
+
+    // A rule swap sends the lamps again by itself (auto-sync), with the flags of the send that carried them.
+    PrefStore::get().set("unreal", "/autoSync", true, PrefScope::Workspace);
+    const size_t before = server.requests().size();
+    run("slotRule", {{"args", {"add"}}, {"type", "lamp"}, {"unrealClass", "/Game/BP/BP_LampB.BP_LampB_C"}});
+    json resent;
+    for (int k = 0; k < 200 && resent.is_null(); ++k)
+    {
+        mainq::drain();
+        const std::vector<json> reqs = server.requests();
+        for (size_t i = before; i < reqs.size(); ++i)
+            if (reqs[i]["method"] == "placeInstances")
+                resent = reqs[i]["params"];
+        if (resent.is_null())
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    REQUIRE(resent.is_object());
+    CHECK(resent["actorClass"] == "/Game/BP/BP_LampB.BP_LampB_C");
+    CHECK(resent["mode"] == "actors");
+    unregisterExporter("fbx:instanceSource");
+    Link::get().disconnect();
 }
 
 TEST_CASE("placement plan: a live array's copies are placements of their source's asset")
@@ -529,7 +697,10 @@ TEST_CASE("geometry nodes instances: one asset per referenced mesh, placed per i
         const std::string gk = grp["key"];
         CHECK(gk.starts_with(key + ":gn:"));
         CHECK(gk.size() == key.size() + 4 + 8);
-        CHECK(grp["contentPath"] == "/Game/Lila/Instances/SM_Ground_" + gk.substr(gk.size() - 8));
+        // Named by content, so the same module under many sources is one asset.
+        const std::string content = grp["contentPath"];
+        CHECK(content.starts_with("/Game/Lila/Instances/GN/SM_GN_" + gk.substr(gk.size() - 8)));
+        CHECK(grp["objectPath"] == content + "." + content.substr(content.rfind('/') + 1));
         CHECK(grp["mode"] == "hism");
         CHECK(grp["placements"].size() == each);
         CHECK(grp.contains("gnMesh"));
@@ -600,8 +771,11 @@ TEST_CASE("geometry nodes instances reach Unreal: their meshes written and impor
     o.port = server.port();
     Link::get().connect(o);
 
-    json done = run("unrealPlaceInstances", {{"args", {"Ground"}}, {"wait", true}});
-    REQUIRE(done["groups"].size() == 3);
+    // A second ground with the same geometry nodes shares their two meshes: still two imports for both.
+    run("polyPlane", {{"width", 100.0}, {"depth", 100.0}, {"name", "Ground2"}});
+    run("gnApply", {{"args", {"Ground2", "Boulders"}}});
+    json done = run("unrealPlaceInstances", {{"args", {"Ground", "Ground2"}}, {"wait", true}});
+    REQUIRE(done["groups"].size() == 6);
     std::vector<json> imports, places, removals;
     for (const json& r : server.requests())
     {
@@ -621,16 +795,224 @@ TEST_CASE("geometry nodes instances reach Unreal: their meshes written and impor
         CHECK(fs::file_size(file) > 1000);
         CHECK(fs::file_size(file) < 100000);
     }
-    REQUIRE(places.size() == 2);
+    REQUIRE(places.size() == 4);
+    CHECK(places[0]["mesh"] == places[2]["mesh"]);
     CHECK(places[0]["mode"] == "hism");
     CHECK(places[0]["label"].get<std::string>().starts_with("|Ground_"));
     // The holder's ULilaInstanceData learns what each custom data slot holds; it shares no components here.
     CHECK(places[0]["customData"] == json::parse(R"([{"name":"random","slot":0,"width":1}])"));
     CHECK(places[0]["components"] == json::array());
-    REQUIRE(removals.size() == 2);
+    REQUIRE(removals.size() == 4);
     CHECK(removals[0]["groups"] == json::array({done["groups"][0]["key"]}));
-    CHECK(removals[1]["prefixes"] == json::array({done["groups"][0]["key"].get<std::string>() + ":gn:"}));
-    CHECK(removals[1]["keep"].size() == 2);
+    CHECK(removals[2]["prefixes"] == json::array({done["groups"][0]["key"].get<std::string>() + ":gn:"}));
+    CHECK(removals[2]["keep"].size() == 2);
+
+    unregisterExporter("fbx:instanceSource");
+    Link::get().disconnect();
+    fs::remove_all(dir);
+}
+
+TEST_CASE("placement signatures: a second send of the same geometry nodes result imports and places nothing")
+{
+    setupPlacementTest();
+    if (!ops::find("gnAddNode"))
+    {
+        gn::registerTypes();
+        gn::registerCommands();
+    }
+    buildScatter();
+    fs::path dir = fs::temp_directory_path() / "lila_link_signatures";
+    fs::remove_all(dir);
+    PrefStore::get().set("unreal", "/cacheDir", dir.generic_string());
+    registerExporter("fbx:instanceSource", [](const std::vector<scene::NodeId>&, const fs::path& path, std::string*) {
+        std::ofstream(path) << "fbx";
+        return true;
+    });
+    // The level as Unreal would hold it: group -> {hash, actors}.
+    auto level = std::make_shared<json>(json::object());
+    auto mx = std::make_shared<std::mutex>();
+    FakeServer server([level, mx](const json& req) -> std::optional<json> {
+        const std::string m = req["method"];
+        if (m == "hello")
+            return FakeServer::reply(req, {{"project", "TestGame"}, {"features", {"progress", "placements", "placementHashes"}}});
+        if (m == "placementHashes")
+        {
+            std::scoped_lock lock(*mx);
+            return FakeServer::reply(req, {{"groups", *level}});
+        }
+        if (m == "importAsset")
+            return FakeServer::reply(req, {{"assets", {req["params"]["contentPath"]}}, {"warnings", json::array()}, {"errors", json::array()}});
+        if (m == "placeInstances")
+        {
+            const json& p = req["params"];
+            std::scoped_lock lock(*mx);
+            (*level)[p["group"].get<std::string>()] = {{"hash", p.value("hash", "")}, {"actors", p["mode"] == "hism" ? size_t(1) : p["placements"].size()}};
+            return FakeServer::reply(req, {{"spawned", p["placements"].size()}, {"updated", 0}, {"removed", 0}});
+        }
+        if (m == "removePlacements")
+            return FakeServer::reply(req, {{"removed", 0}});
+        return std::nullopt;
+    });
+    Link::ConnectOptions o;
+    o.port = server.port();
+    Link::get().connect(o);
+    auto count = [&server](const char* method) {
+        return std::ranges::count_if(server.requests(), [method](const json& r) { return r["method"] == method; });
+    };
+
+    json first = run("unrealPlaceInstances", {{"args", {"Ground"}}, {"wait", true}});
+    CHECK(first["unchanged"] == 0);
+    CHECK(count("importAsset") == 2);
+    CHECK(count("placeInstances") == 2);
+    json second = run("unrealPlaceInstances", {{"args", {"Ground"}}, {"wait", true}});
+    CHECK(second["unchanged"] == 2);
+    CHECK(count("importAsset") == 2);
+    CHECK(count("placeInstances") == 2);
+
+    // A changed scatter changes the placements: both groups go again.
+    gnSet("Boulders", "DistributePointsOnFaces.seed", 8);
+    json third = run("unrealPlaceInstances", {{"args", {"Ground"}}, {"wait", true}});
+    CHECK(third["unchanged"] == 0);
+    CHECK(count("placeInstances") == 4);
+
+    unregisterExporter("fbx:instanceSource");
+    Link::get().disconnect();
+    fs::remove_all(dir);
+}
+
+TEST_CASE("placement signatures: a plain mesh sent again unchanged is skipped, an edited one goes")
+{
+    setupPlacementTest();
+    buildKit();
+    fs::path dir = fs::temp_directory_path() / "lila_link_plain_signatures";
+    fs::remove_all(dir);
+    PrefStore::get().set("unreal", "/cacheDir", dir.generic_string());
+    registerExporter("fbx:instanceSource", [](const std::vector<scene::NodeId>&, const fs::path& path, std::string*) {
+        std::ofstream(path) << "fbx";
+        return true;
+    });
+    auto level = std::make_shared<json>(json::object());
+    auto mx = std::make_shared<std::mutex>();
+    FakeServer server([level, mx](const json& req) -> std::optional<json> {
+        const std::string m = req["method"];
+        if (m == "hello")
+            return FakeServer::reply(req, {{"project", "TestGame"}, {"features", {"progress", "placements", "placementHashes"}}});
+        if (m == "placementHashes")
+        {
+            std::scoped_lock lock(*mx);
+            return FakeServer::reply(req, {{"groups", *level}});
+        }
+        if (m == "importAsset")
+            return FakeServer::reply(req, {{"assets", {req["params"]["contentPath"]}}, {"warnings", json::array()}, {"errors", json::array()}});
+        if (m == "placeInstances")
+        {
+            const json& p = req["params"];
+            std::scoped_lock lock(*mx);
+            (*level)[p["group"].get<std::string>()] = {{"hash", p.value("hash", "")}, {"actors", p["mode"] == "hism" ? size_t(1) : p["placements"].size()}};
+            return FakeServer::reply(req, {{"spawned", p["placements"].size()}, {"updated", 0}, {"removed", 0}});
+        }
+        return std::nullopt;
+    });
+    Link::ConnectOptions o;
+    o.port = server.port();
+    Link::get().connect(o);
+    auto count = [&server](const char* method) {
+        return std::ranges::count_if(server.requests(), [method](const json& r) { return r["method"] == method; });
+    };
+
+    json first = run("unrealPlaceInstances", {{"args", {"Crate"}}, {"wait", true}});
+    CHECK(first["unchanged"] == 0);
+    CHECK(count("importAsset") == 1);
+    json second = run("unrealPlaceInstances", {{"args", {"Crate"}}, {"wait", true}});
+    CHECK(second["unchanged"] == 1);
+    CHECK(count("importAsset") == 1);
+    CHECK(count("placeInstances") == 1);
+
+    run("selectComponents", {{"args", {"Crate"}}, {"faces", {0}}});
+    run("deleteComponents");
+    json third = run("unrealPlaceInstances", {{"args", {"Crate"}}, {"wait", true}});
+    CHECK(third["unchanged"] == 0);
+    CHECK(count("importAsset") == 2);
+
+    unregisterExporter("fbx:instanceSource");
+    Link::get().disconnect();
+    fs::remove_all(dir);
+}
+
+TEST_CASE("content hashes: a send into a fresh level names what each asset is made from, so the project's copy is reused")
+{
+    setupPlacementTest();
+    buildKit();
+    fs::path dir = fs::temp_directory_path() / "lila_link_content_hash";
+    fs::remove_all(dir);
+    PrefStore::get().set("unreal", "/cacheDir", dir.generic_string());
+    registerExporter("fbx:instanceSource", [](const std::vector<scene::NodeId>&, const fs::path& path, std::string*) {
+        std::ofstream(path) << "fbx";
+        return true;
+    });
+    // A project's assets (path -> content hash) outlive its levels; the level's groups do not.
+    auto level = std::make_shared<json>(json::object());
+    auto assets = std::make_shared<std::map<std::string, std::string>>();
+    auto imported = std::make_shared<int>(0);
+    auto mx = std::make_shared<std::mutex>();
+    FakeServer server([level, assets, imported, mx](const json& req) -> std::optional<json> {
+        const std::string m = req["method"];
+        const json& p = req["params"];
+        if (m == "hello")
+            return FakeServer::reply(req, {{"project", "TestGame"}, {"features", {"progress", "placements", "placementHashes"}}});
+        std::scoped_lock lock(*mx);
+        if (m == "placementHashes")
+            return FakeServer::reply(req, {{"groups", *level}});
+        if (m == "importAsset")
+        {
+            const std::string path = p["contentPath"], hash = p.value("contentHash", "");
+            if (!hash.empty() && assets->contains(path) && assets->at(path) == hash)
+                return FakeServer::reply(req, {{"assets", {path}}, {"reused", true}, {"method", "reused"}, {"warnings", json::array()}, {"errors", json::array()}});
+            ++*imported;
+            (*assets)[path] = hash;
+            return FakeServer::reply(req, {{"assets", {path}}, {"warnings", json::array()}, {"errors", json::array()}});
+        }
+        if (m == "placeInstances")
+        {
+            (*level)[p["group"].get<std::string>()] = {{"hash", p.value("hash", "")}, {"actors", p["mode"] == "hism" ? size_t(1) : p["placements"].size()}};
+            return FakeServer::reply(req, {{"spawned", p["placements"].size()}, {"updated", 0}, {"removed", 0}});
+        }
+        return std::nullopt;
+    });
+    Link::ConnectOptions o;
+    o.port = server.port();
+    Link::get().connect(o);
+    auto hashes = [&server]() {
+        std::vector<std::string> out;
+        for (const json& r : server.requests())
+            if (r["method"] == "importAsset")
+                out.push_back(r["params"].value("contentHash", ""));
+        return out;
+    };
+
+    run("unrealPlaceInstances", {{"args", {"Crate"}}, {"wait", true}});
+    REQUIRE(hashes().size() == 1);
+    CHECK(hashes()[0].size() == 16);
+    CHECK(*imported == 1);
+
+    // A new level: nothing placed there yet, so the group goes again, but its asset is the project's already.
+    {
+        std::scoped_lock lock(*mx);
+        *level = json::object();
+    }
+    json fresh = run("unrealPlaceInstances", {{"args", {"Crate"}}, {"wait", true}});
+    REQUIRE(hashes().size() == 2);
+    CHECK(hashes()[1] == hashes()[0]);
+    CHECK(*imported == 1);
+    CHECK(fresh["groups"][0]["import"].value("reused", false));
+
+    // Edited content is a different hash, so it imports over the old asset.
+    run("selectComponents", {{"args", {"Crate"}}, {"faces", {0}}});
+    run("deleteComponents");
+    run("unrealPlaceInstances", {{"args", {"Crate"}}, {"wait", true}});
+    REQUIRE(hashes().size() == 3);
+    CHECK(hashes()[2] != hashes()[0]);
+    CHECK(*imported == 2);
 
     unregisterExporter("fbx:instanceSource");
     Link::get().disconnect();
@@ -710,6 +1092,179 @@ TEST_CASE("custom primitive data: geometry nodes instances send their instance a
         CHECK(part["placements"][k]["customData"][0].get<double>() == doctest::Approx(double(k)));
     const size_t each = part["placements"].size();
     CHECK(plan["groups"][2]["placements"][3]["customData"][0].get<double>() == doctest::Approx(double(each + 3)));
+}
+
+TEST_CASE("instance colours: geometry nodes instances send their colour as custom data 0-3, uncoloured meshes get M_LilaInstanceColor")
+{
+    setupPlacementTest();
+    if (!ops::find("gnAddNode"))
+    {
+        gn::registerTypes();
+        gn::registerCommands();
+    }
+    buildScatter();
+    const std::string store = gnAdd("Boulders", "StoreNamedAttribute");
+    gnSet("Boulders", store + ".dataType", "color");
+    gnSet("Boulders", store + ".domain", "instance");
+    gnSet("Boulders", store + ".name", "color");
+    gnSet("Boulders", store + ".value", json::array({0.5, 0.25, 0.125, 1.0}));
+    run("gnDisconnect", {{"args", {"Boulders", "GroupOutput.geometry"}}});
+    gnLink("Boulders", "JoinGeometry.geometry", store + ".geometry");
+    gnLink("Boulders", store + ".geometry", "GroupOutput.geometry");
+    // A declared slot follows the colour's four.
+    run("unrealCustomData", {{"args", {"Ground"}}, {"data", {"random"}}});
+
+    scene::Graph& g = scene::Graph::current();
+    json plan = placementPlan(g, {g.find("Ground")->id()}, PlacementOptions{});
+    REQUIRE(plan["groups"].size() == 3);
+    const json& part = plan["groups"][1];
+    CHECK(part["customData"] == json::parse(R"([{"name":"color","slot":0,"width":4},{"name":"random","slot":4,"width":1}])"));
+    CHECK(part["instanceColor"] == true);
+    CHECK(part["instanceColorMaterial"] == true);
+    const json& c = part["placements"][0]["customData"];
+    REQUIRE(c.size() == 5);
+    CHECK(c[0].get<double>() == doctest::Approx(0.5));
+    CHECK(c[1].get<double>() == doctest::Approx(0.25));
+    CHECK(c[2].get<double>() == doctest::Approx(0.125));
+    CHECK(c[3].get<double>() == doctest::Approx(1.0));
+
+    fs::path dir = fs::temp_directory_path() / "lila_link_instance_color";
+    fs::remove_all(dir);
+    PrefStore::get().set("unreal", "/cacheDir", dir.generic_string());
+    registerExporter("fbx:instanceSource", [](const std::vector<scene::NodeId>&, const fs::path& path, std::string*) {
+        std::ofstream(path) << "fbx";
+        return true;
+    });
+    for (const bool feature : {true, false})
+    {
+        FakeServer server([feature](const json& req) -> std::optional<json> {
+            const std::string m = req["method"];
+            if (m == "hello")
+                return FakeServer::reply(req, {{"project", "TestGame"},
+                                               {"features", feature ? json{"progress", "placements", "instanceColor"} : json{"progress", "placements"}}});
+            if (m == "importAsset")
+                return FakeServer::reply(req, {{"assets", {req["params"]["contentPath"]}}, {"warnings", json::array()}, {"errors", json::array()}});
+            if (m == "placeInstances")
+                return FakeServer::reply(req, {{"spawned", req["params"]["placements"].size()}, {"updated", 0}, {"removed", 0}});
+            if (m == "removePlacements")
+                return FakeServer::reply(req, {{"removed", 0}});
+            if (m == "instanceColorMaterials")
+                return FakeServer::reply(req, {{"assigned", req["params"]["assets"].size()}});
+            return std::nullopt;
+        });
+        Link::ConnectOptions o;
+        o.port = server.port();
+        Link::get().connect(o);
+        json done = run("unrealPlaceInstances", {{"args", {"Ground"}}, {"wait", true}, {"resend", true}});
+        int calls = 0;
+        for (const json& r : server.requests())
+            if (r["method"] == "instanceColorMaterials")
+            {
+                ++calls;
+                CHECK(r["params"]["assets"].size() == 2);
+            }
+        CHECK(calls == (feature ? 1 : 0));
+        REQUIRE(done.contains("instanceColor"));
+        CHECK(done["instanceColor"]["groups"] == 2);
+        if (feature)
+            CHECK(done["instanceColor"]["materials"]["assigned"] == 2);
+        else
+            CHECK(done["instanceColor"].contains("note"));
+        Link::get().disconnect();
+    }
+    unregisterExporter("fbx:instanceSource");
+    fs::remove_all(dir);
+}
+
+TEST_CASE("instance colours: a second tone follows the colour as custom data 4-7, declared slots after it")
+{
+    setupPlacementTest();
+    if (!ops::find("gnAddNode"))
+    {
+        gn::registerTypes();
+        gn::registerCommands();
+    }
+    buildScatter();
+    // Only the second tone is stored: the colour's four stay (zero) so the second tone is always at 4.
+    const std::string store = gnAdd("Boulders", "StoreNamedAttribute");
+    gnSet("Boulders", store + ".dataType", "color");
+    gnSet("Boulders", store + ".domain", "instance");
+    gnSet("Boulders", store + ".name", "color2");
+    gnSet("Boulders", store + ".value", json::array({0.1, 0.2, 0.3, 1.0}));
+    run("gnDisconnect", {{"args", {"Boulders", "GroupOutput.geometry"}}});
+    gnLink("Boulders", "JoinGeometry.geometry", store + ".geometry");
+    gnLink("Boulders", store + ".geometry", "GroupOutput.geometry");
+    run("unrealCustomData", {{"args", {"Ground"}}, {"data", {"random"}}});
+
+    scene::Graph& g = scene::Graph::current();
+    json plan = placementPlan(g, {g.find("Ground")->id()}, PlacementOptions{});
+    REQUIRE(plan["groups"].size() == 3);
+    const json& part = plan["groups"][1];
+    CHECK(part["customData"] ==
+          json::parse(R"([{"name":"color","slot":0,"width":4},{"name":"color2","slot":4,"width":4},{"name":"random","slot":8,"width":1}])"));
+    CHECK(part["instanceColor"] == true);
+    CHECK(part["instanceColor2"] == true);
+    const json& c = part["placements"][0]["customData"];
+    REQUIRE(c.size() == 9);
+    for (int k = 0; k < 4; ++k)
+        CHECK(c[k].get<double>() == 0.0);
+    CHECK(c[4].get<double>() == doctest::Approx(0.1));
+    CHECK(c[5].get<double>() == doctest::Approx(0.2));
+    CHECK(c[6].get<double>() == doctest::Approx(0.3));
+    CHECK(c[7].get<double>() == doctest::Approx(1.0));
+
+    // Both tones: the colour keeps 0-3.
+    const std::string store1 = gnAdd("Boulders", "StoreNamedAttribute");
+    gnSet("Boulders", store1 + ".dataType", "color");
+    gnSet("Boulders", store1 + ".domain", "instance");
+    gnSet("Boulders", store1 + ".name", "color");
+    gnSet("Boulders", store1 + ".value", json::array({0.9, 0.8, 0.7, 0.5}));
+    run("gnDisconnect", {{"args", {"Boulders", "GroupOutput.geometry"}}});
+    gnLink("Boulders", store + ".geometry", store1 + ".geometry");
+    gnLink("Boulders", store1 + ".geometry", "GroupOutput.geometry");
+    plan = placementPlan(g, {g.find("Ground")->id()}, PlacementOptions{});
+    const json& both = plan["groups"][1]["placements"][0]["customData"];
+    REQUIRE(both.size() == 9);
+    CHECK(both[0].get<double>() == doctest::Approx(0.9));
+    CHECK(both[3].get<double>() == doctest::Approx(0.5));
+    CHECK(both[4].get<double>() == doctest::Approx(0.1));
+
+    fs::path dir = fs::temp_directory_path() / "lila_link_instance_color2";
+    fs::remove_all(dir);
+    PrefStore::get().set("unreal", "/cacheDir", dir.generic_string());
+    registerExporter("fbx:instanceSource", [](const std::vector<scene::NodeId>&, const fs::path& path, std::string*) {
+        std::ofstream(path) << "fbx";
+        return true;
+    });
+    for (const bool feature : {true, false})
+    {
+        FakeServer server([feature](const json& req) -> std::optional<json> {
+            const std::string m = req["method"];
+            if (m == "hello")
+                return FakeServer::reply(req, {{"project", "TestGame"},
+                                               {"features", feature ? json{"progress", "placements", "instanceColor", "instanceColor2"}
+                                                                    : json{"progress", "placements", "instanceColor"}}});
+            if (m == "importAsset")
+                return FakeServer::reply(req, {{"assets", {req["params"]["contentPath"]}}, {"warnings", json::array()}, {"errors", json::array()}});
+            if (m == "placeInstances")
+                return FakeServer::reply(req, {{"spawned", req["params"]["placements"].size()}, {"updated", 0}, {"removed", 0}});
+            if (m == "removePlacements")
+                return FakeServer::reply(req, {{"removed", 0}});
+            if (m == "instanceColorMaterials")
+                return FakeServer::reply(req, {{"assigned", req["params"]["assets"].size()}});
+            return std::nullopt;
+        });
+        Link::ConnectOptions o;
+        o.port = server.port();
+        Link::get().connect(o);
+        json done = run("unrealPlaceInstances", {{"args", {"Ground"}}, {"wait", true}, {"resend", true}});
+        REQUIRE(done.contains("instanceColor"));
+        CHECK(done["instanceColor"]["secondToneGroups"] == 2);
+        CHECK(done["instanceColor"].contains("secondToneNote") == !feature);
+        Link::get().disconnect();
+    }
+    unregisterExporter("fbx:instanceSource");
+    fs::remove_all(dir);
 }
 
 TEST_CASE("instanced groups: the holder takes the components every member shares, each instance keeps its own")

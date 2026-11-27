@@ -67,6 +67,19 @@ public:
     void callAsync(const std::string& method, const json& params, CallOptions opts, Callback done);
     void callAsync(const std::string& method, const json& params, int timeoutMs, Callback done);
 
+    struct Request
+    {
+        std::string method;
+        json params;
+        int timeoutMs = 10000;
+    };
+    /**
+     * Sends the requests with up to `window` of them awaiting replies at once, so Unreal answers several per frame rather
+     * than one per round trip, and blocks until every one replied. Unreal starts them in the order given; the replies come
+     * back in that order. Don't call on the reader thread.
+     */
+    std::vector<RpcResult> callMany(const std::vector<Request>& requests, size_t window = 32);
+
     /** Same, with `done` and onProgress posted to the main thread through mainq. */
     void callOnMain(const std::string& method, const json& params, CallOptions opts, Callback done);
     void callOnMain(const std::string& method, const json& params, int timeoutMs, Callback done);
@@ -104,4 +117,29 @@ private:
     int64_t mNextId = 1;
     std::function<void()> mOnDisconnected;
 };
+/**
+ * Calls sent without waiting for each reply, up to `window` awaiting at once, so Unreal answers several per frame rather
+ * than one per round trip. Unreal starts them in the order sent. finish() blocks until every one replied and returns the
+ * replies in send order. Use from one thread, never the reader thread.
+ */
+class LILA_SCENE_API RpcPipeline
+{
+public:
+    RpcPipeline(RpcClient& client, size_t window = 32);
+    ~RpcPipeline();
+    RpcPipeline(const RpcPipeline&) = delete;
+    RpcPipeline& operator=(const RpcPipeline&) = delete;
+
+    /** Sends the call (waiting first while `window` are awaiting); returns its index in finish()'s replies. */
+    size_t send(const std::string& method, const json& params, int timeoutMs = 10000);
+    size_t send(const std::string& method, const json& params, CallOptions opts);
+    std::vector<RpcResult> finish();
+
+private:
+    struct State;
+    RpcClient& mClient;
+    size_t mWindow;
+    std::shared_ptr<State> mState;
+};
+
 } // namespace lila::link

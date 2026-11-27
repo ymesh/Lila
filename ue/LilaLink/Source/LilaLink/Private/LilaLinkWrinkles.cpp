@@ -1,4 +1,5 @@
 #include "LilaLinkCloth.h"
+#include "LilaLinkMaterialFunction.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
@@ -105,7 +106,7 @@ struct FGraph
  */
 void BuildFunction(UMaterialFunction* Function, UTexture* WrinkleU, UTexture* WrinkleV)
 {
-	UMaterialEditingLibrary::DeleteAllMaterialExpressionsInFunction(Function);
+	LilaLink::DeleteAllExpressions(Function);
 	Function->Description = TEXT("Lila tension wrinkles: fold normals faded in by compression along U and V, blended onto your normal.");
 	Function->bExposeToLibrary = true;
 	FGraph G;
@@ -181,7 +182,7 @@ void BuildFunction(UMaterialFunction* Function, UTexture* WrinkleU, UTexture* Wr
 /** M_LilaTensionWrinkles: the function on a plain surface, its mask from the mesh's vertex colours (Lila's "wrinkle" set). */
 void BuildMaterial(UMaterial* Material, UMaterialFunction* Function)
 {
-	UMaterialEditingLibrary::DeleteAllMaterialExpressions(Material);
+	LilaLink::DeleteAllExpressions(Material);
 	FGraph G;
 	G.Material = Material;
 	auto* Colours = G.New<UMaterialExpressionVertexColor>(-900);

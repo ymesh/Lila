@@ -1,0 +1,107 @@
+{
+  "id": "colonial",
+  "label": "Colonial",
+  "description": "One and two storey houses and shops of an old town centre: tall doors, barred windows, iron balconettes, painted render, flat roofs behind parapets.",
+  "tags": [
+    "colonial",
+    "historic",
+    "old town"
+  ],
+  "floors": {
+    "min": 1,
+    "max": 2,
+    "groundHeight": 480,
+    "height": 420,
+    "plinth": 25
+  },
+  "bays": {
+    "width": 330,
+    "min": 220,
+    "cornerWidth": 50
+  },
+  "openings": {
+    "window": {
+      "width": 0.4,
+      "height": 0.6,
+      "sill": 0.22,
+      "kind": "window.residential"
+    },
+    "door": {
+      "width": 0.5,
+      "height": 0.8,
+      "kind": "door.house"
+    },
+    "shopfront": {
+      "width": 0.62,
+      "height": 0.8
+    },
+    "reveal": 30
+  },
+  "groundFloor": {
+    "street": "window",
+    "arcade": 0.12,
+    "arcadeDepth": 320,
+    "shopfronts": true,
+    "shutters": 0.25,
+    "awnings": 0.15
+  },
+  "modules": {
+    "balconies": 0.35,
+    "balconyKind": "iron",
+    "grilles": 0.6,
+    "acUnits": 0.15,
+    "pilasters": true,
+    "cornice": "heavy",
+    "bands": true,
+    "corner": "quoin",
+    "drainpipes": true
+  },
+  "roof": {
+    "kind": "flat",
+    "parapet": 70,
+    "waterTanks": 0.7,
+    "clutter": 0.4,
+    "rebar": 0.04
+  },
+  "palette": {
+    "render": [
+      "#c9a46b",
+      "#e6d5b0",
+      "#b5654a",
+      "#9aa88a",
+      "#cbbca4",
+      "#8a9fae",
+      "#d8b48a"
+    ],
+    "trim": [
+      "#f1ebdd",
+      "#e6dcc8",
+      "#faf8f2"
+    ],
+    "roof": [
+      "#7a6a5c"
+    ],
+    "base": [
+      "#6b5e55",
+      "#5a5048"
+    ],
+    "dirt": [
+      0.15,
+      0.45
+    ]
+  },
+  "moduleTones": {
+    "arcade": [
+      "render",
+      "trim"
+    ],
+    "window": [
+      null,
+      "trim"
+    ],
+    "door": [
+      null,
+      "trim"
+    ]
+  }
+}

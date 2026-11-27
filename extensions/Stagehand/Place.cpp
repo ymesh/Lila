@@ -14,6 +14,7 @@
 #include <lila/Prefs.h>
 #include <lila/Profile.h>
 #include <lila/Relocate.h>
+#include <lila/Slots.h>
 #include <lila/Transform.h>
 #include <lila/Undo.h>
 #include <lila/Workspace.h>
@@ -570,6 +571,29 @@ bool registerLibraryNodes(ext::Context& ctx)
 
 void registerLibraryCommands(ext::Context& ctx)
 {
+    // Slot payloads naming a library item draw its master; evaluation hooks only use masters already loaded.
+    slots::meshProviders().put(
+        "item",
+        [](Graph& g, const std::string& ref, bool load, std::string& why) -> std::shared_ptr<const geo::Mesh> {
+            const std::optional<Asset> a = library::find(ref);
+            if (!a)
+            {
+                why = "no library asset " + ref;
+                return nullptr;
+            }
+            NodeId m = findMaster(g, a->id);
+            if (m == scene::kNoNode)
+            {
+                if (!load)
+                {
+                    why = ref + " is not loaded in this scene yet (a slot rule or override naming it loads it)";
+                    return nullptr;
+                }
+                m = loadMaster(g, *a);
+            }
+            return slots::combinedMesh(g, m);
+        },
+        ctx.owner());
     const std::vector<FlagDef> queryFlags = {
         {"tags", "t", T::List, nullptr, "Only assets with every one of these tags."},
         {"collection", "c", T::String, nullptr, "Only this collection or the ones under it."},

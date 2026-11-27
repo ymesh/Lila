@@ -13,6 +13,7 @@
 #include <lila/Extension.h>
 #include <lila/Mesh.h>
 #include <lila/Profile.h>
+#include <lila/Slots.h>
 #include <lila/Transform.h>
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -299,8 +300,6 @@ json finishLive(Graph& g, const Args& a, json nodes, json links, json inputs, co
         addColliderNodes(nodes, links, g, colliders, "Settle");
         end = "Settle.instances";
     }
-    links.push_back(end + " -> GroupOutput.geometry");
-
     // A name no other node has anywhere, so later commands can find the host by it even after it is parented.
     std::string unique = hostName;
     auto taken = [&](const std::string& n) {
@@ -308,6 +307,14 @@ json finishLive(Graph& g, const Args& a, json nodes, json links, json inputs, co
     };
     for (int k = 2; taken(unique); ++k)
         unique = hostName + std::to_string(k);
+    // The owner is fixed at creation in the group, so slot ids outlive renaming the host.
+    nodes.push_back({{"name", "Slots"},
+                     {"type", "Slots"},
+                     {"position", json::array({1200, 0})},
+                     {"values", {{"type", a.get<std::string>("slotType", "prop")}, {"owner", "arrange:" + unique}}}});
+    links.push_back(end + " -> Slots.instances");
+    end = "Slots.instances";
+    links.push_back(end + " -> GroupOutput.geometry");
     const json made = ops::execute("createMesh", {{"points", json::array()}, {"faces", json::array()}, {"name", unique}});
     const std::string host = made.is_string() ? made.get<std::string>() : made.at(0).get<std::string>();
     g.setValue({g.find(host)->id(), scene::MeshNode::kInMesh, -1}, scene::MeshPtr(std::make_shared<geo::Mesh>(std::move(hostMesh))));
@@ -351,6 +358,7 @@ std::vector<FlagDef> commonFlags(bool settle, const char* densityFlag = "density
         {"friction", "", T::Float, 0.6, "Friction of the items, for the settle.", {}, {}, 0.0},
         {"seed", "s", T::Int, int64_t(1), "Another seed gives another arrangement."},
         {"name", "n", T::String, nullptr, "Name of the mesh (live) or group (realize) made."},
+        {"slotType", "sty", T::String, "prop", "Live only: the slot type the placed items get, so slot rules can swap them (slotTypes lists them)."},
     };
 }
 
@@ -382,6 +390,7 @@ std::vector<glm::dvec3> shelfLine(Graph& g, NodeId board, double depth, double i
 
 void registerArrangeCommands(ext::Context& ctx)
 {
+    slots::tagResolvers().put("stagehand", [](const std::string& tags) { return taggedAssets(tags); }, ctx.owner());
     std::vector<FlagDef> shelfFlags = commonFlags(true);
     const std::vector<FlagDef> shelfFlagsExtra = {
              {"gap", "gp", T::Float, 0.3, "Space between items, cm.", {}, {}, 0.0},

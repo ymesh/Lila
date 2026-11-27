@@ -74,6 +74,9 @@ struct CoverPiece
     int rule = 0;
     /** Index into the rule's items. */
     int item = 0;
+    /** The rule's grid cell it came from: with rule, an identity that holds while the seed and the rule's density do. */
+    int cellX = 0;
+    int cellZ = 0;
     /** Ground slope, degrees, and the horizontal downhill direction, in the heightfield's space. */
     double slope = 0.0;
     glm::dvec3 downhill{1.0, 0.0, 0.0};

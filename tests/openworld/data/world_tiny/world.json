@@ -1,0 +1,367 @@
+{
+ "name": "SinaloaTiny",
+ "description": "Synthetic Sinaloa-style world from make_world.py: coastal city, capital moved toward the coast, farm valley, foothills, coast, islands, lagoon, reservoir.",
+ "culture": "mexican",
+ "remix": {
+  "scale": {
+   "horizontal": 1.0,
+   "vertical": 1.0
+  },
+  "sources": [
+   {
+    "id": "coast",
+    "dem": "coast.asc",
+    "osm": "coast.json",
+    "at": [
+     0,
+     0
+    ]
+   },
+   {
+    "id": "capital",
+    "dem": "capital.asc",
+    "osm": "capital.json",
+    "at": [
+     2600000.0,
+     0.0
+    ]
+   }
+  ],
+  "regions": [
+   {
+    "id": "capital",
+    "op": "cut",
+    "polygon": [
+     [
+      2523500.0,
+      -76500.0
+     ],
+     [
+      2676500.0,
+      -76500.0
+     ],
+     [
+      2676500.0,
+      76500.0
+     ],
+     [
+      2523500.0,
+      76500.0
+     ]
+    ],
+    "translate": [
+     -2184000.0,
+     -304000.0
+    ]
+   }
+  ],
+  "map": {
+   "center": [
+    0,
+    0
+   ],
+   "size": [
+    1600000.0,
+    1600000.0
+   ],
+   "cell": 3200.0,
+   "maxResolution": 2049
+  },
+  "seams": {
+   "width": 3000.0,
+   "roadReach": 60000.0
+  }
+ },
+ "terrain": {
+  "water": {
+   "sea": {
+    "level": 0
+   }
+  },
+  "coast": {
+   "bathymetry": true,
+   "masks": true,
+   "mangroves": true,
+   "reservoirs": [
+    {
+     "id": "picachos",
+     "a": [
+      528000,
+      144000
+     ],
+     "b": [
+      528000,
+      48000
+     ],
+     "crest": 30000
+    }
+   ],
+   "channels": [
+    {
+     "id": "estero",
+     "craft": "skiff",
+     "path": [
+      [
+       -472000,
+       -616000
+      ],
+      [
+       -392000,
+       -616000
+      ],
+      [
+       -360000,
+       -648000
+      ]
+     ]
+    }
+   ],
+   "routes": {},
+   "sceneObjects": false
+  }
+ },
+ "settlements": [
+  {
+   "name": "Puerto",
+   "osm": "remix",
+   "area": [
+    -480527,
+    -192000,
+    -368170,
+    656000
+   ],
+   "profile": "usTown",
+   "fill": "none",
+   "buildings": {
+    "cell": 6400,
+    "districts": {}
+   }
+  },
+  {
+   "name": "Capital",
+   "osm": "remix",
+   "area": [
+    339500.0,
+    -380500.0,
+    492500.0,
+    -227500.0
+   ],
+   "profile": "usTown",
+   "fill": "none",
+   "buildings": {
+    "lod": "near"
+   }
+  }
+ ],
+ "sites": [
+  {
+   "kind": "port",
+   "id": "port",
+   "at": [
+    -449918,
+    584000
+   ],
+   "heading": 90,
+   "params": {
+    "quayLength": 40000,
+    "tiers": 3
+   }
+  },
+  {
+   "kind": "cruise",
+   "id": "cruise",
+   "at": [
+    -456488,
+    320000
+   ],
+   "heading": 90
+  },
+  {
+   "kind": "lighthouse",
+   "id": "faro",
+   "at": [
+    -667200,
+    272000
+   ],
+   "heading": 90
+  },
+  {
+   "kind": "island",
+   "id": "isla",
+   "at": [
+    -640000,
+    -352000
+   ],
+   "heading": 90,
+   "params": {
+    "islandRadius": 38400,
+    "dockLength": 16000,
+    "raiseIsland": false
+   }
+  },
+  {
+   "kind": "cemetery",
+   "id": "panteon",
+   "at": [
+    324500.0,
+    -284000
+   ]
+  },
+  {
+   "kind": "compound",
+   "id": "mansion",
+   "at": [
+    507500.0,
+    -314000
+   ]
+  },
+  {
+   "kind": "farm",
+   "id": "farm1",
+   "at": [
+    0,
+    512000
+   ]
+  },
+  {
+   "kind": "airstrip",
+   "id": "pista1",
+   "at": [
+    -128000,
+    -32000
+   ],
+   "heading": 90
+  },
+  {
+   "kind": "village",
+   "id": "habal",
+   "at": [
+    384000,
+    608000
+   ],
+   "params": {
+    "houses": 10,
+    "villageRadius": 12000
+   }
+  }
+ ],
+ "buildings": {
+  "lod": "near",
+  "enterable": [
+   {
+    "programs": [
+     "police",
+     "government"
+    ]
+   },
+   {
+    "programs": [
+     "bar"
+    ],
+    "limit": 2
+   },
+   {
+    "programs": [
+     "mansion"
+    ],
+    "limit": 1
+   },
+   {
+    "programs": [
+     "church"
+    ],
+    "limit": 1
+   }
+  ]
+ },
+ "slots": {
+  "rules": [
+   {
+    "id": "signs",
+    "name": "Fictional signs",
+    "type": "sign.storefront",
+    "payload": {
+     "poolTag": "fictional_signs"
+    }
+   },
+   {
+    "id": "palms",
+    "name": "Palms",
+    "type": "tree.palm",
+    "payload": {
+     "poolTag": "palms"
+    }
+   }
+  ]
+ },
+ "zones": {
+  "name": "Zones",
+  "fromDistricts": true,
+  "fromWater": true,
+  "spec": {
+   "layers": [
+    {
+     "id": "police",
+     "type": "police",
+     "zones": [
+      {
+       "id": "puerto",
+       "name": "Policia Municipal del Puerto",
+       "polygons": [
+        [
+         [
+          -800000,
+          -800000
+         ],
+         [
+          0,
+          -800000
+         ],
+         [
+          0,
+          800000
+         ],
+         [
+          -800000,
+          800000
+         ]
+        ]
+       ]
+      },
+      {
+       "id": "sierra",
+       "name": "Policia Estatal Serrana",
+       "polygons": [
+        [
+         [
+          0,
+          -800000
+         ],
+         [
+          800000,
+          -800000
+         ],
+         [
+          800000,
+          800000
+         ],
+         [
+          0,
+          800000
+         ]
+        ]
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "check": true,
+ "export": {
+  "target": "files",
+  "map": {
+   "resolution": 512
+  }
+ }
+}

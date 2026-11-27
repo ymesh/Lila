@@ -23,10 +23,13 @@ namespace
 constexpr int kHfNodeSamples = 2 * kHeightfieldPatch;
 constexpr uint32_t kHfNoMap = 0xffffu;
 
+/** Matches InstanceData in mesh.slang. */
 struct HfGpuInstance
 {
     glm::mat4 world{1.0f};
     glm::vec4 color{0.0f};
+    glm::vec4 tint{0.0f};
+    glm::vec4 tint2{0.0f};
 };
 
 /** Matches HfLayer in heightfield.slang. */
@@ -66,7 +69,7 @@ struct HfGpuParams
     uint64_t flowMask = 0;
     HfGpuLayer layers[kHeightfieldMaxLayers];
 };
-static_assert(sizeof(HfGpuParams) % 16 == 0 && offsetof(HfGpuParams, layers) == 624, "matches HfParams in heightfield.slang");
+static_assert(sizeof(HfGpuParams) % 16 == 0 && offsetof(HfGpuParams, layers) == 656, "matches HfParams in heightfield.slang");
 static_assert(sizeof(HeightfieldPatch) == 16, "matches HfPatch in heightfield.slang");
 
 bool validHeightfieldDraw(const HeightfieldDraw& d)
@@ -607,6 +610,12 @@ void HeightfieldRenderer::prepare(VulkanContext& vk, VkCommandBuffer cmd, const 
             p.flowMask = d.flowArrows ? mask(vk, cmd, f, d.flow, count, false, frame) : 0;
             uint32_t layers = 0;
             bool skippedMaps = false;
+            if (d.layers.size() > size_t(kHeightfieldMaxLayers) && !mWarnedLayers)
+            {
+                log::warn("render: a terrain has {} paint layers; the viewport draws the first {}, the rest show as none", d.layers.size(),
+                          kHeightfieldMaxLayers);
+                mWarnedLayers = true;
+            }
             for (const HeightfieldLayer& l : d.layers)
             {
                 if (layers == uint32_t(kHeightfieldMaxLayers))

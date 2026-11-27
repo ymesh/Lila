@@ -7,6 +7,7 @@
 #include "scene/Anim.h"
 #include "media/Media.h"
 #include "media/SoundCues.h"
+#include "names/Names.h"
 #include "scene/AnimLayer.h"
 #include "scene/RigUtil.h"
 #include "scene/Take.h"
@@ -46,6 +47,7 @@
 #include "pointcloud/PointCloudNode.h"
 #include "ifc/IfcImport.h"
 #include "tiles/Tiles3d.h"
+#include "slots/Slots.h"
 #include "scene/RenderSettings.h"
 #include "scene/Rig.h"
 #include "scene/SceneData.h"
@@ -263,6 +265,7 @@ void registerCommands()
     instancing::registerCommands();
     arrays::registerCommands();
     registerBoundingMeshCommands();
+    names::registerCommands();
     modifiers::registerCommands();
     components::registerCommands();
     materials::registerCommands();
@@ -306,6 +309,7 @@ void registerCommands()
     pointcloud::registerCommands();
     ifc::registerCommands();
     tiles::registerCommands();
+    slots::registerAll();
 
     loadNamingPolicy();
     PrefStore::get().onChanged([](const std::string& file) {

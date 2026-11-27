@@ -67,15 +67,26 @@ struct KeyHash
     size_t operator()(const WireKey& k) const { return std::hash<const void*>()(k.mesh) ^ size_t(k.depthTested); }
 };
 
+/** Calls f(world, k) per placement, k its index in the draw's instances (0 without). */
 template <class F> void forEachPlacement(const MeshDraw& d, F&& f)
 {
     if (!d.instances || d.instances->empty())
     {
-        f(d.world);
+        f(d.world, size_t(0));
         return;
     }
-    for (const glm::mat4& m : *d.instances)
-        f(d.world * glm::dmat4(m));
+    for (size_t k = 0; k < d.instances->size(); ++k)
+        f(d.world * glm::dmat4((*d.instances)[k]), k);
+}
+
+glm::vec4 tintOf(const MeshDraw& d, size_t k)
+{
+    return d.instanceColors && k < d.instanceColors->size() ? (*d.instanceColors)[k] : glm::vec4(0.0f);
+}
+
+glm::vec4 tint2Of(const MeshDraw& d, size_t k)
+{
+    return d.instanceColors2 && k < d.instanceColors2->size() ? (*d.instanceColors2)[k] : glm::vec4(0.0f);
 }
 
 size_t placements(const MeshDraw& d) { return d.instances && !d.instances->empty() ? d.instances->size() : 1; }
@@ -101,7 +112,7 @@ bool sameDraws(const std::vector<MeshDraw>& a, const std::vector<MeshDraw>& b)
     {
         const MeshDraw& x = a[i];
         const MeshDraw& y = b[i];
-        if (x.mesh != y.mesh || x.instances != y.instances || !x.materials.sameList(y.materials) || x.flags != y.flags ||
+        if (x.mesh != y.mesh || x.instances != y.instances || x.instanceColors != y.instanceColors || x.instanceColors2 != y.instanceColors2 || !x.materials.sameList(y.materials) || x.flags != y.flags ||
             x.world != y.world || x.baseColor != y.baseColor || x.roughness != y.roughness || x.vertexColors != y.vertexColors ||
             x.colorChannel != y.colorChannel || x.wireColor != y.wireColor || x.wireWidth != y.wireWidth || x.node != y.node ||
             x.lightingChannels != y.lightingChannels || x.drawOffset != y.drawOffset)
@@ -185,8 +196,8 @@ DrawBatches batchDraws(const FrameState& s, bool shaderWire)
             total += placements(*d);
     out.instances.reserve(total);
     out.translations.reserve(total);
-    auto place = [&out](const glm::dmat4& world, const glm::vec4& color) {
-        out.instances.push_back({glm::mat4(world), color});
+    auto place = [&out](const glm::dmat4& world, const glm::vec4& color, const glm::vec4& tint, const glm::vec4& tint2) {
+        out.instances.push_back({glm::mat4(world), color, tint, tint2});
         out.translations.push_back(glm::dvec3(world[3]));
     };
 
@@ -198,7 +209,13 @@ DrawBatches batchDraws(const FrameState& s, bool shaderWire)
             const bool wire = wireDrawnInShader(*d, shaderWire);
             b.wire = b.wire || wire;
             const glm::vec4 color = wire ? wireColor(s, *d) : glm::vec4(0.0f);
-            forEachPlacement(*d, [&](const glm::dmat4& world) { place(world, color); });
+            if ((d->instanceColors && !d->instanceColors->empty()) || (d->instanceColors2 && !d->instanceColors2->empty()))
+            {
+                b.tinted = true;
+                forEachPlacement(*d, [&](const glm::dmat4& world, size_t k) { place(world, color, tintOf(*d, k), tint2Of(*d, k)); });
+            }
+            else
+                forEachPlacement(*d, [&](const glm::dmat4& world, size_t) { place(world, color, glm::vec4(0.0f), glm::vec4(0.0f)); });
         }
         b.count = uint32_t(out.instances.size()) - b.first;
         out.shaded.push_back(b);
@@ -210,7 +227,7 @@ DrawBatches batchDraws(const FrameState& s, bool shaderWire)
         for (const MeshDraw* d : members)
         {
             const glm::vec4 color = wireColor(s, *d);
-            forEachPlacement(*d, [&](const glm::dmat4& world) { place(world, color); });
+            forEachPlacement(*d, [&](const glm::dmat4& world, size_t) { place(world, color, glm::vec4(0.0f), glm::vec4(0.0f)); });
         }
         b.count = uint32_t(out.instances.size()) - b.first;
         out.wire.push_back(b);

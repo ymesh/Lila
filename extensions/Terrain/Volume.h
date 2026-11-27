@@ -191,6 +191,8 @@ std::map<std::string, std::shared_ptr<const VolumeResult>> volumeResults(uint64_
 
 /** The Terrain Volume node and its commands (terrainCave, terrainTunnel, terrainOverhang, terrainArch, terrainVolumeStamp, ...). */
 bool registerVolume(lila::ext::Context& ctx);
+/** Forgets the results of modifiers no longer in the scene. */
+void forgetGoneVolumeResults();
 
 /**
  * The volume checks terrainCheck adds for a terrain's modifier: seam cracks over tolerance, holes the mesh doesn't fill,

@@ -5,6 +5,7 @@
 #include "Analysis.h"
 #include "Checks.h"
 #include "CliffScene.h"
+#include "Coast.h"
 #include "Erosion.h"
 #include "ErosionGpu.h"
 #include "Export.h"
@@ -40,6 +41,8 @@
 #include <cctype>
 #include <cmath>
 #include <filesystem>
+#include <format>
+#include <fstream>
 #include <limits>
 #include <set>
 
@@ -63,6 +66,33 @@ double upOf(const glm::dvec3& w) { return zUp() ? w.z : w.y; }
 glm::dvec2 groundOf(const glm::dvec3& w) { return zUp() ? glm::dvec2(w.x, w.y) : glm::dvec2(w.x, w.z); }
 glm::dvec3 fromGround(glm::dvec2 g, double up = 0.0) { return zUp() ? glm::dvec3(g.x, g.y, up) : glm::dvec3(g.x, up, g.y); }
 const char* secondAxis() { return zUp() ? "y" : "z"; }
+
+/**
+ * A landscape send's content: the setLandscape parameters, the surface material's and the bytes of the heightmap and
+ * every weightmap. LilaLink tags it on the landscape and leaves a landscape that already carries it as it is.
+ */
+std::string landscapeHash(const json& params, const json& surface)
+{
+    uint64_t h = 1469598103934665603ull;
+    auto mix = [&h](const char* p, size_t n) {
+        for (size_t i = 0; i < n; ++i)
+            h = (h ^ static_cast<unsigned char>(p[i])) * 1099511628211ull;
+    };
+    auto file = [&](const json& path) {
+        if (!path.is_string())
+            return;
+        std::ifstream f(paths::fromUtf8(path.get<std::string>()), std::ios::binary);
+        std::vector<char> buf(1 << 16);
+        while (f.read(buf.data(), std::streamsize(buf.size())) || f.gcount() > 0)
+            mix(buf.data(), size_t(f.gcount()));
+    };
+    const std::string text = params.dump() + surface.dump();
+    mix(text.data(), text.size());
+    file(params.value("heightmap", json()));
+    for (const json& l : params.value("layers", json::array()))
+        file(l.value("weightmap", json()));
+    return std::format("{:016x}", h);
+}
 
 /** A terrain mesh's placement: world from the heightfield's own space (X, Z across, Y up) and back. */
 struct Frame
@@ -561,6 +591,8 @@ json stampJson(const Found& f, const Stamp& s, const StampResult& r, const std::
             {"levels", levels},
             {"walls", walls},
             {"piles", piles}};
+    if (r.falloff > 0.0)
+        out["falloffUsed"] = r.falloff * a;
     if (s.isLine())
     {
         json line = json::array(), spans = json::array(), culverts = json::array();
@@ -600,6 +632,7 @@ std::vector<FlagDef> stampFlags(bool region)
         {"height", "h", T::Float, nullptr, "Target height along the scene's up axis, cm; overrides level."},
         {"offset", "of", T::Float, 0.0, "Added to the target height, cm."},
         {"falloff", "fo", T::Float, 500.0, "Skirt width back to the ground, cm.", {}, {}, 0.0},
+        {"skirtGrade", "sg", T::Float, 0.0, "Steepest the skirt may fall, percent: the falloff widens up to four times to keep to it. 0 keeps it as given.", {}, {}, 0.0},
         {"strength", "st", T::Float, 1.0, "Blend: how far toward the target, 0 to 1.", {}, {}, 0.0, 1.0},
         {"masks", "mk", T::List, json::array({"cityFootprint"}), "Masks its coverage is written to."},
         {"maskValue", "mv", T::Float, 1.0, "Mask value inside.", {}, {}, 0.0, 1.0},
@@ -662,6 +695,7 @@ json runStamp(const Args& a, bool region, const std::string& cmd, const std::str
     s.level = StampLevel(std::find(stampLevelNames().begin(), stampLevelNames().end(), level) - stampLevelNames().begin());
     s.offset = a.get<double>("offset", 0.0) / fr.vertical();
     s.falloff = std::max(0.0, a.get<double>("falloff", 500.0)) / fr.across();
+    s.skirtGrade = std::max(0.0, a.get<double>("skirtGrade", 0.0)) / 100.0 * fr.across() / fr.vertical();
     s.strength = std::clamp(a.get<double>("strength", 1.0), 0.0, 1.0);
     s.stepHeight = std::max(1.0, a.get<double>("stepHeight", 150.0)) / fr.vertical();
     s.steps = int(std::clamp<int64_t>(a.get<int64_t>("steps", 0), 0, 64));
@@ -1893,7 +1927,7 @@ void registerContractCommands(ext::Context& ctx)
                "mesh covers, roads (terrainAddRoad) steeper or more banked than their design or over water with no bridge or culvert, "
                "rivers rising downstream, lakes below their rim with no outlet or above it with no dam, cliff pieces floating above the "
                "ground (floatingCliff), cracks where a cliff meets the terrain (cliffCrack) and cliff tiles over triangleBudget in a "
-               "World Partition cell (tileOverBudget). Returns ok and the issues, each with its type, what it is about, where and a message.",
+               "World Partition cell (tileOverBudget), and waterCheck's channel, lane and air corridor issues. Returns ok and the issues, each with its type, what it is about, where and a message.",
         .positionalDoc = "terrain mesh or its modifier",
         .flags = withAnalysisFlags({nodeFlag({"buildings", "b", T::List, json::array(), "Meshes standing on the terrain to check."}, "mesh"),
                                     {"cutFillLimit", "cf", T::Float, 500.0, "Largest cut plus fill per pad, m3.", {}, {}, 0.0},
@@ -1935,6 +1969,15 @@ void registerContractCommands(ext::Context& ctx)
             };
             const double limit = a.get<double>("cutFillLimit", 500.0);
             const double maxGrade = a.get<double>("maxGrade", 12.0);
+            // A culvert stamp carries the stream past whatever stands over it within a few cells.
+            std::vector<glm::dvec2> culvertPoints;
+            for (const StampEntry& c : stamps)
+                if (c.stamp.kind == "culvert")
+                    for (const glm::dvec3& q : c.result.centreline)
+                        culvertPoints.push_back({q.x, q.z});
+            auto culvertAt = [&](glm::dvec2 p) {
+                return std::any_of(culvertPoints.begin(), culvertPoints.end(), [&](glm::dvec2 q) { return glm::length(q - p) < 3.0 * h.cell; });
+            };
             for (const StampEntry& e : stamps)
             {
                 const json j = stampJson(f, e.stamp, e.result, e.layer);
@@ -1952,12 +1995,46 @@ void registerContractCommands(ext::Context& ctx)
                     if (!e.stamp.polygon.empty())
                     {
                         const std::vector<uint8_t> cover = footprintMask(h, footprintFromPolygon(e.stamp.polygon));
+                        std::set<int32_t> reaches;
                         for (size_t i = 0; i < cover.size(); ++i)
                             if (cover[i] && an->reachOf()[i] >= 0 && an->reaches()[size_t(an->reachOf()[i])].order >= 2)
+                                reaches.insert(an->reachOf()[i]);
+                        // Each stream under the pad, unless a culvert stamp carries it: its way across, a cell past
+                        // each edge, so a culvert can be laid along it.
+                        for (const int32_t reach : reaches)
+                        {
+                            const std::vector<uint32_t>& cells = an->reaches()[size_t(reach)].cells;
+                            size_t first = cells.size(), last = 0;
+                            bool open = false;
+                            for (size_t k = 0; k < cells.size(); ++k)
+                                if (cover[cells[k]])
+                                {
+                                    first = std::min(first, k);
+                                    last = k;
+                                    const glm::dvec2 p = h.samplePos(int(cells[k] % uint32_t(h.nx)), int(cells[k] / uint32_t(h.nx)));
+                                    open = open || !culvertAt(p);
+                                }
+                            if (!open || first > last)
+                                continue;
+                            std::vector<uint32_t> way(cells.begin() + std::ptrdiff_t(first > 0 ? first - 1 : first),
+                                                      cells.begin() + std::ptrdiff_t(std::min(last + 1, cells.size() - 1)) + 1);
+                            // A reach a cell long under the pad: its way across goes on into the reaches either side.
+                            const Reach& rr = an->reaches()[size_t(reach)];
+                            if (way.front() == cells.front() && !rr.upstream.empty() && !an->reaches()[size_t(rr.upstream[0])].cells.empty())
+                                way.insert(way.begin(), an->reaches()[size_t(rr.upstream[0])].cells.back());
+                            if (way.back() == cells.back() && rr.downstream >= 0 && !an->reaches()[size_t(rr.downstream)].cells.empty())
+                                way.push_back(an->reaches()[size_t(rr.downstream)].cells.front());
+                            json crossing = json::array();
+                            for (uint32_t c : way)
                             {
-                                issue("blocksFlow", about, at, "stands in river " + std::to_string(an->reachOf()[i]));
-                                break;
+                                const glm::dvec2 p = h.samplePos(int(c % uint32_t(h.nx)), int(c / uint32_t(h.nx)));
+                                crossing.push_back(worldJson(f.frame.world(p.x, h.heightAt(p.x, p.y), p.y)));
                             }
+                            issue("blocksFlow", about, at, "stands in river " + std::to_string(reach));
+                            issues.back()["reach"] = reach;
+                            issues.back()["order"] = an->reaches()[size_t(reach)].order;
+                            issues.back()["crossing"] = std::move(crossing);
+                        }
                     }
                 }
                 else if (e.stamp.kind == "street")
@@ -2051,6 +2128,8 @@ void registerContractCommands(ext::Context& ctx)
             for (const json& i : cliffs::cliffIssues(pathOf(f, a.objects()[0]), a.get<double>("cliffTolerance", 5.0), a.get<double>("triangleBudget", 400000.0),
                                                      a.get<double>("cellSize", 12800.0)))
                 issues.push_back(i);
+            for (const json& i : coastIssues(pathOf(f, a.objects()[0])))
+                issues.push_back(i);
             return {{"ok", issues.empty()}, {"issues", issues}, {"revision", revision(h)}};
         },
         .examples = {"c = terrainCheck('Terrain', buildings=['House1', 'House2'])\nc['ok'], c['issues']"},
@@ -2121,6 +2200,9 @@ void registerContractCommands(ext::Context& ctx)
 
 void registerCommands(ext::Context& ctx)
 {
+    // The revisions kept for terrainDirtyRegions are whole heightfields, by terrain path: a replaced scene's go with it.
+    for (const events::Event e : {events::Event::SceneNew, events::Event::SceneOpened})
+        ctx.subscribe(e, [](const events::EventData&) { seenRevisions().clear(); });
     const NoiseParams np;
     ctx.registerCommand({
         .name = "terrainCreate",
@@ -2453,6 +2535,8 @@ void registerCommands(ext::Context& ctx)
                     out["volume"] = v;
                 if (json water = exportTerrainWater(names[0], folder, name); !water.is_null())
                     out["water"] = water;
+                if (json coast = exportTerrainCoast(names[0], folder, name); !coast.is_null())
+                    out["coast"] = coast;
             }
             catch (const std::exception& e)
             {
@@ -2544,13 +2628,16 @@ void registerCommands(ext::Context& ctx)
                 throw CommandError(std::string("terrainSendToUnreal: ") + e.what());
             }
             const int timeoutMs = int(std::clamp(a.get<double>("timeout", 300.0), 1.0, 3600.0) * 1000.0);
+            params["hash"] = landscapeHash(params, surface);
             link::RpcResult r = client->call("setLandscape", params, timeoutMs);
             if (!r.ok)
                 throw CommandError("terrainSendToUnreal: " + r.error);
             json out = r.result;
             out["settings"] = settings;
             // Before the volume, which puts the holes' visibility mask into the landscape's material.
-            if (!surface.is_null())
+            if (out.value("unchanged", false))
+                log::info("terrainSendToUnreal: {} unchanged since the last send; heights, layers and material left as they are", name);
+            else if (!surface.is_null())
                 out["terrainMaterial"] = sendSurfaceMaterial(client, surface, timeoutMs);
             try
             {
@@ -2569,6 +2656,16 @@ void registerCommands(ext::Context& ctx)
                 {
                     if (json water = sendTerrainWater(names[0], a.get<double>("timeout", 300.0)); !water.is_null())
                         out["water"] = water;
+                    try
+                    {
+                        if (json coast = sendTerrainCoast(names[0], a.get<double>("timeout", 300.0)); !coast.is_null())
+                            out["coast"] = coast;
+                    }
+                    catch (const std::exception& e)
+                    {
+                        log::warn("terrainSendToUnreal: the landscape and water went, the coast and routes didn't: {}", e.what());
+                        out["coastError"] = e.what();
+                    }
                 }
                 catch (const std::exception& e)
                 {

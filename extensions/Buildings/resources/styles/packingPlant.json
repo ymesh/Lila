@@ -1,0 +1,79 @@
+{
+  "id": "packingPlant",
+  "label": "Packing Plant",
+  "description": "Produce packing and cold storage: white walls, loading doors, refrigeration units crowding a flat roof.",
+  "tags": [
+    "industrial",
+    "farm",
+    "packing"
+  ],
+  "floors": {
+    "min": 1,
+    "max": 1,
+    "groundHeight": 650,
+    "height": 650,
+    "plinth": 100
+  },
+  "bays": {
+    "width": 500,
+    "min": 350,
+    "cornerWidth": 30
+  },
+  "openings": {
+    "window": {
+      "width": 0.4,
+      "height": 0.15,
+      "sill": 0.75,
+      "kind": "window.residential"
+    },
+    "door": {
+      "width": 0.3,
+      "height": 0.35,
+      "kind": "door.service"
+    },
+    "shopfront": {
+      "width": 0.8,
+      "height": 0.6
+    },
+    "reveal": 10
+  },
+  "groundFloor": {
+    "street": "garage",
+    "shopfronts": false
+  },
+  "modules": {
+    "balconies": 0.0,
+    "grilles": 0.0,
+    "acUnits": 0.0,
+    "cornice": "light",
+    "bands": false,
+    "drainpipes": true
+  },
+  "roof": {
+    "kind": "flat",
+    "parapet": 60,
+    "waterTanks": 0.3,
+    "clutter": 1.0
+  },
+  "palette": {
+    "render": [
+      "#f1f1f1",
+      "#dcdcdc",
+      "#e8ece9"
+    ],
+    "trim": [
+      "#2e86ab",
+      "#3b8b5e"
+    ],
+    "roof": [
+      "#9a9a9a"
+    ],
+    "base": [
+      "#808080"
+    ],
+    "dirt": [
+      0.1,
+      0.4
+    ]
+  }
+}

@@ -672,7 +672,7 @@ std::vector<SyncItem> syncItems(const Layout& l, const RoadNetwork& net, const s
         for (size_t k = 0; k < net.lines.size(); ++k)
             (net.lines[k].surface ? surface : ground).push_back(roadIds[k]);
         if (!ground.empty())
-            make(o.key + "/roads", "roads", std::move(ground), hashText(o.roads));
+            make(o.key + "/roads", "roads", std::move(ground), hashText(o.roads) ^ hash64(hashText(o.roadSettings)));
         if (!surface.empty())
             make(o.key + "/paths", "paths", std::move(surface), 0);
     }

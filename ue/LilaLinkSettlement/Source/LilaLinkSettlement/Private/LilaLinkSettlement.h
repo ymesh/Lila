@@ -22,7 +22,16 @@
  * vehicle, intersection, crosswalk and trunk lanes go on the matching shapes too, and folder gets its traffic light and
  * parking data (see LilaLinkSettlementTraffic.h). Replies {actor, shapes, profiles, massTraffic, warnings}.
  *
- * removeSettlement {id} deletes the ZoneGraph actor made for id. Replies {removed}.
+ * removeSettlement {id} deletes the ZoneGraph actor made for id. Replies {removed, laneProfilesRemoved, configBackup?}.
+ *
+ * Lane profiles are reference-counted by level in Config/LilaLink/LaneProfileUsers.json (LilaLink::SetLaneProfileUser):
+ * a Lila_ profile goes from the settings when no level's settlement uses it any more, on removeSettlement or a resend
+ * that stops using it (setZoneGraph replies laneProfilesRemoved). Tags stay: MassTraffic's filters and other shapes name
+ * them.
+ *
+ * Lane profiles, tags and MassTraffic's lane filters live in the project's DefaultPlugins.ini: before a send changes it,
+ * the file as it was is copied to Saved/LilaLink/ConfigBackups (a .absent note when it did not exist yet), and the reply
+ * names the copy as configBackup.
  *
  * setRoadGrammar {asset, label, modules: [{symbol, size, scalable}], grammar} writes a road cross-section as a PCG data
  * asset: pin ModulesInfo (Symbol, Size, Scalable, DebugColor per module, as Subdivide Segment reads them) and pin Grammar
@@ -40,7 +49,9 @@
  * with the asset as its SettlementData parameter. Replies {asset, lots, envelopes, roads, actor, spawned, generated,
  * warnings}.
  *
- * removeSettlementCells {id, cells?: ["x_z", ...]} deletes those cell actors, or every cell of id. Replies {removed}.
+ * removeSettlementCells {id, cells?: ["x_z", ...], folder?} deletes those cell actors, or every cell of id, with their data
+ * assets unless another level's cells name them; with every cell going, folder's PCG data assets no cell names go too.
+ * Replies {removed, assetsDeleted, assets, assetsKept?}.
  */
 namespace LilaLinkSettlement
 {

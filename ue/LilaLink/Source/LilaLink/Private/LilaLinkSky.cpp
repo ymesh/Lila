@@ -254,7 +254,7 @@ void BuildVolumeFunction(UMaterialFunction* Function)
 void BuildVolumeMaterial(UMaterial* Material, UMaterialFunction* Function, USparseVolumeTexture* Default, TArray<FString>& OutWarnings)
 {
 	Material->MaterialDomain = MD_Volume;
-	Material->bUsedWithHeterogeneousVolumes = true;
+	Material->SetUsageByFlag(MATUSAGE_HeterogeneousVolumes, true);
 	Material->BlendMode = BLEND_Additive;
 	Material->SetShadingModel(MSM_Unlit);
 	UMaterialExpressionMaterialFunctionCall* Call = LilaLink::ResetToFunctionCall(Material, Function);

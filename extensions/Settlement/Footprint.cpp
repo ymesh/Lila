@@ -253,7 +253,7 @@ void Mask::dilate(double r)
         on[k] = d[k] <= limit ? 1 : 0;
 }
 
-std::vector<Polygon> Mask::outlines() const
+std::vector<Polygon> Mask::outlines(double tolerance) const
 {
     LILA_ZONE();
 
@@ -317,7 +317,7 @@ std::vector<Polygon> Mask::outlines() const
         }
         if (loop.size() < 4 || signedArea(loop) <= 0.0)
             continue; // a hole: filled
-        Polygon p = makePolygon(simplifyLoop(loop, 0.75 * cell));
+        Polygon p = makePolygon(simplifyLoop(loop, tolerance > 0.0 ? tolerance : 0.75 * cell));
         if (!p.pts.empty())
             out.push_back(std::move(p));
     }

@@ -268,7 +268,8 @@ void buildPrefab(Graph& g, const json& doc, NodeId group, const glm::dmat4& plac
                                                                   {"name", e.value("name", c->name + "1")}, {"parent", ""}})
                                      .get<std::string>();
         g.setParent(g.find(path)->id(), group, true);
-        for (const auto& [k, v] : e.value("properties", json::object()).items())
+        const json properties = e.value("properties", json::object());
+        for (const auto& [k, v] : properties.items())
             if (!v.is_null())
                 ops::execute("setAttr", {{"args", {g.fullPath(g.find(path)->id()) + "." + k, v}}});
     }

@@ -3,6 +3,7 @@
 #include "core/Log.h"
 #include "core/Paths.h"
 #include "geo/Mesh.h"
+#include "geo/Ops.h"
 #include "ops/Command.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -78,28 +79,6 @@ std::optional<fs::path> firstExisting(const std::vector<fs::path>& candidates)
 std::optional<fs::path> prjFor(const fs::path& mesh)
 {
     return firstExisting({fs::path(mesh).replace_extension(".prj"), mesh.parent_path() / (mesh.stem().string() + "_wkt.prj")});
-}
-
-/** Positions by m, normals by its inverse transpose, faces flipped when it mirrors. */
-void transformMesh(geo::Mesh& mesh, const glm::dmat4& m)
-{
-    tbb::parallel_for(geo::Index(0), mesh.pointCapacity(), [&](geo::Index p) {
-        if (mesh.pointValid(p))
-            mesh.setPosition(p, glm::dvec3(m * glm::dvec4(mesh.position(p), 1.0)));
-    });
-    const glm::mat3 n(glm::transpose(glm::inverse(glm::dmat3(m))));
-    for (geo::AttributeSet* set : {&mesh.cornerAttrs(), &mesh.pointAttrs()})
-    {
-        std::span<glm::vec3> normals = set->get<glm::vec3>(geo::attr::kNormal);
-        tbb::parallel_for(size_t(0), normals.size(), [&](size_t i) {
-            if (glm::dot(normals[i], normals[i]) > 0.0f)
-                normals[i] = glm::normalize(n * normals[i]);
-        });
-    }
-    if (glm::determinant(glm::dmat3(m)) < 0.0)
-        for (geo::Index f = 0; f < mesh.faceCapacity(); ++f)
-            if (mesh.faceValid(f))
-                mesh.flipFace(f);
 }
 
 /** The UTM zone (WGS 84) holding a latitude and longitude. */
@@ -226,7 +205,7 @@ std::optional<std::string> place(const fs::path& meshFile, const std::vector<geo
     const glm::dmat4 shift = glm::translate(glm::dmat4(1.0), -rebase);
     const glm::dmat4 m = placed.matrix * local * shift;
     for (geo::Mesh* mesh : meshes)
-        transformMesh(*mesh, m);
+        geo::transformMesh(*mesh, m);
     const std::string message = placed.message + " (" + found->source + ": " + names + note + ")";
     log::info("{}", message);
     return message;

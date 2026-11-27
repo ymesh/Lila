@@ -61,8 +61,9 @@ json schemaJson()
          {{"type", "object"},
           {"description", "Where the heights start. type noise (terrainCreate flags: amplitude, featureSize, octaves, roughness, ridged, warp), "
                           "flat, image (terrainImport flags: file, mode guide|height|uplift|mask|sketch, low, high, erosion; spans size[0]) or "
-                          "dem (terrainImportDem flags: place, bbox or file, source, projection, cellSize, bareEarth, amplify)."},
-          {"properties", {{"type", {{"type", "string"}, {"enum", {"noise", "flat", "image", "dem"}}, {"default", "noise"}}}}}}},
+                          "dem (terrainImportDem flags: place, bbox or file, source, projection, cellSize, bareEarth, amplify) or existing (mesh: a terrain already in the scene, such as a World Remix; the "
+                          "steps run on it and nothing is created)."},
+          {"properties", {{"type", {{"type", "string"}, {"enum", {"noise", "flat", "image", "dem", "existing"}}, {"default", "noise"}}}}}}},
         {"constraints", list("terrainConstrain calls: {kind: ridge|valley|cliff|river|flat, path, height, width, strength, id}. Held while erosion runs.")},
         {"sculpt", list("terrainStroke calls: {brush, points|path, radius, strength, stage, ...}. stage base (the default) erodes with the terrain.")},
         {"erosion", obj("terrainErode flags: {preset: natural|alpine|desert|hills, age: 0 to 1, iterations, device, seed, hardnessMask}.")},
@@ -313,8 +314,14 @@ json createCall(const json& spec)
 {
     const json source = spec.value("source", json{{"type", "noise"}});
     if (!source.is_object())
-        throw CommandError("terrainSpec: source is a dict with a type: noise, flat, image or dem");
+        throw CommandError("terrainSpec: source is a dict with a type: noise, flat, image, dem or existing");
     const std::string type = source.value("type", std::string("noise"));
+    if (type == "existing")
+    {
+        if (!source.contains("mesh") || !source["mesh"].is_string())
+            throw CommandError("terrainSpec: an existing source needs mesh (the terrain the steps run on)");
+        return {{"command", ""}, {"mesh", source["mesh"]}};
+    }
     const std::string name = spec.value("name", std::string("Terrain"));
     json size = spec.value("size", json::array({200000.0, 200000.0}));
     if (!size.is_array() || size.size() != 2)
@@ -354,7 +361,7 @@ json createCall(const json& spec)
             call["size"] = size;
         return {{"command", "terrainImportDem"}, {"call", call}};
     }
-    throw CommandError("terrainSpec: source type is noise, flat, image or dem, not " + type);
+    throw CommandError("terrainSpec: source type is noise, flat, image, dem or existing, not " + type);
 }
 
 bool enabled(const json& spec, const char* key, bool byDefault)
@@ -409,7 +416,13 @@ json buildSteps(const json& spec, Builder& b, std::string& mesh)
 {
     const json create = createCall(spec);
     json made;
-    if (!b.run("source", create["command"], create["call"], &made))
+    if (create["command"] == "")
+    {
+        if (!Graph::current().find(create["mesh"].get<std::string>()))
+            throw CommandError("terrainSpec: no terrain " + create["mesh"].get<std::string>() + " for the existing source");
+        made = {{"mesh", Graph::current().find(create["mesh"].get<std::string>())->path()}};
+    }
+    else if (!b.run("source", create["command"], create["call"], &made))
         return made;
     mesh = made["mesh"].get<std::string>();
     const std::string& t = mesh;
@@ -599,7 +612,8 @@ nlohmann::json buildTerrainSpec(const nlohmann::json& spec, bool replace, bool s
             throw CommandError("terrainSpec: unknown key " + k + " (see lila://schema/terrain-spec)");
     const std::string name = spec.value("name", std::string("Terrain"));
     Graph& g = Graph::current();
-    if (Node* old = g.find(name))
+    const bool existing = spec.contains("source") && spec["source"].is_object() && spec["source"].value("type", std::string()) == "existing";
+    if (Node* old = existing ? nullptr : g.find(name))
     {
         if (!replace)
             throw CommandError("terrainSpec: there is a node named " + name + " already; replace=True rebuilds it, or give the spec another name");
@@ -730,7 +744,7 @@ void registerSpec(ext::Context& ctx)
     ctx.registerCommand({
         .name = "terrainSpec",
         .doc = "Build a whole terrain from one JSON spec, or read a terrain back as one.\n\n"
-               "spec= (or preset= with overrides=) runs the terrain commands in order: source (noise, flat, image or dem), "
+               "spec= (or preset= with overrides=) runs the terrain commands in order: source (noise, flat, image, dem, or existing: an existing terrain the steps run on), "
                "constraints, sculpt, erosion, landforms, water (sea, rivers, lakes), regions (terrainQuery, stored by name for "
                "'region:<name>' references), roads, stamps, volume, biomes, materials, ground cover, keys other extensions add "
                "(seams, with Seamwork), check, export. Each step is "

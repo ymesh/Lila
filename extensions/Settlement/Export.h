@@ -78,6 +78,8 @@ struct SyncOptions
     std::string roads = "landscape"; // landscape, splines, meshes or none
     bool massing = true, pcg = true, partition = true, zoneGraph = true;
     std::string settings;
+    /** Settings only the ground roads item holds (landscape paint layers, deformTerrain), so a change resends just the roads. */
+    std::string roadSettings;
 };
 
 /**

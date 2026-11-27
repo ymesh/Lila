@@ -1,4 +1,5 @@
 #include "io/SceneFormats.h"
+#include "core/Release.h"
 
 #include "core/Decimal.h"
 #include "core/PackedArray.h"
@@ -1166,7 +1167,8 @@ void encodeBinary(json header, const std::function<void(std::string_view)>& writ
     if (error)
         std::rethrow_exception(error);
     // Handing the big buffers to another thread keeps their release (hundreds of MB on a heavy scene) off the save.
-    std::thread([blobs = std::move(blobs), chunks = std::move(chunks)] {}).detach();
+    release::laterEach(std::move(blobs));
+    release::laterEach(std::move(chunks));
 }
 
 std::string encodeBinary(json header)
@@ -1275,7 +1277,7 @@ json decodeBinaryImpl(std::string_view in, std::vector<std::string>* warnings, b
             BlobBytes().swap(blobs[parts[i].blob]);
     restoreBlobs(doc, blobs, warnings);
     // Gigabytes take long enough to free that it is done off this thread.
-    std::thread([b = std::move(blobs)] {}).detach();
+    release::laterEach(std::move(blobs));
     return doc;
 }
 } // namespace

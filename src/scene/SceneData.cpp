@@ -1,5 +1,6 @@
 #include "scene/SceneData.h"
 
+#include "core/Registry.h"
 #include "ops/Command.h"
 #include "ops/Undo.h"
 
@@ -31,6 +32,24 @@ struct SwapAction final : UndoAction
     void redo() override { undo(); }
     size_t bytes() const override { return sizeof(*this) + key.capacity() + other.dump().size(); }
 };
+
+struct LoadedCallback
+{
+    std::string owner;
+    std::function<void()> fn;
+};
+
+std::vector<LoadedCallback>& loadedCallbacks()
+{
+    // Never destroyed: extensions register these, and their code is unloaded before statics are torn down at exit.
+    static auto& c = *new std::vector<LoadedCallback>();
+    // An unloading extension's callbacks go with it: its code is about to leave the process.
+    static const uint64_t sweep = owners::track([](std::string_view owner) {
+        return owner.empty() ? size_t(0) : std::erase_if(c, [&](const LoadedCallback& x) { return x.owner == owner; });
+    });
+    (void)sweep;
+    return c;
+}
 } // namespace
 
 const json& all()
@@ -69,6 +88,14 @@ json toJson()
 void fromJson(const json& j)
 {
     store() = j.is_object() ? j : json::object();
+    for (const LoadedCallback& c : loadedCallbacks())
+        c.fn();
+}
+
+void onLoaded(std::function<void()> fn)
+{
+    const std::string* owner = owners::attributedOwner();
+    loadedCallbacks().push_back({owner ? *owner : std::string(), std::move(fn)});
 }
 
 void registerCommands()

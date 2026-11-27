@@ -38,6 +38,7 @@
 #include <fstream>
 #include <map>
 #include <optional>
+#include <set>
 
 using namespace lila;
 using namespace lila::scene;
@@ -128,13 +129,20 @@ const char* unitName3mf(const std::string& unit)
 
 // Meshes
 
+/** Meshes a Print command has worked on: the validator checks only these, so meshes bound elsewhere never get print issues. */
+std::set<NodeId> gTargets;
+int gTargetListener = -1;
+
 std::vector<Node*> meshNodes(const Args& a, const char* cmd)
 {
     Graph& g = Graph::current();
     std::vector<Node*> out;
     for (const std::string& name : meshObjects(a, cmd))
         if (Node* n = g.find(name))
+        {
             out.push_back(n);
+            gTargets.insert(n->id());
+        }
     return out;
 }
 
@@ -742,6 +750,7 @@ json splitCmd(const Args& a)
     {
         Node* part = g.createNode(*type, n.name() + suffix, kNoNode, true);
         g.setValue({part->id(), MeshNode::kInMesh, -1}, MeshPtr(std::make_shared<geo::Mesh>(std::move(*mesh))));
+        gTargets.insert(part->id());
         made.push_back(g.fullPath(part->id()));
     }
     ops::execute("hide", {{"args", {g.fullPath(n.id())}}});
@@ -800,6 +809,7 @@ json import3mf(const Args& a)
         Node* n = g.createNode(*type, Graph::validName(o.name) && !o.name.empty() ? o.name : fs::path(paths::fromUtf8(path)).stem().string(),
                                kNoNode, true);
         g.setValue({n->id(), MeshNode::kInMesh, -1}, MeshPtr(std::make_shared<geo::Mesh>(transformed(o.mesh, m))));
+        gTargets.insert(n->id());
         names.push_back(g.fullPath(n->id()));
     }
     return names;
@@ -951,17 +961,64 @@ void registerCommands(ext::Context& ctx)
                                .exportSelection = {.command = "export3mf"}});
 
     ctx.add(dx::validators(), "validator", kSource,
-            dx::Validator{"Meshes print: closed, manifold, consistently wound, no self-intersections, walls above the printer's minimum.",
+            dx::Validator{"Meshes being prepared for print (ones a Print command or 3MF import has worked on): closed, manifold, consistently "
+                          "wound, no self-intersections, walls above the printer's minimum.",
                           [] {
                               Graph& g = Graph::current();
                               std::vector<Node*> nodes;
-                              for (NodeId id : g.nodes())
+                              for (NodeId id : gTargets)
                                   if (Node* n = g.node(id); n && n->type().isA("mesh"))
                                       nodes.push_back(n);
                               CheckOptions o;
                               o.minWall = currentPrinter().minWall * kMmToCm;
                               runChecks(nodes, o, true);
                           }});
+}
+
+int gExportListener = -1;
+
+/**
+ * Meshes written by exportStl become print targets and are checked straight away, so an STL exported for printing
+ * gets the same printability issues as one prepared with the Print commands.
+ */
+void checkStlExport(const ExecuteEvent& e)
+{
+    if (e.name != "exportStl" || !e.done || !e.ok || ops::previewing())
+        return;
+    Graph& g = Graph::current();
+    std::vector<NodeId> roots;
+    const json& args = e.call.contains("args") && e.call["args"].is_array() ? e.call["args"] : json::array();
+    for (size_t i = 1; i < args.size(); ++i)
+        if (args[i].is_string())
+            if (Node* n = g.find(args[i].get<std::string>()))
+                roots.push_back(n->id());
+    if (roots.empty())
+        roots = g.selection();
+    std::vector<Node*> nodes;
+    std::set<NodeId> seen;
+    auto add = [&](NodeId id) {
+        if (Node* n = g.node(id); n && n->type().isA("mesh") && seen.insert(id).second)
+            nodes.push_back(n);
+    };
+    for (NodeId r : roots)
+    {
+        add(r);
+        for (NodeId d : g.descendants(r))
+            add(d);
+    }
+    if (nodes.empty())
+        return;
+    for (Node* n : nodes)
+        gTargets.insert(n->id());
+    CheckOptions o;
+    o.minWall = currentPrinter().minWall * kMmToCm;
+    runChecks(nodes, o, true);
+    size_t issues = 0;
+    for (Node* n : nodes)
+        for (const dx::Issue* i : dx::issuesOf(n->id()))
+            issues += i->source == kSource;
+    if (issues)
+        log::warn("Print: {} printability issue(s) on the exported meshes (Validation lists them)", issues);
 }
 
 /** "Size 52.0 x 30.0 x 12.0 mm, fits Prusa MK4" for the selection, under an export's unit field. */
@@ -1157,6 +1214,15 @@ LILA_EXTENSION_EXPORT int lilaExtensionInit(lila::ext::Context& ctx)
 {
     print::registerCommands(ctx);
     print::registerUi(ctx);
+    print::gExportListener = lila::ops::addExecuteListener(print::checkStlExport);
+    print::gTargetListener = lila::scene::Graph::current().addListener(
+        [](lila::scene::Change c, lila::scene::NodeId id) {
+            if (c == lila::scene::Change::Cleared)
+                print::gTargets.clear();
+            else if (c == lila::scene::Change::Deleted)
+                print::gTargets.erase(id);
+        },
+        true);
     return 0;
 }
 
@@ -1164,4 +1230,11 @@ LILA_EXTENSION_EXPORT void lilaExtensionUninit(lila::ext::Context&)
 {
     print::gPlacingHole = false;
     print::gLegend = {};
+    if (print::gExportListener >= 0)
+        lila::ops::removeExecuteListener(print::gExportListener);
+    print::gExportListener = -1;
+    if (print::gTargetListener >= 0)
+        lila::scene::Graph::current().removeListener(print::gTargetListener);
+    print::gTargetListener = -1;
+    print::gTargets.clear();
 }

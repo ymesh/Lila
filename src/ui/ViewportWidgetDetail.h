@@ -58,6 +58,7 @@
 #include "ui/Tools.h"
 #include "ui/ViewportDisplay.h"
 #include "ui/ViewportHooks.h"
+#include "ui/ViewOverlays.h"
 #include "ui/ViewportHud.h"
 #include "ui/ViewportRenderers.h"
 #include "ui/ViewportTool.h"
@@ -122,7 +123,8 @@ inline glm::dmat4 shownWorld(const scene::Node& n)
  */
 inline void pushInstanceDraws(render::FrameState& s, const render::MeshDraw& d, const gn::InstanceView& view, bool textured)
 {
-    auto push = [&](const scene::MeshPtr& mesh, std::shared_ptr<const std::vector<glm::mat4>> placements) {
+    using Colors = std::shared_ptr<const std::vector<glm::vec4>>;
+    auto push = [&](const scene::MeshPtr& mesh, std::shared_ptr<const std::vector<glm::mat4>> placements, Colors colors, Colors colors2) {
         const bool tangents = textured && needsTangents(*mesh);
         auto rm = renderMeshFor(mesh, tangents);
         if (!rm)
@@ -138,17 +140,32 @@ inline void pushInstanceDraws(render::FrameState& s, const render::MeshDraw& d, 
                 for (const glm::mat4& p : *placements)
                     both->push_back(copy * p);
             part.instances = std::move(both);
+            auto repeat = [&](const Colors& list) -> Colors {
+                if (!list)
+                    return nullptr;
+                auto repeated = std::make_shared<std::vector<glm::vec4>>();
+                repeated->reserve(d.instances->size() * list->size());
+                for (size_t copy = 0; copy < d.instances->size(); ++copy)
+                    repeated->insert(repeated->end(), list->begin(), list->end());
+                return repeated;
+            };
+            part.instanceColors = repeat(colors);
+            part.instanceColors2 = repeat(colors2);
         }
         else
+        {
             part.instances = placements ? std::move(placements) : d.instances;
+            part.instanceColors = std::move(colors);
+            part.instanceColors2 = std::move(colors2);
+        }
         if (textured)
             part.materials = drawMaterials(*mesh);
         s.meshes.push_back(std::move(part));
     };
     if (view.base)
-        push(view.base, nullptr);
+        push(view.base, nullptr, nullptr, nullptr);
     for (const gn::InstancePart& p : view.parts)
-        push(p.mesh, p.transforms);
+        push(p.mesh, p.transforms, p.colors, p.colors2);
 }
 
 /**

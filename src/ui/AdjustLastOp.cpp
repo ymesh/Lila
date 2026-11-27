@@ -115,7 +115,11 @@ LastOpEditor::LastOpEditor(QWidget* parent) : QWidget(parent)
         else
             refresh();
     });
-    mGraphListener = scene::Graph::current().addListener([this](scene::Change, scene::NodeId) { mLiveCheck->start(); });
+    // Restarting a timer costs more than the check; a world build makes hundreds of thousands of changes.
+    mGraphListener = scene::Graph::current().addListener([this](scene::Change, scene::NodeId) {
+        if (!mLiveCheck->isActive())
+            mLiveCheck->start();
+    });
     mComponentListener = scene::components::addListener([this] { mLiveCheck->start(); });
     qApp->installEventFilter(this);
     rebuild();

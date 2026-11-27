@@ -243,6 +243,8 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* e)
         requestFrame();
         return;
     }
+    if (e->buttons() == Qt::NoButton && viewportHooks::hoverDrag(e->position(), viewInfo()))
+        requestFrame();
     // Badges follow the cursor, which otherwise only redraws the view when the hover changes.
     if (e->buttons() == Qt::NoButton && !cursorBadges::active(state(e->position())).empty())
         requestFrame();

@@ -293,6 +293,48 @@ void registerActions()
                   .python = "lila.prefs.set(\"general\", \"/manipulator/moveSpace\", \"normal\")",
                   .checked = spaceIs("/manipulator/moveSpace", "normal")});
 
+    // Scale has no Parent space, so Parent leaves it alone.
+    auto setAllSpaces = [](const std::string& space) {
+        PrefStore& prefs = PrefStore::get();
+        prefs.set("general", "/manipulator/moveSpace", space);
+        prefs.set("general", "/manipulator/rotateSpace", space);
+        if (space != "parent")
+            prefs.set("general", "/manipulator/scaleSpace", space);
+    };
+    auto allSpacesIs = [](std::string space) -> std::function<bool()> {
+        return [space] {
+            const PrefStore& prefs = PrefStore::get();
+            return prefs.value<std::string>("general", "/manipulator/moveSpace", "world") == space &&
+                   prefs.value<std::string>("general", "/manipulator/rotateSpace", "world") == space &&
+                   (space == "parent" || prefs.value<std::string>("general", "/manipulator/scaleSpace", "world") == space);
+        };
+    };
+    for (auto [space, label, what] : {std::tuple{"world", "All World", "the world axes"}, {"object", "All Object", "the object's own axes"},
+                                      {"parent", "All Parent", "the parent's axes (scale has no parent space and keeps its own)"}})
+    {
+        std::string py = std::string("for m in (\"move\", \"rotate\"") + (std::string(space) == "parent" ? "" : ", \"scale\"") +
+                         "):\n    lila.prefs.set(\"general\", f\"/manipulator/{m}Space\", \"" + space + "\")";
+        actions::add({.id = std::string("manip.all.") + space, .label = label, .category = "Tools",
+                      .run = [setAllSpaces, space] { setAllSpaces(space); },
+                      .doc = std::string("Aligns the move, rotate and scale manipulators to ") + what + ".",
+                      .python = py,
+                      .checked = allSpacesIs(space),
+                      .keywords = {"manipulator space", "all manipulators", "transform space"}});
+    }
+    actions::add({.id = "manip.all.cycle", .label = "Cycle Manipulator Space", .category = "Tools",
+                  .run =
+                      [setAllSpaces] {
+                          const std::string cur = PrefStore::get().value<std::string>("general", "/manipulator/moveSpace", "world");
+                          const char* next = cur == "world" ? "object" : cur == "object" ? "parent" : "world";
+                          setAllSpaces(next);
+                          const QString label = QString(next);
+                          viewportToast::showActive(label.left(1).toUpper() + label.mid(1) + " Space", 1200, viewportToast::Kind::Info,
+                                                    "manip.space");
+                      },
+                  .doc = "Steps the move, rotate and scale manipulators through World, Object and Parent space, starting from the move "
+                         "manipulator's current space.",
+                  .keywords = {"manipulator space", "toggle space", "world object parent", "transform space"}});
+
     auto resizeManip = [](double factor) {
         double size = PrefStore::get().value<double>("general", "/manipulator/size", 100.0);
         // Round to the Preferences field's 5 px step, always moving at least one step.

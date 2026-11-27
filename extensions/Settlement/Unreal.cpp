@@ -18,6 +18,8 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <optional>
+#include <chrono>
 #include <cctype>
 #include <cmath>
 #include <filesystem>
@@ -695,7 +697,10 @@ json sendCellMesh(link::RpcClient& c, const geo::Mesh& mesh, const std::string& 
     std::string err;
     if (!fbx::writeFbx(scene, file, fbx::ExportOptions{}, &err))
         throw CommandError(std::string(cmd) + ": writing " + file.string() + ": " + err);
-    const json imported = call(c, "importAsset", link::importParams(file, {{"contentPath", folder + "/" + name}, {"kind", "static"}, {"reapplyOptions", true}}), cmd);
+    // Managed materials with no inputs: the Default slot stays on the engine default instead of an imported Default material.
+    const json imported = call(c, "importAsset",
+                               link::importParams(file, {{"contentPath", folder + "/" + name}, {"kind", "static"}, {"reapplyOptions", true}}, json::array()),
+                               cmd);
     std::error_code ec;
     fs::remove(file, ec);
     std::string asset = folder + "/" + name + "." + name;
@@ -710,22 +715,143 @@ json sendCellMesh(link::RpcClient& c, const geo::Mesh& mesh, const std::string& 
                 cmd);
 }
 
+/** The polyline cut back by from at its start and to at its end; empty when nothing is left. */
+std::vector<glm::dvec3> trimmed(const std::vector<glm::dvec3>& pts, double from, double to)
+{
+    double length = 0.0;
+    for (size_t i = 1; i < pts.size(); ++i)
+        length += glm::length(pts[i] - pts[i - 1]);
+    if (from + to >= length - 1.0)
+        return {};
+    std::vector<glm::dvec3> out;
+    double at = 0.0;
+    for (size_t i = 1; i < pts.size(); ++i)
+    {
+        const double step = glm::length(pts[i] - pts[i - 1]);
+        if (step <= 0.0)
+            continue;
+        const double a0 = at, a1 = at + step;
+        if (a1 > from && a0 < length - to)
+        {
+            if (out.empty())
+                out.push_back(glm::mix(pts[i - 1], pts[i], std::max(0.0, from - a0) / step));
+            out.push_back(glm::mix(pts[i - 1], pts[i], std::min(1.0, (length - to - a0) / step)));
+        }
+        at = a1;
+    }
+    return out.size() >= 2 ? out : std::vector<glm::dvec3>{};
+}
+
+/** The polyline moved sideways by d in the ground plane, mitred at the corners. */
+std::vector<glm::dvec3> offsetSplineLine(const std::vector<glm::dvec3>& pts, double d)
+{
+    auto side = [](const glm::dvec3& p, const glm::dvec3& q) {
+        const glm::dvec2 t(q.x - p.x, q.z - p.z);
+        const double n = glm::length(t);
+        return n > 0.0 ? glm::dvec2(-t.y, t.x) / n : glm::dvec2(0.0);
+    };
+    std::vector<glm::dvec3> out;
+    for (size_t i = 0; i < pts.size(); ++i)
+    {
+        const glm::dvec2 in = i > 0 ? side(pts[i - 1], pts[i]) : side(pts[i], pts[i + 1]);
+        const glm::dvec2 on = i + 1 < pts.size() ? side(pts[i], pts[i + 1]) : in;
+        glm::dvec2 m = in + on;
+        const double len = glm::length(m);
+        m = len > 1e-9 ? m / len : on;
+        // Mitre length, capped so a hairpin does not throw the shoulder far out.
+        const double cosHalf = std::max(0.5, glm::dot(m, on));
+        out.push_back(pts[i] + glm::dvec3(m.x, 0.0, m.y) * (d / cosHalf));
+    }
+    return out;
+}
+
+/**
+ * Ground roads as landscape splines: each road paints layer over its carriageway (lanes, median, parking) and shapes its
+ * whole width; with shoulderLayer, a spline each side that leaves the heights alone paints the sidewalk and verge strip,
+ * cut back at junctions. Shoulders go first, so on a weight-blended landscape the road layer wins where they meet.
+ */
+json landscapeRoadSplines(const Rebuilt& r, const std::string& layer, const std::string& shoulderLayer, bool deform)
+{
+    const Layout& l = r.layout;
+    const std::vector<StreetLine> lines = streetLines(l, r.ground);
+    std::map<int, double> junctionReach;
+    for (const StreetLine& s : lines)
+        if (!s.surface)
+            for (int node : {s.startNode, s.endNode})
+                if (node >= 0 && l.graph.degree(node) >= 3)
+                    junctionReach[node] = std::max(junctionReach[node], 0.5 * s.width);
+    auto reach = [&](int node) {
+        const auto it = junctionReach.find(node);
+        return it != junctionReach.end() ? it->second : 0.0;
+    };
+    auto entry = [](const curve::Spline& s, const std::string& paint, double share, bool shapes) {
+        json out = link::splinePoints({s}, glm::dvec3(0.0));
+        if (out.empty())
+            return json();
+        json j = out[0];
+        if (!paint.empty())
+        {
+            j["layer"] = paint;
+            j["layerWidth"] = share;
+        }
+        j["deform"] = shapes;
+        return j;
+    };
+    json shoulders = json::array(), roads = json::array();
+    for (const StreetLine& s : lines)
+    {
+        if (s.surface)
+            continue;
+        const double half = 0.5 * s.width;
+        double carriage = half;
+        if (s.profile >= 0 && size_t(s.profile) < l.roads.size())
+        {
+            const RoadProfile& p = l.roads[size_t(s.profile)];
+            if (p.width() > 0.0)
+                carriage = half * (p.lanes * p.laneWidth + p.median + 2.0 * p.parking) / p.width();
+        }
+        if (json j = entry(smoothSpline(s.pts, half / 100.0), layer, std::clamp(carriage / std::max(half, 1.0), 0.01, 1.0), deform); !j.is_null())
+            roads.push_back(std::move(j));
+        const double strip = half - carriage;
+        if (shoulderLayer.empty() || strip < 10.0)
+            continue;
+        const std::vector<glm::dvec3> cut = trimmed(s.pts, reach(s.startNode), reach(s.endNode));
+        if (cut.empty())
+            continue;
+        for (double sideSign : {-1.0, 1.0})
+            if (json j = entry(smoothSpline(offsetSplineLine(cut, sideSign * (carriage + 0.5 * strip)), 0.5 * strip / 100.0), shoulderLayer, 1.0, false);
+                !j.is_null())
+                shoulders.push_back(std::move(j));
+    }
+    for (json& j : roads)
+        shoulders.push_back(std::move(j));
+    return shoulders;
+}
+
 /** Ground roads (surface=false) on the landscape or as one spline actor, or the surface paths as their own actor. */
 json sendSplines(link::RpcClient& c, const Rebuilt& r, const Args& a, const std::string& key, const std::string& label, bool surface,
                  const char* cmd)
 {
     LILA_ZONE();
 
-    curve::Splines splines;
-    for (const StreetLine& s : streetLines(r.layout, r.ground))
-        if (s.surface == surface)
-            splines.push_back(smoothSpline(s.pts, 0.5 * s.width / 100.0));
     const bool landscape = !surface && a.get<std::string>("roads", "landscape") == "landscape";
+    json points;
+    if (landscape)
+        points = landscapeRoadSplines(r, a.get<std::string>("roadLayer", "roadSurface"), a.get<std::string>("shoulderLayer", "roadVerge"),
+                                      a.get<bool>("deformTerrain", true));
+    else
+    {
+        curve::Splines splines;
+        for (const StreetLine& s : streetLines(r.layout, r.ground))
+            if (s.surface == surface)
+                splines.push_back(smoothSpline(s.pts, 0.5 * s.width / 100.0));
+        points = link::splinePoints(splines, glm::dvec3(0.0));
+    }
     json params = {{"id", key + (surface ? "/paths" : "/roads")},
                    {"label", label + (surface ? "_Paths" : "_Roads")},
                    {"mode", landscape ? "landscape" : "actor"},
                    {"location", json::array({0, 0, 0})},
-                   {"splines", link::splinePoints(splines, glm::dvec3(0.0))},
+                   {"splines", points},
                    {"folder", "Lila/Settlement"}};
     if (!surface)
     {
@@ -775,6 +901,146 @@ json readJsonFile(const fs::path& path)
 /** The cell named at the end of an item key ("<key>/pcg/<x>_<z>"). */
 std::string cellNameOf(const std::string& itemKey) { return itemKey.substr(itemKey.find_last_of('/') + 1); }
 
+/** One manifest per settlement, Unreal project and level: what was last sent there, for the diff. */
+fs::path manifestPathFor(const std::string& key, const link::LevelIdentity& level)
+{
+    std::string project = link::Link::get().connected() ? link::Link::get().status().value("project", std::string()) : std::string();
+    if (!level.level.empty())
+        project += "_" + link::levelFileKey(level.level);
+    return link::cacheDir() / "settlement" / ("sync_" + assetName(project) + "_" + assetName(key) + ".json");
+}
+
+/**
+ * The manifest at path, or null when there is none or it describes another level than the open one (one deleted and
+ * made again under the same path holds none of it); why it was set aside goes in *ignored.
+ */
+json readManifest(const fs::path& path, const link::LevelIdentity& level, std::string* ignored)
+{
+    json m = readJsonFile(path);
+    if (const std::string why = link::levelRecordMismatch(m, level); !why.empty())
+    {
+        *ignored = "the last send's record was set aside: " + why;
+        return json();
+    }
+    return m;
+}
+
+/** The label a settlement's Unreal actors and assets are named by: the key's last path part. */
+std::string labelOf(const std::string& key)
+{
+    const size_t slash = key.find_last_of("|/");
+    return slash == std::string::npos ? key : key.substr(slash + 1);
+}
+
+/**
+ * Everything a settlement sent to the open level goes: placements and mesh cells (their meshes too), road, path and
+ * level splines, PCG cells with their data assets, and its ZoneGraph lanes. Works from the Unreal key alone, so a
+ * settlement already deleted in Lila can be removed; the manifest of that key is deleted after.
+ */
+/** Lifts a spline send or removal reply's warnings and the paint layers it took off the landscape to the command's top level. */
+void liftSplineReport(const json& reply, json& warnings, json& paintLayersRemoved)
+{
+    if (!reply.is_object())
+        return;
+    for (const json& w : reply.value("warnings", json::array()))
+        warnings.push_back(w);
+    for (const json& l : reply.value("paintLayersRemoved", json::array()))
+        paintLayersRemoved.push_back(l);
+}
+
+json removeFromUnreal(const Args& a)
+{
+    LILA_ZONE();
+
+    const char* cmd = "settlementRemoveFromUnreal";
+    std::string key = a.get<std::string>("key", "");
+    if (key.empty())
+    {
+        const std::vector<std::string> names = a.objects();
+        if (names.size() != 1)
+            throw CommandError(std::string(cmd) + ": give one settlement, or key= (the Unreal key of one no longer in the scene)");
+        const Rebuilt r = rebuildSettlement(scene::Graph::current(), names[0], cmd);
+        key = r.mesh.empty() ? r.modifier : r.mesh;
+    }
+    const std::string label = labelOf(key);
+    const std::string folder = a.get<std::string>("folder", "/Game/Lila/Settlement");
+    const std::string cellFolder = folder + "/" + assetName(label);
+    std::shared_ptr<link::RpcClient> c = client(cmd, {});
+    const json have = link::Link::get().status().value("features", json::array());
+    auto has = [&](const char* f) { return have.is_array() && std::ranges::find(have, json(f)) != have.end(); };
+    const link::LevelIdentity level = link::openLevelIdentity();
+    const fs::path manifestPath = manifestPathFor(key, level);
+    std::string ignored;
+    const json previous = readManifest(manifestPath, level, &ignored);
+    const json before = previous.is_object() ? previous.value("items", json::object()) : json::object();
+
+    json out = {{"key", key},
+                {"manifest", previous.is_object() ? "found" : !ignored.empty() ? ignored + "; removed by the key's tags only" : "none: removed by the key's tags only"}};
+    json errors = json::array();
+    auto attempt = [&](const char* what, const std::function<json()>& f) {
+        try
+        {
+            out[what] = f();
+        }
+        catch (const std::exception& e)
+        {
+            errors.push_back(std::string(what) + ": " + e.what());
+        }
+    };
+    // Mesh cells first, so their meshes go with them; then every other group of the key by prefix.
+    json meshGroups = json::array();
+    for (const auto& [k, v] : before.items())
+        if (const std::string kind = v.value("kind", std::string()); kind == "massing" || (kind == "roads" && k.find("/roads/") != std::string::npos))
+            meshGroups.push_back(k);
+    if (!meshGroups.empty())
+        attempt("meshCells", [&] { return call(*c, "removePlacements", {{"groups", meshGroups}, {"deleteMeshes", true}, {"meshFolder", cellFolder}}, cmd); });
+    attempt("placements", [&] { return call(*c, "removePlacements", {{"prefixes", {key + "/"}}}, cmd); });
+    json warnings = json::array(), paintLayersRemoved = json::array();
+    attempt("splines", [&] {
+        json r = json::object();
+        for (const char* s : {"/roads", "/paths", "/levels"})
+        {
+            const json reply = call(*c, "removeSpline", {{"id", key + s}}, cmd);
+            liftSplineReport(reply, warnings, paintLayersRemoved);
+            r[s + 1] = reply.value("removed", false);
+        }
+        return r;
+    });
+    if (!warnings.empty())
+        out["warnings"] = warnings;
+    if (!paintLayersRemoved.empty())
+        out["paintLayersRemoved"] = paintLayersRemoved;
+    if (has("settlementCells"))
+        attempt("pcgCells", [&] { return call(*c, "removeSettlementCells", {{"id", key}, {"folder", cellFolder}}, cmd); });
+    if (has("settlement"))
+    {
+        attempt("zoneGraph", [&] { return call(*c, "removeSettlement", {{"id", key}}, cmd); });
+        // Lane profiles are project-wide: say which ones the project ini lost and where the ini as it was went.
+        if (const json zg = out.value("zoneGraph", json::object()); zg.is_object())
+            for (const char* f : {"laneProfilesRemoved", "configBackup"})
+                if (zg.contains(f) && !(zg[f].is_array() && zg[f].empty()))
+                    out[f] = zg[f];
+    }
+    // Settlement-wide assets: the unpartitioned PCG data and Mass traffic's data assets (named after the lanes actor).
+    const std::string lanes = assetName(label + "_Lanes");
+    json assets = json::array({folder + "/PCG_" + assetName(label)});
+    for (const char* t : {"_TrafficLightTypes", "_TrafficLights", "_ParkingSpaces"})
+        assets.push_back(folder + "/DA_" + lanes + t);
+    attempt("assets", [&] {
+        json r = call(*c, "deleteAssets", {{"paths", assets}}, cmd);
+        r.erase("missing");
+        return r;
+    });
+    if (errors.empty())
+    {
+        std::error_code ec;
+        fs::remove(manifestPath, ec);
+    }
+    else
+        out["errors"] = errors;
+    return out;
+}
+
 json sendToUnreal(const Args& a)
 {
     LILA_ZONE();
@@ -822,21 +1088,30 @@ json sendToUnreal(const Args& a)
                        {"placeMode", placeMode},
                        {"pcgGraph", graph},
                        {"landscape", a.get<std::string>("landscape", "")},
-                       {"roadMesh", a.get<std::string>("roadMesh", "")},
-                       {"deformTerrain", a.get<bool>("deformTerrain", true)}})
+                       {"roadMesh", a.get<std::string>("roadMesh", "")}})
                      .dump();
+    if (mode == "landscape")
+        o.roadSettings = json({{"deformTerrain", a.get<bool>("deformTerrain", true)},
+                               {"roadLayer", a.get<std::string>("roadLayer", "roadSurface")},
+                               {"shoulderLayer", a.get<std::string>("shoulderLayer", "roadVerge")}})
+                             .dump();
     const std::vector<SyncItem> items = syncItems(r.layout, net, cells, o, roadHashes);
     const std::map<std::string, uint64_t> elements = elementHashes(r.layout, net);
 
-    // One manifest per settlement and Unreal project: what was last sent there, for the diff.
-    const std::string project = link::Link::get().connected() ? link::Link::get().status().value("project", std::string()) : std::string();
-    const fs::path manifestPath = link::cacheDir() / "settlement" / ("sync_" + assetName(project) + "_" + assetName(key) + ".json");
-    const json previous = a.get<bool>("resend", false) ? json() : readJsonFile(manifestPath);
+    const link::LevelIdentity level = link::openLevelIdentity();
+    const fs::path manifestPath = manifestPathFor(key, level);
+    std::string ignored;
+    const json previous = a.get<bool>("resend", false) ? json() : readManifest(manifestPath, level, &ignored);
     const SyncDiff d = diffSync(previous, items, elements);
     json kinds = json::object();
     for (const SyncItem& i : items)
         kinds[i.kind] = kinds.value(i.kind, 0) + 1;
-    json out = {{"cells", cells.size()}, {"cellSize", cellSize}, {"items", items.size()}, {"kinds", kinds}, {"diff", toJson(d)}};
+    json out = {{"key", key}, {"cells", cells.size()}, {"cellSize", cellSize}, {"items", items.size()}, {"kinds", kinds}, {"diff", toJson(d)}};
+    if (!ignored.empty())
+        out["resentAll"] = ignored + "; everything sent again";
+    else if (!level.level.empty() && level.guid.empty())
+        out["levelUnchecked"] = "this LilaLink doesn't report level GUIDs, so a level made again under the same path is taken to hold the last send; "
+                                "rebuild the plugin, or send with resend=True";
     if (a.get<bool>("dryRun", false))
     {
         out["dryRun"] = true;
@@ -879,20 +1154,11 @@ json sendToUnreal(const Args& a)
     if (o.massing)
         massingCells = massingByCell(r.layout, cellSize);
     json sent = json::object(), errors = json::array();
-    json warnings = json::array();
+    json warnings = json::array(), paintLayersRemoved = json::array();
     std::set<std::string> failed;
-    auto send = [&](const SyncItem& i) -> json {
+    // PCG cells and placements: many small calls, sent pipelined (see below).
+    auto request = [&](const SyncItem& i) -> std::optional<link::RpcClient::Request> {
         const Vec2 mid = i.cell.center(cellSize);
-        if (i.kind == "roads" && mode == "meshes")
-            return sendCellMesh(*c, roadMeshes.at(i.cell), "SM_" + assetName(label) + "_Roads_" + i.cell.name(), i.key,
-                                {mid.x, 0.0, mid.y}, cellFolder, dir, cmd);
-        if (i.kind == "roads" || i.kind == "paths")
-            return sendSplines(*c, r, a, key, label, i.kind == "paths", cmd);
-        if (i.kind == "levels")
-            return sendLevels(*c, r, key, label, cmd);
-        if (i.kind == "massing")
-            return sendCellMesh(*c, massingCells.at(i.cell), "SM_" + assetName(label) + "_Massing_" + i.cell.name(), i.key,
-                                {mid.x, 0.0, mid.y}, cellFolder, dir, cmd);
         if (i.kind == "pcg" && o.partition)
         {
             json params = pcgData(r, net, &cells.at(i.cell));
@@ -907,15 +1173,7 @@ json sendToUnreal(const Args& a)
                 params["graph"] = graph;
                 params["makeGraph"] = a.get<bool>("makeGraph", false);
             }
-            return call(*c, "setSettlementCell", params, cmd);
-        }
-        if (i.kind == "pcg")
-        {
-            json params = pcgData(r, net);
-            params["id"] = key;
-            params["asset"] = folder + "/PCG_" + assetName(label);
-            params["label"] = label;
-            return call(*c, "setSettlementData", params, cmd);
+            return link::RpcClient::Request{"setSettlementCell", std::move(params), 300000};
         }
         if (i.kind == "place")
         {
@@ -923,13 +1181,35 @@ json sendToUnreal(const Args& a)
             for (int k : cells.at(i.cell).placements)
                 if (r.layout.placements[size_t(k)].asset == i.asset)
                     list.push_back(placementJson(r.layout.placements[size_t(k)]));
-            return call(*c, "placeInstances",
-                        {{"group", i.key},
-                         {"label", label + "_" + safeName(i.asset.substr(i.asset.find_last_of('/') + 1)) + "_" + i.cell.name()},
-                         {"mesh", objectPath(i.asset)},
-                         {"mode", placeMode},
-                         {"placements", list}},
-                        cmd, 600000);
+            return link::RpcClient::Request{"placeInstances",
+                                            {{"group", i.key},
+                                             {"label", label + "_" + safeName(i.asset.substr(i.asset.find_last_of('/') + 1)) + "_" + i.cell.name()},
+                                             {"mesh", objectPath(i.asset)},
+                                             {"mode", placeMode},
+                                             {"placements", list}},
+                                            600000};
+        }
+        return std::nullopt;
+    };
+    auto send = [&](const SyncItem& i) -> json {
+        const Vec2 mid = i.cell.center(cellSize);
+        if (i.kind == "roads" && mode == "meshes")
+            return sendCellMesh(*c, roadMeshes.at(i.cell), "SM_" + assetName(label) + "_Roads_" + i.cell.name(), i.key,
+                                {mid.x, 0.0, mid.y}, cellFolder, dir, cmd);
+        if (i.kind == "roads" || i.kind == "paths")
+            return sendSplines(*c, r, a, key, label, i.kind == "paths", cmd);
+        if (i.kind == "levels")
+            return sendLevels(*c, r, key, label, cmd);
+        if (i.kind == "massing")
+            return sendCellMesh(*c, massingCells.at(i.cell), "SM_" + assetName(label) + "_Massing_" + i.cell.name(), i.key,
+                                {mid.x, 0.0, mid.y}, cellFolder, dir, cmd);
+        if (i.kind == "pcg")
+        {
+            json params = pcgData(r, net);
+            params["id"] = key;
+            params["asset"] = folder + "/PCG_" + assetName(label);
+            params["label"] = label;
+            return call(*c, "setSettlementData", params, cmd);
         }
         if (i.kind == "zoneGraph")
         {
@@ -947,11 +1227,54 @@ json sendToUnreal(const Args& a)
     // Placements of an asset the project doesn't have are one finding per asset, not one error per cell.
     std::map<std::string, int> missingAssets;
     constexpr std::string_view kNoMesh = "no static mesh at ";
+    // Seconds per item kind, in the result.
+    std::map<std::string, double> kindSeconds;
+    struct Lap
+    {
+        double& into;
+        std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+        ~Lap() { into += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); }
+    };
+    // Meshes the project lacks, asked once per mesh: their placements are skipped (and tried again next send).
+    std::set<std::string> lacking;
+    {
+        Lap lap{kindSeconds["assetCheck"]};
+        std::vector<std::string> assets;
+        for (const std::vector<std::string>* keys : {&d.added, &d.changed})
+            for (const std::string& k : *keys)
+                if (byKey[k]->kind == "place" && std::ranges::find(assets, objectPath(byKey[k]->asset)) == assets.end())
+                    assets.push_back(objectPath(byKey[k]->asset));
+        std::vector<link::RpcClient::Request> asks;
+        for (const std::string& p : assets)
+            asks.push_back({"assetInfo", {{"path", p}}, 30000});
+        const std::vector<link::RpcResult> got = c->callMany(asks);
+        for (size_t k = 0; k < got.size(); ++k)
+            if (!got[k].ok && got[k].error.starts_with("No asset at"))
+                lacking.insert(assets[k]);
+    }
+    std::vector<std::string> pipelined;
+    std::vector<link::RpcClient::Request> requests;
     for (const std::vector<std::string>* keys : {&d.added, &d.changed})
         for (const std::string& k : *keys)
             try
             {
-                sent[k] = send(*byKey[k]);
+                const SyncItem& item = *byKey[k];
+                if (item.kind == "place" && lacking.contains(objectPath(item.asset)))
+                {
+                    failed.insert(k);
+                    ++missingAssets[objectPath(item.asset)];
+                    continue;
+                }
+                if (std::optional<link::RpcClient::Request> req = request(item))
+                {
+                    pipelined.push_back(k);
+                    requests.push_back(std::move(*req));
+                    continue;
+                }
+                Lap lap{kindSeconds[item.kind]};
+                sent[k] = send(item);
+                if (const std::string& kind = byKey[k]->kind; kind == "paths" || kind == "levels" || (kind == "roads" && mode != "meshes"))
+                    liftSplineReport(sent[k], warnings, paintLayersRemoved);
             }
             catch (const std::exception& e)
             {
@@ -962,6 +1285,25 @@ json sendToUnreal(const Args& a)
                 else
                     errors.push_back(k + ": " + what);
             }
+    {
+        Lap lap{kindSeconds["cellsAndPlacements"]};
+        const std::vector<link::RpcResult> replies = c->callMany(requests);
+        for (size_t n = 0; n < replies.size(); ++n)
+        {
+            const std::string& k = pipelined[n];
+            if (replies[n].ok)
+            {
+                sent[k] = replies[n].result;
+                continue;
+            }
+            failed.insert(k);
+            const std::string what = std::string(cmd) + ": " + requests[n].method + ": " + replies[n].error;
+            if (const size_t at = what.find(kNoMesh); byKey[k]->kind == "place" && at != std::string::npos)
+                ++missingAssets[what.substr(at + kNoMesh.size())];
+            else
+                errors.push_back(k + ": " + what);
+        }
+    }
 
     // What the last send made that this layout no longer has.
     const json before = previous.is_object() ? previous.value("items", json::object()) : json::object();
@@ -978,7 +1320,10 @@ json sendToUnreal(const Args& a)
             else if (kind == "place")
                 groups.push_back(k);
             else if (kind == "roads" || kind == "paths" || kind == "levels")
+            {
                 removed[k] = call(*c, "removeSpline", {{"id", k}}, cmd);
+                liftSplineReport(removed[k], warnings, paintLayersRemoved);
+            }
             else if (kind == "pcg" && k.find("/pcg/") != std::string::npos)
                 pcgCells.push_back(cellNameOf(k));
             else if (kind == "zoneGraph")
@@ -1019,6 +1364,7 @@ json sendToUnreal(const Args& a)
             manifest["items"][k] = before[k];
     for (const std::string& k : keptRemoved)
         manifest["items"][k] = before[k];
+    link::stampLevelRecord(manifest, level);
     fs::create_directories(manifestPath.parent_path(), ec);
     std::ofstream(manifestPath, std::ios::binary) << manifest.dump(1);
 
@@ -1034,7 +1380,10 @@ json sendToUnreal(const Args& a)
     }
     if (!warnings.empty())
         out["warnings"] = warnings;
+    if (!paintLayersRemoved.empty())
+        out["paintLayersRemoved"] = paintLayersRemoved;
     out["manifest"] = manifestPath.generic_string();
+    out["seconds"] = kindSeconds;
     return out;
 }
 } // namespace
@@ -1046,8 +1395,14 @@ void registerUnrealCommands(ext::Context& ctx)
         .doc = "Sends a settlement to the connected Unreal editor and keeps it in sync: each send compares what it would make "
                "with what the last send to that project made (a manifest keyed by stable ids: streets, lots, envelopes, "
                "junctions, placements) and sends only the objects whose contents changed, removing those that are gone. "
+               "The manifest names the level it was written for by its GUID: a level deleted and made again under the same "
+               "path gets everything again (resentAll says why). "
                "Everything spatial is cut into World Partition cells of side cell, one actor per cell, so the level streams "
-               "it. Roads go as landscape splines (roads='landscape', joined at junctions, shaping the landscape), as spline "
+               "it. Roads go as landscape splines (roads='landscape', joined at junctions, shaping the landscape and painting "
+               "roadLayer over the carriageways and shoulderLayer over sidewalks and verges, layers added when the landscape "
+               "lacks them and taken off it again once no spline paints them; changing roadLayer, shoulderLayer or "
+               "deformTerrain resends the roads alone; landscape regions World Partition had unloaded are loaded for the "
+               "redraw), as spline "
                "actors (roads='splines', with spline meshes of roadMesh along them), as ribbon meshes per cell "
                "(roads='meshes') or not at all; paths on the walkable mesh go as a spline actor. massing=True sends each "
                "cell's envelopes as a static mesh. pcg=True writes PCG data: per cell (partition=True) a data asset and a cell "
@@ -1063,6 +1418,8 @@ void registerUnrealCommands(ext::Context& ctx)
                   {"roadMesh", "rm", Arg::String, nullptr, "Static mesh asset laid along road splines, such as /Game/Roads/SM_Road."},
                   {"landscape", "ls", Arg::String, nullptr, "roads='landscape': the landscape's label (default the first one)."},
                   {"deformTerrain", "dt", Arg::Bool, true, "roads='landscape': the splines shape the landscape."},
+                  {"roadLayer", "rl", Arg::String, "roadSurface", "roads='landscape': landscape paint layer of the carriageways; empty paints none."},
+                  {"shoulderLayer", "sl", Arg::String, "roadVerge", "roads='landscape': landscape paint layer of the sidewalks and verges; empty paints none."},
                   {"cell", "ce", Arg::Float, 12800.0, "World Partition cell side, cm: road meshes, massing, PCG data and placements are cut by it.",
                    {}, {}, 1000.0},
                   {"massing", "ma", Arg::Bool, true, "Envelopes as a static mesh per cell."},
@@ -1082,6 +1439,24 @@ void registerUnrealCommands(ext::Context& ctx)
         .examples = {"settlementSendToUnreal('Settlement', roads='landscape', pcg=True, zoneGraph=True)",
                      "settlementSendToUnreal('Settlement', roads='meshes', cell=12800, pcgGraph='/Game/PCG/PCG_Buildings')",
                      "settlementSendToUnreal('Settlement', dryRun=True)['diff']"},
+    });
+
+    ctx.registerCommand({
+        .name = "settlementRemoveFromUnreal",
+        .doc = "Removes everything a settlement sent to the open Unreal level: its placements and mesh cells (with their "
+               "meshes), road, path and level splines, PCG cells with their data assets, its ZoneGraph lanes and Mass traffic "
+               "data. Give the settlement, or key= for one already deleted in Lila (the Unreal key its sends used, the "
+               "settlement mesh's name). Its sync manifest is deleted, so a later send sends everything again. Returns what "
+               "Unreal removed per kind and any errors; laneProfilesRemoved lists the Lila_ lane profiles taken out of "
+               "the project ini because no level's settlement uses them any more (configBackup: the ini as it was); "
+               "paintLayersRemoved lists the landscape paint layers Lila had added for the roads and took out with them, and "
+               "warnings name any such layer kept because someone painted it by hand.",
+        .positionalDoc = "settlement mesh or its modifier (or key=)",
+        .flags = {{"key", "k", Arg::String, nullptr, "Unreal key of a settlement no longer in the scene (its mesh's name)."},
+                  {"folder", "f", Arg::String, "/Game/Lila/Settlement", "Content folder its sends used."}},
+        .undoable = false,
+        .run = [](const Args& a) -> json { return removeFromUnreal(a); },
+        .examples = {"settlementRemoveFromUnreal('Settlement')", "settlementRemoveFromUnreal(key='Puerto')"},
     });
 
     ctx.registerCommand({

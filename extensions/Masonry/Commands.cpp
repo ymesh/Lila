@@ -319,31 +319,54 @@ std::string wallKey(Graph& g, Node& mesh)
     return fresh;
 }
 
-/** Group keys a wall sent last time, so the ones it no longer has can be taken out of the level. */
-std::filesystem::path sentFile(const std::string& key) { return link::cacheDir() / "masonry" / (key + ".json"); }
+/**
+ * Group keys a wall sent last time to one level, so the ones it no longer has can be taken out of it. One file per wall,
+ * project and level (the whole level path), stamped with the level's GUID.
+ */
+std::filesystem::path sentFile(const std::string& key, const link::LevelIdentity& level)
+{
+    std::string name = key;
+    if (link::Link::get().connected())
+        if (std::string project = link::Link::get().status().value("project", std::string()); !project.empty())
+            name += "_" + link::levelFileKey(project);
+    if (!level.level.empty())
+        name += "_" + link::levelFileKey(level.level);
+    return link::cacheDir() / "masonry" / (name + ".json");
+}
 
-std::set<std::string> readSent(const std::string& key)
+/**
+ * The group keys of the wall's last send to the open level; none, with why in *ignored, when the record describes another
+ * level (one deleted and made again under the same path holds none of them).
+ */
+std::set<std::string> readSent(const std::string& key, const link::LevelIdentity& level, std::string* ignored)
 {
     std::set<std::string> out;
-    std::ifstream in(sentFile(key));
+    std::ifstream in(sentFile(key, level));
     if (!in)
         return out;
     const json j = json::parse(in, nullptr, false);
-    if (j.is_array())
-        for (const json& k : j)
+    if (const std::string why = link::levelRecordMismatch(j, level); !why.empty())
+    {
+        *ignored = "the last send's record was set aside: " + why + "; none of its groups removed";
+        return out;
+    }
+    if (j.is_object())
+        for (const json& k : j.value("groups", json::array()))
             if (k.is_string())
                 out.insert(k.get<std::string>());
     return out;
 }
 
-void writeSent(const std::string& key, const json& groups)
+void writeSent(const std::string& key, const link::LevelIdentity& level, const json& groups)
 {
-    json keys = json::array();
+    json record = {{"groups", json::array()}};
     for (const json& g : groups)
-        keys.push_back(g["key"]);
+        record["groups"].push_back(g["key"]);
+    link::stampLevelRecord(record, level);
+    const std::filesystem::path file = sentFile(key, level);
     std::error_code ec;
-    std::filesystem::create_directories(sentFile(key).parent_path(), ec);
-    std::ofstream(sentFile(key)) << keys.dump();
+    std::filesystem::create_directories(file.parent_path(), ec);
+    std::ofstream(file) << record.dump();
 }
 
 /** The Unreal texture asset each baked map of a group (or of every group when group is empty) became, by map. */
@@ -1317,15 +1340,6 @@ void registerCommands(ext::Context& ctx)
                     throw CommandError("masonryShip: writing " + file.string() + " failed: " + err);
                 files.push_back(file);
             }
-            std::set<std::string> now;
-            for (const json& grp : plan["groups"])
-                now.insert(grp["key"].get<std::string>());
-            json stale = json::array();
-            for (const std::string& old : readSent(key))
-                if (!now.count(old))
-                    stale.push_back(old);
-            stats["removedGroups"] = int64_t(stale.size());
-
             try
             {
                 link::Link::get().ensureConnected();
@@ -1334,7 +1348,22 @@ void registerCommands(ext::Context& ctx)
             {
                 throw CommandError(std::string("masonryShip: not connected to Unreal: ") + e.what());
             }
-            writeSent(key, plan["groups"]);
+            const link::LevelIdentity level = link::openLevelIdentity();
+            std::set<std::string> now;
+            for (const json& grp : plan["groups"])
+                now.insert(grp["key"].get<std::string>());
+            json stale = json::array();
+            std::string ignored;
+            for (const std::string& old : readSent(key, level, &ignored))
+                if (!now.count(old))
+                    stale.push_back(old);
+            stats["removedGroups"] = int64_t(stale.size());
+            if (!ignored.empty())
+                stats["recordIgnored"] = ignored;
+            else if (!level.level.empty() && level.guid.empty())
+                stats["levelUnchecked"] = "this LilaLink doesn't report level GUIDs, so a level made again under the same path is taken to hold the "
+                                          "wall's last send; rebuild the plugin";
+            writeSent(key, level, plan["groups"]);
             json materials = json::array();
             for (const char* slot : {kStoneSlot, kStoneFarSlot, kMortarSlot, kShellSlot, kPlasterSlot, kIvySlot})
                 materials.push_back(link::materialInputs(g, slot));

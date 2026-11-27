@@ -1,0 +1,275 @@
+{
+  "lilatrim": 1,
+  "name": "LilaBuilding",
+  "width": 2048,
+  "height": 2048,
+  "pxPerM": 256.0,
+  "padding": 8,
+  "mipLevel": 3,
+  "preset": "",
+  "material": "",
+  "maps": [
+    "normal",
+    "ao",
+    "curvature",
+    "height",
+    "cavity",
+    "detailNormal"
+  ],
+  "folder": "",
+  "supersampling": 16,
+  "high": [],
+  "highReplaces": false,
+  "decal": false,
+  "trims": [
+    {
+      "name": "Render",
+      "min": [
+        0,
+        0
+      ],
+      "max": [
+        2048,
+        1280
+      ],
+      "kind": "stripU",
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "tags": [
+        "building",
+        "render"
+      ],
+      "altGroup": -1,
+      "allowRotate": false,
+      "allowMirror": false,
+      "reserved": false,
+      "profile": {
+        "style": "flat",
+        "bevelPx": 8.0,
+        "angle": 45.0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "detailPx": 10.0,
+        "seed": 0
+      }
+    },
+    {
+      "name": "Plinth",
+      "min": [
+        0,
+        1280
+      ],
+      "max": [
+        2048,
+        1536
+      ],
+      "kind": "stripU",
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "tags": [
+        "building",
+        "plinth"
+      ],
+      "altGroup": -1,
+      "allowRotate": false,
+      "allowMirror": false,
+      "reserved": false,
+      "profile": {
+        "style": "chipped",
+        "bevelPx": 8.0,
+        "angle": 45.0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "detailPx": 10.0,
+        "seed": 0
+      }
+    },
+    {
+      "name": "Cornice",
+      "min": [
+        0,
+        1536
+      ],
+      "max": [
+        2048,
+        1664
+      ],
+      "kind": "stripU",
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "tags": [
+        "building",
+        "cornice"
+      ],
+      "altGroup": -1,
+      "allowRotate": false,
+      "allowMirror": false,
+      "reserved": false,
+      "profile": {
+        "style": "ogee",
+        "bevelPx": 8.0,
+        "angle": 45.0,
+        "segments": 2,
+        "spacingPx": 64.0,
+        "detailPx": 10.0,
+        "seed": 0
+      }
+    },
+    {
+      "name": "Band",
+      "min": [
+        0,
+        1664
+      ],
+      "max": [
+        2048,
+        1728
+      ],
+      "kind": "stripU",
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "tags": [
+        "building",
+        "band"
+      ],
+      "altGroup": -1,
+      "allowRotate": false,
+      "allowMirror": false,
+      "reserved": false,
+      "profile": {
+        "style": "raised",
+        "bevelPx": 8.0,
+        "angle": 45.0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "detailPx": 10.0,
+        "seed": 0
+      }
+    },
+    {
+      "name": "Coping",
+      "min": [
+        0,
+        1728
+      ],
+      "max": [
+        2048,
+        1792
+      ],
+      "kind": "stripU",
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "tags": [
+        "building",
+        "coping"
+      ],
+      "altGroup": -1,
+      "allowRotate": false,
+      "allowMirror": false,
+      "reserved": false,
+      "profile": {
+        "style": "step",
+        "bevelPx": 8.0,
+        "angle": 45.0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "detailPx": 10.0,
+        "seed": 0
+      }
+    },
+    {
+      "name": "Pilaster",
+      "min": [
+        0,
+        1792
+      ],
+      "max": [
+        2048,
+        1856
+      ],
+      "kind": "stripU",
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "tags": [
+        "building",
+        "pilaster"
+      ],
+      "altGroup": -1,
+      "allowRotate": false,
+      "allowMirror": false,
+      "reserved": false,
+      "profile": {
+        "style": "fluting",
+        "bevelPx": 8.0,
+        "angle": 45.0,
+        "segments": 2,
+        "spacingPx": 64.0,
+        "detailPx": 10.0,
+        "seed": 0
+      }
+    },
+    {
+      "name": "RoofTile",
+      "min": [
+        0,
+        1856
+      ],
+      "max": [
+        2048,
+        1984
+      ],
+      "kind": "stripU",
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "tags": [
+        "building",
+        "rooftile"
+      ],
+      "altGroup": -1,
+      "allowRotate": false,
+      "allowMirror": false,
+      "reserved": false,
+      "profile": {
+        "style": "ribs",
+        "bevelPx": 8.0,
+        "angle": 45.0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "detailPx": 10.0,
+        "seed": 0
+      }
+    },
+    {
+      "name": "Sheet",
+      "min": [
+        0,
+        1984
+      ],
+      "max": [
+        2048,
+        2048
+      ],
+      "kind": "stripU",
+      "fit": "seamless",
+      "insetPx": 2.0,
+      "tags": [
+        "building",
+        "sheet"
+      ],
+      "altGroup": -1,
+      "allowRotate": false,
+      "allowMirror": false,
+      "reserved": false,
+      "profile": {
+        "style": "ribs",
+        "bevelPx": 8.0,
+        "angle": 45.0,
+        "segments": 1,
+        "spacingPx": 64.0,
+        "detailPx": 10.0,
+        "seed": 0
+      }
+    }
+  ],
+  "palettes": []
+}

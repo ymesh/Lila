@@ -1,0 +1,86 @@
+{
+  "id": "ruralShack",
+  "label": "Rural Shack",
+  "description": "Shacks and huts at the edge of fields: thin walls, small windows, a door, a low sheet roof with eaves.",
+  "tags": [
+    "rural",
+    "shack"
+  ],
+  "floors": {
+    "min": 1,
+    "max": 1,
+    "groundHeight": 260,
+    "height": 260,
+    "plinth": 10
+  },
+  "bays": {
+    "width": 260,
+    "min": 160,
+    "cornerWidth": 10
+  },
+  "openings": {
+    "window": {
+      "width": 0.35,
+      "height": 0.4,
+      "sill": 0.38,
+      "kind": "window.residential"
+    },
+    "door": {
+      "width": 0.4,
+      "height": 0.8,
+      "kind": "door.house"
+    },
+    "shopfront": {
+      "width": 0.6,
+      "height": 0.75
+    },
+    "reveal": 8
+  },
+  "groundFloor": {
+    "street": "window",
+    "shopfronts": true,
+    "shutters": 0.0,
+    "awnings": 0.3
+  },
+  "modules": {
+    "balconies": 0.0,
+    "grilles": 0.1,
+    "acUnits": 0.0,
+    "cornice": "none",
+    "bands": false,
+    "drainpipes": false
+  },
+  "roof": {
+    "kind": "sheet",
+    "material": "sheet",
+    "parapet": 0,
+    "pitch": 10,
+    "overhang": 40
+  },
+  "palette": {
+    "render": [
+      "#a68a64",
+      "#7f9c96",
+      "#b7b7a4",
+      "#c2a878",
+      "#9b8b74"
+    ],
+    "trim": [
+      "#5c4b37"
+    ],
+    "roof": [
+      "#8a8f8c",
+      "#9c5b43"
+    ],
+    "base": [
+      "#6b5b45"
+    ],
+    "dirt": [
+      0.35,
+      0.75
+    ]
+  },
+  "massing": {
+    "wallThickness": 10
+  }
+}

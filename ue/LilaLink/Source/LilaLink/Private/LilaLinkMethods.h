@@ -4,6 +4,9 @@
 
 namespace LilaLink
 {
+/** Asset metadata, listed in the asset registry, naming what Lila made an imported asset from (importAsset contentHash). */
+inline const TCHAR* const ContentHashTag = TEXT("LilaContentHash");
+
 /** Every JSON-RPC method the server answers, by name. */
 TMap<FString, FLilaLinkMethod> MakeMethods();
 

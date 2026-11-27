@@ -57,11 +57,29 @@ UMaterial* LilaLink::FindOrCreateMaterial(const FString& Folder, const FString& 
 	return FindOrCreate<UMaterial>(Folder, Name, NewObject<UMaterialFactoryNew>(GetTransientPackage()), bOutCreated);
 }
 
+void LilaLink::DeleteAllExpressions(UMaterial* Material)
+{
+	const TArray<TObjectPtr<UMaterialExpression>> Expressions(Material->GetExpressions());
+	for (UMaterialExpression* Expression : Expressions)
+	{
+		UMaterialEditingLibrary::DeleteMaterialExpression(Material, Expression);
+	}
+}
+
+void LilaLink::DeleteAllExpressions(UMaterialFunction* Function)
+{
+	const TArray<TObjectPtr<UMaterialExpression>> Expressions(Function->GetExpressions());
+	for (UMaterialExpression* Expression : Expressions)
+	{
+		UMaterialEditingLibrary::DeleteMaterialExpressionInFunction(Function, Expression);
+	}
+}
+
 LilaLink::FFunctionGraph::FFunctionGraph(UMaterialFunction* InFunction, const TCHAR* Description)
 	: Function(InFunction)
 {
 	Function->Modify();
-	UMaterialEditingLibrary::DeleteAllMaterialExpressionsInFunction(Function);
+	LilaLink::DeleteAllExpressions(Function);
 	Function->Description = Description;
 	Function->bExposeToLibrary = true;
 }
@@ -149,7 +167,7 @@ void LilaLink::FFunctionGraph::Finish()
 UMaterialExpressionMaterialFunctionCall* LilaLink::ResetToFunctionCall(UMaterial* Material, UMaterialFunctionInterface* Function)
 {
 	Material->Modify();
-	UMaterialEditingLibrary::DeleteAllMaterialExpressions(Material);
+	LilaLink::DeleteAllExpressions(Material);
 	auto* Call = Cast<UMaterialExpressionMaterialFunctionCall>(
 		UMaterialEditingLibrary::CreateMaterialExpression(Material, UMaterialExpressionMaterialFunctionCall::StaticClass(), -400, 0));
 	Call->SetMaterialFunction(Function);

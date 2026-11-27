@@ -41,7 +41,7 @@ Site site(double size)
 /** The site each built-in profile's targets were measured on: a size the style makes sense at. */
 double targetSite(const std::string& profile)
 {
-    if (profile == "usTown" || profile == "europeanCity")
+    if (profile == "usTown" || profile == "europeanCity" || profile == "mexicanCity")
         return 120000.0;
     if (profile == "manhattan" || profile == "modernCity")
         return 150000.0;

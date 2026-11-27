@@ -215,6 +215,8 @@ void applyShadingChannels(render::FrameState& s)
     if (!any)
         return;
     std::vector<render::MeshDraw>* draws = nullptr;
+    // Material slot name to its texture set, looked up once a frame: a scene of many meshes shares few materials.
+    std::unordered_map<std::string, std::string> setBySlot;
     for (size_t i = 0; i < s.meshes.size(); ++i)
     {
         const render::MeshDraw& cd = s.meshes[i];
@@ -229,8 +231,14 @@ void applyShadingChannels(render::FrameState& s)
         {
             if (cd.materials[slot].style.model != render::ShadingModel::DefaultLit)
                 continue;
-            const scene::Node* material = scene::materials::find(g, scene::materials::slotName(**mesh, int32_t(slot)));
-            const std::string set = material ? setFor(g, *material) : std::string();
+            const std::string slotName = scene::materials::slotName(**mesh, int32_t(slot));
+            auto known = setBySlot.find(slotName);
+            if (known == setBySlot.end())
+            {
+                const scene::Node* material = scene::materials::find(g, slotName);
+                known = setBySlot.emplace(slotName, material ? setFor(g, *material) : std::string()).first;
+            }
+            const std::string& set = known->second;
             const tex::SetSettings* settings = set.empty() ? nullptr : settingsOf(g, set);
             if (!settings)
                 continue;

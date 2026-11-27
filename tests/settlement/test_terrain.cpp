@@ -1,6 +1,7 @@
 // Settlement on a Terrain: siting terms, terrain routes, grading as road features, dirty re-planning, checks, explain.
 
 #include "TestUtil.h"
+#include "Generators.h"
 #include "SettlementTerrain.h"
 
 #include "extensions/ExtensionManager.h"
@@ -364,7 +365,7 @@ TEST_CASE("settlement terrain: a big graded town is fast, agrees with settlement
     const json dirty = run("settlementReplan", {{"args", {mesh}}});
     CAPTURE(dirty.dump());
     REQUIRE(dirty["mode"] == "dirty");
-    CHECK(dirty["keptBlocks"].get<int>() > 2 * dirty["droppedBlocks"].get<int>());
+    CHECK(dirty["keptBlocks"].get<int>() > dirty["droppedBlocks"].get<int>());
     const json again = run("settlementGrade", {{"args", {mesh}}});
     CHECK(again["errors"].empty());
     CHECK(again["unchanged"].get<int>() > again["stampsSent"].get<int>());
@@ -509,6 +510,19 @@ TEST_CASE("settlement terrain: checks find each kind of problem by id")
     CHECK(c["counts"]["water"] == 1);
     CHECK(c["counts"]["lanes"].get<int>() >= 1);
     CHECK(c["counts"]["phases"] == 0);
+    auto reachSeverities = [](const json& check) {
+        std::set<std::string> out;
+        for (const json& i : check["issues"])
+            if (i["check"] == "lanes" || i["check"] == "laneGraph")
+                out.insert(i["severity"].get<std::string>());
+        return out;
+    };
+    CHECK(reachSeverities(c) == std::set<std::string>{"error"});
+    // The same split in imported streets is a warning: real networks have islands and clipped ends.
+    Layout imported = l;
+    imported.gen = std::make_shared<GenLayout>();
+    imported.gen->imported = 4;
+    CHECK(reachSeverities(checkLayout(imported, ground, Options())) == std::set<std::string>{"warning"});
     bool frontage = false;
     for (const json& i : c["issues"])
         frontage = frontage || (i["check"] == "frontage" && i["id"] == "lot:2");

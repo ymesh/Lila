@@ -38,8 +38,10 @@
 #include "ui/Theme.h"
 #include "ui/ViewportDisplay.h"
 #include "ui/ViewportHooks.h"
+#include "ui/ViewOverlays.h"
 #include "ui/ViewportRenderers.h"
 #include "ui/ViewportWidget.h"
+#include "ui/ViewportWidgetDetail.h"
 #include "ui/VolumeDisplay.h"
 
 #include <QApplication>
@@ -247,8 +249,11 @@ void drawOverlays(render::FrameState& s, const ViewInfo& view, scene::Graph& g)
                                    : themeLinear("wireframe", glm::vec4(0.02f, 0.02f, 0.02f, 1.0f));
             ov->draw(dc);
         }
-    for (const viewportHooks::Drawer& d : viewportHooks::drawers())
-        d(s, painter, view);
+    const std::vector<viewportHooks::Drawer> drawers = viewportHooks::drawers();
+    const std::vector<std::string> drawerIds = viewportHooks::drawerIds();
+    for (size_t i = 0; i < drawers.size(); ++i)
+        if (i >= drawerIds.size() || viewOverlays::drawerShown(drawerIds[i], view.camera))
+            drawers[i](s, painter, view);
     s.atlas = overlayAtlas();
 }
 
@@ -473,7 +478,11 @@ QImage render(const Options& o, Timing* timing, int repeat)
             d.flags |= render::DrawShaded;
         if (o.display != "shaded")
             d.flags |= render::DrawWire;
-        s.meshes.push_back(std::move(d));
+        // Geometry nodes instances draw as the viewport draws them: each referenced mesh instanced, with instance colours.
+        if (gn::InstanceViewPtr view = smooth == 0 ? gn::instanceViewFor(g, id) : nullptr)
+            viewportDetail::pushInstanceDraws(s, d, *view, textured);
+        else
+            s.meshes.push_back(std::move(d));
         // A smoothed or modified mesh also shows the cage being edited, as Lila's component mode does.
         if (o.display != "shaded")
         {

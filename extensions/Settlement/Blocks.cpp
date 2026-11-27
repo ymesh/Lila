@@ -17,7 +17,7 @@ namespace
 {
 constexpr const char* kBlockTypes[] = {"perimeter", "courtyard", "open", "row", "superblock", "park", "plaza", "market", "churchyard", "field"};
 constexpr const char* kLotMethods[] = {"frontage", "obb", "skeleton", "burgage", "voronoi", "strips", "whole"};
-constexpr const char* kRoutes[] = {"outline", "massing", "library", "masonry", "unreal"};
+constexpr const char* kRoutes[] = {"outline", "massing", "library", "masonry", "unreal", "buildings"};
 constexpr const char* kEras[] = {"medieval", "early", "industrial", "modern", "future"};
 
 template <class E, size_t N> bool parseName(const char* const (&names)[N], std::string_view name, E* out)
@@ -621,6 +621,23 @@ std::vector<Polygon> cutBlock(const Block& b, const Layout& l, const Options& o,
     std::erase_if(lots, [](const Polygon& x) { return !usable(x); });
     if (b.method != LotMethod::Whole)
         joinLandlocked(lots, minArea, warnings, b.key);
+    // Strips of a weighted skeleton can cross on an irregular block: the smaller of two overlapping lots stays open ground.
+    {
+        std::vector<char> gone(lots.size(), 0);
+        for (size_t i = 0; i < lots.size(); ++i)
+            for (size_t j = i + 1; j < lots.size() && !gone[i]; ++j)
+                if (!gone[j] && polygonsShareArea(lots[i], lots[j], 2.0))
+                    gone[area(lots[i]) < area(lots[j]) ? i : j] = 1;
+        if (const size_t n = size_t(std::count(gone.begin(), gone.end(), 1)); n > 0)
+        {
+            for (size_t k = lots.size(); k-- > 0;)
+                if (gone[k])
+                    lots.erase(lots.begin() + long(k));
+            if (warnings)
+                warnings->push_back("block " + std::to_string(b.key) + ": " + std::to_string(n) + " overlapping " + lotMethodName(b.method) +
+                                    " lot(s) left open");
+        }
+    }
     // A lot reaching past its block would overlap the next block's: it is left out, and said so.
     const size_t before = lots.size();
     std::erase_if(lots, [&](const Polygon& x) {

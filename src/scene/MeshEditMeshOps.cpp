@@ -261,19 +261,7 @@ void registerMeshEditMeshOpsCommands()
             {
                 Node& n = meshArg(name, "polyCombine");
                 geo::Mesh m = *n.as<MeshPtr>(MeshNode::kOutMesh);
-                glm::dmat4 w = n.as<glm::dmat4>(Transform::kWorldMatrix);
-                for (Index p = 0; p < m.pointCapacity(); ++p)
-                    if (m.pointValid(p))
-                        m.setPosition(p, glm::dvec3(w * glm::dvec4(m.position(p), 1.0)));
-                // Mirrored transforms flip winding; keep faces pointing out.
-                if (glm::determinant(glm::dmat3(w)) < 0.0)
-                {
-                    Ids all;
-                    for (Index f = 0; f < m.faceCapacity(); ++f)
-                        if (m.faceValid(f))
-                            all.push_back(f);
-                    geo::flipNormals(m, all);
-                }
+                geo::transformMesh(m, n.as<glm::dmat4>(Transform::kWorldMatrix));
                 worldMeshes.push_back(std::move(m));
             }
             std::vector<const geo::Mesh*> ptrs;

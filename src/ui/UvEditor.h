@@ -104,6 +104,9 @@ private:
     int mGraphListener = 0;
     int mComponentListener = 0;
     int mLiveListener = 0;
+    int mExecListener = 0;
+    /** The uv set box waits for a hidden editor to show, or for the command making a burst of changes to finish. */
+    bool mSetsStale = false;
 };
 
 /** Registers "window.uvEditor" and the uv.* actions (unwrap, auto, pack...) for menus, hotkeys and shelves. */

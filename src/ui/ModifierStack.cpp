@@ -837,7 +837,8 @@ void ModifierStackWidget::showEvent(QShowEvent* e)
 
 void ModifierStackWidget::scheduleRefresh()
 {
-    mRefresh->start();
+    if (!mRefresh->isActive())
+        mRefresh->start();
 }
 
 NodeId ModifierStackWidget::resolveMesh() const

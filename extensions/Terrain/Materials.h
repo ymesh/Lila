@@ -25,6 +25,8 @@ struct Term
     double hi = 1e30;
     double fade = 0.0;
     bool invert = false;
+    /** Blur radius over the input before the range is read, cm: class masks from a grid soften into gradients the layer's noise can break up. */
+    double blur = 0.0;
 
     double eval(double v) const;
     nlohmann::json toJson() const;
@@ -96,6 +98,8 @@ public:
     explicit SurfaceFields(const Heightfield& h);
     /** Null when the heightfield has no such mask and it isn't a derived field. */
     const std::vector<float>* get(const std::string& name);
+    /** get(name) blurred over radius cm (box filter, three passes), cached. */
+    const std::vector<float>* blurred(const std::string& name, double radius);
     const Heightfield& heightfield() const { return mH; }
 
 private:
@@ -190,9 +194,10 @@ RulesResult applyBiomes(Heightfield& h, const BiomeSpec& s);
 /** Snow, alpine, forest, meadow, scrub and wetland over a temperate climate. */
 BiomeSpec defaultBiomes();
 /**
- * Layers for a terrain as it is: grass at the base, dirt on worn ground, gravel on scree, rock on steep slopes, riverbed
- * in the channels, sand at the shore when a sea level is given, snow up high (by temperature when the terrain has
- * biomes, else the top of its height range) and road wherever a road mask exists.
+ * Layers for a terrain as it is: grass at the base, forest on hillsides (or in the forest biome), dirt on worn ground,
+ * gravel on scree, rock on steep slopes, riverbed in the channels, sand at the shore when a sea level is given, snow up
+ * high (by temperature when the terrain has biomes; with a sea level, the top of the land above it and never below 3 km;
+ * else the top of its height range) and road wherever a road mask exists.
  */
 MaterialRules defaultMaterialRules(const Heightfield& h, std::optional<double> seaLevel = std::nullopt);
 /** The Meadowlight material and colour a layer of this name gets when its rule names none. */

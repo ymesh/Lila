@@ -4,7 +4,9 @@
 #include "scene/TransformOps.h"
 
 #include "ops/Command.h"
+#include "geo/Attribute.h"
 #include "geo/Mesh.h"
+#include "geo/Normals.h"
 #include "geo/Primitives.h"
 #include "scene/Components.h"
 #include "scene/Graph.h"
@@ -90,6 +92,32 @@ TEST_CASE("whole-mesh commands take groups")
     CHECK(faces(run("polyCombine").get<std::string>()) == 12);
 
     CHECK_THROWS(run("polySubdivide", {{"args", {empty}}}));
+}
+
+TEST_CASE("combine carries stored normals into world space")
+{
+    run("newScene");
+    scene::Graph& g = scene::Graph::current();
+    auto withNormals = [&](std::vector<double> rotate, std::vector<double> scale) {
+        const std::string name = run("polyCube", {{"width", 100.0}, {"height", 100.0}, {"depth", 100.0}, {"generator", false}})[0];
+        geo::Mesh m = *g.find(name)->as<scene::MeshPtr>(scene::MeshNode::kInMesh);
+        geo::updateCornerNormals(m);
+        g.setValue({g.find(name)->id(), scene::MeshNode::kInMesh, -1}, scene::MeshPtr(std::make_shared<geo::Mesh>(std::move(m))));
+        run("setAttr", {{"args", {name + ".rotate", rotate}}});
+        run("setAttr", {{"args", {name + ".scale", scale}}});
+        return name;
+    };
+    const std::string turned = withNormals({0, 90, 30}, {1, 1, 1});
+    const std::string mirrored = withNormals({0, 45, 0}, {-1, 2, 1});
+    const std::string both = run("polyCombine", {{"args", {turned, mirrored}}}).get<std::string>();
+    g.evaluate();
+    REQUIRE(g.find(both));
+    const geo::Mesh& m = *g.find(both)->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+    std::span<const glm::vec3> n = m.cornerAttrs().get<glm::vec3>(geo::attr::kNormal);
+    REQUIRE(!n.empty());
+    for (geo::Index f = 0; f < m.faceCapacity(); ++f)
+        if (m.faceValid(f))
+            m.forEachFaceCorner(f, [&](geo::Index c) { CHECK(glm::dot(glm::dvec3(n[c]), m.faceNormal(f)) > 0.99); });
 }
 
 TEST_CASE("duplicate, freeze, center pivot")

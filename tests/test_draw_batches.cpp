@@ -134,3 +134,64 @@ TEST_CASE("Draw batches: material lists compare field by field")
     CHECK(sameMaterials(a, b));
     CHECK_FALSE(sameMaterials(a, std::vector<Material>(1)));
 }
+
+TEST_CASE("Draw batches: instance colours reach each placement and mark only their batch")
+{
+    auto shared = triangle();
+    FrameState s;
+    MeshDraw plain = drawAt(shared, 0.0f);
+    s.meshes.push_back(plain);
+    MeshDraw listed = drawAt(shared, 10.0f);
+    listed.instances = std::make_shared<std::vector<glm::mat4>>(
+        std::vector<glm::mat4>{glm::mat4(1.0f), glm::translate(glm::mat4(1.0f), glm::vec3(1, 0, 0)), glm::translate(glm::mat4(1.0f), glm::vec3(2, 0, 0))});
+    listed.instanceColors = std::make_shared<std::vector<glm::vec4>>(std::vector<glm::vec4>{{1, 0, 0, 1}, {0, 0, 0, 0}, {0, 0, 1, 0.5f}});
+    s.meshes.push_back(listed);
+    DrawBatches b = batchDraws(s);
+    // Colours are per placement, so coloured and plain draws of one mesh still share a batch.
+    REQUIRE(b.shaded.size() == 1);
+    CHECK(b.shaded[0].tinted);
+    REQUIRE(b.shaded[0].count == 4);
+    const GpuInstance* in = &b.instances[b.shaded[0].first];
+    CHECK(in[0].tint == glm::vec4(0.0f));
+    CHECK(in[1].tint == glm::vec4(1, 0, 0, 1));
+    CHECK(in[2].tint == glm::vec4(0.0f));
+    CHECK(in[3].tint == glm::vec4(0, 0, 1, 0.5f));
+    CHECK(in[3].world[3].x == doctest::Approx(12.0f));
+
+    // Without colours nothing is marked and every tint stays zero.
+    FrameState none;
+    none.meshes.push_back(plain);
+    MeshDraw uncoloured = listed;
+    uncoloured.instanceColors = nullptr;
+    none.meshes.push_back(uncoloured);
+    b = batchDraws(none);
+    REQUIRE(b.shaded.size() == 1);
+    CHECK_FALSE(b.shaded[0].tinted);
+    for (const GpuInstance& i : b.instances)
+        CHECK(i.tint == glm::vec4(0.0f));
+
+    // A new colour list is a different frame.
+    FrameState again = s;
+    MeshDraw recoloured = listed;
+    recoloured.instanceColors = std::make_shared<std::vector<glm::vec4>>(*listed.instanceColors);
+    again.meshes.edit()[1] = recoloured;
+    CHECK_FALSE(sameDraws(s.meshes.list(), again.meshes.list()));
+
+    // A second tone rides beside the first, per placement; on its own it marks the batch too.
+    FrameState two;
+    MeshDraw toned = listed;
+    toned.instanceColors = nullptr;
+    toned.instanceColors2 = std::make_shared<std::vector<glm::vec4>>(std::vector<glm::vec4>{{0, 1, 0, 1}, {0, 0, 0, 0}, {1, 1, 0, 1}});
+    two.meshes.push_back(toned);
+    b = batchDraws(two);
+    REQUIRE(b.shaded.size() == 1);
+    CHECK(b.shaded[0].tinted);
+    CHECK(b.instances[b.shaded[0].first].tint == glm::vec4(0.0f));
+    CHECK(b.instances[b.shaded[0].first].tint2 == glm::vec4(0, 1, 0, 1));
+    CHECK(b.instances[b.shaded[0].first + 2].tint2 == glm::vec4(1, 1, 0, 1));
+    FrameState two2 = two;
+    MeshDraw retoned = toned;
+    retoned.instanceColors2 = std::make_shared<std::vector<glm::vec4>>(*toned.instanceColors2);
+    two2.meshes.edit()[0] = retoned;
+    CHECK_FALSE(sameDraws(two.meshes.list(), two2.meshes.list()));
+}

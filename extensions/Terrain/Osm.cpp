@@ -15,7 +15,9 @@
 #include <fstream>
 #include <limits>
 #include <stdexcept>
+#include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace terrain
 {
@@ -320,7 +322,7 @@ void pbfBlock(std::string_view block, Builder& b)
                 continue;
             }
             Pb e(gp.bytes());
-            std::vector<uint64_t> ids, lats, lons, keys, vals, refs, roles, memids, types;
+            std::vector<uint64_t> ids, lats, lons, keys, vals, refs, roles, memids, types, keysVals;
             int64_t id = 0, lat = 0, lon = 0;
             while (e.more())
             {
@@ -330,6 +332,10 @@ void pbfBlock(std::string_view block, Builder& b)
                 {
                     if (ef == 1 && ew == 0)
                         id = Pb::zigzag(e.varint());
+                    else if (ef == 2)
+                        e.repeated(ew, keys);
+                    else if (ef == 3)
+                        e.repeated(ew, vals);
                     else if (ef == 8 && ew == 0)
                         lat = Pb::zigzag(e.varint());
                     else if (ef == 9 && ew == 0)
@@ -345,6 +351,8 @@ void pbfBlock(std::string_view block, Builder& b)
                         e.repeated(ew, lats);
                     else if (ef == 9)
                         e.repeated(ew, lons);
+                    else if (ef == 10)
+                        e.repeated(ew, keysVals);
                     else
                         e.skip(ew);
                 }
@@ -369,16 +377,36 @@ void pbfBlock(std::string_view block, Builder& b)
                     e.skip(ew);
             }
             if (f == 1)
+            {
                 b.nodes[id] = {deg(lat, latOffset), deg(lon, lonOffset)};
+                if (!keys.empty())
+                {
+                    OsmData::Node n{id, b.nodes[id], {}};
+                    pbfTags(keys, vals, strings, n.tags);
+                    b.data.tagged.push_back(std::move(n));
+                }
+            }
             else if (f == 2)
             {
                 int64_t did = 0, dlat = 0, dlon = 0;
+                // keys_vals: per node, key and value string ids in pairs, each node's run ended by a 0.
+                size_t kv = 0;
                 for (size_t i = 0; i < ids.size() && i < lats.size() && i < lons.size(); ++i)
                 {
                     did += Pb::zigzag(ids[i]);
                     dlat += Pb::zigzag(lats[i]);
                     dlon += Pb::zigzag(lons[i]);
                     b.nodes[did] = {deg(dlat, latOffset), deg(dlon, lonOffset)};
+                    OsmTags tags;
+                    while (kv < keysVals.size() && keysVals[kv] != 0)
+                    {
+                        if (kv + 1 < keysVals.size() && keysVals[kv] < strings.size() && keysVals[kv + 1] < strings.size())
+                            tags[strings[keysVals[kv]]] = strings[keysVals[kv + 1]];
+                        kv += 2;
+                    }
+                    ++kv;
+                    if (!tags.empty())
+                        b.data.tagged.push_back({did, b.nodes[did], std::move(tags)});
                 }
             }
             else if (f == 3)
@@ -543,6 +571,86 @@ std::vector<LatLon> positions(const std::vector<OsmPoint>& pts, bool dropClosing
 }
 
 bool isClosed(const std::vector<OsmPoint>& pts) { return pts.size() > 3 && pts.front().key == pts.back().key; }
+
+/** Every real name the tags give: name and its language, official, alternative, old and short forms, brand and operator. */
+std::vector<std::string> realNamesOf(const OsmTags& t)
+{
+    std::vector<std::string> out;
+    for (const auto& [k, v] : t)
+    {
+        if (v.empty())
+            continue;
+        const bool named = k == "name" || k.starts_with("name:") || k == "official_name" || k == "alt_name" || k == "old_name" ||
+                           k == "short_name" || k == "loc_name" || k == "reg_name" || k == "int_name" || k == "nat_name";
+        const bool owner = k == "brand" || k.starts_with("brand:") || k == "operator" || k.starts_with("operator:") || k == "network";
+        if (!named && !owner)
+            continue;
+        if (std::ranges::find(out, v) == out.end())
+            out.push_back(v);
+    }
+    return out;
+}
+
+/** The chain a branch belongs to: its brand, else its operator, as lower-case text; empty for an independent business. */
+std::string chainOf(const OsmTags& t)
+{
+    std::string_view c = tag(t, "brand");
+    if (c.empty())
+        c = tag(t, "operator");
+    std::string out;
+    for (unsigned char ch : c)
+        out += char(std::tolower(ch));
+    return out;
+}
+
+/** Metres from a height tag ("12", "12 m", "40'"); NaN when it isn't a number. */
+double metresTag(std::string_view v)
+{
+    if (v.empty())
+        return std::numeric_limits<double>::quiet_NaN();
+    const double m = widthTag(v);
+    return m > 0.0 ? m : (v.front() == '0' ? 0.0 : std::numeric_limits<double>::quiet_NaN());
+}
+
+int levelsTag(std::string_view v)
+{
+    if (v.empty())
+        return -1;
+    const double x = std::strtod(std::string(v).c_str(), nullptr);
+    return x >= 0.0 && x < 500.0 ? int(std::lround(x)) : -1;
+}
+
+LatLon ringCentre(const std::vector<LatLon>& r)
+{
+    double lat = 0.0, lon = 0.0, a = 0.0;
+    for (size_t i = 0, j = r.size() - 1; i < r.size(); j = i++)
+    {
+        const double c = r[j].lon * r[i].lat - r[i].lon * r[j].lat;
+        a += c;
+        lon += (r[j].lon + r[i].lon) * c;
+        lat += (r[j].lat + r[i].lat) * c;
+    }
+    if (std::abs(a) < 1e-18)
+    {
+        LatLon m{0.0, 0.0};
+        for (const LatLon& p : r)
+            m.lat += p.lat / double(r.size()), m.lon += p.lon / double(r.size());
+        return m;
+    }
+    return {lat / (3.0 * a), lon / (3.0 * a)};
+}
+
+bool inRing(const std::vector<LatLon>& r, LatLon q)
+{
+    bool in = false;
+    for (size_t i = 0, j = r.size() - 1; i < r.size(); j = i++)
+        if ((r[i].lat > q.lat) != (r[j].lat > q.lat) && q.lon < (r[j].lon - r[i].lon) * (q.lat - r[i].lat) / (r[j].lat - r[i].lat) + r[i].lon)
+            in = !in;
+    return in;
+}
+
+bool isStructure(std::string_view mm) { return mm == "pier" || mm == "breakwater" || mm == "quay" || mm == "groyne"; }
+
 } // namespace osmdetail
 
 using namespace osmdetail;
@@ -565,6 +673,7 @@ OsmData parseOsmXml(std::string_view s)
     std::vector<int64_t> refs;
     OsmTags tags;
     OsmData::Relation rel;
+    LatLon nodeAt;
     bool sawOsm = false;
     while (nextXmlTag(s, pos, t))
     {
@@ -577,6 +686,8 @@ OsmData parseOsmXml(std::string_view s)
                 rel.tags = std::move(tags);
                 b.data.relations.push_back(std::move(rel));
             }
+            else if (t.name == "node" && in == InNode && !tags.empty())
+                b.data.tagged.push_back({id, nodeAt, std::move(tags)});
             if (t.name == "node" || t.name == "way" || t.name == "relation")
             {
                 in = None;
@@ -590,7 +701,9 @@ OsmData parseOsmXml(std::string_view s)
             sawOsm = true;
         else if (t.name == "node")
         {
-            b.nodes[toInt(t.attr("id"))] = {toDouble(t.attr("lat")), toDouble(t.attr("lon"))};
+            id = toInt(t.attr("id"));
+            nodeAt = {toDouble(t.attr("lat")), toDouble(t.attr("lon"))};
+            b.nodes[id] = nodeAt;
             in = t.selfClosing ? None : InNode;
         }
         else if (t.name == "way")
@@ -658,7 +771,11 @@ OsmData parseOverpassJson(std::string_view text)
                 tags[k] = v.is_string() ? v.get<std::string>() : v.dump();
         const int64_t id = e.value("id", int64_t(0));
         if (type == "node")
+        {
             b.nodes[id] = {e.value("lat", 0.0), e.value("lon", 0.0)};
+            if (!tags.empty())
+                b.data.tagged.push_back({id, b.nodes[id], std::move(tags)});
+        }
         else if (type == "way")
         {
             std::vector<int64_t> refs;
@@ -791,7 +908,10 @@ OsmData readOsm(const std::filesystem::path& path)
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
     try
     {
-        if (ext == ".pbf")
+        // Overpass answers are JSON or XML even when saved under a .pbf name, so text content wins over the extension.
+        const size_t first = bytes.find_first_not_of(" \t\r\n");
+        const bool text = first != std::string::npos && (bytes[first] == '{' || bytes[first] == '<');
+        if (ext == ".pbf" && !text)
             return parseOsmPbf(bytes);
         if (ext == ".json" || ext == ".geojson" || (!bytes.empty() && bytes.find_first_not_of(" \t\r\n") != std::string::npos &&
                                                     bytes[bytes.find_first_not_of(" \t\r\n")] == '{'))
@@ -806,7 +926,7 @@ OsmData readOsm(const std::filesystem::path& path)
 
 const std::vector<std::string>& osmFeatureKindNames()
 {
-    static const std::vector<std::string> n = {"road", "path", "river", "stream", "lake", "coastline"};
+    static const std::vector<std::string> n = {"road", "path", "river", "stream", "lake", "coastline", "pier", "breakwater", "quay", "dam"};
     return n;
 }
 
@@ -814,6 +934,156 @@ const std::vector<std::string>& landcoverClasses()
 {
     static const std::vector<std::string> n = {"forest", "grassland", "farmland", "scrub", "rock", "sand", "urban", "wetland", "water", "glacier"};
     return n;
+}
+
+std::pair<std::string, std::string> osmProgram(const OsmTags& t)
+{
+    const std::string_view amenity = tag(t, "amenity"), shop = tag(t, "shop"), tourism = tag(t, "tourism"), office = tag(t, "office");
+    const std::string_view leisure = tag(t, "leisure"), landuse = tag(t, "landuse"), aeroway = tag(t, "aeroway"), manMade = tag(t, "man_made");
+    const std::string_view cuisine = tag(t, "cuisine"), building = tag(t, "building"), place = tag(t, "place"), nat = tag(t, "natural");
+    const std::string_view harbour = tag(t, "harbour"), industrial = tag(t, "industrial"), craft = tag(t, "craft");
+    auto has = [](std::string_view list, std::string_view w) { return list.find(w) != std::string_view::npos; };
+    using P = std::pair<std::string, std::string>;
+    if (!amenity.empty())
+    {
+        if ((amenity == "restaurant" || amenity == "fast_food") && (has(cuisine, "taco") || has(cuisine, "mexican")))
+            return P{"taqueria", "business"};
+        if (amenity == "restaurant" || amenity == "food_court")
+            return has(cuisine, "seafood") || has(cuisine, "fish") ? P{"seafood", "business"} : P{"restaurant", "business"};
+        static const std::pair<const char*, std::pair<const char*, const char*>> kAmenity[] = {
+            {"fast_food", {"fastFood", "business"}}, {"cafe", {"cafe", "business"}}, {"bar", {"bar", "business"}},
+            {"pub", {"bar", "business"}}, {"biergarten", {"bar", "business"}}, {"nightclub", {"nightclub", "business"}},
+            {"ice_cream", {"iceCream", "business"}}, {"pharmacy", {"pharmacy", "business"}}, {"bank", {"bank", "business"}},
+            {"fuel", {"fuel", "business"}}, {"hospital", {"hospital", "hospital"}}, {"clinic", {"clinic", "hospital"}},
+            {"doctors", {"clinic", "business"}}, {"dentist", {"dentist", "business"}}, {"veterinary", {"vet", "business"}},
+            {"school", {"school", "school"}}, {"kindergarten", {"school", "school"}}, {"college", {"school", "school"}},
+            {"university", {"university", "school"}}, {"police", {"police", "police"}}, {"fire_station", {"fireStation", "government"}},
+            {"townhall", {"townhall", "government"}}, {"courthouse", {"courthouse", "government"}}, {"prison", {"government", "government"}},
+            {"post_office", {"postOffice", "government"}}, {"library", {"library", "government"}}, {"place_of_worship", {"church", "religious"}},
+            {"marketplace", {"market", "market"}}, {"bus_station", {"busStation", "business"}}, {"ferry_terminal", {"ferryTerminal", "port"}},
+            {"grave_yard", {"cemetery", "cemetery"}}, {"theatre", {"theatre", "landmark"}}, {"cinema", {"cinema", "business"}},
+            {"car_wash", {"carWash", "business"}}, {"car_repair", {"carRepair", "business"}}, {"arts_centre", {"museum", "landmark"}},
+            {"community_centre", {"government", "government"}}, {"social_facility", {"government", "government"}},
+            {"public_building", {"government", "government"}}, {"bureau_de_change", {"bank", "business"}},
+        };
+        for (const auto& [k, v] : kAmenity)
+            if (amenity == k)
+                return amenity == "place_of_worship" && building == "cathedral" ? P{"cathedral", "religious"} : P{v.first, v.second};
+    }
+    if (!shop.empty())
+    {
+        static const std::pair<const char*, const char*> kShop[] = {
+            {"convenience", "grocery"}, {"general", "grocery"}, {"kiosk", "grocery"}, {"variety_store", "grocery"}, {"supermarket", "supermarket"},
+            {"butcher", "butcher"}, {"car_parts", "carParts"}, {"tyres", "tyres"}, {"car_repair", "carRepair"}, {"car", "carRepair"},
+            {"hardware", "hardware"}, {"doityourself", "hardware"}, {"trade", "hardware"}, {"clothes", "clothes"}, {"boutique", "clothes"},
+            {"fashion", "clothes"}, {"shoes", "shoes"}, {"mobile_phone", "electronics"}, {"electronics", "electronics"}, {"computer", "electronics"},
+            {"furniture", "furniture"}, {"stationery", "stationery"}, {"hairdresser", "hairdresser"}, {"beauty", "hairdresser"},
+            {"laundry", "laundry"}, {"dry_cleaning", "laundry"}, {"alcohol", "liquor"}, {"beverages", "liquor"}, {"florist", "florist"},
+            {"jewelry", "jewelry"}, {"optician", "optician"}, {"bakery", "bakery"}, {"pastry", "bakery"}, {"confectionery", "bakery"},
+            {"mall", "mall"}, {"department_store", "mall"}, {"seafood", "seafood"}, {"tortilla", "tortilleria"}, {"ice_cream", "iceCream"},
+            {"chemist", "pharmacy"}, {"medical_supply", "pharmacy"}, {"greengrocer", "grocery"},
+        };
+        for (const auto& [k, v] : kShop)
+            if (shop == k)
+                return P{v, "business"};
+        return P{"shop", "business"};
+    }
+    if (!tourism.empty())
+    {
+        if (tourism == "hotel" || tourism == "guest_house" || tourism == "hostel" || tourism == "apartment")
+            return P{"hotel", "business"};
+        if (tourism == "motel")
+            return P{"motel", "business"};
+        if (tourism == "museum" || tourism == "gallery")
+            return P{"museum", "landmark"};
+        if (tourism == "attraction" || tourism == "viewpoint" || tourism == "artwork")
+            return P{"", "landmark"};
+    }
+    if (!office.empty())
+        return office == "government" ? P{"government", "government"} : P{"office", "business"};
+    if (!leisure.empty())
+    {
+        if (leisure == "stadium")
+            return P{"stadium", "stadium"};
+        if (leisure == "park" || leisure == "garden")
+            return P{"park", "park"};
+        if (leisure == "marina")
+            return P{"marina", "port"};
+        if (leisure == "fitness_centre")
+            return P{"gym", "business"};
+        if (leisure == "sports_centre" || leisure == "pitch" || leisure == "track")
+            return P{"sports", "park"};
+    }
+    if (harbour == "yes" || landuse == "port" || tag(t, "seamark:type") == "harbour" || industrial == "port")
+        return P{"port", "port"};
+    if (!aeroway.empty())
+    {
+        if (aeroway == "aerodrome" || aeroway == "airport")
+            return tag(t, "aerodrome:type") == "private" || tag(t, "aerodrome") == "private" ? P{"airstrip", "airport"} : P{"airport", "airport"};
+        if (aeroway == "airstrip")
+            return P{"airstrip", "airport"};
+        if (aeroway == "terminal")
+            return P{"airport", "airport"};
+        if (aeroway == "hangar")
+            return P{"warehouse", "building"};
+    }
+    if (manMade == "lighthouse")
+        return P{"lighthouse", "landmark"};
+    if (manMade == "works")
+        return P{"factory", "business"};
+    if (!industrial.empty())
+        return industrial == "warehouse" ? P{"warehouse", "business"} : P{"factory", "business"};
+    if (!craft.empty())
+        return P{"shop", "business"};
+    if (landuse == "cemetery")
+        return P{"cemetery", "cemetery"};
+    if (landuse == "farmland" || landuse == "orchard" || landuse == "farmyard" || landuse == "vineyard")
+        return P{"farm", "business"};
+    if (landuse == "greenhouse_horticulture")
+        return P{"greenhouse", "business"};
+    if (landuse == "industrial")
+        return P{"factory", "business"};
+    if (landuse == "military")
+        return P{"military", "government"};
+    if (!place.empty())
+    {
+        if (place == "city" || place == "town" || place == "village" || place == "hamlet" || place == "isolated_dwelling" || place == "municipality")
+            return P{"town", "town"};
+        if (place == "suburb" || place == "neighbourhood" || place == "quarter" || place == "borough" || place == "city_block")
+            return P{"district", "district"};
+        if (place == "island" || place == "islet")
+            return P{"island", "island"};
+    }
+    if (nat == "beach")
+        return P{"beach", "beach"};
+    if (nat == "bay")
+        return P{"bay", "bay"};
+    if (nat == "peak" || nat == "volcano" || nat == "hill" || nat == "ridge")
+        return P{"mountain", "mountain"};
+    if (!building.empty())
+    {
+        static const std::pair<const char*, std::pair<const char*, const char*>> kBuilding[] = {
+            {"church", {"church", "religious"}}, {"chapel", {"church", "religious"}}, {"cathedral", {"cathedral", "religious"}},
+            {"mosque", {"church", "religious"}}, {"temple", {"church", "religious"}}, {"synagogue", {"church", "religious"}},
+            {"school", {"school", "school"}}, {"kindergarten", {"school", "school"}}, {"university", {"university", "school"}},
+            {"college", {"school", "school"}}, {"hospital", {"hospital", "hospital"}}, {"civic", {"government", "government"}},
+            {"public", {"government", "government"}}, {"government", {"government", "government"}}, {"townhall", {"townhall", "government"}},
+            {"fire_station", {"fireStation", "government"}}, {"train_station", {"busStation", "building"}}, {"transportation", {"busStation", "building"}},
+            {"hotel", {"hotel", "business"}}, {"retail", {"shop", "business"}}, {"commercial", {"shop", "business"}}, {"supermarket", {"supermarket", "business"}},
+            {"kiosk", {"grocery", "business"}}, {"office", {"office", "business"}}, {"industrial", {"factory", "business"}},
+            {"warehouse", {"warehouse", "business"}}, {"factory", {"factory", "business"}}, {"manufacture", {"factory", "business"}},
+            {"greenhouse", {"greenhouse", "business"}}, {"farm", {"farm", "business"}}, {"barn", {"farm", "business"}},
+            {"farm_auxiliary", {"farm", "business"}}, {"stable", {"farm", "business"}}, {"hangar", {"warehouse", "building"}},
+            {"stadium", {"stadium", "stadium"}}, {"grandstand", {"stadium", "stadium"}}, {"apartments", {"apartments", "building"}},
+            {"residential", {"apartments", "building"}}, {"dormitory", {"apartments", "building"}}, {"mansion", {"mansion", "building"}},
+            {"villa", {"mansion", "building"}},
+        };
+        for (const auto& [k, v] : kBuilding)
+            if (building == k)
+                return P{v.first, v.second};
+        return P{"", "building"};
+    }
+    return {};
 }
 
 OsmExtract extractOsm(const OsmData& d)
@@ -839,13 +1109,89 @@ OsmExtract extractOsm(const OsmData& d)
             return;
         x.features.push_back({OsmFeatureKind::Lake, id, std::string(tag(t, "name")), cls, 0.0, true, positions(ring, true)});
     };
+    auto isBuilding = [](const OsmTags& t) {
+        const std::string_view b = tag(t, "building"), p = tag(t, "building:part");
+        return (!b.empty() && b != "no") || (!p.empty() && p != "no");
+    };
+    auto addBuilding = [&](int64_t id, char type, int piece, const OsmTags& t, const std::vector<OsmPoint>& outer,
+                           const std::vector<std::vector<OsmPoint>>& holes) {
+        if (outer.size() < 4)
+            return;
+        OsmBuilding b;
+        b.id = id;
+        b.type = type;
+        b.piece = piece;
+        const std::string_view partTag = tag(t, "building:part");
+        b.part = !partTag.empty() && partTag != "no" && (tag(t, "building").empty() || tag(t, "building") == "no");
+        b.building = std::string(b.part ? partTag : tag(t, "building"));
+        b.outer = positions(outer, true);
+        for (const auto& h : holes)
+            if (h.size() >= 4)
+                b.holes.push_back(positions(h, true));
+        b.height = metresTag(tag(t, "height"));
+        b.minHeight = metresTag(tag(t, "min_height"));
+        b.roofHeight = metresTag(tag(t, "roof:height"));
+        b.levels = levelsTag(tag(t, "building:levels"));
+        b.minLevel = levelsTag(tag(t, "building:min_level"));
+        b.roofLevels = levelsTag(tag(t, "roof:levels"));
+        b.roofShape = std::string(tag(t, "roof:shape"));
+        b.colour = std::string(tag(t, "building:colour"));
+        b.roofColour = std::string(tag(t, "roof:colour"));
+        b.material = std::string(tag(t, "building:material"));
+        b.roofMaterial = std::string(tag(t, "roof:material"));
+        b.startDate = std::string(tag(t, "start_date"));
+        std::tie(b.program, b.kind) = osmProgram(t);
+        if (b.kind.empty())
+            b.kind = "building";
+        b.realNames = realNamesOf(t);
+        b.chain = chainOf(t);
+        x.buildings.push_back(std::move(b));
+    };
+    auto addPlace = [&](int64_t id, char type, const OsmTags& t, LatLon at, const std::vector<std::vector<OsmPoint>>& rings) {
+        auto [program, kind] = osmProgram(t);
+        if (kind.empty() || kind == "building")
+            return;
+        OsmPlace p;
+        p.id = id;
+        p.type = type;
+        for (const char* k : {"amenity", "shop", "tourism", "office", "leisure", "harbour", "aeroway", "man_made", "industrial", "craft",
+                              "landuse", "place", "natural"})
+            if (const std::string_view v = tag(t, k); !v.empty())
+            {
+                p.key = k;
+                p.value = std::string(v);
+                break;
+            }
+        p.program = std::move(program);
+        p.kind = std::move(kind);
+        p.at = at;
+        for (const auto& r : rings)
+            if (r.size() >= 4)
+                p.rings.push_back(positions(r, true));
+        if (!p.rings.empty())
+            p.at = ringCentre(p.rings.front());
+        p.realNames = realNamesOf(t);
+        p.chain = chainOf(t);
+        x.places.push_back(std::move(p));
+    };
+    auto structureKind = [](std::string_view mm) {
+        return mm == "breakwater" || mm == "groyne" ? OsmFeatureKind::Breakwater : mm == "quay" ? OsmFeatureKind::Quay : OsmFeatureKind::Pier;
+    };
+
+    // Outer ways of building multipolygons: the relation is the building, so a way tagged as one too is not a second.
+    std::unordered_set<int64_t> buildingOuters;
+    for (const OsmData::Relation& r : d.relations)
+        if (tag(r.tags, "type") == "multipolygon" && isBuilding(r.tags))
+            for (const OsmData::Member& m : r.members)
+                if (m.type == 'w' && m.role != "inner")
+                    buildingOuters.insert(m.ref);
 
     for (const OsmData::Way& w : d.ways)
     {
         if (w.points.size() < 2)
             continue;
         const OsmTags& t = w.tags;
-        const std::string_view hw = tag(t, "highway"), ww = tag(t, "waterway"), nat = tag(t, "natural");
+        const std::string_view hw = tag(t, "highway"), ww = tag(t, "waterway"), nat = tag(t, "natural"), mm = tag(t, "man_made");
         const std::string name(tag(t, "name"));
         if (!hw.empty() && tag(t, "area") != "yes")
         {
@@ -866,6 +1212,18 @@ OsmExtract extractOsm(const OsmData& d)
                 m = ww == "river" ? 20.0 : ww == "canal" ? 15.0 : ww == "stream" || ww == "brook" ? 3.0 : 1.5;
             x.features.push_back({river ? OsmFeatureKind::River : OsmFeatureKind::Stream, w.id, name, std::string(ww), m * 100.0, false, positions(w.points, false)});
         }
+        else if (ww == "dam" || ww == "weir")
+        {
+            const double m = widthTag(tag(t, "width"));
+            x.features.push_back({OsmFeatureKind::Dam, w.id, name, std::string(ww), (m > 0.0 ? m : ww == "dam" ? 10.0 : 2.0) * 100.0,
+                                  isClosed(w.points), positions(w.points, isClosed(w.points))});
+        }
+        else if (isStructure(mm))
+        {
+            const double m = widthTag(tag(t, "width"));
+            x.features.push_back({structureKind(mm), w.id, name, std::string(mm), (m > 0.0 ? m : mm == "quay" ? 0.0 : 6.0) * 100.0,
+                                  isClosed(w.points), positions(w.points, isClosed(w.points))});
+        }
         if (nat == "coastline")
             coast.push_back(w.points);
         if (isClosed(w.points))
@@ -874,8 +1232,18 @@ OsmExtract extractOsm(const OsmData& d)
                 addLake(lake, w.id, t, w.points);
             if (const std::string cover = landcoverOf(t); !cover.empty())
                 addArea(cover, w.id, {w.points});
+            if (isBuilding(t))
+            {
+                if (!buildingOuters.count(w.id))
+                    addBuilding(w.id, 'w', 0, t, w.points, {});
+            }
+            else if (hw.empty() && !isStructure(mm))
+                addPlace(w.id, 'w', t, {}, {w.points});
         }
     }
+
+    for (const OsmData::Node& n : d.tagged)
+        addPlace(n.id, 'n', n.tags, n.at, {});
 
     for (const OsmData::Relation& r : d.relations)
     {
@@ -883,7 +1251,10 @@ OsmExtract extractOsm(const OsmData& d)
         if (type != "multipolygon" && type != "boundary")
             continue;
         const std::string lake = lakeOf(r.tags), cover = landcoverOf(r.tags);
-        if (lake.empty() && cover.empty())
+        const bool building = type == "multipolygon" && isBuilding(r.tags);
+        const bool structure = type == "multipolygon" && isStructure(tag(r.tags, "man_made"));
+        const bool place = type == "multipolygon" && !building && !structure && !osmProgram(r.tags).second.empty();
+        if (lake.empty() && cover.empty() && !building && !structure && !place)
             continue;
         std::vector<std::vector<OsmPoint>> outer, inner;
         for (const OsmData::Member& m : r.members)
@@ -901,21 +1272,65 @@ OsmExtract extractOsm(const OsmData& d)
         }
         std::vector<std::vector<OsmPoint>> rings = joinWays(outer);
         std::erase_if(rings, [](const std::vector<OsmPoint>& c) { return !isClosed(c); });
+        std::vector<std::vector<OsmPoint>> holes = joinWays(inner);
+        std::erase_if(holes, [](const std::vector<OsmPoint>& c) { return !isClosed(c); });
         if (!lake.empty())
             for (const auto& ring : rings)
                 addLake(lake, r.id, r.tags, ring);
-        if (!cover.empty())
+        if (building)
         {
-            std::vector<std::vector<OsmPoint>> holes = joinWays(inner);
-            std::erase_if(holes, [](const std::vector<OsmPoint>& c) { return !isClosed(c); });
-            rings.insert(rings.end(), holes.begin(), holes.end());
-            addArea(cover, r.id, rings);
+            // Each hole goes with the outer ring around it.
+            for (size_t k = 0; k < rings.size(); ++k)
+            {
+                const std::vector<LatLon> o = positions(rings[k], true);
+                std::vector<std::vector<OsmPoint>> mine;
+                for (const auto& h : holes)
+                    if (!h.empty() && inRing(o, h.front().at))
+                        mine.push_back(h);
+                addBuilding(r.id, 'r', int(k), r.tags, rings[k], mine);
+            }
         }
+        if (structure)
+            for (const auto& ring : rings)
+                x.features.push_back({structureKind(tag(r.tags, "man_made")), r.id, std::string(tag(r.tags, "name")),
+                                      std::string(tag(r.tags, "man_made")), 0.0, true, positions(ring, true)});
+        std::vector<std::vector<OsmPoint>> all = rings;
+        all.insert(all.end(), holes.begin(), holes.end());
+        if (place && !rings.empty())
+            addPlace(r.id, 'r', r.tags, {}, all);
+        if (!cover.empty())
+            addArea(cover, r.id, all);
     }
 
     for (const std::vector<OsmPoint>& c : joinWays(coast))
         x.features.push_back({OsmFeatureKind::Coastline, 0, {}, "coastline", 0.0, isClosed(c), positions(c, isClosed(c))});
     return x;
+}
+
+void forEachPoint(OsmExtract& x, const std::function<void(LatLon&)>& f)
+{
+    for (OsmFeature& v : x.features)
+        for (LatLon& p : v.points)
+            f(p);
+    for (OsmArea& a : x.areas)
+        for (auto& r : a.rings)
+            for (LatLon& p : r)
+                f(p);
+    for (OsmBuilding& b : x.buildings)
+    {
+        for (LatLon& p : b.outer)
+            f(p);
+        for (auto& r : b.holes)
+            for (LatLon& p : r)
+                f(p);
+    }
+    for (OsmPlace& pl : x.places)
+    {
+        f(pl.at);
+        for (auto& r : pl.rings)
+            for (LatLon& p : r)
+                f(p);
+    }
 }
 
 std::vector<std::vector<glm::dvec2>> clipToHeightfield(const std::vector<glm::dvec2>& in, const Heightfield& h, bool closed)

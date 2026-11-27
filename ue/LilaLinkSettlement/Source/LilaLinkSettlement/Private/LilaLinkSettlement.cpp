@@ -1,6 +1,7 @@
 #include "LilaLinkSettlement.h"
 
 #include "LilaLinkMethodRegistry.h"
+#include "LilaLinkProjectConfig.h"
 #include "LilaLinkSettlementTraffic.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -406,6 +407,25 @@ struct FZoneSettingsAccess
 		return Profiles && Tags;
 	}
 
+	/**
+	 * Records that the settlement Id in World uses Used (none when it went) and takes out the Lila lane profiles no level
+	 * uses any more; returns their names.
+	 */
+	TArray<TSharedPtr<FJsonValue>> UpdateProfileUsers(const UWorld* World, const FString& Id, const TArray<FName>& Used)
+	{
+		const TArray<FName> Unused = LilaLink::SetLaneProfileUser(World, TEXT("settlement:") + Id, Used);
+		TArray<TSharedPtr<FJsonValue>> Removed;
+		Profiles->RemoveAll([&](const FZoneLaneProfile& P) {
+			const bool bGone = Unused.Contains(P.Name) && P.Name.ToString().StartsWith(TEXT("Lila_"));
+			if (bGone)
+			{
+				Removed.Add(MakeShared<FJsonValueString>(P.Name.ToString()));
+			}
+			return bGone;
+		});
+		return Removed;
+	}
+
 	/** The tag of that name, made in the first free slot when the project has none. */
 	FZoneGraphTag Tag(const FString& Name, TArray<FString>& Warnings)
 	{
@@ -534,7 +554,13 @@ TSharedPtr<FJsonValue> SetZoneGraph(const TSharedPtr<FJsonObject>& Params, FStri
 			ProfileRefs.Add(Entry.Key, FZoneLaneProfileRef(*Profile));
 		}
 	}
-	Access.Settings->TryUpdateDefaultConfigFile();
+	TArray<FName> Used;
+	for (const auto& [Key, Ref] : ProfileRefs)
+	{
+		Used.Add(Ref.Name);
+	}
+	const TArray<TSharedPtr<FJsonValue>> ProfilesRemoved = Access.UpdateProfileUsers(World, Id, Used);
+	const FString ConfigBackup = LilaLink::UpdateProjectIni(Access.Settings);
 	UE::ZoneGraphDelegates::OnZoneGraphTagsChanged.Broadcast();
 
 	const FName Tag = ZoneTagFor(Id);
@@ -703,6 +729,14 @@ TSharedPtr<FJsonValue> SetZoneGraph(const TSharedPtr<FJsonObject>& Params, FStri
 	Out->SetStringField(TEXT("actor"), Actor->GetPathName());
 	Out->SetNumberField(TEXT("shapes"), Shapes);
 	Out->SetNumberField(TEXT("profiles"), ProfileRefs.Num());
+	if (!ConfigBackup.IsEmpty())
+	{
+		Out->SetStringField(TEXT("configBackup"), ConfigBackup);
+	}
+	if (!ProfilesRemoved.IsEmpty())
+	{
+		Out->SetArrayField(TEXT("laneProfilesRemoved"), ProfilesRemoved);
+	}
 	if (MassTraffic.IsValid())
 	{
 		Out->SetObjectField(TEXT("massTraffic"), MassTraffic);
@@ -751,12 +785,30 @@ TSharedPtr<FJsonValue> RemoveSettlement(const TSharedPtr<FJsonObject>& Params, F
 	{
 		bRemoved |= World->EditorDestroyActor(Actor, true);
 	}
-	if (bRemoved)
+	// Lane profiles are project-wide: one goes when no level keeps a settlement on it.
+	TArray<TSharedPtr<FJsonValue>> ProfilesRemoved;
+	FString ConfigBackup;
+	FZoneSettingsAccess Access;
+	if (Access.Init())
+	{
+		Access.Settings->Modify();
+		ProfilesRemoved = Access.UpdateProfileUsers(World, Id, {});
+		if (!ProfilesRemoved.IsEmpty())
+		{
+			ConfigBackup = LilaLink::UpdateProjectIni(Access.Settings);
+		}
+	}
+	if (bRemoved || !ProfilesRemoved.IsEmpty())
 	{
 		UE::ZoneGraphDelegates::OnZoneGraphRequestRebuild.Broadcast();
 	}
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetBoolField(TEXT("removed"), bRemoved);
+	Out->SetArrayField(TEXT("laneProfilesRemoved"), ProfilesRemoved);
+	if (!ConfigBackup.IsEmpty())
+	{
+		Out->SetStringField(TEXT("configBackup"), ConfigBackup);
+	}
 	return MakeShared<FJsonValueObject>(Out);
 }
 } // namespace

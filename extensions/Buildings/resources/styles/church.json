@@ -1,0 +1,87 @@
+{
+  "id": "church",
+  "label": "Church",
+  "description": "Parish churches and the cathedral: one tall nave, high windows, a tall door, two bell towers with domes, gable roof.",
+  "tags": [
+    "church",
+    "religious",
+    "landmark"
+  ],
+  "floors": {
+    "min": 1,
+    "max": 1,
+    "groundHeight": 1200,
+    "height": 1200,
+    "plinth": 60
+  },
+  "bays": {
+    "width": 600,
+    "min": 400,
+    "cornerWidth": 120
+  },
+  "openings": {
+    "window": {
+      "width": 0.3,
+      "height": 0.42,
+      "sill": 0.45,
+      "kind": "window.residential"
+    },
+    "door": {
+      "width": 0.45,
+      "height": 0.5,
+      "kind": "door.house"
+    },
+    "shopfront": {
+      "width": 0.6,
+      "height": 0.6
+    },
+    "reveal": 60
+  },
+  "groundFloor": {
+    "street": "window",
+    "shopfronts": false
+  },
+  "modules": {
+    "balconies": 0.0,
+    "grilles": 0.0,
+    "acUnits": 0.0,
+    "pilasters": true,
+    "cornice": "heavy",
+    "bands": false,
+    "corner": "pilaster",
+    "drainpipes": false
+  },
+  "roof": {
+    "kind": "gable",
+    "material": "tile",
+    "parapet": 0,
+    "pitch": 30,
+    "overhang": 20
+  },
+  "palette": {
+    "render": [
+      "#efe6d2",
+      "#e8c39e",
+      "#d4a373",
+      "#f2e8cf"
+    ],
+    "trim": [
+      "#ffffff",
+      "#f8f4e3"
+    ],
+    "roof": [
+      "#9c4a2f",
+      "#8b3a2b"
+    ],
+    "base": [
+      "#8a7f72"
+    ],
+    "dirt": [
+      0.1,
+      0.4
+    ]
+  },
+  "extras": {
+    "bellTowers": 2
+  }
+}

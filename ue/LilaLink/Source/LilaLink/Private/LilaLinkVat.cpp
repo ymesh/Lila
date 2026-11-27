@@ -674,7 +674,7 @@ void BuildRigidFunction(UMaterialFunction* Function, const FVatMeta& Meta, UText
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkVat::BuildRigidFunction);
 
-	UMaterialEditingLibrary::DeleteAllMaterialExpressionsInFunction(Function);
+	LilaLink::DeleteAllExpressions(Function);
 	Function->Description = TEXT("Lila rigid Vertex Animation Texture: plays a baked rigid-body animation, a transform per piece per frame.");
 	Function->bExposeToLibrary = true;
 	FVatGraph G;

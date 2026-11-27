@@ -1,0 +1,81 @@
+{
+  "id": "portShed",
+  "label": "Port Shed",
+  "description": "Transit sheds and warehouses on the quay: wide bays of roll-up doors, big low gable sheet roof with deep eaves.",
+  "tags": [
+    "port",
+    "industrial",
+    "harbour"
+  ],
+  "floors": {
+    "min": 1,
+    "max": 1,
+    "groundHeight": 900,
+    "height": 900,
+    "plinth": 20
+  },
+  "bays": {
+    "width": 800,
+    "min": 500,
+    "cornerWidth": 40
+  },
+  "openings": {
+    "window": {
+      "width": 0.6,
+      "height": 0.12,
+      "sill": 0.82,
+      "kind": "window.residential"
+    },
+    "door": {
+      "width": 0.25,
+      "height": 0.3,
+      "kind": "door.service"
+    },
+    "shopfront": {
+      "width": 0.8,
+      "height": 0.6
+    },
+    "reveal": 10
+  },
+  "groundFloor": {
+    "street": "garage",
+    "shopfronts": false
+  },
+  "modules": {
+    "balconies": 0.0,
+    "grilles": 0.0,
+    "acUnits": 0.0,
+    "cornice": "none",
+    "bands": false,
+    "drainpipes": true
+  },
+  "roof": {
+    "kind": "sheet",
+    "material": "sheet",
+    "parapet": 0,
+    "pitch": 12,
+    "overhang": 80
+  },
+  "palette": {
+    "render": [
+      "#9aa5ab",
+      "#6c8a9b",
+      "#b55d4c",
+      "#a39171"
+    ],
+    "trim": [
+      "#4b5358"
+    ],
+    "roof": [
+      "#7d868c",
+      "#9c5b43"
+    ],
+    "base": [
+      "#5e5e5e"
+    ],
+    "dirt": [
+      0.3,
+      0.65
+    ]
+  }
+}

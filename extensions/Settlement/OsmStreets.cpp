@@ -82,6 +82,8 @@ void layImported(Layout& l, std::span<const ImportedStreet> streets, int era)
 {
     LILA_ZONE();
 
+    if (!l.gen)
+        l.gen = std::make_shared<GenLayout>();
     int laid = 0;
     for (const ImportedStreet& s : streets)
     {
@@ -89,12 +91,12 @@ void layImported(Layout& l, std::span<const ImportedStreet> streets, int era)
         for (const std::vector<Vec2>& run : gen::clip(s.pts, l.outline, l.center, 0.0, 0.0, l.exclusions))
         {
             l.graph.addPolyline(run, s.cls, era);
+            if (!s.name.empty() || !s.osmId.empty())
+                l.gen->importedRuns.push_back({run, s.cls, s.name, s.osmId});
             any = true;
         }
         laid += any ? 1 : 0;
     }
-    if (!l.gen)
-        l.gen = std::make_shared<GenLayout>();
     l.gen->imported += laid;
     if (laid < int(streets.size()))
         l.gen->warnings.push_back("osm: " + std::to_string(int(streets.size()) - laid) + " of " + std::to_string(streets.size()) +

@@ -21,6 +21,8 @@ namespace lila::crash::upload
 namespace fs = std::filesystem;
 
 inline constexpr const char* kConsentFile = "crash-consent.json";
+/** Under the telemetry folder: {"url", "event"} per running Lila, for sendCrashedSession(). */
+inline constexpr const char* kCrashEventsDir = "crash-events";
 
 struct Consent
 {
@@ -45,5 +47,15 @@ LILA_CRASHKIT_API std::string sanitize(std::string_view reportText, const std::v
 /** POSTs reportDir's minidump and sanitized report. Writes reportDir/.sent with Sentry's event id on success. */
 LILA_CRASHKIT_API bool send(const fs::path& reportDir, std::string* eventId = nullptr, std::string* error = nullptr);
 LILA_CRASHKIT_API bool alreadySent(const fs::path& reportDir);
+
+/** POSTs a JSON body to an http(s) URL; true on a 2xx answer. */
+LILA_CRASHKIT_API bool postJson(const std::string& url, const std::string& body, std::string* error = nullptr);
+
+/**
+ * The crashed session's usage event, which Lila keeps ready in <telemetryDir>/crash-events/<pid>.json while usage
+ * statistics are on. POSTs it and, on success, removes it and Lila's session file so the next start doesn't send it again.
+ * Returns false when there is nothing to send or the send failed.
+ */
+LILA_CRASHKIT_API bool sendCrashedSession(const fs::path& telemetryDir, unsigned long pid, std::string* error = nullptr);
 #endif
 } // namespace lila::crash::upload

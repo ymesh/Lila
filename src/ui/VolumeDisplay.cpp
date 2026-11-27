@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <map>
 #include <mutex>
+#include <unordered_map>
 
 namespace lila::ui::volumeDisplay
 {
@@ -103,12 +104,28 @@ void apply(render::FrameState& s)
     s.volumes.clear();
     scene::Graph& g = scene::Graph::current();
     const scene::sceneIndex::Hierarchy& hierarchy = scene::sceneIndex::hierarchy(g, true);
+    // Material slot name to its volume material (or none), looked up once a frame: many meshes share few materials.
+    std::unordered_map<std::string, const scene::Node*> volumeBySlot;
+    auto volumeOf = [&](const geo::Mesh& mesh) -> const scene::Node* {
+        for (const std::string& slot : mesh.materialNames())
+        {
+            auto it = volumeBySlot.find(slot);
+            if (it == volumeBySlot.end())
+            {
+                const scene::Node* m = scene::materials::find(g, slot);
+                it = volumeBySlot.emplace(slot, m && m->as<int64_t>(kShadingModel) == int64_t(ShadingModel::Volume) ? m : nullptr).first;
+            }
+            if (it->second)
+                return it->second;
+        }
+        return nullptr;
+    };
     for (const scene::Node* n : scene::sceneIndex::ofType(g, "mesh"))
     {
         if (!hierarchy.visible(n->id()))
             continue;
         const scene::MeshPtr mesh = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
-        const scene::Node* material = mesh ? volumeMaterial(*mesh) : nullptr;
+        const scene::Node* material = mesh ? volumeOf(*mesh) : nullptr;
         if (!material)
             continue;
         if (s.volumes.size() >= render::kMaxVolumes)

@@ -5,6 +5,7 @@
 #include "core/Paths.h"
 #include "core/Progress.h"
 #include "geo/ColorSets.h"
+#include "geo/Ops.h"
 #include "geo/PlyIO.h"
 #include "geo/StlIO.h"
 #include "math/MathCore.h"
@@ -50,29 +51,6 @@ glm::dmat4 fileToScene(const Args& a, const char* cmd)
     else if (!fileZ && sceneZ) // (x, y, z) -> (x, -z, y)
         m = glm::dmat4(glm::dvec4(s, 0, 0, 0), glm::dvec4(0, 0, s, 0), glm::dvec4(0, -s, 0, 0), glm::dvec4(0, 0, 0, 1));
     return m;
-}
-
-/** Positions by m, file normals (corner and point) by its inverse transpose. */
-void transformMesh(geo::Mesh& mesh, const glm::dmat4& m)
-{
-    tbb::parallel_for(geo::Index(0), mesh.pointCapacity(), [&](geo::Index p) {
-        if (mesh.pointValid(p))
-            mesh.setPosition(p, glm::dvec3(m * glm::dvec4(mesh.position(p), 1.0)));
-    });
-    const glm::mat3 n(glm::transpose(glm::inverse(glm::dmat3(m))));
-    const bool flip = glm::determinant(glm::dmat3(m)) < 0.0;
-    for (geo::AttributeSet* set : {&mesh.cornerAttrs(), &mesh.pointAttrs()})
-    {
-        std::span<glm::vec3> normals = set->get<glm::vec3>(geo::attr::kNormal);
-        tbb::parallel_for(size_t(0), normals.size(), [&](size_t i) {
-            if (glm::dot(normals[i], normals[i]) > 0.0f)
-                normals[i] = glm::normalize(n * normals[i]);
-        });
-    }
-    if (flip)
-        for (geo::Index f = 0; f < mesh.faceCapacity(); ++f)
-            if (mesh.faceValid(f))
-                mesh.flipFace(f);
 }
 
 std::string readPath(const Args& a, const char* cmd)
@@ -133,7 +111,7 @@ std::vector<std::pair<std::string, geo::Mesh>> gatherMeshes(const Args& a, const
         if (!m)
             continue;
         geo::Mesh mesh = *m;
-        transformMesh(mesh, sceneToFile * n->as<glm::dmat4>(Transform::kWorldMatrix));
+        geo::transformMesh(mesh, sceneToFile * n->as<glm::dmat4>(Transform::kWorldMatrix));
         out.emplace_back(n->name(), std::move(mesh));
     }
     if (out.empty())
@@ -178,7 +156,7 @@ void registerMeshFileCommands()
             progress::runOnWorker([&] {
                 r = geo::readStlFile(path, {.weld = a.get<bool>("weld", true), .hardAngle = a.get<double>("hardAngle", 30.0)});
                 for (geo::StlSolid& s : r.solids)
-                    transformMesh(s.mesh, m);
+                    geo::transformMesh(s.mesh, m);
             });
             if (!r.ok())
                 throw CommandError("importStl: " + r.error);
@@ -238,7 +216,7 @@ void registerMeshFileCommands()
             progress::runOnWorker([&] {
                 r = geo::readPlyFile(path, {.keepNormals = a.get<bool>("normals", true)});
                 if (r.ok() && !georeferenced)
-                    transformMesh(r.mesh, m);
+                    geo::transformMesh(r.mesh, m);
             });
             if (!r.ok())
                 throw CommandError("importPly: " + r.error);

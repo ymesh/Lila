@@ -45,7 +45,8 @@ private:
     bool mArmed = false;
 };
 
-/** Press a chord, pick a mode and context, and write it for one target (an action id or a {"markingMenu": name}). */
+/** Press a chord, pick a mode and context, and write it for one target (an action id, a {"markingMenu": name} or a
+ * {"python": source}). */
 class LILA_UI_API ChordCaptureDialog : public QDialog
 {
     Q_OBJECT
@@ -136,6 +137,7 @@ private:
     std::string selectedContext() const;
     const hotkeys::Binding* selectedBinding() const;
     void assignSelected();
+    void pythonHotkey();
     void refreshKeymaps();
     /** Runs a keymap change, showing why it failed. */
     void keymapChange(const std::function<void()>& fn);
@@ -151,6 +153,7 @@ private:
     KeyboardHeatMap* mMap = nullptr;
     QLabel* mDetail = nullptr;
     QPushButton* mAssign = nullptr;
+    QPushButton* mPython = nullptr;
     QPushButton* mUnbind = nullptr;
     QPushButton* mReset = nullptr;
     ChordGrabber* mGrabber = nullptr;

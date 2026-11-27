@@ -4,6 +4,13 @@
 #include "LilaLinkMethodRegistry.h"
 
 #include "Async/Async.h"
+#include "Editor.h"
+#include "Engine/World.h"
+#include "Misc/PackageName.h"
+#include "WorldPartition/WorldPartition.h"
+#include "WorldPartition/WorldPartitionActorDescInstance.h"
+#include "WorldPartition/LoaderAdapter/LoaderAdapterActorList.h"
+#include "WorldPartition/WorldPartitionHelpers.h"
 #include "Common/TcpSocketBuilder.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
@@ -315,6 +322,59 @@ void FLilaLinkServer::WatchGameThread()
 	}
 }
 
+namespace
+{
+/**
+ * Loads the open World Partition level's actors Lila made (any tag starting with Lila), once per level, so sends find,
+ * update and remove what earlier sessions placed instead of adding a second copy beside unloaded actors.
+ */
+void LoadLilaActors()
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkServer::LoadLilaActors);
+
+	static TWeakObjectPtr<UWorldPartition> Done;
+	// Holds the actors loaded; released when its level's World Partition shuts down, before the world goes.
+	static TUniquePtr<FLoaderAdapterActorList> Loader;
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	UWorldPartition* Partition = World ? World->GetWorldPartition() : nullptr;
+	if (!Partition || Done.Get() == Partition)
+	{
+		return;
+	}
+	Done = Partition;
+	// The slot table sends write into, loaded now while nothing else is: loading it mid-send flushes async loading while
+	// World Partition may be registering the actors placed just before.
+	const TCHAR* SlotTable = TEXT("/Game/Lila/Slots/DA_LilaSlotTable");
+	if (FPackageName::DoesPackageExist(SlotTable))
+	{
+		LoadObject<UObject>(nullptr, TEXT("/Game/Lila/Slots/DA_LilaSlotTable.DA_LilaSlotTable"), nullptr, LOAD_NoWarn | LOAD_Quiet);
+	}
+	TArray<FGuid> Guids;
+	FWorldPartitionHelpers::ForEachActorDescInstance(Partition, AActor::StaticClass(), [&Guids](const FWorldPartitionActorDescInstance* Desc) {
+		if (!Desc->IsLoaded() && Desc->GetTags().ContainsByPredicate([](const FName& Tag) { return Tag.ToString().StartsWith(TEXT("Lila")); }))
+		{
+			Guids.Add(Desc->GetGuid());
+		}
+		return true;
+	});
+	if (!Guids.IsEmpty())
+	{
+		Loader = MakeUnique<FLoaderAdapterActorList>(World);
+		// Level Instance partitions broadcast here too, while their cleanup swallows unregistrations: releasing the loader
+		// then leaves its actors flagged as unregistering, and the next reference to one asserts in World Partition.
+		TWeakObjectPtr<UWorldPartition> Owner = Partition;
+		World->OnWorldPartitionUninitialized().AddLambda([Owner](UWorldPartition* Gone) {
+			if (Gone == Owner.Get())
+			{
+				Loader.Reset();
+			}
+		});
+		Loader->AddActors(Guids);
+		UE_LOG(LogLilaLink, Log, TEXT("Loaded %d Lila actors of %s that World Partition had unloaded"), Guids.Num(), *World->GetName());
+	}
+}
+} // namespace
+
 bool FLilaLinkServer::TickGameThread(float DeltaTime)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkServer::TickGameThread);
@@ -338,6 +398,7 @@ bool FLilaLinkServer::TickGameThread(float DeltaTime)
 			continue;
 		}
 		UE_LOG(LogLilaLink, Log, TEXT("-> %s (waited %.2f s for the game thread)"), *Call->Describe(), Now - Request.QueuedSeconds);
+		LoadLilaActors();
 		(*Handler)(Request.Params, Call);
 		if (!Call->HasReplied())
 		{

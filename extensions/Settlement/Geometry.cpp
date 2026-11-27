@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numeric>
 
 namespace settlement
 {
@@ -131,6 +132,67 @@ bool selfIntersects(std::span<const Vec2> pts)
     return false;
 }
 
+/**
+ * p's sides moved in by d with every side whose offset turns back on itself dropped, shortest first, its neighbours
+ * meeting in its place (the edge events of a straight skeleton). Empty when what is left still crosses itself.
+ */
+static Polygon insetDropping(const Polygon& p, std::span<const double> d)
+{
+    const size_t n = p.pts.size();
+    std::vector<Vec2> dir(n), base(n);
+    for (size_t k = 0; k < n; ++k)
+    {
+        const Vec2 e = p.pts[(k + 1) % n] - p.pts[k];
+        const double len = glm::length(e);
+        dir[k] = len > 1e-12 ? e / len : Vec2(1.0, 0.0);
+        base[k] = p.pts[k] + leftNormal(dir[k]) * d[k];
+    }
+    std::vector<size_t> keep(n);
+    std::iota(keep.begin(), keep.end(), size_t(0));
+    std::vector<Vec2> v;
+    while (keep.size() >= 3)
+    {
+        const size_t m = keep.size();
+        v.assign(m, Vec2(0.0));
+        for (size_t i = 0; i < m; ++i)
+        {
+            const size_t j = keep[(i + m - 1) % m], k = keep[i];
+            const double den = cross(dir[j], dir[k]);
+            // Nearly parallel neighbours (a street changing width along a straight run) step across at the corner.
+            if (std::abs(den) < 0.05)
+            {
+                const Vec2 q = p.pts[k];
+                v[i] = 0.5 * (base[j] + dir[j] * glm::dot(q - base[j], dir[j]) + base[k] + dir[k] * glm::dot(q - base[k], dir[k]));
+            }
+            else
+                v[i] = base[j] + dir[j] * (cross(base[k] - base[j], dir[k]) / den);
+        }
+        size_t worst = m;
+        double shortest = 0.0;
+        for (size_t i = 0; i < m; ++i)
+            if (const double along = glm::dot(v[(i + 1) % m] - v[i], dir[keep[i]]); along <= 0.0 && along < shortest + 1e-9)
+            {
+                shortest = along;
+                worst = i;
+            }
+        if (worst == m)
+            break;
+        keep.erase(keep.begin() + long(worst));
+    }
+    if (keep.size() < 3 || signedArea(v) <= 1e-6 || selfIntersects(v))
+        return {};
+    // Sides that met across a narrow neck leave corners outside, or nearer a side than its distance: not an inset.
+    const double nearest = *std::min_element(d.begin(), d.end());
+    for (const Vec2& q : v)
+        if (!contains(p.pts, q) || boundaryDistance(p.pts, q) < nearest - 1.0)
+            return {};
+    Polygon out;
+    out.pts = v;
+    for (size_t k : keep)
+        out.tag.push_back(p.tag[k]);
+    return out;
+}
+
 Polygon inset(const Polygon& p, std::span<const double> d)
 {
     const size_t n = p.pts.size();
@@ -166,6 +228,9 @@ Polygon inset(const Polygon& p, std::span<const double> d)
             ok = glm::dot(out.pts[(k + 1) % n] - out.pts[k], dir[k]) > 0.0;
     if (ok && signedArea(out.pts) > 1e-6 && !selfIntersects(out.pts))
         return out;
+    // A short side between bends turns back once moved in; clipping by every side would cut a concave face away.
+    if (Polygon dropped = insetDropping(p, d); !dropped.pts.empty())
+        return dropped;
 
     Polygon cut = p;
     for (size_t k = 0; k < n && !cut.pts.empty(); ++k)
@@ -206,6 +271,45 @@ Ground Ground::plane(double height)
     Ground g;
     g.mPlane = height;
     return g;
+}
+
+/** Whether every face is an axis-aligned quad of one size on a grid from origin, all split from the same corner pair. */
+static bool findLattice(const geo::Mesh& mesh, Vec2 origin, Ground::Lattice& out)
+{
+    bool first = true;
+    for (geo::Index f = 0; f < mesh.faceCapacity(); ++f)
+    {
+        if (!mesh.faceValid(f))
+            continue;
+        const std::vector<geo::Index> pts = mesh.facePoints(f);
+        if (pts.size() != 4)
+            return false;
+        glm::dvec3 c[4];
+        for (size_t k = 0; k < 4; ++k)
+            c[k] = mesh.position(pts[k]);
+        Vec2 lo(std::min({c[0].x, c[1].x, c[2].x, c[3].x}), std::min({c[0].z, c[1].z, c[2].z, c[3].z}));
+        Vec2 hi(std::max({c[0].x, c[1].x, c[2].x, c[3].x}), std::max({c[0].z, c[1].z, c[2].z, c[3].z}));
+        const Vec2 size = hi - lo;
+        // The split runs from corner 0 to corner 2: the main diagonal when they differ the same way in x and z.
+        const bool main = (c[0].x - c[2].x) * (c[0].z - c[2].z) > 0.0;
+        if (first)
+        {
+            if (size.x <= 1e-3 || size.y <= 1e-3)
+                return false;
+            out = {origin, size, main};
+            first = false;
+        }
+        const double tol = 1e-3 * std::min(out.cell.x, out.cell.y);
+        if (std::abs(size.x - out.cell.x) > tol || std::abs(size.y - out.cell.y) > tol || main != out.mainDiagonal)
+            return false;
+        for (size_t k = 0; k < 4; ++k)
+            if ((std::abs(c[k].x - lo.x) > tol && std::abs(c[k].x - hi.x) > tol) || (std::abs(c[k].z - lo.y) > tol && std::abs(c[k].z - hi.y) > tol))
+                return false;
+        const Vec2 at = (lo - origin) / out.cell;
+        if (std::abs(at.x - std::round(at.x)) * out.cell.x > tol || std::abs(at.y - std::round(at.y)) * out.cell.y > tol)
+            return false;
+    }
+    return !first;
 }
 
 Ground Ground::fromMesh(const geo::Mesh& mesh, double cell, int maxSide)
@@ -257,7 +361,14 @@ Ground Ground::fromMesh(const geo::Mesh& mesh, double cell, int maxSide)
         for (size_t k = 1; k + 1 < pts.size(); ++k)
             put(mesh.position(pts[0]), mesh.position(pts[k]), mesh.position(pts[k + 1]));
     }
-    g.mBvh = std::make_shared<const geo::MeshBvh>(mesh);
+    // Quads split from their first corner, as the grid above and the heightfield renderer split them: a ribbon draped on the
+    // shorter diagonal sinks under the terrain drawn wherever the two differ.
+    g.mHasLattice = findLattice(mesh, {b.min.x, b.min.z}, g.mLattice);
+    geo::TriangulateOptions split;
+    split.quads = geo::QuadSplit::FirstCorner;
+    auto bvh = std::make_shared<geo::MeshBvh>();
+    bvh->build(mesh, geo::triangulate(mesh, split));
+    g.mBvh = std::move(bvh);
     g.mTop = b.max.y + 100.0;
     g.mDepth = (b.max.y - b.min.y) + 200.0;
     g.mPlane = b.min.y;

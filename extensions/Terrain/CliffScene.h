@@ -17,6 +17,8 @@ inline constexpr const char* kCliffsNode = "Cliffs";
 
 /** The ground the Terrain Cliffs node of a modifier saw on its last evaluation, before any cliff edit. */
 void publishGround(uint64_t modifier, std::shared_ptr<const Heightfield> h);
+/** Forgets the grounds and results of modifiers no longer in the scene. */
+void forgetGoneCliffs();
 std::shared_ptr<const Heightfield> publishedGround(uint64_t modifier);
 
 /** What a cliff node of a modifier reported on its last evaluation; null before one. */

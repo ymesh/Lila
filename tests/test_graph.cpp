@@ -4,10 +4,12 @@
 
 #include "TestUtil.h"
 
+#include "core/Release.h"
 #include "ops/Command.h"
 #include "ops/Undo.h"
 #include "scene/Graph.h"
 #include "scene/Naming.h"
+#include "scene/Node.h"
 #include "scene/Rig.h"
 #include "scene/Transform.h"
 #include "scene/TransformOps.h"
@@ -190,6 +192,43 @@ TEST_CASE("scene save/load round trip")
     CHECK(run("getAttr", {{"args", {"B.rotateOrder"}}}) == 2);
     CHECK(ops::execute("undoInfo", json::object())["undo"].get<std::string>().empty());
     CHECK(io::serialize() == doc);
+}
+
+TEST_CASE("a scene opened for a view computes all of itself in the load, timing each node")
+{
+    run("newScene");
+    run("spaceLocator", {{"name", "A"}});
+    run("polyCube", {{"name", "box"}});
+    run("parent", {{"args", {"box", "A"}}});
+    const json doc = io::serialize();
+    auto computedAll = [] {
+        const scene::Graph& g = scene::Graph::current();
+        for (scene::NodeId id : g.nodes())
+            if (g.node(id)->lastComputeUs() == scene::Node::kUnknownCost)
+                return false;
+        return true;
+    };
+    run("newScene");
+    io::deserialize(doc);
+    CHECK(!computedAll());
+    io::setEvaluateOnLoad(true);
+    run("newScene");
+    io::deserialize(doc);
+    io::setEvaluateOnLoad(false);
+    CHECK(computedAll());
+    CHECK(run("listRelatives", {{"args", {"A"}}}) == json::array({"box"}));
+}
+
+TEST_CASE("the releaser counts the values it has finished freeing")
+{
+    release::drain();
+    const uint64_t before = release::finished();
+    release::later(std::vector<int>(1000, 1));
+    std::vector<std::vector<int>> many(50, std::vector<int>(100, 2));
+    release::laterEach(std::move(many));
+    release::drain();
+    CHECK(release::finished() == before + 2);
+    CHECK(release::pending() == 0);
 }
 
 TEST_CASE("parent chain follows selection order")

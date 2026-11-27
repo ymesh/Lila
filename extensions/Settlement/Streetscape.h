@@ -136,8 +136,8 @@ struct FurniturePlacement
 
 /**
  * Furniture along every road from its profile's set, signals at signalised junctions (one per vehicle approach), stop
- * and yield signs by junction control, a street-name sign per junction, and squares furnished (medieval: a well, market
- * stalls and carts; modern: benches, trees and bollards).
+ * and yield signs by junction control, a street-name sign per junction, squares furnished (medieval: a well, market
+ * stalls and carts; modern: benches, trees and bollards), and trees in parks and yards (the sets named park and yard).
  */
 std::vector<FurniturePlacement> placeFurniture(const Layout& l, const RoadNetwork& net, const Ground& ground, const std::vector<FurnitureSet>& sets);
 

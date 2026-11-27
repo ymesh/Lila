@@ -167,6 +167,37 @@ TEST_CASE("telemetry sessions left by a gone process become crashed session ends
     CHECK(p["command_sources"]["ui"] == 1);
     CHECK(p["command_sources"]["python"] == 1);
     CHECK(p["$geoip_disable"] == true);
+    CHECK(e["uuid"].get<std::string>().size() == 36);
+    CHECK(tel::sessionEndEvent(stale[0], "install", true)["uuid"] != e["uuid"]);
+}
+
+TEST_CASE("telemetry keeps a crashed session end for the watchdog and clears it with the session")
+{
+    fs::path dir = telemetryDir("crash-events");
+    tel::Store store(dir);
+    tel::Session s;
+    s.id = "c";
+    s.pid = 444;
+    store.writeSession(s);
+    store.writeCrashEvent(s.pid, "http://127.0.0.1:1/e", tel::sessionEndEvent(s, "install", true));
+    fs::path pending = dir / crash::upload::kCrashEventsDir / "444.json";
+    REQUIRE(fs::exists(pending));
+
+#ifdef _WIN32
+    // Nothing listens there: a failed send keeps both files, so the next start still counts the crash.
+    CHECK_FALSE(crash::upload::sendCrashedSession(dir, 444));
+    CHECK(fs::exists(pending));
+    CHECK(fs::exists(dir / "sessions" / "444.json"));
+    CHECK_FALSE(crash::upload::sendCrashedSession(dir, 555));
+#endif
+
+    store.removeSession(444);
+    CHECK_FALSE(fs::exists(pending));
+
+    store.writeSession(s);
+    store.writeCrashEvent(s.pid, "http://127.0.0.1:1/e", tel::sessionEndEvent(s, "install", true));
+    CHECK(store.takeStaleSessions(1, [](int64_t, int64_t) { return false; }).size() == 1);
+    CHECK_FALSE(fs::exists(pending));
 }
 
 TEST_CASE("crash report upload strips identifying details")

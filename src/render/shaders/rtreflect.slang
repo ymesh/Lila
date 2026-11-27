@@ -25,8 +25,11 @@ struct TraceInstance
     float4 rows[3];
     uint64_t sections; // TraceSection per material section, in triangle order
     uint sectionCount;
-    uint pad;
+    uint tint; // instance colour, unorm rgba8: linear rgb, amount
 };
+
+static const uint kTraceInstanceColor = 1 << 0;
+static const uint kTraceBaseColorMap = 1 << 1;
 
 /** A section's material for hit shading; matches render::TraceSection. */
 struct TraceSection
@@ -34,7 +37,7 @@ struct TraceSection
     uint endTriangle; // one past its last triangle
     float roughness;
     float metallic;
-    float pad;
+    uint flags;       // kTraceInstanceColor, kTraceBaseColorMap
     float4 baseColor; // linear
     float4 emissive;  // linear
 };
@@ -153,6 +156,11 @@ float3 shadeHit(uint instance, uint primitive, float2 bary, float3 P, float3 ray
         m = sections[s];
         if (primitive < m.endTriangle)
             break;
+    }
+    if ((m.flags & kTraceInstanceColor) != 0 && ti.tint >= 0x01000000)
+    {
+        const float4 tint = unpackUnorm4x8ToFloat(ti.tint);
+        m.baseColor.rgb = lerp(m.baseColor.rgb, (m.flags & kTraceBaseColorMap) != 0 ? m.baseColor.rgb * tint.rgb : tint.rgb, tint.a);
     }
     // One bounce: diffuse from the environment and lights, and the hit's own reflection of the environment alone.
     float metal = saturate(m.metallic);

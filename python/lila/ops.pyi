@@ -2063,7 +2063,7 @@ def createGroom(*objects: Any, guides: str | None = None, count: int | None = No
         sides: Points around each lock.
     """
 
-def createMaterial(*objects: Any, baseColor: Sequence[float] | None = None, metallic: float | None = None, roughness: float | None = None, specular: float | None = None, emissive: Sequence[float] | None = None, emissiveIntensity: float | None = None, opacity: float | None = None, opacityMaskClipValue: float | None = None, blendMode: Any | None = None, twoSided: bool | None = None, uvSet: int | None = None, normalFormat: Any | None = None, flipGreen: bool | None = None, baseColorMap: str | None = None, metallicMap: str | None = None, roughnessMap: str | None = None, normalMap: str | None = None, ambientOcclusionMap: str | None = None, ormMap: str | None = None, packedLayout: Any | None = None, emissiveMap: str | None = None, shadingModel: Any | None = None, painterlyStrength: float | None = None, strokeNormal: float | None = None, strokeScale: float | None = None, strokeLayerRatio: float | None = None, strokeMapping: Any | None = None, strokeMap: str | None = None, paletteCount: int | None = None, paletteShadow: Sequence[float] | None = None, paletteLight: Sequence[float] | None = None, paletteAccent: Sequence[float] | None = None, paletteContrast: float | None = None, paletteSpread: float | None = None, specularTint: float | None = None, boil: bool | None = None, boilFps: float | None = None, toonShadowColor: Sequence[float] | None = None, toonLightTint: Sequence[float] | None = None, toonThreshold: float | None = None, toonSoftness: float | None = None, toonOuterOffset: float | None = None, toonOuterColor: Sequence[float] | None = None, rimColor: Sequence[float] | None = None, rimWidth: float | None = None, rimStrength: float | None = None, foliageBottomColor: Sequence[float] | None = None, foliageTopColor: Sequence[float] | None = None, foliageGradient: float | None = None, foliageBottomShadow: float | None = None, foliageTopHighlight: float | None = None, foliageTranslucency: float | None = None, foliageWrap: float | None = None, subsurfaceColor: Sequence[float] | None = None, subsurfaceAmount: float | None = None, sheenColor: Sequence[float] | None = None, sheenRoughness: float | None = None, clearcoat: float | None = None, clearcoatRoughness: float | None = None, anisotropy: float | None = None, anisotropyRotation: float | None = None, hairShift: float | None = None, irisRadius: float | None = None, irisDepth: float | None = None, limbalRing: float | None = None, bevelRadius: float | None = None, heightMap: str | None = None, normalFromHeight: bool | None = None, heightDepth: float | None = None, heightUvWidth: float | None = None, heightUvHeight: float | None = None, baseColorMapWrapU: Any | None = None, baseColorMapWrapV: Any | None = None, baseColorMapFilter: Any | None = None, baseColorMapColorSpace: Any | None = None, metallicMapWrapU: Any | None = None, metallicMapWrapV: Any | None = None, metallicMapFilter: Any | None = None, metallicMapColorSpace: Any | None = None, roughnessMapWrapU: Any | None = None, roughnessMapWrapV: Any | None = None, roughnessMapFilter: Any | None = None, roughnessMapColorSpace: Any | None = None, normalMapWrapU: Any | None = None, normalMapWrapV: Any | None = None, normalMapFilter: Any | None = None, normalMapColorSpace: Any | None = None, ambientOcclusionMapWrapU: Any | None = None, ambientOcclusionMapWrapV: Any | None = None, ambientOcclusionMapFilter: Any | None = None, ambientOcclusionMapColorSpace: Any | None = None, ormMapWrapU: Any | None = None, ormMapWrapV: Any | None = None, ormMapFilter: Any | None = None, ormMapColorSpace: Any | None = None, emissiveMapWrapU: Any | None = None, emissiveMapWrapV: Any | None = None, emissiveMapFilter: Any | None = None, emissiveMapColorSpace: Any | None = None, baseColorMapOcioSpace: str | None = None, emissiveMapOcioSpace: str | None = None, textureSet: str | None = None, volumeDensity: float | None = None, volumeScatterColor: Sequence[float] | None = None, volumeAbsorptionColor: Sequence[float] | None = None, volumeAnisotropy: float | None = None, volumeEmissionColor: Sequence[float] | None = None, volumeEmissionStrength: float | None = None, volumeVoxelSize: float | None = None, volumeNoise: float | None = None, volumeNoiseScale: float | None = None, volumeNoiseDetail: float | None = None, volumeNoiseRoughness: float | None = None, volumeNoiseCoverage: float | None = None, volumeNoiseOffset: Sequence[float] | None = None, volumeEdgeFade: float | None = None, bc: Sequence[float] | None = None) -> Any:
+def createMaterial(*objects: Any, baseColor: Sequence[float] | None = None, metallic: float | None = None, roughness: float | None = None, specular: float | None = None, emissive: Sequence[float] | None = None, emissiveIntensity: float | None = None, opacity: float | None = None, opacityMaskClipValue: float | None = None, blendMode: Any | None = None, twoSided: bool | None = None, uvSet: int | None = None, normalFormat: Any | None = None, flipGreen: bool | None = None, baseColorMap: str | None = None, metallicMap: str | None = None, roughnessMap: str | None = None, normalMap: str | None = None, ambientOcclusionMap: str | None = None, ormMap: str | None = None, packedLayout: Any | None = None, emissiveMap: str | None = None, shadingModel: Any | None = None, painterlyStrength: float | None = None, strokeNormal: float | None = None, strokeScale: float | None = None, strokeLayerRatio: float | None = None, strokeMapping: Any | None = None, strokeMap: str | None = None, paletteCount: int | None = None, paletteShadow: Sequence[float] | None = None, paletteLight: Sequence[float] | None = None, paletteAccent: Sequence[float] | None = None, paletteContrast: float | None = None, paletteSpread: float | None = None, specularTint: float | None = None, boil: bool | None = None, boilFps: float | None = None, toonShadowColor: Sequence[float] | None = None, toonLightTint: Sequence[float] | None = None, toonThreshold: float | None = None, toonSoftness: float | None = None, toonOuterOffset: float | None = None, toonOuterColor: Sequence[float] | None = None, rimColor: Sequence[float] | None = None, rimWidth: float | None = None, rimStrength: float | None = None, foliageBottomColor: Sequence[float] | None = None, foliageTopColor: Sequence[float] | None = None, foliageGradient: float | None = None, foliageBottomShadow: float | None = None, foliageTopHighlight: float | None = None, foliageTranslucency: float | None = None, foliageWrap: float | None = None, subsurfaceColor: Sequence[float] | None = None, subsurfaceAmount: float | None = None, sheenColor: Sequence[float] | None = None, sheenRoughness: float | None = None, clearcoat: float | None = None, clearcoatRoughness: float | None = None, anisotropy: float | None = None, anisotropyRotation: float | None = None, hairShift: float | None = None, irisRadius: float | None = None, irisDepth: float | None = None, limbalRing: float | None = None, bevelRadius: float | None = None, heightMap: str | None = None, normalFromHeight: bool | None = None, heightDepth: float | None = None, heightUvWidth: float | None = None, heightUvHeight: float | None = None, baseColorMapWrapU: Any | None = None, baseColorMapWrapV: Any | None = None, baseColorMapFilter: Any | None = None, baseColorMapColorSpace: Any | None = None, metallicMapWrapU: Any | None = None, metallicMapWrapV: Any | None = None, metallicMapFilter: Any | None = None, metallicMapColorSpace: Any | None = None, roughnessMapWrapU: Any | None = None, roughnessMapWrapV: Any | None = None, roughnessMapFilter: Any | None = None, roughnessMapColorSpace: Any | None = None, normalMapWrapU: Any | None = None, normalMapWrapV: Any | None = None, normalMapFilter: Any | None = None, normalMapColorSpace: Any | None = None, ambientOcclusionMapWrapU: Any | None = None, ambientOcclusionMapWrapV: Any | None = None, ambientOcclusionMapFilter: Any | None = None, ambientOcclusionMapColorSpace: Any | None = None, ormMapWrapU: Any | None = None, ormMapWrapV: Any | None = None, ormMapFilter: Any | None = None, ormMapColorSpace: Any | None = None, emissiveMapWrapU: Any | None = None, emissiveMapWrapV: Any | None = None, emissiveMapFilter: Any | None = None, emissiveMapColorSpace: Any | None = None, baseColorMapOcioSpace: str | None = None, emissiveMapOcioSpace: str | None = None, textureSet: str | None = None, volumeDensity: float | None = None, volumeScatterColor: Sequence[float] | None = None, volumeAbsorptionColor: Sequence[float] | None = None, volumeAnisotropy: float | None = None, volumeEmissionColor: Sequence[float] | None = None, volumeEmissionStrength: float | None = None, volumeVoxelSize: float | None = None, volumeNoise: float | None = None, volumeNoiseScale: float | None = None, volumeNoiseDetail: float | None = None, volumeNoiseRoughness: float | None = None, volumeNoiseCoverage: float | None = None, volumeNoiseOffset: Sequence[float] | None = None, volumeEdgeFade: float | None = None, instanceColor: bool | None = None, instanceColor2: bool | None = None, bc: Sequence[float] | None = None) -> Any:
     """Create a material (Unreal default lit inputs). Faces use it through a slot of the same name. Returns its name.
 
     Args:
@@ -2184,6 +2184,8 @@ def createMaterial(*objects: Any, baseColor: Sequence[float] | None = None, meta
         volumeNoiseCoverage: Volume: share of the space the noise fills; 0 clears it, 1 fills it.
         volumeNoiseOffset: Volume: moves the noise through the volume, cm; key it for drifting clouds.
         volumeEdgeFade: Volume: depth inside a filled mesh over which density fades in from its surface, cm; 0 is a hard edge.
+        instanceColor: Shows the colour instances carry (container liveries, building palettes): it replaces the base colour, or tints the base colour map. Off keeps this material's own colour on coloured instances.
+        instanceColor2: Takes the instances' second colour (their color2) instead of the first: the other tone of a two-tone piece, such as a building's trim against its walls.
     """
 
 def createMesh(points: Sequence[Any] | None = None, faces: Sequence[Any] | None = None, uvs: Sequence[Any] | None = None, name: str | None = None, *, n: str | None = None) -> Any:
@@ -3535,6 +3537,22 @@ def fairCurve(*objects: Any, tolerance: float | None = None, keepTangents: bool 
         keepTangents: Keep the end tangents' directions. Short form kt. Default True.
         keepCorners: Leave corners sharp and in place. Short form kc. Default True.
         iterations: Most smoothing passes. Short form it. Default 200.
+    """
+
+def fictionalName(culture: str | None = None, kind: str | None = None, program: str | None = None, key: str | None = None, streetClass: int | None = None, *, cu: str | None = None, k: str | None = None, pg: str | None = None, ky: str | None = None, sc: int | None = None) -> Any:
+    """A fictional name from a naming culture, the same every time for the same culture, kind, program and key. Never one that matches the brand blocklist or a real name an import in the scene replaced. Returns the name and the key used.
+
+    Args:
+        culture: Naming culture (namingCultures). Short form cu. Default 'mexican'.
+        kind: What is named: street, district, town, river, lake, reservoir, dam, island, beach, port, airport, cemetery, school, hospital, government, business, ... Short form k. Default 'business'.
+        program: For businesses and buildings: what they are (pharmacy, taqueria, carParts, ...). Short form pg.
+        key: Stable key: a number or any text (an id). Short form ky. Default '1'.
+        streetClass: Streets: 0 arterial, 1 collector, 2 local, 3 alley, 4 path. Short form sc. Default 2.
+
+    Examples:
+        fictionalName(culture='mexican', kind='business', program='taqueria', key='node/123')['name']
+
+        fictionalName(kind='river', key=42)
     """
 
 def field(*objects: Any, shape: str | None = None, position: Sequence[float] | None = None, radius: float | None = None, name: str | None = None) -> Any:
@@ -6155,6 +6173,13 @@ def namingConvention(*objects: Any, enable: bool | None = None, mode: str | None
         fix: Rename every node that breaks the rules. Short form f. Default False.
     """
 
+def namingCultures() -> Any:
+    """The naming cultures imports and settlements name things in, each with the vocabulary its businesses and places are named from, the kinds of named things, and the business programs with patterns of their own.
+
+    Examples:
+        namingCultures()['cultures']
+    """
+
 def newScene() -> Any:
     """Clear the scene. Not undoable."""
 
@@ -7538,6 +7563,21 @@ def rangeOfMotion(*objects: Any, angle: float | None = None, axes: str | None = 
         randomPoses: Poses turning every joint at once by a random amount within angle. Default 0.
         seed: Seed of the random poses. Default 1.
         name: Name of the take; <root>_ROM by default. Short form n.
+    """
+
+def realNameCheck(texts: Sequence[Any] | None = None, scene: bool | None = None, report: bool | None = None, *, tx: Sequence[Any] | None = None, sn: bool | None = None, rp: bool | None = None) -> Any:
+    """Finds output text that matches a real name: names written by imports and generators (osmFeatures, osmBuildings, osmPlaces, sign text, labels), node names, and any texts given, compared with the real names imports replaced (kept in hidden sourceNames attributes) and the brand blocklist (OpenStreetMap name-suggestion-index). Node names are compared with imported names only. report=True lists each leak in the Validation panel on its node. Returns ok, the leaks (where, text, the real name, where that came from) and how many real names were compared.
+
+    Args:
+        texts: Extra texts to check: strings, or {where, text}. Short form tx.
+        scene: Check the scene's names and name attributes too. Short form sn. Default True.
+        report: Also list leaks in the Validation panel (replacing this check's earlier ones). Short form rp. Default False.
+
+    Examples:
+        c = realNameCheck()
+        c['ok'], c['leaks']
+
+        realNameCheck(texts=['Farmacias Similares'], scene=False)
     """
 
 def rebindDeformer(*objects: Any) -> Any:
@@ -9745,6 +9785,152 @@ def slideMedia(*objects: Any, frames: float | None = None, f: float | None = Non
 
     Examples:
         slideMedia('shot010', 'shot010Ref', frames=-6)
+    """
+
+def slotFind(type: str | None = None, region: str | None = None, tag: Any | None = None, owner: str | None = None, id: Any | None = None, rule: str | None = None, near: Sequence[Any] | None = None, radius: float | None = None, limit: int | None = None, full: bool | None = None, select: bool | None = None, *, t: str | None = None, r: str | None = None, tg: Any | None = None, o: str | None = None, ru: str | None = None, n: Sequence[Any] | None = None, rad: float | None = None, l: int | None = None, f: bool | None = None, sl: bool | None = None) -> Any:
+    """Find slots by type, region, tag, owner, rule or distance, with each one's resolved payload and what decided it (default, rule:<id>, override, pin). select=True selects the nodes publishing them.
+
+    Args:
+        type: Type pattern: "door" covers every door, "door.*" only the subtypes, a comma list any. Short form t.
+        region: A region the slot lies in ("settlement:Town", "district:" for any district). Short form r.
+        tag: Tags the slot must all carry (one or a list). Short form tg.
+        owner: Owner id or a prefix of it ("lot/1a2b"). Short form o.
+        id: Exact slot ids (one or a list).
+        rule: Only slots this rule applies to. Short form ru.
+        near: [x, y, z]: nearest first (with radius, only within it). Short form n.
+        radius: With near: furthest distance, cm; 0 for any. Short form rad. Default 0.0.
+        limit: Most slots listed, 0 for all; count is always the full number. Short form l. Default 500.
+        full: Add regions, tags, default payload and matrix. Short form f. Default False.
+        select: Select the nodes publishing them. Short form sl. Default False.
+
+    Examples:
+        slotFind(type='sign.storefront', region='district:', limit=10)
+
+        slotFind(near=[0, 0, 0], radius=5000, select=True)
+    """
+
+def slotLoadItems() -> Any:
+    """Load the Set Dressing library items the scene's slots name (rules, overrides, pins, pools, pool tags and the slots' own payloads) so they draw as themselves rather than placeholders. Runs by itself when a scene opens with named items not loaded yet. Returns {loaded: [item ids], missing: [{item, why}]} (missing: no such library item, or its model brought in nothing).
+
+    Examples:
+        slotLoadItems()
+    """
+
+def slotPin(*objects: Any, owner: str | None = None, swappable: bool | None = None, remove: bool | None = None, o: str | None = None, sw: bool | None = None, rm: bool | None = None) -> Any:
+    """Pin slots, or every slot of an owner (a building, block or arrangement), as they are now: regenerating leaves them where they are with what they show, and differences are reported as conflicts. With no key, lists the pins.
+
+    Args:
+        objects: slot id, or owner:<owner id>.
+        owner: Pin every slot of this owner (same as owner:<id>). Short form o.
+        swappable: Hold off regeneration only: rules and overrides still swap what the slots show. Short form sw. Default False.
+        remove: Unpin. Short form rm. Default False.
+
+    Examples:
+        slotPin('owner:settlement:Town/lot/1a2b')
+
+        slotPin('b/12/f0/door0', remove=True)
+
+        slotPin()
+    """
+
+def slotPublish(*objects: Any, slots: Sequence[Any] | None = None, parent: str | None = None, source: str | None = None, s: Sequence[Any] | None = None, p: str | None = None, src: str | None = None) -> Any:
+    """Write slots into a slotSet node (made under parent when missing), for scripts and generators without nodes of their own. Each slot: {id | owner + path, type, matrix (16, column-major) | position [x, y, z] + rotateY degrees, regions, tags, payload}. Pinned slots keep their pinned frame.
+
+    Args:
+        objects: slotSet name.
+        slots: The slots, world space. Short form s.
+        parent: Node to put a new slotSet under. Short form p.
+        source: What wrote them (shown on the node). Short form src.
+
+    Examples:
+        slotPublish('shopSlots', slots=[{'owner': 'lot/7', 'path': 'f0/door', 'type': 'door.shop', 'position': [0, 0, 500]}])
+    """
+
+def slotReport(validate: bool | None = None, *, v: bool | None = None) -> Any:
+    """Counts of slots per type, rule and owner, the rules with how many slots each covers, orphaned overrides (with the nearest slot of their type to reassign to), pin conflicts, duplicate ids, unregistered types and payloads that fell back to placeholders. validate=True also lists them in the Validation panel.
+
+    Args:
+        validate: Report problems to the Validation panel too. Short form v. Default True.
+
+    Examples:
+        r = slotReport()
+        r['byType'], r['orphans']
+    """
+
+def slotRule(*objects: Any, id: str | None = None, name: str | None = None, level: str | None = None, type: str | None = None, region: str | None = None, owner: str | None = None, tag: Sequence[Any] | None = None, enabled: bool | None = None, index: int | None = None, rule: Any | None = None, replacePayload: bool | None = None, item: str | None = None, pool: Sequence[Any] | None = None, poolTag: str | None = None, mesh: str | None = None, placeholder: str | None = None, unrealMesh: str | None = None, unrealClass: str | None = None, hidden: bool | None = None, data: Any | None = None, nm: str | None = None, lv: str | None = None, t: str | None = None, r: str | None = None, o: str | None = None, tg: Sequence[Any] | None = None, en: bool | None = None, ix: int | None = None, rl: Any | None = None, rp: bool | None = None, it: str | None = None, pl: Sequence[Any] | None = None, pt: str | None = None, ms: str | None = None, ph: str | None = None, um: str | None = None, uc: str | None = None, hd: bool | None = None, dt: Any | None = None) -> Any:
+    """Add, edit, remove, move or list swap rules. A rule gives every slot it covers its payload (an item, a variant pool, a mesh, an Unreal class, data); rules apply global, then region, then owner, each in list order, then per-slot overrides. Rules are saved in the scene; every change undoes.
+
+    Args:
+        objects: action: add | edit | remove | move | list.
+        id: The rule (edit, remove, move); add takes it as the new rule's id.
+        name: A label for the rule. Short form nm.
+        level: global, region or owner: rules apply in that order, then overrides. Short form lv. One of 'global', 'region', 'owner'.
+        type: Type pattern the rule covers ("sign.storefront", "door", "*"). Short form t.
+        region: Region rule: a region slots list ("district:3", "settlement:Town"). Short form r.
+        owner: Owner rule: an owner id or its prefix (a building, lot, street). Short form o.
+        tag: Slots must carry every tag. Short form tg.
+        enabled: Switch the rule on or off. Short form en.
+        index: Position in the list (add, move); -1 for the end. Short form ix. Default -1.
+        rule: The whole rule as JSON ({level, type, region, owner, tags, payload, enabled}). Short form rl.
+        replacePayload: edit: start the payload over instead of overlaying the given fields. Short form rp. Default False.
+        item: Library item id (Set Dressing library, "Collection/Asset"). Short form it.
+        pool: Variant pool: item ids, one picked per slot by its id. Short form pl.
+        poolTag: Variant pool from library tags ("fictional_signs", "a+b" for both). Short form pt.
+        mesh: A scene mesh (or group of meshes) drawn and exported in place of the slot. Short form ms.
+        placeholder: A shipped stand-in shape sized to the type's footprint. Short form ph. One of 'box', 'panel', 'door', 'window', 'sign', 'awning', 'pole', 'lamp', 'tree', 'palm', 'bush', 'plant', 'cylinder', 'cone', 'row'.
+        unrealMesh: Unreal static mesh path for instanced placement ("/Game/Props/SM_Door"). Short form um.
+        unrealClass: Unreal actor class spawned per slot ("/Game/BP/BP_Door.BP_Door_C"); "-" clears it. Short form uc.
+        hidden: Remove the part (true) or bring it back (false). Short form hd.
+        data: Gameplay key/values merged into the slot's data ({"locked": true}); a null value removes a key. Short form dt.
+
+    Examples:
+        slotRule('add', type='sign.storefront', poolTag='fictional_signs', name='Fictional signs')
+
+        slotRule('add', level='region', region='district:3', type='door.shop', unrealClass='/Game/BP/BP_ShopDoor.BP_ShopDoor_C')
+
+        slotRule('edit', id='r1', enabled=False)
+
+        slotRule('remove', id='r1')
+    """
+
+def slotSet(id: Any | None = None, clear: bool | None = None, remove: bool | None = None, reassign: str | None = None, item: str | None = None, pool: Sequence[Any] | None = None, poolTag: str | None = None, mesh: str | None = None, placeholder: str | None = None, unrealMesh: str | None = None, unrealClass: str | None = None, hidden: bool | None = None, data: Any | None = None, *, cl: bool | None = None, rm: bool | None = None, ra: str | None = None, it: str | None = None, pl: Sequence[Any] | None = None, pt: str | None = None, ms: str | None = None, ph: str | None = None, um: str | None = None, uc: str | None = None, hd: bool | None = None, dt: Any | None = None) -> Any:
+    """Override slots by id: the payload fields given replace what rules gave (item, pool, mesh, Unreal class), data merges key by key. Overrides are keyed by the stable slot id, so they survive regenerating the generator; one whose slot disappears is reported as an orphan (Validation panel) and can be reassigned.
+
+    Args:
+        id: Slot ids (one or a list).
+        clear: Start the override over before applying the given fields. Short form cl. Default False.
+        remove: Drop the override: the slot goes back to its rules. Short form rm. Default False.
+        reassign: Move an orphaned override from id to this slot id. Short form ra.
+        item: Library item id (Set Dressing library, "Collection/Asset"). Short form it.
+        pool: Variant pool: item ids, one picked per slot by its id. Short form pl.
+        poolTag: Variant pool from library tags ("fictional_signs", "a+b" for both). Short form pt.
+        mesh: A scene mesh (or group of meshes) drawn and exported in place of the slot. Short form ms.
+        placeholder: A shipped stand-in shape sized to the type's footprint. Short form ph. One of 'box', 'panel', 'door', 'window', 'sign', 'awning', 'pole', 'lamp', 'tree', 'palm', 'bush', 'plant', 'cylinder', 'cone', 'row'.
+        unrealMesh: Unreal static mesh path for instanced placement ("/Game/Props/SM_Door"). Short form um.
+        unrealClass: Unreal actor class spawned per slot ("/Game/BP/BP_Door.BP_Door_C"); "-" clears it. Short form uc.
+        hidden: Remove the part (true) or bring it back (false). Short form hd.
+        data: Gameplay key/values merged into the slot's data ({"locked": true}); a null value removes a key. Short form dt.
+
+    Examples:
+        slotSet(id='settlement:Town/st1a2b/lamp-3c', item='Street/LampOld')
+
+        slotSet(id=['b/12/f0/door0'], unrealClass='/Game/BP/BP_Door.BP_Door_C', data={'locked': True, 'missionId': 'm04'})
+
+        slotSet(id='old/id', reassign='new/id')
+    """
+
+def slotTypes(*objects: Any, tag: str | None = None, add: Any | None = None, tg: str | None = None, a: Any | None = None) -> Any:
+    """The slot types: id, label, tags, footprint (cm, width/height/depth), attach frame and placeholder shape. Types are dotted, most general first (door.shop is a door); rules naming door cover every door type.
+
+    Args:
+        objects: type pattern.
+        tag: Only types carrying this tag. Short form tg.
+        add: Register a type for this session: {id, label, tags, footprint [w, h, d], attach, placeholder, doc}. Extensions register theirs in code so they come back on load. Short form a.
+
+    Examples:
+        slotTypes('door')
+
+        slotTypes(add={'id': 'sign.neon', 'footprint': [200, 60, 10], 'attach': 'wall', 'placeholder': 'sign'})
     """
 
 def smartJoin(*objects: Any, segments: int | None = None, tension: float | None = None, twist: int | None = None, holeScale: float | None = None, offsetU: float | None = None, offsetV: float | None = None, limbLoop: int | None = None, deleteBuried: bool | None = None, relax: int | None = None, trimMargin: float | None = None, keepOriginals: bool | None = None, flip: bool | None = None, name: str | None = None) -> Any:
@@ -11970,19 +12156,23 @@ def unrealMorphPaths(*objects: Any, skeletalMesh: str | None = None, postProcess
         dryRun: Return what would be sent without connecting to Unreal. Short form dry. Default False.
     """
 
-def unrealPlaceInstances(*objects: Any, folder: str | None = None, mode: str | None = None, threshold: int | None = None, lightingChannels: bool | None = None, collision: str | None = None, nanite: bool | None = None, hlodLayer: str | None = None, validate: bool | None = None, dryRun: bool | None = None, wait: bool | None = None, f: str | None = None, m: str | None = None, t: int | None = None, lc: bool | None = None, col: str | None = None, na: bool | None = None, hl: str | None = None, va: bool | None = None, w: bool | None = None) -> Any:
-    """Send meshes to Unreal as one static mesh asset per instance source, placed in the open level: an actor per member referencing that asset, or one instanced static mesh component (ISM or HISM) for a large group. Lights among them go as light actors (point, spot, directional, rect; discs as square rect lights, domes skipped). Lighting channels map onto Unreal's three: default is channel 0, the next two channels the sent nodes use (in scene order) 1 and 2; any more are dropped, with a warning naming them, and what is left in none goes on 0. Placements are keyed by each node's linkId, given on the first send and saved with the scene, so sending a group again moves, adds and removes its actors to match, also after a rename or reopening the scene. Validators run first: a blocking issue stops the send, others come back in issues. Returns the plan, with each group's import and placement results when wait=True.
+def unrealPlaceInstances(*objects: Any, folder: str | None = None, mode: str | None = None, threshold: int | None = None, lightingChannels: bool | None = None, collision: str | None = None, nanite: bool | None = None, naniteOffMaterials: Sequence[Any] | None = None, hlodLayer: str | None = None, linkedHlodLayer: str | None = None, resend: bool | None = None, validate: bool | None = None, slotTable: str | None = None, dryRun: bool | None = None, wait: bool | None = None, f: str | None = None, m: str | None = None, t: int | None = None, lc: bool | None = None, col: str | None = None, na: bool | None = None, nom: Sequence[Any] | None = None, hl: str | None = None, lhl: str | None = None, rs: bool | None = None, va: bool | None = None, stb: str | None = None, w: bool | None = None) -> Any:
+    """Send meshes to Unreal as one static mesh asset per instance source, placed in the open level: an actor per member referencing that asset, or one instanced static mesh component (ISM or HISM) for a large group. Lights among them go as light actors (point, spot, directional, rect; discs as square rect lights, domes skipped). Lighting channels map onto Unreal's three: default is channel 0, the next two channels the sent nodes use (in scene order) 1 and 2; any more are dropped, with a warning naming them, and what is left in none goes on 0. Placements are keyed by each node's linkId, given on the first send and saved with the scene, so sending a group again moves, adds and removes its actors to match, also after a rename or reopening the scene. Validators run first: a blocking issue stops the send, others come back in issues. Slots (slotSet nodes, Slots geometry nodes) go keyed by slot id: as actors of their payload's Unreal class, instances of its Unreal mesh, or their Lila visual; actors carry the tags LilaSlot:<id>, LilaSlotType:<type> and LilaSlotData:<key>=<value>, and every slot is listed in the slotTable data asset. A slot rule or override change sends the last slot roots again while auto-sync is on. Returns the plan, with each group's import and placement results when wait=True.
 
     Args:
         objects: objects.
         folder: Content folder the assets go in; each is SM_<source name>, with part of the source's link id appended when another mesh in the scene has the same name. The name is saved on the source, so it never changes. Short form f. Default '/Game/Lila/Instances'.
-        mode: How members are placed: actors, ism, hism, or auto (actors up to threshold members, then hism). Short form m. One of 'auto', 'actors', 'ism', 'hism'. Default 'auto'.
+        mode: How members are placed: actors, ism, hism, auto (actors up to threshold members, then hism), or customHlod (World Partition Custom HLOD actors in hlodLayer, shown while their cell is unloaded: HLOD proxies). Short form m. One of 'auto', 'actors', 'ism', 'hism', 'customHlod'. Default 'auto'.
         threshold: auto switches to hism above this many members (default the unreal pref /instanceThreshold, 50). Short form t.
         lightingChannels: Set the actors' and lights' Lighting Channels from Lila's channels. The plan's lightingChannels lists the channels, lights and objects, the Unreal slot of each channel and any dropped. Short form lc. Default True.
         collision: Collision the assets get: auto (ucx for a source with UCX_ children or a Stagehand body's hulls, else complexAsSimple), none (the placed actors and instances don't collide either), box, convex (Unreal's auto convex decomposition), complexAsSimple (the render mesh) or ucx (the hulls only; a source's UCX_ child meshes go with it, and its other children into the asset too). Short form col. One of 'auto', 'none', 'box', 'convex', 'complexAsSimple', 'ucx'. Default 'auto'.
         nanite: Build Nanite data for the assets. Short form na. Default False.
-        hlodLayer: HLOD layer asset path for the placed actors. Short form hl.
+        naniteOffMaterials: With nanite: assets using any of these materials go without Nanite (translucent ones, which Nanite can't draw). Short form nom.
+        hlodLayer: HLOD layer asset path for the placed actors, or none to leave them out of HLOD generation; with mode=customHlod the Custom HLOD Actor layer, made when missing (default /Game/Lila/HLOD/HL_LilaCustom). Short form hl.
+        linkedHlodLayer: mode=customHlod: the HLOD layer whose unloading shows these, or default for the level's default HLOD layer (far proxies). Short form lhl.
+        resend: Send every group, also the ones the level already holds unchanged. Short form rs. Default False.
         validate: Run the validators first: an issue blocking unrealPlaceInstances, "unreal" or "*" on what is sent stops the send; other issues come back in the result's issues. Short form va. Default True.
+        slotTable: Data asset the sent slots are listed in (id, type, owner, class, mesh, data, transform), for game code to look slots up by id. Short form stb. Default '/Game/Lila/Slots/DA_LilaSlotTable'.
         dryRun: Return the plan without exporting or contacting Unreal. Default False.
         wait: Block until Unreal has imported and placed everything. Short form w. Default False.
 

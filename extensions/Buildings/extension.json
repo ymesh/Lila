@@ -1,0 +1,14 @@
+{
+    "id": "Buildings",
+    "name": "Buildings",
+    "version": "0.1.0",
+    "vendor": "Lila",
+    "description": "Procedural buildings from Settlement envelopes, footprints or OSM: styles as JSON, shells on a trim sheet, every window, door, sign and balcony a swappable slot, edits kept by id through regeneration.",
+    "sdk": "1.0",
+    "entry": {
+        "windows": "Buildings.dll",
+        "linux": "Buildings.so",
+        "macos": "Buildings.dylib"
+    },
+    "enabledByDefault": true
+}

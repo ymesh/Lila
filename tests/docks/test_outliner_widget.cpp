@@ -107,3 +107,34 @@ TEST_CASE("outliner lists object sets after the hierarchy, members under them, c
     CHECK(run("ls", {{"selection", true}}) == json({"a", "b"}));
     CHECK_FALSE(set->isSelected());
 }
+
+TEST_CASE("outliner: selection changes inside a command show once the command finishes")
+{
+    run("newScene");
+    run("spaceLocator", {{"name", "a"}});
+    run("spaceLocator", {{"name", "b"}});
+    ui::Outliner o;
+    QApplication::processEvents();
+    static ui::Outliner* probe = nullptr;
+    static bool shownInside = true;
+    probe = &o;
+    if (!ops::find("outlinerSelectProbe"))
+        ops::registerCommand({.name = "outlinerSelectProbe",
+                              .doc = "Probe.",
+                              .undoable = false,
+                              .run = [](const Args&) -> json {
+                                  scene::Graph& g = scene::Graph::current();
+                                  for (int i = 0; i < 50; ++i)
+                                      g.select({g.find(i % 2 ? "a" : "b")->id()});
+                                  shownInside = outlinerRow(*probe, "a")->isSelected();
+                                  return nullptr;
+                              }});
+    run("select", {{"clear", true}});
+    run("outlinerSelectProbe");
+    CHECK_FALSE(shownInside);
+    CHECK(outlinerRow(o, "a")->isSelected());
+    CHECK_FALSE(outlinerRow(o, "b")->isSelected());
+    // Outside a command it follows at once.
+    scene::Graph::current().select({scene::Graph::current().find("b")->id()});
+    CHECK(outlinerRow(o, "b")->isSelected());
+}

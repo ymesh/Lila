@@ -31,7 +31,7 @@ struct HeightPyramid
 /** Quads along a patch side; a heightfield is drawn as patches of kPatch by kPatch quads. */
 constexpr int kHeightfieldPatch = 32;
 constexpr int kHeightfieldMaxLods = 24;
-constexpr int kHeightfieldMaxLayers = 8;
+constexpr int kHeightfieldMaxLayers = 16;
 
 /** One patch to draw: kHeightfieldPatch quads a side, spacing samples apart from origin (samples), at lod. */
 struct HeightfieldPatch
@@ -178,5 +178,6 @@ private:
     compute::Buffer mIndices; // one patch's triangles over its (kHeightfieldPatch + 1)-square vertex grid
     size_t mPatches = 0;
     bool mWarnedMaps = false;
+    bool mWarnedLayers = false;
 };
 } // namespace lila::render

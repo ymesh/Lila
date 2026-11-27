@@ -9,6 +9,7 @@
 #include "core/Paths.h"
 #include "core/PrefStore.h"
 #include "core/Profile.h"
+#include "core/Release.h"
 #include "core/UsdPlugins.h"
 #include "core/Workspace.h"
 #include "extensions/Library.h"
@@ -667,6 +668,9 @@ void ExtensionManager::unload(const std::string& name)
     checkUnloadable(name);
     Loaded& rec = *it->second;
     removeOwned(rec);
+    // Values queued for the releaser may free through the library's code (its destructors, its release pieces).
+    if (rec.lib)
+        release::drain();
     rec.dropLibrary();
 
     const ExtensionKind kind = rec.info.kind;

@@ -164,6 +164,7 @@ void MainWindow::registerPanels()
     registerSceneSettingsPanel();
     issues::registerUi();
     registerOffsetsPanel();
+    registerSlotsUi();
     registerRetargetUi();
     registerNotesPanel();
     registerRenamePanel();

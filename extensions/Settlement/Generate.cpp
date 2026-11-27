@@ -1751,6 +1751,11 @@ Layout build(const Site& site, const Ground& g, const Options& in, const WalkSur
     l.center = freePoint(l, l.center, std::max(p.widthArterial, 500.0));
     for (const Vec2& q : l.outline.pts)
         l.radius = std::max(l.radius, glm::length(q - l.center));
+    if (p.townRadius > 0.0)
+    {
+        l.center = Vec2(p.townCentreX, p.townCentreZ);
+        l.radius = p.townRadius;
+    }
 
     l.graph.addPolyline(l.outline.pts, StreetClass::Boundary, 0, true);
     for (const Polygon& x : l.exclusions)

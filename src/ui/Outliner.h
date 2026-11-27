@@ -98,7 +98,10 @@ private:
     /** RowSource groups that were opened. */
     std::set<std::string> mOpenSources;
     int mListener = 0;
+    int mExecListener = 0;
     bool mQueued = false;
+    /** Selection changes inside a command sync once it finishes, not once per change. */
+    bool mSelectionStale = false;
     bool mRestyleQueued = false;
     std::unordered_set<scene::NodeId> mDirtyRows;
     bool mSyncing = false;

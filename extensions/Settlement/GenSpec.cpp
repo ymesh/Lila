@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <initializer_list>
+#include <limits>
 #include <stdexcept>
 
 namespace settlement
@@ -303,11 +304,113 @@ std::vector<ImportedStreet> streetsFrom(const json& j, const std::string& w)
     std::vector<ImportedStreet> out;
     for (const json& s : j)
     {
-        onlyKeys(s, w, {"points", "class", "name"});
+        onlyKeys(s, w, {"points", "class", "name", "id"});
         ImportedStreet x;
         x.pts = points(s, "points", w, 2);
         x.cls = classFromOsm(text(s, "class", w));
         x.name = text(s, "name", w);
+        x.osmId = text(s, "id", w);
+        out.push_back(std::move(x));
+    }
+    return out;
+}
+
+double heightField(const json& j, const char* key, const std::string& where)
+{
+    if (!j.contains(key) || j[key].is_null())
+        return std::numeric_limits<double>::quiet_NaN();
+    if (!j[key].is_number())
+        bad(where, std::string(key) + " takes a number (cm) or null");
+    return j[key].get<double>();
+}
+
+std::vector<std::vector<Vec2>> ringsFrom(const json& j, const char* key, const std::string& where)
+{
+    std::vector<std::vector<Vec2>> out;
+    if (!j.contains(key))
+        return out;
+    if (!j[key].is_array())
+        bad(where, std::string(key) + " takes a list of rings");
+    for (const json& r : j[key])
+    {
+        std::vector<Vec2> ring;
+        if (!r.is_array())
+            bad(where, std::string(key) + " takes a list of rings");
+        for (const json& p : r)
+            ring.push_back(point(p, where + "." + key));
+        if (ring.size() >= 3)
+            out.push_back(std::move(ring));
+    }
+    return out;
+}
+
+std::vector<OsmBuildingIn> osmBuildingsFrom(const json& j)
+{
+    const std::string w = "osmBuildings";
+    if (!j.is_array())
+        bad(w, "takes a list of buildings {id, outer, holes, ...}");
+    std::vector<OsmBuildingIn> out;
+    out.reserve(j.size());
+    for (const json& b : j)
+    {
+        onlyKeys(b, w, {"id", "outer", "holes", "part", "building", "program", "kind", "name", "height", "minHeight", "roofHeight", "levels",
+                        "minLevel", "roofLevels", "roofShape", "colour", "roofColour", "material", "roofMaterial", "startDate"});
+        OsmBuildingIn x;
+        x.id = text(b, "id", w);
+        if (x.id.empty())
+            bad(w, "every building needs an id");
+        x.outer = points(b, "outer", w, 3);
+        x.holes = ringsFrom(b, "holes", w);
+        x.part = boolean(b, "part", false, w);
+        x.building = text(b, "building", w);
+        x.program = text(b, "program", w);
+        x.kind = text(b, "kind", w);
+        x.name = text(b, "name", w);
+        x.height = heightField(b, "height", w);
+        x.minHeight = heightField(b, "minHeight", w);
+        x.roofHeight = heightField(b, "roofHeight", w);
+        x.levels = int(number(b, "levels", -1.0, w));
+        x.minLevel = int(number(b, "minLevel", -1.0, w));
+        x.roofLevels = int(number(b, "roofLevels", -1.0, w));
+        x.roofShape = text(b, "roofShape", w);
+        x.colour = text(b, "colour", w);
+        x.roofColour = text(b, "roofColour", w);
+        x.material = text(b, "material", w);
+        x.roofMaterial = text(b, "roofMaterial", w);
+        x.startDate = text(b, "startDate", w);
+        out.push_back(std::move(x));
+    }
+    return out;
+}
+
+std::vector<OsmPlaceIn> osmPlacesFrom(const json& j)
+{
+    const std::string w = "osmPlaces";
+    if (!j.is_array())
+        bad(w, "takes a list of places {id, program, kind, name, at or rings}");
+    std::vector<OsmPlaceIn> out;
+    for (const json& p : j)
+    {
+        onlyKeys(p, w, {"id", "key", "value", "program", "kind", "name", "at", "rings"});
+        OsmPlaceIn x;
+        x.id = text(p, "id", w);
+        x.key = text(p, "key", w);
+        x.value = text(p, "value", w);
+        x.program = text(p, "program", w);
+        x.kind = text(p, "kind", w);
+        x.name = text(p, "name", w);
+        x.rings = ringsFrom(p, "rings", w);
+        if (p.contains("at"))
+            x.at = point(p["at"], w + ".at");
+        else if (!x.rings.empty())
+        {
+            Vec2 c(0.0);
+            for (const Vec2& q : x.rings.front())
+                c += q / double(x.rings.front().size());
+            x.at = c;
+        }
+        else
+            bad(w, "a place needs at or rings");
         out.push_back(std::move(x));
     }
     return out;
@@ -422,7 +525,7 @@ GenSpec parseGenerators(const json& j)
     GenSpec s;
     if (j.is_null() || (j.is_object() && j.empty()))
         return s;
-    onlyKeys(j, "generators", {"tensor", "walls", "eras", "districts", "osm", "example", "contour", "levels"});
+    onlyKeys(j, "generators", {"tensor", "walls", "eras", "districts", "osm", "osmBuildings", "osmPlaces", "osmFill", "avoid", "example", "contour", "levels"});
     if (j.contains("tensor"))
         s.tensor = tensorFrom(j["tensor"]);
     if (j.contains("walls"))
@@ -462,6 +565,32 @@ GenSpec parseGenerators(const json& j)
     }
     if (j.contains("osm"))
         s.osm = streetsFrom(j["osm"], "osm");
+    if (j.contains("osmBuildings"))
+        s.osmBuildings = osmBuildingsFrom(j["osmBuildings"]);
+    if (j.contains("osmPlaces"))
+        s.osmPlaces = osmPlacesFrom(j["osmPlaces"]);
+    if (j.contains("osmFill"))
+    {
+        const json& f = j["osmFill"];
+        onlyKeys(f, "osmFill", {"mode", "coverage"});
+        s.osmFill = text(f, "mode", "osmFill");
+        if (s.osmFill.empty())
+            s.osmFill = "sparse";
+        if (s.osmFill != "sparse" && s.osmFill != "all" && s.osmFill != "none")
+            bad("osmFill", "mode is sparse, all or none");
+        s.osmCoverage = std::clamp(number(f, "coverage", 0.25, "osmFill"), 0.0, 1.0);
+    }
+    if (j.contains("avoid"))
+    {
+        try
+        {
+            s.avoid = lila::names::NameHashes::fromJson(j["avoid"].dump());
+        }
+        catch (const std::exception& e)
+        {
+            bad("avoid", e.what());
+        }
+    }
     if (j.contains("example"))
     {
         const json& e = j["example"];

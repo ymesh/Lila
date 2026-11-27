@@ -1830,6 +1830,8 @@ void registerBuiltins()
              "morphTarget", "correction", "deltaMush", "smoothDeformer", "tension", "textureDeformer", "noiseDeformer", "meshCache"})
         registerNeutral(t);
     registerNeutral("gameExportPreset");
+    // Slots are stored local to the set.
+    registerNeutral("slotSet");
     // Math nodes, scale and pole vector constraints among them: they compute from connected values and hold nothing in world space.
     for (const char* t : {"addDoubleLinear", "multDoubleLinear", "blendColors", "blendTwoAttr", "blendWeighted", "choice", "clamp", "condition",
                           "multiplyDivide", "plusMinusAverage", "remapValue", "reverse", "setRange", "unitConversion", "pairBlend", "distanceBetween",

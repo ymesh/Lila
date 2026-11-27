@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <set>
 
 using namespace lila;
 using namespace terraintest;
@@ -151,6 +152,96 @@ TEST_CASE("materials: layer weights sum to 1 everywhere, match their rules, and 
 
     CHECK_THROWS(terrain::MaterialRules::fromJson(json{{"layers", {{{"name", "a b"}}}}}));
     CHECK_THROWS(terrain::MaterialRules::fromJson(json{{"layers", {{{"name", "a"}}, {{"name", "a"}}}}}));
+}
+
+TEST_CASE("materials: a term's blur softens a class mask so the layer's noise breaks its edge off the grid")
+{
+    // A class mask stepping from 1 to 0 down the middle of the grid, as a land cover import writes one.
+    geo::Heightfield h = geo::makeHeightfield(129, 129, 1000.0, {0.0, 0.0});
+    std::vector<float>& cls = h.mask("landcover_forest");
+    for (int z = 0; z < h.nz; ++z)
+        for (int x = 0; x < h.nx; ++x)
+            cls[h.index(x, z)] = x < 64 ? 1.0f : 0.0f;
+    auto edges = [&](const json& term) {
+        terrain::MaterialRules r = terrain::MaterialRules::fromJson(
+            json{{"layers", {{{"name", "grass"}}, {{"name", "forest"}, {"when", {{"landcover_forest", term}}}, {"noise", {{"amount", 0.6}, {"scale", 4000.0}}}}}}});
+        terrain::applyMaterialRules(h, r);
+        const std::vector<float>& f = *h.findMask("layer_forest");
+        std::set<int> at;
+        for (int z = 0; z < h.nz; ++z)
+        {
+            int x = 0;
+            while (x + 1 < h.nx && !(f[h.index(x, z)] >= 0.5f && f[h.index(x + 1, z)] < 0.5f))
+                ++x;
+            at.insert(x);
+        }
+        return at;
+    };
+    const std::set<int> hard = edges({{"range", {0.5, nullptr}}, {"fade", 0.5}});
+    const std::set<int> soft = edges({{"range", {0.5, nullptr}}, {"fade", 0.5}, {"blur", 6000.0}});
+    MESSAGE("edge columns: hard " << hard.size() << ", blurred " << soft.size());
+    CHECK(hard.size() == 1);
+    CHECK(soft.size() >= 5);
+    CHECK(terrain::MaterialRules::fromJson(json{{"layers", {{{"name", "a"}}, {{"name", "b"}, {"when", {{"x", {{"range", {0, 1}}, {"blur", 500.0}}}}}}}}})
+              .toJson()["layers"][1]["when"]["x"]["blur"] == 500.0);
+}
+
+TEST_CASE("materials: default layers on a low coast with a deep seabed: sand, grass, forest and rock, no snow")
+{
+    // 20 km across X: seabed down to 3 km under the sea, a coastal plain to 20 m, then hills to 800 m ribbed along Z.
+    geo::Heightfield h = geo::makeHeightfieldCovering({0.0, 0.0}, {2000000.0, 2000000.0}, 257);
+    for (int z = 0; z < h.nz; ++z)
+        for (int x = 0; x < h.nx; ++x)
+        {
+            const glm::dvec2 p = h.samplePos(x, z);
+            const double t = p.x / 2000000.0 + 0.5;
+            double y = 0.0;
+            if (t < 0.3)
+                y = -300000.0 * (0.3 - t) / 0.3;
+            else if (t < 0.55)
+                y = 2000.0 * (t - 0.3) / 0.25;
+            else
+                y = 2000.0 + (t - 0.55) / 0.45 * (40000.0 + 40000.0 * std::sin(p.y * 2.0 * math::kPi / 400000.0));
+            h.heights[h.index(x, z)] = float(y);
+        }
+    const terrain::RulesResult r = terrain::applyMaterialRules(h, terrain::defaultMaterialRules(h, 0.0));
+    CHECK(r.maxSumError < 1e-5);
+    terrain::SurfaceFields fields(h);
+    const std::vector<float>& slope = *fields.get("slope");
+    double snowMax = 0.0, sand = 0.0, grass = 0.0, forest = 0.0;
+    size_t shore = 0, plain = 0, hills = 0;
+    for (size_t k = 0; k < h.size(); ++k)
+    {
+        const float y = h.heights[k];
+        snowMax = std::max(snowMax, double((*h.findMask("layer_snow"))[k]));
+        if (y > 0.0f && y < 200.0f && slope[k] < 5.0f)
+        {
+            sand += (*h.findMask("layer_sand"))[k];
+            ++shore;
+        }
+        else if (y > 800.0f && y < 1900.0f && slope[k] < 5.0f)
+        {
+            grass += (*h.findMask("layer_grass"))[k];
+            ++plain;
+        }
+        else if (y > 10000.0f && slope[k] > 15.0f && slope[k] < 32.0f)
+        {
+            forest += (*h.findMask("layer_forest"))[k];
+            ++hills;
+        }
+    }
+    REQUIRE(shore > 0);
+    REQUIRE(plain > 0);
+    REQUIRE(hills > 0);
+    CHECK(snowMax < 0.01);
+    CHECK(sand / double(shore) > 0.5);
+    CHECK(grass / double(plain) > 0.5);
+    CHECK(forest / double(hills) > 0.4);
+
+    // The same ground with no sea level keeps the relative snow rule: the top of the range.
+    geo::Heightfield dry = h;
+    terrain::applyMaterialRules(dry, terrain::defaultMaterialRules(dry));
+    CHECK(meanOf(*dry.findMask("layer_snow")) > 0.05);
 }
 
 TEST_CASE("biomes: temperature falls with height, the lee is drier, and biome weights sum to 1")
@@ -407,10 +498,17 @@ TEST_CASE("terrain commands: biomes, layers and ground cover as nodes, coverage 
     REQUIRE(geom);
     REQUIRE(geom->instances);
     CHECK(geom->instances->size() == count);
+    // Every piece is a slot keyed by its rule's grid cell, so the same seed gives the same ids.
+    const json pieces = run("slotFind", {{"tag", {"groundcover"}}, {"limit", 0}});
+    CHECK(pieces["count"] == count);
+    REQUIRE(pieces["slots"].size() > 0);
+    CHECK(pieces["slots"][0]["id"].get<std::string>().find("/rule") != std::string::npos);
 
     // Again with the same seed: same count; another seed moves them.
     json same = run("terrainGroundCover", {{"args", {mesh}}, {"density", 4.0}});
     CHECK(same["count"] == cover["count"]);
     CHECK(same["placeholders"].size() == 4);
+    g.evaluate();
+    CHECK(run("slotFind", {{"tag", {"groundcover"}}, {"limit", 0}}) == pieces);
     run("newScene");
 }

@@ -307,6 +307,15 @@ bool pressDrag(QMouseEvent* e, const ViewInfo& view)
     return false;
 }
 
+bool hoverDrag(QPointF px, const ViewInfo& view)
+{
+    bool redraw = false;
+    for (const auto& [id, hook] : dragHooks())
+        if (hook.hover)
+            redraw = hook.hover(px, view) || redraw;
+    return redraw;
+}
+
 bool dragging() { return activeHook() != nullptr; }
 
 void moveDrag(QMouseEvent* e, const ViewInfo& view)

@@ -79,6 +79,17 @@ public:
     void setShadow(bool on) { mShadow = on; }
 
     /**
+     * The view in logical pixels: lines and dashes are cut to it (with a margin), so a point projected from just in front
+     * of the eye, thousands of views away, costs nothing. Without one nothing is cut.
+     */
+    void setClip(QRectF view) { mClip = view; }
+    /** Vertices one painter emits at most; past it whole triangles are dropped and capped() turns true. */
+    static constexpr size_t kMaxVertices = size_t(4) << 20;
+    bool capped() const { return mCapped; }
+    /** A label saying the overlay was capped, drawn past the cap; nothing when it was not. */
+    void cappedNote(QPointF at);
+
+    /**
      * Which parts of the background are bright: 1 or 0 per cell of cols x rows over a view of the given logical size,
      * top row first, from classifyBackdrop(). Without it the backdrop counts as dark.
      */
@@ -99,6 +110,8 @@ public:
 
 private:
     void vertex(QPointF p, glm::vec2 uv, const glm::vec4& color);
+    /** Distances along a..b (of length len) inside the clip grown by margin; false when none of it is. */
+    bool clipSpan(QPointF a, QPointF b, double len, double margin, double& t0, double& t1) const;
 
     /** The under-stroke for a stroke of color c at alpha a: white under dark grays, black under everything else. */
     static glm::vec4 shadowFor(const glm::vec4& c, float a);
@@ -108,6 +121,10 @@ private:
     const OverlayAtlasData& atlasData() const;
     mutable std::shared_ptr<const OverlayAtlasData> mAtlas;
     bool mShadow = false;
+    QRectF mClip;
+    size_t mStart = 0; // mOut's size when the painter began: the cap counts this painter's vertices only
+    bool mCapped = false;
+    bool mUncapped = false;
     std::vector<float> mBackdrop;
     int mBackdropCols = 0, mBackdropRows = 0;
     QSizeF mBackdropView;

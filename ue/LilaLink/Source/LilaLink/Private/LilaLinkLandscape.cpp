@@ -42,7 +42,9 @@ namespace
 const FName LilaLayerName(TEXT("Lila"));
 const TCHAR* LayerFunctionName = TEXT("MF_LilaLandscapeLayer");
 const TCHAR* LayerVersionTag = TEXT("Lila Landscape Layer v");
-constexpr int32 LayerFunctionVersion = 1;
+// The layer texture is read through the shared wrap sampler, so landscapes with more than a dozen layers stay under
+// the 16 sampler limit.
+constexpr int32 LayerFunctionVersion = 2;
 const TCHAR* LandscapeFolder = TEXT("/Game/LilaLink/Landscapes");
 
 /** One paint layer of a send: its name in Unreal and the 8-bit weightmap file in the landscape's vertex layout. */
@@ -54,7 +56,7 @@ struct FLayerSend
 };
 
 const TCHAR* LayerColorCode = TEXT(R"(
-float3 c = Tint.rgb * Texture2DSample(Texture, TextureSampler, WorldTile.xy).rgb;
+float3 c = Tint.rgb * Texture2DSample(Texture, View.MaterialTextureBilinearWrapedSampler, WorldTile.xy).rgb;
 return lerp(Under, c, saturate(Weight));
 )");
 
@@ -207,7 +209,7 @@ UMaterial* LandscapeMaterial(const FString& Label, const TArray<FLayerSend>& Lay
 		return Material;
 	}
 	Material->Modify();
-	UMaterialEditingLibrary::DeleteAllMaterialExpressions(Material);
+	LilaLink::DeleteAllExpressions(Material);
 	int32 Row = 0;
 	auto Make = [&](TSubclassOf<UMaterialExpression> Class, int32 X) {
 		return UMaterialEditingLibrary::CreateMaterialExpression(Material, Class, X, (Row++) * 140);
@@ -497,6 +499,28 @@ TSharedPtr<FJsonValue> SetLandscape(const TSharedPtr<FJsonObject>& Params, FStri
 		World->EditorDestroyActor(Landscape, true);
 		Landscape = nullptr;
 	}
+	// Lila's content hash of heights, weightmaps and material: a landscape already carrying it is left as it is.
+	FString Hash;
+	Params->TryGetStringField(TEXT("hash"), Hash);
+	const FName HashTag = Hash.IsEmpty() ? NAME_None : FName(TEXT("LilaHash:") + Hash);
+	if (Landscape && !Hash.IsEmpty() && Landscape->Tags.Contains(HashTag))
+	{
+		Transaction.Cancel();
+		TSharedRef<FJsonObject> Same = MakeShared<FJsonObject>();
+		Same->SetStringField(TEXT("actor"), Landscape->GetActorLabel());
+		Same->SetBoolField(TEXT("created"), false);
+		Same->SetBoolField(TEXT("unchanged"), true);
+		Same->SetArrayField(TEXT("resolution"), {MakeShared<FJsonValueNumber>(SizeX), MakeShared<FJsonValueNumber>(SizeY)});
+		TArray<TSharedPtr<FJsonValue>> Names;
+		for (const FLayerSend& L : Layers)
+		{
+			Names.Add(MakeShared<FJsonValueString>(L.Name.ToString()));
+		}
+		Same->SetArrayField(TEXT("layers"), Names);
+		Same->SetStringField(TEXT("material"), Landscape->LandscapeMaterial ? Landscape->LandscapeMaterial->GetPathName() : FString());
+		UE_LOG(LogLilaLink, Log, TEXT("setLandscape: %s unchanged, left as it is"), *Label);
+		return MakeShared<FJsonValueObject>(Same);
+	}
 	if (!Landscape)
 	{
 		Landscape = CreateLandscape(World, Label, Location, Rotation, Scale, SizeX, SizeY, QuadsPerSection, SectionsPerComponent);
@@ -587,6 +611,12 @@ TSharedPtr<FJsonValue> SetLandscape(const TSharedPtr<FJsonObject>& Params, FStri
 		{
 			Subsystem->ChangeGridSize(Info, static_cast<uint32>(GridSize));
 		}
+	}
+
+	Landscape->Tags.RemoveAll([](const FName& T) { return T.ToString().StartsWith(TEXT("LilaHash:")); });
+	if (!Hash.IsEmpty())
+	{
+		Landscape->Tags.Add(HashTag);
 	}
 
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();

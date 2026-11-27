@@ -26,14 +26,17 @@ void aerialCS(uint3 id: SV_DispatchThreadID)
     float3 dir = normalize(farH.xyz / farH.w - nearH.xyz / nearH.w);
     GpuAtmosphere* a = pc.atmosphere;
     float3 sun = a->sunDir.xyz;
-    float start = a->camera.w;
+    float origin = atmAerialOrigin(a, dir);
+    float start = max(origin, 0.0) + a->camera.w;
     for (uint z = 0; z < slices; ++z)
     {
         float f = (z + 1.0) / slices;
         float dist = pc.params.x * f * f;
-        float3 T;
+        float3 T = float3(1.0, 1.0, 1.0);
+        float3 L = float3(0.0, 0.0, 0.0);
         // The distance scale stretches how far the haze reaches, as Unreal's aerial perspective view distance scale does.
-        float3 L = atmIntegrate(a, a->camera.xyz, dir, sun, start, max(dist * a->skyFactor.w, start), 6 + z / 4, false, T);
+        if (origin >= 0.0)
+            L = atmIntegrate(a, a->camera.xyz, dir, sun, start, max(origin + dist * a->skyFactor.w, start), 6 + z / 4, false, T);
         uint i = ((z * cells + id.y) * cells + id.x) * 2;
         pc.froxels[i] = float4(L * a->sunRadiance.rgb, 1.0);
         pc.froxels[i + 1] = float4(T, 1.0);

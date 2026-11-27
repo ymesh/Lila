@@ -898,12 +898,32 @@ void installPendingOnExit()
         return;
     PrefStore::get().set("general", kAttemptedPref, file.toStdString());
     PrefStore::get().flush();
-    const QStringList args{"/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", installScopeArg(),
+    // /SILENT, not /VERYSILENT: no wizard pages, but the progress window shows, so the install is visible.
+    const QStringList args{"/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", installScopeArg(),
                            QString("/WAITPID=%1").arg(QApplication::applicationPid())};
     log::info("running update installer {} {}", file.toStdString(), args.join(' ').toStdString());
     if (!QProcess::startDetached(file, args))
         log::warn("the update installer couldn't be started: {}", file.toStdString());
 }
+
+#ifdef _WIN32
+/** Brings the installer's progress window to the front, so opening Lila mid-install shows why it didn't start. */
+void raiseInstallerWindow()
+{
+    for (HWND w = FindWindowExW(nullptr, nullptr, L"TWizardForm", nullptr); w;
+         w = FindWindowExW(nullptr, w, L"TWizardForm", nullptr))
+    {
+        wchar_t title[256]{};
+        GetWindowTextW(w, title, 256);
+        if (!wcsstr(title, L"Lila"))
+            continue;
+        if (IsIconic(w))
+            ShowWindow(w, SW_RESTORE);
+        SetForegroundWindow(w);
+        return;
+    }
+}
+#endif
 
 bool deferToRunningInstall()
 {
@@ -916,6 +936,7 @@ bool deferToRunningInstall()
     QDir().mkpath(updateDir());
     QFile flag(QDir(updateDir()).filePath("relaunch"));
     (void)flag.open(QIODevice::WriteOnly);
+    raiseInstallerWindow();
     return true;
 #else
     return false;

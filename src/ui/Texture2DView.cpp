@@ -1,5 +1,6 @@
 #include "ui/TextureGraphUi.h"
 
+#include "core/Events.h"
 #include "core/Profile.h"
 #include "geo/Mesh.h"
 #include "render/PaintGpu.h"
@@ -72,6 +73,7 @@ struct Controller
     int nextListener = 1;
     int sceneListener = 0;
     int paintListener = 0;
+    events::SubscriptionId timeListener = 0;
     bool queued = false;
     /** When paint last changed the shown set: edits to it soon after are the paint's too, and wait for it to settle. */
     QElapsedTimer painted;
@@ -152,6 +154,11 @@ void installSceneListener()
         return;
     // The views draw the live channel while painting; the preview (histogram, pixel readout) catches up once painting
     // pauses, as each update reads every paint buffer back and evaluates the whole graph again.
+    // An Image Sequence or keyed value shows another frame at another time; the cache keeps frames already rendered.
+    c.timeListener = events::subscribe(events::Event::TimeChanged, [](const events::EventData&) {
+        if (texPreview::animated(ctl().source.set))
+            requestSoon();
+    });
     c.paintListener = render::paint::addChangeListener([](scene::NodeId id) {
         const scene::Node* set = tex::findSet(scene::Graph::current(), tex::splitAddress(ctl().source.set).set);
         if (!set || set->id() != id || !QCoreApplication::instance())

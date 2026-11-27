@@ -1,6 +1,9 @@
 #include "ui/PointCloudDisplay.h"
+#include "core/Log.h"
+#include "core/Release.h"
 #include "ui/ViewportWidgetDetail.h"
 
+#include "io/SceneFile.h"
 #include "render/Surface.h"
 #include "scene/LightingChannels.h"
 #include "scene/SceneIndex.h"
@@ -50,6 +53,7 @@ using namespace viewportDetail;
 
 ViewportWidget::ViewportWidget(QWidget* parent) : QWidget(parent)
 {
+    io::setEvaluateOnLoad(true);
     setAttribute(Qt::WA_NativeWindow);
     setAttribute(Qt::WA_PaintOnScreen);
     setAttribute(Qt::WA_NoSystemBackground);
@@ -541,6 +545,16 @@ void ViewportWidget::submit()
     syncLookThrough();
     if (!mId)
         return;
+    // A load pumps events; drawing then would evaluate the half-read scene, only for the rest of the load to dirty it again.
+    if (io::loading())
+    {
+        if (!std::exchange(mLoadWaitQueued, true))
+            QTimer::singleShot(100, this, [this] {
+                mLoadWaitQueued = false;
+                submit();
+            });
+        return;
+    }
     render::Renderer::get().submit(mId, buildFrame(nullptr));
 }
 
@@ -552,6 +566,7 @@ render::FrameState ViewportWidget::renderFrame(const RenderView& view)
 render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
 {
     LILA_ZONE();
+    const release::Hold holdReleases;
     const Camera& camera = rv ? rv->camera : shownCamera();
     const double viewAspect = rv ? double(rv->width) / double(std::max(rv->height, 1)) : aspect();
     scene::Graph& g = scene::Graph::current();
@@ -561,6 +576,8 @@ render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
     const bool inherit = scene::inheritVisibility();
 
     render::FrameState s;
+    if (!rv)
+        render::Renderer::get().reuseBuffers(mId, s);
     s.view = camera.view();
     s.proj = camera.proj(viewAspect);
     s.eye = camera.eye();
@@ -670,6 +687,7 @@ render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
     drawPreselect(s);
     drawHandlerHover(s);
     OverlayPainter painter(s.overlayTris, devicePixelRatioF());
+    painter.setClip(QRectF(0, 0, width(), height()));
     {
         constexpr int kCols = 8, kRows = 6;
         auto probe = render::Renderer::get().environmentProbe(s.envPath);
@@ -721,9 +739,11 @@ render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
     renderPasses::run(renderPasses::Stage::Scene, passes);
     {
         const std::vector<viewportHooks::Drawer> drawers = viewportHooks::drawers();
-        const std::vector<std::string> drawerIds = LILA_PROFILER_CONNECTED() ? viewportHooks::drawerIds() : std::vector<std::string>();
+        const std::vector<std::string> drawerIds = viewportHooks::drawerIds();
         for (size_t i = 0; i < drawers.size(); ++i)
         {
+            if (i < drawerIds.size() && !viewOverlays::drawerShown(drawerIds[i], view.camera))
+                continue;
             LILA_ZONE_N("buildFrame viewport drawer");
             if (i < drawerIds.size())
                 LILA_ZONE_TEXT(drawerIds[i].data(), drawerIds[i].size());
@@ -755,6 +775,13 @@ render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
     else
         cursorBadges::publish(this, {});
     renderPasses::run(renderPasses::Stage::Final, passes);
+    if (painter.capped())
+    {
+        static bool warned = false;
+        if (!std::exchange(warned, true))
+            log::warn("viewport: the overlay passed {} vertices in one frame; the rest is not drawn until there is less of it", OverlayPainter::kMaxVertices);
+        painter.cappedNote(QPointF(12, height() - 16));
+    }
     // The ground grid is edge-on in side views, so they get a grid in the view plane through the origin instead.
     if (s.grid && mCamera.ortho && std::abs(glm::dot(mCamera.forward(), mCamera.up())) < 0.5)
     {
@@ -924,6 +951,36 @@ std::optional<QPointF> ViewportWidget::project(const glm::dvec3& world) const
     return QPointF((clip.x / clip.w * 0.5 + 0.5) * width(), (clip.y / clip.w * 0.5 + 0.5) * height());
 }
 
+bool ViewportWidget::meshTouchesSelectRegion(const render::RenderMesh& rm, const glm::dmat4& world, const QRectF& box) const
+{
+    const size_t step = std::max<size_t>(1, rm.vertices.size() / 20000);
+    for (size_t k = 0; k < rm.vertices.size(); k += step)
+        if (auto p = project(glm::dvec3(world * glm::dvec4(glm::dvec3(rm.vertices[k].pos), 1.0))); p && inSelectRegion(box, *p))
+            return true;
+    // No sampled point inside: the region can still sit over an edge or the middle of a face.
+    constexpr double kBehind = std::numeric_limits<double>::quiet_NaN();
+    std::vector<glm::dvec2> screen(rm.vertices.size());
+    for (size_t k = 0; k < rm.vertices.size(); ++k)
+    {
+        auto p = project(glm::dvec3(world * glm::dvec4(glm::dvec3(rm.vertices[k].pos), 1.0)));
+        screen[k] = p ? glm::dvec2(p->x(), p->y()) : glm::dvec2(kBehind);
+    }
+    std::vector<glm::dvec2> tri(3);
+    for (size_t i = 0; i + 2 < rm.indices.size(); i += 3)
+    {
+        for (int c = 0; c < 3; ++c)
+            tri[c] = screen[rm.indices[i + c]];
+        if (std::isnan(tri[0].x) || std::isnan(tri[1].x) || std::isnan(tri[2].x))
+            continue;
+        const glm::dvec2 lo = glm::min(tri[0], glm::min(tri[1], tri[2])), hi = glm::max(tri[0], glm::max(tri[1], tri[2]));
+        if (hi.x < box.left() || lo.x > box.right() || hi.y < box.top() || lo.y > box.bottom())
+            continue;
+        if (touchesSelectRegion(box, tri))
+            return true;
+    }
+    return false;
+}
+
 std::vector<std::string> ViewportWidget::hitTest(QPointF a, QPointF b)
 {
     LILA_ZONE();
@@ -967,7 +1024,7 @@ std::vector<std::string> ViewportWidget::hitTest(QPointF a, QPointF b)
         }
     }
     // Meshes: a click takes the nearest surface under the cursor unless a locator line is right there; a box takes
-    // any mesh with a vertex inside it.
+    // any mesh it overlaps.
     glm::dvec3 rayO, rayD;
     view.ray(a, rayO, rayD);
     double nearest = 1e300;
@@ -1001,19 +1058,13 @@ std::vector<std::string> ViewportWidget::hitTest(QPointF a, QPointF b)
                 }
             continue;
         }
-        size_t step = std::max<size_t>(1, rm->vertices.size() / 20000);
         for (const scene::arrays::Copy& c : copies)
         {
             const std::string arrayPath = g.node(c.array)->path();
             if (std::ranges::any_of(hits, [&](const json& h) { return h.get<std::string>() == arrayPath; }))
                 continue;
-            const glm::dmat4 at = c.transform * world;
-            for (size_t k = 0; k < rm->vertices.size(); k += step)
-                if (auto p = project(glm::dvec3(at * glm::dvec4(glm::dvec3(rm->vertices[k].pos), 1.0))); p && inSelectRegion(box, *p))
-                {
-                    hits.push_back(arrayPath);
-                    break;
-                }
+            if (meshTouchesSelectRegion(*rm, c.transform * world, box))
+                hits.push_back(arrayPath);
         }
         if (mIsolation.isPartial(id))
         {
@@ -1029,12 +1080,8 @@ std::vector<std::string> ViewportWidget::hitTest(QPointF a, QPointF b)
                     }
             continue;
         }
-        for (size_t k = 0; k < rm->vertices.size(); k += step)
-            if (auto p = project(glm::dvec3(world * glm::dvec4(glm::dvec3(rm->vertices[k].pos), 1.0))); p && inSelectRegion(box, *p))
-            {
-                hits.push_back(n->path());
-                break;
-            }
+        if (meshTouchesSelectRegion(*rm, world, box))
+            hits.push_back(n->path());
     }
     for (const auto& picker : viewportHooks::pickers())
         for (const viewportHooks::PickHit& h : picker(a, b, click, view))

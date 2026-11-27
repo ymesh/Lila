@@ -494,6 +494,16 @@ TEST_CASE("settlement streetscape: commands mesh roads, place furniture, name st
     CHECK(run("settlementFurniture", {{"args", {mesh}}})["placements"] == f["placements"]);
     CHECK(run("settlementFurniture", {{"args", {mesh}}, {"kinds", {"lamp"}}})["byKind"].size() == 1);
     CHECK(f["layoutPlacements"] == f["count"]);
+    // The placements are slots: one per placement, ids stable across a rerun, swapped by a rule.
+    CHECK(f["slots"]["written"] == f["count"]);
+    const json lampSlots = run("slotFind", {{"type", "lamp.street"}, {"limit", 0}});
+    CHECK(lampSlots["count"] == f["byKind"]["lamp"]);
+    const json slotIds = run("slotFind", {{"limit", 0}, {"region", "settlement:"}});
+    run("settlementFurniture", {{"args", {mesh}}});
+    CHECK(run("slotFind", {{"limit", 0}, {"region", "settlement:"}}) == slotIds);
+    run("slotRule", {{"args", {"add"}}, {"type", "lamp"}, {"unrealClass", "/Game/BP/BP_Lamp"}});
+    CHECK(run("slotReport", {{"validate", false}})["byRule"]["r1"] == f["byKind"]["lamp"]);
+    run("undo");
     const json stored = run("settlementFurniture", {{"args", {mesh}}, {"store", true}, {"sets", {{"lane", json::array()}, {"street", json::array()}}},
                                                     {"engineAssets", {{"lamp", "/Game/City/SM_Lamp"}}}});
     CHECK(stored["count"].get<int>() < f["count"].get<int>());
@@ -546,3 +556,53 @@ TEST_CASE("settlement streetscape: commands mesh roads, place furniture, name st
     CHECK(transit["unreachable"].empty());
 }
 
+
+TEST_CASE("settlement streetscape: a street ending where only footpaths carry on is a dead end vehicles turn round at")
+{
+    // One footpath on from the end (a plain node), or two branching there (a junction).
+    for (const int paths : {1, 2})
+    {
+        CAPTURE(paths);
+        Layout l = build(Site{.size = 160000.0}, Ground::plane(), styled("europeanCity", false));
+        uint64_t next = 0;
+        for (const StreetEdge& e : l.graph.edges)
+            next = std::max(next, e.street + 1);
+        std::vector<int> spur, path;
+        // From a junction, out into ground clear enough for the spur and its paths.
+        const size_t nodes = l.graph.nodes.size();
+        for (size_t n = 0; n < nodes && spur.empty(); ++n)
+        {
+            if (l.graph.degree(int(n)) < 3)
+                continue;
+            const Vec2 a = l.graph.nodes[n].p;
+            for (const Vec2 dir : {Vec2(1, 0), Vec2(-1, 0), Vec2(0, 1), Vec2(0, -1)})
+            {
+                const Vec2 end = a + dir * 3000.0, side(-dir.y, dir.x);
+                Vec2 hit;
+                double along = 0.0;
+                if (l.graph.firstCrossing(a + dir * 200.0, end + dir * 3000.0, &hit, &along) >= 0 ||
+                    l.graph.firstCrossing(end - side * 3000.0, end + side * 3000.0, &hit, &along) >= 0)
+                    continue;
+                spur = l.graph.addStreet(a, end, StreetClass::Local);
+                if (paths == 1)
+                    path = l.graph.addStreet(end, end + dir * 3000.0, StreetClass::Path);
+                else
+                    for (const Vec2 to : {end + side * 3000.0, end - side * 3000.0})
+                        for (int e : l.graph.addStreet(end, to, StreetClass::Path))
+                            path.push_back(e);
+                break;
+            }
+        }
+        REQUIRE(!spur.empty());
+        for (int e : spur)
+            l.graph.edges[size_t(e)].street = next;
+        for (size_t k = 0; k < path.size(); ++k)
+            l.graph.edges[size_t(path[k])].street = next + 1 + k / std::max<size_t>(1, path.size() / size_t(paths));
+        const RoadNetwork net = roadNetwork(l, Ground::plane());
+        const LaneGraph g = laneGraph(l, net);
+        const json c = checkLaneGraph(g, net);
+        INFO(c["modes"]["vehicle"].dump());
+        CHECK(c["modes"]["vehicle"]["components"] == 1);
+        CHECK(c["modes"]["vehicle"]["cannotReachExit"].empty());
+    }
+}

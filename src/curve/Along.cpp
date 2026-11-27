@@ -73,24 +73,6 @@ void rotateCornerFrames(geo::Mesh& m, const std::vector<glm::dmat3>& rot, double
 }
 
 /** Positions and stored normals through an affine transform. */
-void transformMesh(geo::Mesh& m, const glm::dmat4& xf)
-{
-    for (Index p = 0; p < m.pointCapacity(); ++p)
-        if (m.pointValid(p))
-            m.setPosition(p, D3(xf * glm::dvec4(m.position(p), 1.0)));
-    glm::dmat3 nm = glm::transpose(glm::inverse(glm::dmat3(xf)));
-    std::vector<glm::dmat3> rot(m.pointCapacity(), nm);
-    rotateCornerFrames(m, rot, 1.0);
-    if (glm::determinant(glm::dmat3(xf)) < 0.0)
-    {
-        std::vector<Index> faces;
-        for (Index f = 0; f < m.faceCapacity(); ++f)
-            if (m.faceValid(f))
-                faces.push_back(f);
-        geo::flipNormals(m, faces);
-    }
-}
-
 uint64_t splitmix(uint64_t& state)
 {
     uint64_t z = (state += 0x9E3779B97F4A7C15ull);

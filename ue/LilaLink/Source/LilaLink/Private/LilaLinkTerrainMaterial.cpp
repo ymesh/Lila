@@ -251,7 +251,7 @@ UMaterial* TerrainMaterial(const FString& Label, const TArray<FTerrainLayer>& La
 		return nullptr;
 	}
 	Material->Modify();
-	UMaterialEditingLibrary::DeleteAllMaterialExpressions(Material);
+	LilaLink::DeleteAllExpressions(Material);
 	int32 Row = 0;
 	auto Make = [&](TSubclassOf<UMaterialExpression> Class, int32 X) {
 		return UMaterialEditingLibrary::CreateMaterialExpression(Material, Class, X, (Row++) * 140);

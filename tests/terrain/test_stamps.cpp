@@ -507,3 +507,33 @@ TEST_CASE("gpu erosion: timing at 4097" * doctest::skip())
     const double cpuS = std::chrono::duration<double>(std::chrono::steady_clock::now() - t1).count();
     MESSAGE("4097x4097: CPU " << cpuS / 2.0 << " s per iteration (2 run), about " << cpuS / 2.0 * 60.0 << " s for 60");
 }
+
+TEST_CASE("stamps: a pad held below the ground round it widens its skirt to keep to its skirt grade")
+{
+    for (const double grade : {0.0, 0.08})
+    {
+        // Level ground 6 m above where the pad is held.
+        geo::Heightfield h = geo::makeHeightfieldCovering({0.0, 0.0}, {400000.0, 400000.0}, 1025);
+        std::fill(h.heights.begin(), h.heights.end(), 1000.0f);
+        terrain::Stamp s;
+        s.id = "yard";
+        s.level = terrain::StampLevel::Value;
+        s.height = 400.0;
+        s.falloff = 3000.0;
+        s.skirtGrade = grade;
+        s.polygon = rect({20000.0, -10000.0}, {6000.0, 4000.0});
+        const terrain::StampResult r = terrain::applyStamp(h, s, terrain::footprintFromPolygon(s.polygon));
+        double steepest = 0.0;
+        for (double x = 26000.0; x < 26000.0 + 4.0 * s.falloff; x += h.cell)
+            steepest = std::max(steepest, std::abs(h.heightAt(x + h.cell, -10000.0) - h.heightAt(x, -10000.0)) / h.cell);
+        CAPTURE(grade);
+        CAPTURE(steepest);
+        if (grade > 0.0)
+        {
+            CHECK(r.falloff > s.falloff);
+            CHECK(steepest <= grade + 0.01);
+        }
+        else
+            CHECK(steepest > 0.2);
+    }
+}

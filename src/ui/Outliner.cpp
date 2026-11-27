@@ -483,9 +483,18 @@ Outliner::Outliner(QWidget* parent) : QTreeWidget(parent)
         else if (c == scene::Change::Value || c == scene::Change::Connection)
             scheduleRowRestyle(id);
         else if (c == scene::Change::Selection)
-            syncSelectionFromScene();
+        {
+            if (ops::currentArgs())
+                mSelectionStale = true;
+            else
+                syncSelectionFromScene();
+        }
         else
             scheduleRebuild();
+    });
+    mExecListener = ops::addExecuteListener([this](const ExecuteEvent& e) {
+        if (e.done && std::exchange(mSelectionStale, false))
+            syncSelectionFromScene();
     });
 
     connect(this, &QTreeWidget::itemSelectionChanged, this, &Outliner::pushSelectionToScene);
@@ -555,6 +564,7 @@ Outliner::~Outliner()
     for (events::SubscriptionId id : mEventSubs)
         events::unsubscribe(id);
     scene::Graph::current().removeListener(mListener);
+    ops::removeExecuteListener(mExecListener);
 }
 
 void Outliner::dropEvent(QDropEvent* e)

@@ -227,6 +227,10 @@ render::Material convert(const scene::Node& n)
         m.flags |= render::MatTwoSided;
     if (n.as<int64_t>(kUvSet) >= 1)
         m.flags |= render::MatUv1;
+    if (!n.as<bool>(kInstanceColor))
+        m.flags |= render::MatNoInstanceColor;
+    if (n.as<bool>(kInstanceColor2))
+        m.flags |= render::MatInstanceColor2;
     m.style = style(n);
     return m;
 }

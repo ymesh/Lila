@@ -25,6 +25,17 @@ namespace lila::ui
 LILA_UI_API std::shared_ptr<const render::RenderMesh> renderMeshFor(const scene::MeshPtr& mesh, bool tangents = false,
                                                                     scene::NodeId owner = scene::kNoNode);
 
+/**
+ * Builds the render copies of these meshes (with tangents where the flag says) that are not cached yet, in parallel:
+ * for a frame about to draw thousands of new meshes, which renderMeshFor would otherwise build one at a time.
+ */
+LILA_UI_API void prewarmRenderMeshes(const std::vector<std::pair<scene::MeshPtr, bool>>& meshes);
+/**
+ * Drops the render copies (whole, static and masked) of meshes that no longer exist. Lookups drop them only when they
+ * cache something new, so after a scene is replaced the old one's copies (gigabytes) would stay until then.
+ */
+LILA_UI_API void dropExpiredRenderMeshes();
+
 /** The mesh subdivided for smooth preview, cached per snapshot and level. Level 0 returns the mesh itself. */
 LILA_UI_API scene::MeshPtr smoothedFor(const scene::MeshPtr& mesh, int level);
 
@@ -68,6 +79,8 @@ LILA_UI_API ModifierWire modifierWireFor(const scene::MeshPtr& cage, const scene
 
 /** renderMeshFor(mesh) without its wire lines, for a surface whose edges are drawn by another draw. */
 LILA_UI_API std::shared_ptr<const render::RenderMesh> wirelessMeshFor(const scene::MeshPtr& mesh, bool tangents = false);
+/** wirelessMeshFor for many meshes at once, built in parallel; their render copies come first (prewarmRenderMeshes). */
+LILA_UI_API void prewarmWirelessMeshes(const std::vector<std::pair<scene::MeshPtr, bool>>& meshes);
 
 /** renderMeshFor(smooth.mesh) with its wire cut down to the edges that run along the cage's. */
 LILA_UI_API std::shared_ptr<const render::RenderMesh> cageWireMeshFor(const SmoothCage& smooth, bool tangents = false);

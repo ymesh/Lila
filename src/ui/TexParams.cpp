@@ -323,13 +323,13 @@ protected:
         int hit = stopAt(e->position());
         if (hit < 0)
             return;
-        Rgba& c = mStops[size_t(hit)].color;
-        QColor init = display(c);
-        init.setAlphaF(c[3]);
+        const Rgba& was = mStops[size_t(hit)].color;
+        QColor init = display(was);
+        init.setAlphaF(was[3]);
         QColor picked = colorPopup::getColor(init, this, "Stop Color", true);
-        if (!picked.isValid())
+        if (!picked.isValid() || size_t(hit) >= mStops.size())
             return;
-        c = {toLinear(float(picked.redF())), toLinear(float(picked.greenF())), toLinear(float(picked.blueF())), float(picked.alphaF())};
+        mStops[size_t(hit)].color = {toLinear(float(picked.redF())), toLinear(float(picked.greenF())), toLinear(float(picked.blueF())), float(picked.alphaF())};
         update();
         mChanged();
     }

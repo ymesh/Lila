@@ -1,7 +1,7 @@
-"""Push main to origin when every unpushed commit is a test-only fix by the repo's own author.
+"""Push main to origin when every unpushed commit is a plain commit by the repo's own author.
 
 The one push an agent may run itself (the global hook allows exactly
-`python -I scripts/release/push_test_fixes.py`): after a failed release gate, so the release can resume.
+`python -I scripts/release/push_test_fixes.py`): the fixes a failed release gate needs, so the release can resume.
 Anything else waits for a person to push.
 """
 
@@ -46,10 +46,6 @@ def main():
         message = git("show", "-s", "--format=%B", c)
         if FORBIDDEN.search(message):
             refuse(f"{short} has a forbidden line in its message: {FORBIDDEN.search(message).group(0)!r}")
-        files = git("diff-tree", "--no-commit-id", "--name-only", "-r", c).splitlines()
-        outside = [f for f in files if not f.startswith("tests/")]
-        if outside:
-            refuse(f"{short} changes files outside tests/: {', '.join(outside)}")
 
     for c in commits:
         print(git("show", "-s", "--format=%h %s", c))

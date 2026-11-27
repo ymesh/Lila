@@ -1,6 +1,7 @@
 // Settlement: street furniture along roads from per-profile sets, at junctions by their control, and on squares.
 
 #include "Streetscape.h"
+#include "Parcels.h"
 
 #include <lila/Profile.h>
 
@@ -35,7 +36,6 @@ FurnitureRule rule(const char* kind, double spacing, const char* where, const ch
     return {kind, spacing, where, sides, minWidth};
 }
 
-constexpr double kCurb = 15.0;
 } // namespace
 
 std::vector<FurnitureSet> furnitureSets(bool medieval)
@@ -52,6 +52,8 @@ std::vector<FurnitureSet> furnitureSets(bool medieval)
             {"track", {}},
             {"footpath", {}},
             {"stairs", {rule("lantern", 3000.0, "edge", "right")}},
+            {"park", {rule("parkTree", 1200.0, "edge", "both")}},
+            {"yard", {rule("yardTree", 3000.0, "back", "both")}},
         };
     return {
         {"highway", {rule("lamp", 4000.0, "median", "right", 100.0)}},
@@ -67,6 +69,8 @@ std::vector<FurnitureSet> furnitureSets(bool medieval)
         {"track", {}},
         {"footpath", {rule("lamp", 3000.0, "edge", "right"), rule("bench", 6000.0, "edge", "left")}},
         {"stairs", {rule("lamp", 3000.0, "edge", "right")}},
+        {"park", {rule("parkTree", 1000.0, "edge", "both")}},
+        {"yard", {rule("yardTree", 2500.0, "back", "both")}},
     };
 }
 
@@ -191,24 +195,24 @@ std::vector<FurniturePlacement> placeFurniture(const Layout& l, const RoadNetwor
         for (size_t r = 0; r < set->rules.size(); ++r)
         {
             const FurnitureRule& rule = set->rules[r];
-            double offset = 0.0, up = 0.0;
+            double offset = 0.0, up = kRoadTop;
             bool fits = true;
             if (rule.where == "median")
             {
                 fits = sec.median > 0.0 && sec.median >= rule.minWidth;
-                up = kCurb;
+                up = kSidewalkTop;
             }
             else if (rule.where == "verge")
             {
                 fits = sec.verge >= rule.minWidth;
                 offset = sec.verge > 0.0 ? sec.carriage + sec.sidewalk + 0.5 * sec.verge : sec.half() - 40.0;
-                up = sec.sidewalk > 0.0 ? kCurb : 0.0;
+                up = sec.sidewalk > 0.0 ? kSidewalkTop : kRoadTop;
             }
             else if ((rule.where == "kerb" || rule.where == "back") && sec.sidewalk > 0.0 && sec.carriage > 0.0)
             {
                 fits = sec.sidewalk >= rule.minWidth;
                 offset = rule.where == "kerb" ? sec.carriage + std::min(50.0, 0.5 * sec.sidewalk) : sec.carriage + std::max(0.5 * sec.sidewalk, sec.sidewalk - 50.0);
-                up = kCurb;
+                up = kSidewalkTop;
             }
             else
             {
@@ -277,7 +281,7 @@ std::vector<FurniturePlacement> placeFurniture(const Layout& l, const RoadNetwor
                 // A street running on through the junction comes in from both sides: its approach's own point tells them apart.
                 x.id = furnitureMix(furnitureMix(furnitureMix(jKey, textKey(kind)), line.street), pointKey(planXZ(end.p))) & kStreetscapeIdMask;
                 x.kind = kind;
-                x.p = groundAt(q, sec.sidewalk > 0.0 && !sec.kerbless ? kCurb : 0.0);
+                x.p = groundAt(q, sec.sidewalk > 0.0 && !sec.kerbless ? kSidewalkTop : kRoadTop);
                 x.heading = headingOf(facing);
                 x.junction = int(ji);
                 x.profile = "junction";
@@ -377,6 +381,66 @@ std::vector<FurniturePlacement> placeFurniture(const Layout& l, const RoadNetwor
                     add("bollard", a + d * s + inward * 50.0, -inward);
         }
     }
+
+    // Parks: the park set's trees on a loose grid of their spacing. Yards: a tree behind a house, more often the wider its
+    // frontage is against the yard set's spacing, where the yard is deep enough to hold one.
+    auto setRules = [&](const char* name) -> const std::vector<FurnitureRule>* {
+        auto it = std::find_if(sets.begin(), sets.end(), [&](const FurnitureSet& s) { return s.profile == name; });
+        return it == sets.end() || it->rules.empty() ? nullptr : &it->rules;
+    };
+    auto addAt = [&](const std::string& kind, uint64_t key, Vec2 q, double heading, int block, const char* profile) {
+        FurniturePlacement x;
+        x.id = key & kStreetscapeIdMask;
+        x.kind = kind;
+        x.p = groundAt(q, 0.0);
+        x.heading = heading;
+        x.block = block;
+        x.profile = profile;
+        out.push_back(std::move(x));
+    };
+    if (const std::vector<FurnitureRule>* park = setRules("park"))
+        for (const Lot& lot : l.lots)
+        {
+            if (lot.use != Use::Park || lot.outline.size() < 3)
+                continue;
+            Vec2 lo(1e300), hi(-1e300);
+            for (const Vec2& q : lot.outline.pts)
+                lo = glm::min(lo, q), hi = glm::max(hi, q);
+            for (size_t r = 0; r < park->size(); ++r)
+            {
+                const FurnitureRule& rule = (*park)[r];
+                const double step = std::max(rule.spacing, 200.0);
+                const uint64_t base = furnitureMix(furnitureMix(lot.key, textKey(rule.kind)), r);
+                for (int iy = 0; lo.y + (iy + 0.5) * step < hi.y; ++iy)
+                    for (int ix = 0; lo.x + (ix + 0.5) * step < hi.x; ++ix)
+                    {
+                        const uint64_t key = furnitureMix(base, (uint64_t(iy) << 20) ^ uint64_t(ix));
+                        const Vec2 q = lo + Vec2((ix + 0.2 + 0.6 * unitRandom(key)) * step, (iy + 0.2 + 0.6 * unitRandom(key ^ 0x9Eull)) * step);
+                        if (contains(lot.outline.pts, q) && boundaryDistance(lot.outline.pts, q) >= 250.0)
+                            addAt(rule.kind, key, q, 360.0 * unitRandom(key ^ 0x7Full), lot.block, "park");
+                    }
+            }
+        }
+    if (const std::vector<FurnitureRule>* yard = setRules("yard"))
+        for (const Envelope& env : l.envelopes)
+        {
+            if (env.lot < 0 || size_t(env.lot) >= l.lots.size() || env.footprint.size() < 3 || env.use == Use::Industrial || env.use == Use::Port)
+                continue;
+            const Lot& lot = l.lots[size_t(env.lot)];
+            double width = 0.0, depth = 0.0;
+            Vec2 centre(0.0);
+            frontageFit(env, width, depth, centre);
+            for (size_t r = 0; r < yard->size(); ++r)
+            {
+                const FurnitureRule& rule = (*yard)[r];
+                const uint64_t key = furnitureMix(furnitureMix(lot.key, textKey(rule.kind)), r);
+                if (unitRandom(key) >= std::min(1.0, width / std::max(rule.spacing, 100.0)))
+                    continue;
+                const Vec2 q = centre - env.front * (0.5 * depth + 300.0) + Vec2(-env.front.y, env.front.x) * ((unitRandom(key ^ 0x51ull) - 0.5) * 0.5 * width);
+                if (contains(lot.outline.pts, q) && boundaryDistance(lot.outline.pts, q) >= 150.0)
+                    addAt(rule.kind, key, q, 360.0 * unitRandom(key ^ 0x7Full), lot.block, "yard");
+            }
+        }
     return out;
 }
 } // namespace settlement

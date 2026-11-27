@@ -1,0 +1,97 @@
+{
+  "id": "adobe",
+  "label": "Adobe",
+  "description": "Earth-walled village houses: thick walls, small deep-set windows, a wooden door, roof beams (vigas) poking out under a flat roof.",
+  "tags": [
+    "adobe",
+    "village",
+    "rural",
+    "earth"
+  ],
+  "floors": {
+    "min": 1,
+    "max": 1,
+    "groundHeight": 330,
+    "height": 300,
+    "plinth": 20
+  },
+  "bays": {
+    "width": 280,
+    "min": 180,
+    "cornerWidth": 30
+  },
+  "openings": {
+    "window": {
+      "width": 0.3,
+      "height": 0.4,
+      "sill": 0.35,
+      "kind": "window.residential"
+    },
+    "door": {
+      "width": 0.4,
+      "height": 0.75,
+      "kind": "door.house"
+    },
+    "shopfront": {
+      "width": 0.6,
+      "height": 0.75
+    },
+    "reveal": 45
+  },
+  "groundFloor": {
+    "street": "window",
+    "shopfronts": true,
+    "shutters": 0.0,
+    "awnings": 0.1
+  },
+  "modules": {
+    "balconies": 0.0,
+    "grilles": 0.3,
+    "acUnits": 0.0,
+    "cornice": "vigas",
+    "bands": false,
+    "drainpipes": false
+  },
+  "roof": {
+    "kind": "flat",
+    "parapet": 30,
+    "waterTanks": 0.4,
+    "clutter": 0.1
+  },
+  "palette": {
+    "render": [
+      "#c9a27e",
+      "#b5835a",
+      "#d9b99b",
+      "#e3c9a8",
+      "#f2e4cf"
+    ],
+    "trim": [
+      "#8b5e3c",
+      "#6f4e37"
+    ],
+    "roof": [
+      "#9c7a5b"
+    ],
+    "base": [
+      "#8b6b4a"
+    ],
+    "dirt": [
+      0.3,
+      0.7
+    ]
+  },
+  "massing": {
+    "wallThickness": 50
+  },
+  "moduleTones": {
+    "window": [
+      null,
+      "trim"
+    ],
+    "door": [
+      null,
+      "trim"
+    ]
+  }
+}

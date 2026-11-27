@@ -167,7 +167,10 @@ json envelopeJson(const Envelope& e)
 {
     json tiers = json::array();
     for (const Envelope::Tier& t : e.tiers)
-        tiers.push_back({{"footprint", polyJson(t.footprint)}, {"bottom", t.bottom}, {"top", t.top}});
+        tiers.push_back({{"footprint", polyJson(t.footprint)}, {"bottom", t.bottom}, {"top", t.top}, {"roof", t.roof}, {"roofHeight", t.roofHeight}});
+    json holes = json::array();
+    for (const Polygon& h : e.holes)
+        holes.push_back(polyJson(h));
     return {{"lot", e.lot},
             {"footprint", polyJson(e.footprint)},
             {"base", e.base},
@@ -195,7 +198,8 @@ json envelopeJson(const Envelope& e)
             {"eraName", e.eraName},
             {"era", e.era},
             {"wealth", e.wealth},
-            {"route", int(e.route)}};
+            {"route", int(e.route)},
+            {"holes", holes}};
 }
 
 Envelope envelopeOf(const json& j)
@@ -214,7 +218,7 @@ Envelope envelopeOf(const json& j)
     e.random = j.value("random", 0.0f);
     e.key = j.value("key", uint64_t(0));
     for (const json& t : j.value("tiers", json::array()))
-        e.tiers.push_back({polyOf(t.at("footprint")), t.value("bottom", 0.0), t.value("top", 0.0)});
+        e.tiers.push_back({polyOf(t.at("footprint")), t.value("bottom", 0.0), t.value("top", 0.0), t.value("roof", std::string()), t.value("roofHeight", 0.0)});
     e.partyWith = j.value("partyWith", std::vector<int>());
     e.frontSetback = j.value("frontSetback", 0.0);
     e.sideSetback = j.value("sideSetback", 0.0);
@@ -230,6 +234,8 @@ Envelope envelopeOf(const json& j)
     e.era = j.value("era", 0);
     e.wealth = j.value("wealth", 1);
     e.route = BuildingRoute(j.value("route", 0));
+    for (const json& h : j.value("holes", json::array()))
+        e.holes.push_back(polyOf(h));
     return e;
 }
 

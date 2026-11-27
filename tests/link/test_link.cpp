@@ -137,6 +137,48 @@ TEST_CASE("framing: split, batched and out-of-order replies match their requests
     CHECK(reqs[1]["params"]["x"] == 1);
 }
 
+TEST_CASE("pipelined calls keep a bounded number awaiting and return the replies in send order")
+{
+    setup();
+    std::mutex m;
+    std::vector<json> held;
+    size_t most = 0;
+    // Holds requests back and answers them in reverse, three at a time, so replies arrive out of order.
+    FakeServer server([&](const json& req) -> std::optional<json> {
+        std::scoped_lock lock(m);
+        held.push_back(req);
+        most = std::max(most, held.size());
+        if (held.size() < 3 && req["params"]["i"].get<int>() < 9)
+            return std::nullopt;
+        json out = json::array();
+        for (auto it = held.rbegin(); it != held.rend(); ++it)
+            out.push_back((*it)["params"]["i"].get<int>() == 4 ? json{{"jsonrpc", "2.0"}, {"id", (*it)["id"]}, {"error", {{"code", -1}, {"message", "four"}}}}
+                                                                : FakeServer::reply(*it, (*it)["params"]["i"].get<int>() * 10));
+        held.clear();
+        return out;
+    });
+    RpcClient client;
+    REQUIRE(client.connect("127.0.0.1", server.port(), 1000));
+    std::vector<RpcClient::Request> calls;
+    for (int i = 0; i < 10; ++i)
+        calls.push_back({"n", {{"i", i}}, 3000});
+    const std::vector<RpcResult> r = client.callMany(calls, 3);
+    REQUIRE(r.size() == 10);
+    for (int i = 0; i < 10; ++i)
+    {
+        CAPTURE(i);
+        CHECK(r[size_t(i)].ok == (i != 4));
+        if (i != 4)
+            CHECK(r[size_t(i)].result == i * 10);
+    }
+    CHECK(r[4].error == "four");
+    CHECK(most <= 3);
+    const std::vector<json> reqs = server.requests();
+    REQUIRE(reqs.size() == 10);
+    for (int i = 0; i < 10; ++i)
+        CHECK(reqs[size_t(i)]["params"]["i"] == i);
+}
+
 TEST_CASE("errors come back as failed results with the server's code")
 {
     setup();

@@ -683,7 +683,10 @@ TEST_CASE("terrain inputs: terrainImportOsm drapes curves on the terrain, adds l
     const std::string road = o["curves"]["road"];
     CHECK(run("getAttr", {{"args", {road + ".terrainFeature"}}}) == "road");
     const json feats = json::parse(run("getAttr", {{"args", {road + ".osmFeatures"}}}).get<std::string>());
-    CHECK(feats[0]["name"] == "Main & High");
+    // Every name is fictional; the real one is kept only in the hidden source attribute.
+    CHECK(feats[0]["name"] != "Main & High");
+    CHECK_FALSE(feats[0]["name"].get<std::string>().empty());
+    CHECK(json::parse(run("getAttr", {{"args", {road + ".sourceNames"}}}).get<std::string>())["100"] == "Main & High");
     // Draped: every point sits on the ground.
     const json data = run("curveData", {{"args", {road}}, {"worldSpace", true}});
     double worst = 0.0;
@@ -1217,6 +1220,42 @@ TEST_CASE("terrain inputs: terrainImportLandCover puts WorldCover codes on the r
 
     CHECK_THROWS_WITH_AS(run("terrainImportLandCover", {{"args", {file.string()}}, {"terrain", mesh}, {"origin", {10.0, 10.0}}}), doctest::Contains("cover"), std::exception);
     fs::remove_all(dir);
+}
+
+TEST_CASE("terrain inputs: WorldCover on a grid coarser than its pixels gives each class its share of the cell")
+{
+    // Stripes one pixel wide, forest and farmland in turn, under a 30 m grid: every cell holds some of each.
+    Dem codes;
+    codes.width = 300, codes.height = 300, codes.geographic = true, codes.epsg = 4326;
+    codes.x0 = 6.0, codes.y0 = 48.0, codes.dx = codes.dy = kWcStep;
+    codes.metres.resize(size_t(codes.width) * codes.height);
+    for (int y = 0; y < codes.height; ++y)
+        for (int x = 0; x < codes.width; ++x)
+            codes.metres[size_t(y) * codes.width + x] = x % 2 ? 40.0f : 10.0f;
+    Georef g;
+    g.latMid = 48.0, g.x0 = 6.0, g.y0 = 48.0;
+    g.mx = 111320.0 * std::cos(48.0 * 0.017453292519943295), g.my = 111132.0;
+    geo::Heightfield h = geo::makeHeightfield(60, 60, 3000.0, {0.0, 0.0});
+    g.origin = h.origin;
+    rasterizeWorldCover(h, codes, g, "worldcover", true);
+    const std::vector<float>& forest = *h.findMask("landcover_forest");
+    const std::vector<float>& farm = *h.findMask("landcover_farmland");
+    size_t mixed = 0, n = 0;
+    double sum = 0.0;
+    for (int z = 2; z < h.nz - 2; ++z)
+        for (int x = 2; x < h.nx - 2; ++x)
+        {
+            const size_t i = h.index(x, z);
+            CHECK(forest[i] + farm[i] == doctest::Approx(1.0).epsilon(1e-5));
+            mixed += forest[i] > 0.05f && forest[i] < 0.95f;
+            sum += forest[i];
+            ++n;
+        }
+    CHECK(mixed > n * 3 / 4);
+    CHECK(sum / double(n) == doctest::Approx(0.5).epsilon(0.15));
+    // The code mask stays one code per cell.
+    for (float c : *h.findMask("worldcover"))
+        CHECK((std::lround(c * 255.0f) == 10 || std::lround(c * 255.0f) == 40));
 }
 
 TEST_CASE("terrain inputs: network: a real area downloads from AWS Terrain Tiles")

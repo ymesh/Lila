@@ -246,9 +246,8 @@ struct Runtime
         jobs.reset();
         serialJobs.reset();
         temp.reset();
-        // No JPH::UnregisterTypes(): this runs during static destruction (library unload, process exit), where Jolt's
-        // own statics may already be gone. It releases PhysicsMaterial::sDefault, which another static Ref has freed
-        // first under some link orders, writing into freed memory (heap corruption at exit in the GCC 13 build).
+        // Not JPH::UnregisterTypes: it releases PhysicsMaterial::sDefault, a static Jolt destroys before this one, so
+        // the release would write into the freed default material.
         delete JPH::Factory::sInstance;
         JPH::Factory::sInstance = nullptr;
     }

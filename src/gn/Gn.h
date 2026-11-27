@@ -38,6 +38,11 @@ LILA_SCENE_API std::string typeNameFor(const Group& g);
 /** Modifiers using a group. */
 LILA_SCENE_API std::vector<scene::NodeId> instancesOf(scene::Graph& g, scene::NodeId groupNode);
 LILA_SCENE_API bool isGnModifier(const scene::Node& n);
+/**
+ * Drops the step results a gn modifier keeps between evaluations and marks it dirty, so every node runs again: for
+ * nodes that read state no input carries (a style library, a tool's cutaway). False when it is not a gn modifier.
+ */
+LILA_SCENE_API bool rerunModifier(scene::Graph& g, scene::NodeId modifier);
 /** The heightfield a gn modifier's group produced on its last evaluation; null when it made none or failed. */
 LILA_SCENE_API std::shared_ptr<const geo::Heightfield> modifierHeightfield(scene::NodeId modifier);
 /** Everything a gn modifier's group produced on its last evaluation (volumes, curves, instances unrealized); null when none. */

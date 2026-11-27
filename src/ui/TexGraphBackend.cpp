@@ -506,6 +506,8 @@ public:
         return texPreview::toQImage(*r.image, r.type, texPreview::isColor(r.type, node));
     }
 
+    bool thumbnailsFollowTime(const std::string& group) const override { return texPreview::animated(group); }
+
     QWidget* nodePanel(QWidget* parent, NodeEditor& editor, const json& node) const override
     {
         if (node.value("type", "") == tex::kGroupInputType)

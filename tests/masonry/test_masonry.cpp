@@ -1,7 +1,10 @@
 #include "TestUtil.h"
+#include "../link/FakeServer.h"
 #include "MasonryBake.h"
 #include "MasonryCore.h"
 #include "MasonryShip.h"
+#include "core/PrefStore.h"
+#include "link/UnrealLink.h"
 
 #include "extensions/ExtensionManager.h"
 #include "geo/ColorSets.h"
@@ -475,6 +478,87 @@ TEST_CASE("masonry: masonryShip plans a wall without Unreal on dryRun")
     CHECK(lp["shellTriangles"].get<int64_t>() > 0);
     CHECK(lp["collisionHulls"].get<int64_t>() == 3);
     CHECK_THROWS(run("masonryShip", {{"args", {w["mesh"]}}, {"mode", "nanite"}, {"dryRun", true}}));
+}
+
+TEST_CASE("masonry: a wall's sent record belongs to one level; a level made again under the same path removes nothing")
+{
+    loadMasonry();
+    run("newScene");
+    const json w = run("masonryWall", {{"points", json::array({json::array({0, 0, 100}), json::array({600, 0, 100})})}, {"height", 100.0}});
+    const std::filesystem::path cache = std::filesystem::temp_directory_path() / "lila_masonry_level_record";
+    std::filesystem::remove_all(cache);
+    lila::PrefStore::get().set("unreal", "/cacheDir", cache.generic_string());
+    std::string level = "/Game/Test/Ruins", guid = "AAAA";
+    std::mutex m;
+    std::vector<json> removed;
+    FakeServer server([&](const json& req) -> std::optional<json> {
+        std::lock_guard lock(m);
+        const std::string method = req["method"];
+        if (method == "hello")
+            return FakeServer::reply(req, {{"project", "TestGame"}, {"features", {"progress", "placements", "levelInfo"}}});
+        if (method == "levelInfo")
+            return FakeServer::reply(req, {{"level", level}, {"guid", guid}, {"partitioned", false}});
+        if (method == "importAsset")
+            return FakeServer::reply(req, {{"assets", json::array()}, {"warnings", json::array()}, {"errors", json::array()}});
+        if (method == "placeInstances")
+            return FakeServer::reply(req, {{"spawned", req["params"]["placements"].size()}});
+        if (method == "removePlacements")
+        {
+            removed.push_back(req["params"]["groups"]);
+            return FakeServer::reply(req, {{"removed", req["params"]["groups"].size()}});
+        }
+        return std::nullopt;
+    });
+    lila::link::Link::ConnectOptions o;
+    o.port = server.port();
+    lila::link::Link::get().connect(o);
+    auto ship = [&](double chunk) {
+        return run("masonryShip", {{"args", {w["mesh"]}}, {"mode", "merged"}, {"chunkSize", chunk}, {"textures", false}, {"material", "none"}, {"wait", true}});
+    };
+    auto setLevel = [&](const std::string& l, const std::string& g) {
+        std::lock_guard lock(m);
+        level = l;
+        guid = g;
+    };
+
+    const json first = ship(200.0);
+    CHECK(first["removedGroups"] == 0);
+    CHECK_FALSE(first.contains("recordIgnored"));
+    // Bigger chunks: the same level drops the groups the wall no longer has.
+    const json second = ship(600.0);
+    CHECK(second["removedGroups"].get<int64_t>() > 0);
+    CHECK_FALSE(second.contains("recordIgnored"));
+    CHECK(removed.size() == 1);
+
+    // The level deleted and made again under the same path: the record is set aside and nothing is removed.
+    setLevel("/Game/Test/Ruins", "BBBB");
+    const json remade = ship(200.0);
+    CHECK(remade["removedGroups"] == 0);
+    REQUIRE(remade.contains("recordIgnored"));
+    CHECK(remade["recordIgnored"].get<std::string>().find("deleted and made again") != std::string::npos);
+    CHECK(removed.size() == 1);
+    // The record now names the new level and is trusted again.
+    const json again = ship(600.0);
+    CHECK(again["removedGroups"].get<int64_t>() > 0);
+    CHECK_FALSE(again.contains("recordIgnored"));
+    CHECK(removed.size() == 2);
+
+    // Another level keeps its own record: the wall's first send there removes nothing, and the first level's record stays.
+    ship(200.0);
+    setLevel("/Game/Other/Ruins", "CCCC");
+    const json other = ship(600.0);
+    CHECK(other["removedGroups"] == 0);
+    CHECK_FALSE(other.contains("recordIgnored"));
+    setLevel("/Game/Test/Ruins", "BBBB");
+    const json back = ship(600.0);
+    CHECK(back["removedGroups"].get<int64_t>() > 0);
+    CHECK(removed.size() == 3);
+
+    // A plugin without GUIDs: the record is trusted, with a note.
+    setLevel("/Game/Test/Ruins", "");
+    CHECK(ship(200.0).contains("levelUnchecked"));
+    lila::link::Link::get().disconnect();
+    std::filesystem::remove_all(cache);
 }
 
 TEST_CASE("masonry: collision hulls cover the wall, one convex piece per segment and band")

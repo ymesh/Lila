@@ -12,6 +12,7 @@
 #include "tex/Evaluate.h"
 #include "tex/PaintStrokes.h"
 #include "tex/Ports.h"
+#include "tex/Sequence.h"
 #include "tex/TextureSet.h"
 #pragma pop_macro("slots")
 
@@ -168,6 +169,9 @@ Prepared prepare(const Request& r)
         // r.set may name a node group as "Set/Group"; its previews read the group's inputs at their defaults.
         p.graph = tex::readGraphAt(scene::Graph::current(), r.set, &set);
         settings = tex::readSettings(*set);
+        // Sequence files and keyed values at the current frame; they land in the node values, so the key tells frames apart.
+        if (tex::sequence::animated(p.graph))
+            tex::sequence::followTime(p.graph, scene::Graph::current(), *set, scene::Graph::current().time(), imageRoot());
     }
     catch (const std::exception& e)
     {
@@ -421,6 +425,20 @@ Result render(const Request& request)
     catch (const std::exception& e)
     {
         return {nullptr, p.type, false, e.what()};
+    }
+}
+
+bool animated(const std::string& set)
+{
+    if (set.empty())
+        return false;
+    try
+    {
+        return tex::sequence::animated(tex::readGraphAt(scene::Graph::current(), set));
+    }
+    catch (const std::exception&)
+    {
+        return false;
     }
 }
 

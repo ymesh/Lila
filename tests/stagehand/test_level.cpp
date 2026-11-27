@@ -289,6 +289,34 @@ TEST_CASE("library: the starter props are built on first use, found by words and
     CHECK(run("dressInfo", {{"args", {beam[0]["meshes"][0]}}})[0]["shape"] == "compound");
 }
 
+TEST_CASE("slots: library items a scene's rules name load when it opens, so its slots draw them, not placeholders")
+{
+    load();
+    run("newScene");
+    run("libraryStarter");
+    run("slotPublish", {{"args", {"Props"}}, {"slots", json::array({{{"owner", "lot/1"}, {"path", "a"}, {"type", "prop"}, {"position", json::array({0, 0, 0})}},
+                                                                    {{"owner", "lot/1"}, {"path", "b"}, {"type", "prop"}, {"position", json::array({200, 0, 0})}}})}});
+    run("slotRule", {{"args", {"add"}}, {"type", "prop"}, {"item", "Industrial/Crate"}});
+    CHECK(run("slotReport", {{"validate", false}})["missingVisuals"].empty());
+    // The scene saved without the item's master (as one whose rules came from elsewhere would be).
+    run("delete", {{"args", {"StagehandLibrary"}}});
+    REQUIRE(scene::Graph::current().find("StagehandLibrary") == nullptr);
+    const auto path = std::filesystem::temp_directory_path() / "lila_stagehand_level" / "slot_items.lila";
+    std::filesystem::create_directories(path.parent_path());
+    run("saveScene", {{"args", {path.string()}}});
+    run("newScene");
+    run("openScene", {{"args", {path.string()}}});
+    // Opening loaded the crate: the slots draw it, and asking again finds nothing left to load.
+    const json report = run("slotReport", {{"validate", false}});
+    CAPTURE(report["missingVisuals"].dump());
+    CHECK(report["missingVisuals"].empty());
+    CHECK(report["total"] == 2);
+    CHECK(scene::Graph::current().find("StagehandLibrary") != nullptr);
+    const json again = run("slotLoadItems");
+    CHECK(again["loaded"].empty());
+    CHECK(again["missing"].empty());
+}
+
 TEST_CASE("unreal: body shapes export as UCX_ collision beside their meshes, only for meshes with bodies")
 {
     load();

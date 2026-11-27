@@ -1,4 +1,5 @@
 #include "io/SceneFile.h"
+#include "core/Release.h"
 
 #include "ops/Command.h"
 #include "ops/Undo.h"
@@ -65,6 +66,9 @@ struct State
     bool modified = false;
     bool autosaveDirty = false;
     bool loading = false;
+    bool evaluateOnLoad = false;
+    int opening = 0; // load() calls running
+    std::filesystem::path loadingPath;
     uint64_t cleanStateId = 0;
     bool untracked = false; // changed outside the undo stack, so no undo can return to the saved state
     std::optional<uint64_t> autosavedStateId; // undo state the last autosave wrote, while no untracked edit followed
@@ -448,6 +452,7 @@ void deserialize(const nlohmann::json& doc, const fs::path& sceneDir, double own
         }
         refs::resolvePendingParents(warnings);
 
+        LILA_ZONE_N("load.settings");
         std::vector<NodeId> sel;
         for (const json& n : doc.value("selection", json::array()))
             try
@@ -470,9 +475,17 @@ void deserialize(const nlohmann::json& doc, const fs::path& sceneDir, double own
         scene::camera::migrateNamedSettings(g, scene::renderSettings());
         scene::renderSettingsChanged();
         scene::scripts::fromJson(doc.value("scripts", json::array()));
-        scene::data::fromJson(doc.value("data", json::object()));
+        {
+            LILA_ZONE_N("load.data");
+            scene::data::fromJson(doc.value("data", json::object()));
+        }
         scene::poses::sceneFromJson(doc.value("poses", json::array()));
         scene::picker::sceneFromJson(doc.value("pickers", json::array()));
+        if (s.evaluateOnLoad)
+        {
+            LILA_ZONE_N("load.evaluate");
+            g.evaluateUpstream(g.nodes());
+        }
     }
     catch (...)
     {
@@ -688,6 +701,16 @@ void load(const fs::path& path)
 {
     LILA_ZONE();
 
+    struct Opening
+    {
+        explicit Opening(const fs::path& p) : was(std::exchange(state().loadingPath, p)) { ++state().opening; }
+        ~Opening()
+        {
+            --state().opening;
+            state().loadingPath = was;
+        }
+        fs::path was;
+    } opening(path);
     const std::string name = path.filename().string();
     progress::Scope scope(loadingVerb() + "...", 10.0, progress::Cancellable);
     scope.setStatus(name);
@@ -707,7 +730,7 @@ void load(const fs::path& path)
         progress::Scope build("", 0.0, progress::None, 7.0);
         restoreIfCancelled([&] { deserialize(doc, path.parent_path(), ec ? 0.0 : double(size)); });
         // The document holds a copy of every mesh array, slow enough to free that it goes on its own thread.
-        std::thread([d = std::move(doc)] {}).detach();
+        release::later(std::move(doc));
     }
     setCurrentPath(path);
     state().origin = origin;
@@ -741,6 +764,18 @@ void setCurrentPath(const fs::path& path)
     paths::setCurrentSceneDir(path.empty() ? fs::path() : path.parent_path());
     state().title.clear();
     notify();
+}
+
+bool loading()
+{
+    return state().loading || state().opening > 0;
+}
+
+void setEvaluateOnLoad(bool on) { state().evaluateOnLoad = on; }
+
+const fs::path& loadingPath()
+{
+    return state().loadingPath;
 }
 
 bool modified()

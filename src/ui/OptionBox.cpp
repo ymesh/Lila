@@ -179,6 +179,7 @@ public:
         scroll->setFrameShape(QFrame::NoFrame);
         scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         auto* body = new QWidget(scroll);
+        mBody = body;
         auto* grid = new QGridLayout(body);
         grid->setContentsMargins(12, 4, 12, 4);
         grid->setHorizontalSpacing(8);
@@ -223,6 +224,7 @@ public:
                     if (!mFilling && mPresetMenu)
                         mPresetMenu->setCurrentIndex(-1);
                     refreshEnabled();
+                    scheduleLiveNotes();
                 }, body);
                 mSetters[flag] = w.set;
                 mDefaults[flag] = f.defaultValue;
@@ -237,9 +239,12 @@ public:
                 ++row;
                 if (QLabel* note = noteFor(flag, body))
                     grid->addWidget(note, row++, 1);
+                if (QLabel* live = liveNoteFor(flag, body))
+                    grid->addWidget(live, row++, 1);
             }
         }
         grid->setRowStretch(row, 1);
+        refreshLiveNotes();
         rebuildPresets();
         refreshWarning();
         if (over && over->warning)
@@ -359,6 +364,66 @@ private:
         return label;
     }
 
+    /** A label under the flag's field for its live note, empty until refreshLiveNotes fills it; null when it has none. */
+    QLabel* liveNoteFor(const std::string& flag, QWidget* parent)
+    {
+        const opt::Override* o = opt::findOverride(mCommand);
+        if (!o || !o->liveNotes.count(flag) || !o->liveNotes.at(flag))
+            return nullptr;
+        auto* label = new QLabel(parent);
+        label->setObjectName("optionLiveNote");
+        label->setWordWrap(true);
+        label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        optionDim(label);
+        mLiveNotes[flag] = label;
+        return label;
+    }
+
+    void refreshLiveNotes()
+    {
+        const opt::Override* o = opt::findOverride(mCommand);
+        if (!o)
+            return;
+        json values = mValues;
+        if (mCall.is_object())
+            for (auto& [k, v] : mCall.items())
+                values[k] = v;
+        for (auto& [flag, label] : mLiveNotes)
+        {
+            std::string text;
+            try
+            {
+                text = o->liveNotes.at(flag)(values);
+            }
+            catch (const std::exception& e)
+            {
+                text = e.what();
+            }
+            label->setText(QString::fromStdString(text));
+            label->setVisible(!text.empty());
+        }
+        // A note that grew (a list of downloads) grows the box with it, up to the height the box opens at at most.
+        if (mBody && isVisible())
+        {
+            mBody->adjustSize();
+            const int want = std::min(720, mBody->sizeHint().height() + 140);
+            if (want > height())
+                resize(width(), want);
+        }
+    }
+
+    /** Live notes may read files, so a burst of edits (typing a path) refreshes them once. */
+    void scheduleLiveNotes()
+    {
+        if (mLiveQueued || mLiveNotes.empty())
+            return;
+        mLiveQueued = true;
+        QTimer::singleShot(200, this, [this] {
+            mLiveQueued = false;
+            refreshLiveNotes();
+        });
+    }
+
     /** Stores the fields' values where Apply does, so the menu item, hotkeys and shelf run with them. */
     void saveSettings()
     {
@@ -396,6 +461,7 @@ private:
         }
         mFilling = false;
         refreshEnabled();
+        scheduleLiveNotes();
     }
 
     void resetSettings()
@@ -408,6 +474,7 @@ private:
                 set(mValues[flag]);
         mFilling = false;
         refreshEnabled();
+        scheduleLiveNotes();
         if (mPresetMenu)
             mPresetMenu->setCurrentIndex(-1);
     }
@@ -422,9 +489,11 @@ private:
             const auto w = mFieldWidgets.find(flag);
             if (w == mFieldWidgets.end())
                 continue;
-            const json v = mValues.contains(when.first) ? mValues[when.first] : mDefaults[when.first];
+            const json v = mCall.contains(when.first) ? mCall[when.first] : mValues.contains(when.first) ? mValues[when.first] : mDefaults[when.first];
             const bool warned = mWarningShown && std::find(o->warned.begin(), o->warned.end(), flag) != o->warned.end();
-            const bool on = !warned && v.is_string() && std::find(when.second.begin(), when.second.end(), v.get<std::string>()) != when.second.end();
+            // A Bool flag reads as "true" or "false", so a checkbox can turn its dependants on and off.
+            const std::string value = v.is_boolean() ? (v.get<bool>() ? "true" : "false") : v.is_string() ? v.get<std::string>() : std::string();
+            const bool on = !warned && (v.is_string() || v.is_boolean()) && std::find(when.second.begin(), when.second.end(), value) != when.second.end();
             for (QWidget* x : {w->second.first, w->second.second})
                 if (x)
                     x->setEnabled(on);
@@ -588,9 +657,12 @@ private:
     QWidget* mWarning = nullptr;
     int mGraphListener = -1;
     bool mWarningQueued = false;
+    std::map<std::string, QLabel*> mLiveNotes;
+    bool mLiveQueued = false;
     bool mWarningShown = false;
     QLabel* mPresetLabel = nullptr;
     QWidget* mPresetHost = nullptr;
+    QWidget* mBody = nullptr;
     QPointer<QComboBox> mPresetMenu;
     std::vector<opt::presets::Preset> mSaved;
     /** Set while a preset or reset writes the fields, so their change doesn't read as an edit. */

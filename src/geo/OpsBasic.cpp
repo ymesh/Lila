@@ -7,6 +7,7 @@
 #include "core/Profile.h"
 
 #include <glm/gtc/constants.hpp>
+#include <tbb/parallel_for.h>
 
 #include <algorithm>
 #include <cmath>
@@ -217,6 +218,30 @@ void flipNormals(Mesh& mesh, std::span<const Index> faces)
         if (!n.empty())
             mesh.forEachFaceCorner(f, [&](Index c) { n[c] = -n[c]; });
     }
+}
+
+void transformMesh(Mesh& mesh, const glm::dmat4& m)
+{
+    LILA_ZONE();
+
+    std::span<glm::dvec3> pos = mesh.positions();
+    tbb::parallel_for(size_t(0), pos.size(), [&](size_t p) { pos[p] = glm::dvec3(m * glm::dvec4(pos[p], 1.0)); });
+    const glm::dmat3 linear(m);
+    const glm::mat3 n(glm::transpose(glm::inverse(linear))), t(linear);
+    const bool mirrors = glm::determinant(linear) < 0.0;
+    for (AttributeSet* set : {&mesh.cornerAttrs(), &mesh.pointAttrs()})
+    {
+        for (glm::vec3& v : set->get<glm::vec3>(attr::kNormal))
+            if (glm::dot(v, v) > 0.0f)
+                v = glm::normalize(n * v);
+        for (glm::vec4& v : set->get<glm::vec4>(attr::kTangent))
+            if (const glm::vec3 d = t * glm::vec3(v); glm::dot(d, d) > 0.0f)
+                v = glm::vec4(glm::normalize(d), mirrors ? -v.w : v.w);
+    }
+    if (mirrors)
+        for (Index f = 0; f < mesh.faceCapacity(); ++f)
+            if (mesh.faceValid(f))
+                mesh.flipFace(f);
 }
 
 void conformNormals(Mesh& mesh, std::span<const Index> faces)

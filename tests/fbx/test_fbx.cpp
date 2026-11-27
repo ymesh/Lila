@@ -525,6 +525,31 @@ TEST_CASE("exportFbx and importFbx commands")
     CHECK(names[0].get<std::string>() != "Body"); // made unique
 }
 
+TEST_CASE("fbx export writes a plain color layer as vertex colors")
+{
+    math::setUpAxis(math::UpAxis::Y);
+    Graph& g = Graph::current();
+    g.clear();
+    geo::Mesh m = geo::makeCube({.width = 100.0, .height = 100.0, .depth = 100.0});
+    std::span<glm::vec4> col = m.cornerAttrs().getOrAdd<glm::vec4>(geo::attr::kColor);
+    for (size_t c = 0; c < col.size(); ++c)
+        col[c] = glm::vec4(0.25f, 0.5f, 0.75f, 1.0f);
+    REQUIRE(geo::colors::sets(m).empty());
+    addMesh(g, "Tinted", std::move(m));
+    const fs::path path = tempFile("plaincolor.fbx");
+    ops::execute("exportFbx", {{"args", {path.string(), "Tinted"}}, {"profile", "ue5"}});
+    g.clear();
+    ops::execute("importFbx", {{"args", {path.string()}}});
+    Node* n = g.find("Tinted");
+    REQUIRE(n);
+    const MeshPtr back = n->as<MeshPtr>(MeshNode::kOutMesh);
+    REQUIRE(back);
+    const std::vector<std::string> sets = geo::colors::sets(*back);
+    REQUIRE(sets.size() == 1);
+    for (const glm::vec4& c : geo::colors::values(*back, sets[0]))
+        CHECK(std::abs(c.g - 0.5f) < 1e-3f);
+}
+
 TEST_CASE("fbx textures carry their wrap modes out and back")
 {
     math::setUpAxis(math::UpAxis::Y);

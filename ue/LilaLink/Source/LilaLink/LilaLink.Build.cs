@@ -52,6 +52,8 @@ public class LilaLink : ModuleRules
 			"ChaosCaching",
 			"StaticMeshEditor",
 			"EditorSubsystem",
+			"DataLayerEditor",
+			"BSPUtils",
 			"RenderCore",
 			"RHI",
 			"LilaLinkRuntime",

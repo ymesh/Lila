@@ -8,6 +8,7 @@
 
 #include <lila/Extension.h>
 #include <lila/GeometryNodes.h>
+#include <lila/Graph.h>
 #include <lila/Log.h>
 #include <lila/Math.h>
 #include <lila/Overlap.h>
@@ -439,6 +440,17 @@ void publishGround(uint64_t modifier, std::shared_ptr<const Heightfield> h)
 {
     std::lock_guard lock(gGroundMutex);
     gGround[modifier] = std::move(h);
+}
+
+void forgetGoneCliffs()
+{
+    const lila::scene::Graph& g = lila::scene::Graph::current();
+    {
+        std::lock_guard lock(gGroundMutex);
+        std::erase_if(gGround, [&](const auto& e) { return !g.node(lila::scene::NodeId(e.first)); });
+    }
+    std::lock_guard lock(gResultMutex);
+    std::erase_if(gResults, [&](const auto& e) { return !g.node(lila::scene::NodeId(e.first.first)); });
 }
 
 std::shared_ptr<const Heightfield> publishedGround(uint64_t modifier)

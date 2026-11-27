@@ -498,6 +498,7 @@ json Stamp::toJson() const
               {"height", height},
               {"offset", offset},
               {"falloff", falloff},
+              {"skirtGrade", skirtGrade},
               {"strength", strength},
               {"grade", grade},
               {"direction", json::array({direction.x, direction.y})},
@@ -556,6 +557,7 @@ Stamp Stamp::fromJson(const json& j)
     s.height = j.value("height", 0.0);
     s.offset = j.value("offset", 0.0);
     s.falloff = std::max(0.0, j.value("falloff", 500.0));
+    s.skirtGrade = std::max(0.0, j.value("skirtGrade", 0.0));
     s.strength = std::clamp(j.value("strength", 1.0), 0.0, 1.0);
     s.grade = j.value("grade", 0.0);
     if (j.contains("direction") && j["direction"].is_array() && j["direction"].size() == 2)
@@ -713,7 +715,9 @@ StampResult applyLine(Heightfield& h, const Stamp& s, const std::vector<glm::dve
     const bool oneSided = kind == "quay" || kind == "seawall" || kind == "embankment";
     const double sideSign = s.side == "right" ? -1.0 : 1.0;
     const double half = s.width * 0.5;
-    const double reach = half + s.falloff + h.cell;
+    // A quay narrower than a cell still sets the land samples next to its face, which the grid draws as a one-cell slope.
+    const double landHalf = kind == "quay" ? std::max(half, h.cell) : half;
+    const double reach = landHalf + s.falloff + h.cell;
 
     // Nearest centreline point per sample, segment by segment over each one's box.
     glm::dvec2 bl(std::numeric_limits<double>::infinity()), bh(-std::numeric_limits<double>::infinity());
@@ -763,12 +767,13 @@ StampResult applyLine(Heightfield& h, const Stamp& s, const std::vector<glm::dve
                 continue;
             // Counterclockwise in (X, Z): positive cross is to the left of travel.
             const bool landSide = (cross[i] * sideSign) >= 0.0;
-            double w = d <= half ? 1.0 : (s.falloff > 0.0 ? 1.0 - smoothstep(0.0, s.falloff, d - half) : 0.0);
+            const double core = landSide ? landHalf : half;
+            double w = d <= core ? 1.0 : (s.falloff > 0.0 ? 1.0 - smoothstep(0.0, s.falloff, d - core) : 0.0);
             if (oneSided && !landSide)
                 w = kind == "quay" && d <= half ? 1.0 : 0.0;
             if (w <= 0.0)
                 continue;
-            if (d <= half)
+            if (d <= core)
                 ++covered;
             const size_t hi = h.index(x, z);
             for (std::vector<float>* mk : masks)
@@ -806,6 +811,57 @@ StampResult applyLine(Heightfield& h, const Stamp& s, const std::vector<glm::dve
 }
 } // namespace
 
+namespace
+{
+/**
+ * The falloff a footprint stamp's skirt needs to fall no steeper than its skirtGrade: the level it will take, the most the
+ * ground round it differs from that, and the smoothstep's peak slope of 1.5 times the mean. Between the given falloff
+ * and four times it.
+ */
+double skirtFalloff(const Heightfield& h, const Stamp& s, const Footprint& f, glm::dvec2 lo, glm::dvec2 hi)
+{
+    const Region r0 = regionAround(h, lo, hi, 2.0 * h.cell);
+    const std::vector<uint8_t> core = rasterize(h, r0, f);
+    std::vector<float> ground;
+    for (int z = r0.z0; z <= r0.z1; ++z)
+        for (int x = r0.x0; x <= r0.x1; ++x)
+            if (core[r0.at(x, z)])
+                ground.push_back(h.at(x, z));
+    if (ground.empty())
+        return s.falloff;
+    double base = std::accumulate(ground.begin(), ground.end(), 0.0) / double(ground.size());
+    switch (s.level)
+    {
+    case StampLevel::Min: base = *std::min_element(ground.begin(), ground.end()); break;
+    case StampLevel::Max: base = *std::max_element(ground.begin(), ground.end()); break;
+    case StampLevel::Median:
+        std::nth_element(ground.begin(), ground.begin() + ground.size() / 2, ground.end());
+        base = ground[ground.size() / 2];
+        break;
+    case StampLevel::Object: base = std::isnan(f.lowestY) ? *std::min_element(ground.begin(), ground.end()) : f.lowestY; break;
+    case StampLevel::Value: base = s.height; break;
+    default: break;
+    }
+    base += s.offset;
+    double falloff = s.falloff;
+    for (int pass = 0; pass < 2; ++pass)
+    {
+        const Region ring = regionAround(h, lo, hi, falloff);
+        double drop = 0.0;
+        for (int z = ring.z0; z <= ring.z1; ++z)
+            for (int x = ring.x0; x <= ring.x1; ++x)
+            {
+                const glm::dvec2 p = h.samplePos(x, z);
+                const glm::dvec2 out = glm::max(glm::max(lo - p, p - hi), glm::dvec2(0.0));
+                if (glm::length(out) <= falloff && (out.x > 0.0 || out.y > 0.0))
+                    drop = std::max(drop, std::abs(double(h.at(x, z)) - base));
+            }
+        falloff = std::clamp(1.5 * drop / s.skirtGrade, s.falloff, 4.0 * s.falloff);
+    }
+    return falloff;
+}
+} // namespace
+
 StampResult applyStamp(Heightfield& h, const Stamp& s, const Footprint& f)
 {
     LILA_ZONE();
@@ -828,6 +884,15 @@ StampResult applyStamp(Heightfield& h, const Stamp& s, const Footprint& f)
             lo = glm::min(lo, p);
             hi = glm::max(hi, p);
         }
+    if (s.skirtGrade > 0.0 && s.edge != StampEdge::Wall && s.falloff > 0.0 && s.mode != StampMode::Plinth && s.mode != StampMode::Stilts)
+    {
+        Stamp widened = s;
+        widened.skirtGrade = 0.0;
+        widened.falloff = skirtFalloff(h, s, f, lo, hi);
+        StampResult r = applyStamp(h, widened, f);
+        r.falloff = widened.falloff;
+        return r;
+    }
     const bool skirt = s.edge != StampEdge::Wall && s.falloff > 0.0;
     const Region r = regionAround(h, lo, hi, (skirt ? s.falloff : 0.0) + 2.0 * h.cell);
     if (r.empty())

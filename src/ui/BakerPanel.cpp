@@ -408,6 +408,8 @@ void BakerPanel::onBakeEvent(const bake::BakeEvent& e)
             }
         }
         updateButtons();
+        // The bake's progress has ended: Assign and the bar follow at once, not on the next poll.
+        pollProgress();
         break;
     }
 }

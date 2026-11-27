@@ -252,6 +252,8 @@ public:
     void clear();
     /** Drops deleted elements and makes face corners contiguous. */
     void compact(MeshRemap* remap = nullptr);
+    /** No deleted elements and every face's corners contiguous in face order: compact() would change nothing. */
+    bool alreadyCompact() const;
     /** Appends other's elements; returns the point id offset. Attribute layers are merged by name. */
     Index append(const Mesh& other);
 

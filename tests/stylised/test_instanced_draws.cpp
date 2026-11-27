@@ -237,3 +237,197 @@ TEST_CASE("Instanced draws: timing for many placements of one mesh")
     MESSAGE("4900 boxes, CPU record ms: instanced " << shared.cpuMs << ", one draw each " << unique.cpuMs << "; GPU ms: " << shared.gpuMs << " vs "
                                                    << unique.gpuMs);
 }
+
+namespace
+{
+/** Mean colour (rgb, 0 to 255) of the lit pixels in columns [x0, x1); zero when none are lit. */
+glm::dvec3 litMean(const std::vector<uint8_t>& bgra, int x0, int x1)
+{
+    glm::dvec3 sum(0.0);
+    int n = 0;
+    for (int y = 0; y < kDrawSize; ++y)
+        for (int x = x0; x < x1; ++x)
+        {
+            const uint8_t* p = &bgra[(size_t(y) * kDrawSize + x) * 4];
+            if (p[0] + p[1] + p[2] > 6)
+            {
+                sum += glm::dvec3(p[2], p[1], p[0]);
+                ++n;
+            }
+        }
+    return n ? sum / double(n) : glm::dvec3(0.0);
+}
+
+/** Pixels that differ by more than a few levels in any channel. */
+int changedPixels(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b)
+{
+    int n = 0;
+    for (size_t i = 0; i < a.size(); i += 4)
+        if (std::abs(int(a[i]) - int(b[i])) > 8 || std::abs(int(a[i + 1]) - int(b[i + 1])) > 8 || std::abs(int(a[i + 2]) - int(b[i + 2])) > 8)
+            ++n;
+    return n;
+}
+
+/** Three boxes left, middle and right as one instanced draw, coloured red, not at all and blue when colored. */
+FrameState threeBoxes(bool colored)
+{
+    FrameState s = frameAt(30.0);
+    MeshDraw d;
+    d.mesh = box(5.0f);
+    auto list = std::make_shared<std::vector<glm::mat4>>();
+    for (float x : {-20.0f, 0.0f, 20.0f})
+        list->push_back(glm::translate(glm::mat4(1.0f), glm::vec3(x, 0.0f, 0.0f)));
+    d.instances = list;
+    if (colored)
+        d.instanceColors = std::make_shared<std::vector<glm::vec4>>(std::vector<glm::vec4>{{0.8f, 0.05f, 0.05f, 1.0f}, glm::vec4(0.0f), {0.05f, 0.05f, 0.8f, 1.0f}});
+    s.meshes.push_back(d);
+    return s;
+}
+} // namespace
+
+TEST_CASE("Instanced draws: each placement shows its instance colour")
+{
+    if (!gpu("instanced draw"))
+        return;
+    const auto plain = renderInstanced(threeBoxes(false));
+    const auto colored = renderInstanced(threeBoxes(true));
+    const int third = kDrawSize / 3;
+    // The middle box alone: the outer boxes reach into the middle third under perspective.
+    const int mid0 = kDrawSize * 7 / 16, mid1 = kDrawSize * 9 / 16;
+    const glm::dvec3 left = litMean(colored, 0, third), middle = litMean(colored, mid0, mid1), right = litMean(colored, 2 * third, kDrawSize);
+    MESSAGE("left " << left.r << " " << left.g << " " << left.b << ", middle " << middle.r << " " << middle.g << " " << middle.b << ", right " << right.r
+                    << " " << right.g << " " << right.b);
+    CHECK(left.r > 2.0 * left.g);
+    CHECK(left.r > 2.0 * left.b);
+    CHECK(right.b > 2.0 * right.r);
+    CHECK(right.b > 2.0 * right.g);
+    // The uncoloured placement is untouched.
+    const glm::dvec3 plainMiddle = litMean(plain, mid0, mid1);
+    CHECK(std::abs(middle.r - plainMiddle.r) < 1.0);
+    CHECK(std::abs(middle.b - plainMiddle.b) < 1.0);
+
+    // A material that keeps its own colour ignores them; one without the flag takes them.
+    FrameState kept = threeBoxes(true);
+    Material own;
+    own.baseColor = glm::vec3(0.5f);
+    own.flags |= MatNoInstanceColor;
+    kept.meshes.edit()[0].materials = {own};
+    FrameState keptPlain = threeBoxes(false);
+    keptPlain.meshes.edit()[0].materials = {own};
+    CHECK(maxDiff(renderInstanced(kept), renderInstanced(keptPlain)) == 0);
+    own.flags &= ~uint32_t(MatNoInstanceColor);
+    kept.meshes.edit()[0].materials = {own};
+    CHECK(litMean(renderInstanced(kept), 0, third).r > 2.0 * litMean(renderInstanced(kept), 0, third).g);
+
+    // Half an amount lands between the two.
+    FrameState half = threeBoxes(true);
+    auto halfColors = std::make_shared<std::vector<glm::vec4>>(*half.meshes[0].instanceColors);
+    (*halfColors)[0].a = 0.5f;
+    half.meshes.edit()[0].instanceColors = halfColors;
+    const glm::dvec3 halfLeft = litMean(renderInstanced(half), 0, third), plainLeft = litMean(plain, 0, third);
+    CHECK(halfLeft.g < plainLeft.g - 5.0);
+    CHECK(halfLeft.g > left.g + 5.0);
+
+    // Two tones: a material with MatInstanceColor2 takes the second colour, the others the first.
+    FrameState toned = threeBoxes(true);
+    auto second = std::make_shared<std::vector<glm::vec4>>(toned.meshes[0].instanceColors->size(), glm::vec4(0, 1, 0, 1));
+    toned.meshes.edit()[0].instanceColors2 = second;
+    Material first;
+    first.baseColor = glm::vec3(0.5f);
+    toned.meshes.edit()[0].materials = {first};
+    const glm::dvec3 firstLeft = litMean(renderInstanced(toned), 0, third);
+    CHECK(firstLeft.r > 2.0 * firstLeft.g);
+    Material trim = first;
+    trim.flags |= MatInstanceColor2;
+    toned.meshes.edit()[0].materials = {trim};
+    const glm::dvec3 secondLeft = litMean(renderInstanced(toned), 0, third);
+    MESSAGE("second tone left " << secondLeft.r << " " << secondLeft.g << " " << secondLeft.b);
+    CHECK(secondLeft.g > 2.0 * secondLeft.r);
+    CHECK(secondLeft.g > 2.0 * secondLeft.b);
+}
+
+TEST_CASE("Instanced draws: selection still outlines coloured placements")
+{
+    if (!gpu("instanced draw"))
+        return;
+    auto selected = [](FrameState s) {
+        s.meshes.edit()[0].flags = DrawShaded | DrawWire | DrawSelected;
+        return s;
+    };
+    const int plainWire = changedPixels(renderInstanced(threeBoxes(false)), renderInstanced(selected(threeBoxes(false))));
+    const int coloredWire = changedPixels(renderInstanced(threeBoxes(true)), renderInstanced(selected(threeBoxes(true))));
+    MESSAGE("selection wire pixels: plain " << plainWire << ", coloured " << coloredWire);
+    CHECK(plainWire > 50);
+    CHECK(std::abs(coloredWire - plainWire) <= plainWire / 10);
+}
+
+TEST_CASE("Instanced draws: timing for 100k placements with and without instance colours")
+{
+    if (!gpu("instanced draw"))
+        return;
+    constexpr int kSide = 317; // 100,489 boxes
+    FrameState s = frameAt(kSide * 10.0);
+    MeshDraw d;
+    d.mesh = box(3.0f);
+    auto list = std::make_shared<std::vector<glm::mat4>>();
+    auto colors = std::make_shared<std::vector<glm::vec4>>();
+    for (int i = 0; i < kSide * kSide; ++i)
+    {
+        list->push_back(glm::translate(glm::mat4(1.0f), glm::vec3((i % kSide - kSide / 2) * 10.0f, 0.0f, (i / kSide - kSide / 2) * 10.0f)));
+        colors->push_back(glm::vec4(float(i % 7) / 7.0f, float(i % 5) / 5.0f, float(i % 3) / 3.0f, 1.0f));
+    }
+    d.instances = list;
+    s.meshes.push_back(d);
+    // Alternated so clock ramps and caches favour neither.
+    for (int round = 0; round < 3; ++round)
+    {
+        Renderer::FrameStats plain, colored;
+        s.meshes.edit()[0].instanceColors = nullptr;
+        renderInstanced(s, &plain, 10);
+        s.meshes.edit()[0].instanceColors = colors;
+        renderInstanced(s, &colored, 10);
+        CHECK(plain.meshInstances == colored.meshInstances);
+        CHECK(plain.meshDrawCalls == colored.meshDrawCalls);
+        MESSAGE("100,489 boxes, CPU record ms: plain " << plain.cpuMs << ", coloured " << colored.cpuMs << "; GPU ms: " << plain.gpuMs << " vs "
+                                                       << colored.gpuMs);
+    }
+}
+
+TEST_CASE("Instanced draws: ray-traced reflections show instance colours")
+{
+    if (!gpu("instanced draw") || !Renderer::get().gpuInfo().rayTracing)
+        return;
+    // Every placement red over a mirror floor; the reflections' change from plain to coloured is what the colour adds.
+    auto scene = [](bool colored, FrameState::Reflections r) {
+        FrameState s = threeBoxes(false);
+        if (colored)
+            s.meshes.edit()[0].instanceColors = std::make_shared<std::vector<glm::vec4>>(3, glm::vec4(0.8f, 0.05f, 0.05f, 1.0f));
+        s.reflections = r;
+        s.lighting = FrameState::Lighting::Environment;
+        s.reflectionCutoff = 1.0f;
+        MeshDraw floor;
+        floor.mesh = box(1.0f);
+        floor.world = glm::scale(glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -8.0f, 0.0f)), glm::vec3(200.0f, 0.5f, 200.0f));
+        Material mirror;
+        mirror.baseColor = glm::vec3(0.9f);
+        mirror.metallic = 1.0f;
+        mirror.roughness = 0.05f;
+        mirror.flags |= MatNoInstanceColor;
+        floor.materials = {mirror};
+        s.meshes.push_back(floor);
+        return s;
+    };
+    auto reflected = [&](bool colored) {
+        const auto on = renderInstanced(scene(colored, FrameState::Reflections::RayTraced)), off = renderInstanced(scene(colored, FrameState::Reflections::Off));
+        glm::dvec3 sum(0.0);
+        for (size_t i = 0; i < on.size(); i += 4)
+            sum += glm::dvec3(int(on[i + 2]) - int(off[i + 2]), int(on[i + 1]) - int(off[i + 1]), int(on[i]) - int(off[i]));
+        return sum;
+    };
+    const glm::dvec3 plain = reflected(false), delta = reflected(true) - plain;
+    MESSAGE("reflections against none, rgb sums: " << plain.r << " " << plain.g << " " << plain.b);
+    MESSAGE("reflection change from the colour, rgb sums: " << delta.r << " " << delta.g << " " << delta.b);
+    CHECK(delta.r > 2000.0);
+    CHECK(delta.g < -2000.0);
+    CHECK(delta.b < -2000.0);
+}

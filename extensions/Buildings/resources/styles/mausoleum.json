@@ -1,0 +1,88 @@
+{
+  "id": "mausoleum",
+  "label": "Mausoleum",
+  "description": "Family chapels of the cemetery: one storey, columns at a glass front, a dome, marble and pastel.",
+  "tags": [
+    "cemetery",
+    "mausoleum",
+    "landmark"
+  ],
+  "floors": {
+    "min": 1,
+    "max": 1,
+    "groundHeight": 380,
+    "height": 380,
+    "plinth": 40
+  },
+  "bays": {
+    "width": 250,
+    "min": 180,
+    "cornerWidth": 40
+  },
+  "openings": {
+    "window": {
+      "width": 0.35,
+      "height": 0.5,
+      "sill": 0.3,
+      "kind": "window.residential"
+    },
+    "door": {
+      "width": 0.6,
+      "height": 0.8,
+      "kind": "door.shop"
+    },
+    "shopfront": {
+      "width": 0.7,
+      "height": 0.8
+    },
+    "reveal": 20
+  },
+  "groundFloor": {
+    "street": "door",
+    "shopfronts": false
+  },
+  "modules": {
+    "balconies": 0.0,
+    "grilles": 0.6,
+    "acUnits": 0.2,
+    "pilasters": true,
+    "cornice": "heavy",
+    "bands": false,
+    "corner": "pilaster",
+    "drainpipes": false
+  },
+  "roof": {
+    "kind": "flat",
+    "parapet": 50,
+    "waterTanks": 0.0,
+    "clutter": 0.0
+  },
+  "palette": {
+    "render": [
+      "#f8f8f8",
+      "#e8f1f2",
+      "#f7e1d7",
+      "#dbe7e4",
+      "#fce8c8"
+    ],
+    "trim": [
+      "#ffffff",
+      "#d9c9a3"
+    ],
+    "roof": [
+      "#3a7ca5",
+      "#c9a227"
+    ],
+    "base": [
+      "#cfcfcf"
+    ],
+    "dirt": [
+      0.0,
+      0.2
+    ]
+  },
+  "extras": {
+    "columns": 2,
+    "domes": 1
+  }
+}

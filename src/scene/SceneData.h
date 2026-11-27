@@ -4,6 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <functional>
 #include <string>
 
 namespace lila::scene::data
@@ -26,6 +27,11 @@ LILA_SCENE_API void clear();
 LILA_SCENE_API json toJson();
 /** Replaces everything without undo. */
 LILA_SCENE_API void fromJson(const json& j);
+/**
+ * Called after fromJson, while the scene is still loading: for state derived from the data that anything evaluating
+ * the rest of the load must already see. A callback an extension registers is removed when the extension unloads.
+ */
+LILA_SCENE_API void onLoaded(std::function<void()> fn);
 
 /** Commands: sceneData. */
 LILA_SCENE_API void registerCommands();

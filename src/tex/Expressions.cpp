@@ -24,7 +24,8 @@ bool graphJsonUsesTime(const json& g)
     for (const json& n : g.value("nodes", json::array()))
         if (n.contains("values") && n["values"].is_object() && mentionsTime(n["values"].value(kExpressionsKey, json())))
             return true;
-    for (const auto& [name, sub] : g.value("subgroups", json::object()).items())
+    const json subgroups = g.value("subgroups", json::object());
+    for (const auto& [name, sub] : subgroups.items())
         if (graphJsonUsesTime(sub))
             return true;
     return false;

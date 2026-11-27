@@ -107,12 +107,16 @@ struct DragHook
     std::function<bool(QMouseEvent* e, const ViewInfo& view)> press;
     std::function<void(QMouseEvent* e, const ViewInfo& view)> move;
     std::function<void(QMouseEvent* e, const ViewInfo& view)> release;
+    /** The cursor moved with no button down: true when what the hook shows under it changed, so the view redraws. */
+    std::function<bool(QPointF px, const ViewInfo& view)> hover;
 };
 /** Adding an id again replaces it. */
 LILA_UI_API void setDragHook(std::string id, DragHook hook);
 LILA_UI_API bool removeDragHook(std::string_view id);
 /** Offers a press to each hook by id; true when one took it and owns the drag until releaseDrag. */
 LILA_UI_API bool pressDrag(QMouseEvent* e, const ViewInfo& view);
+/** Offers a buttonless move to every hook's hover; true when one asks for a redraw. */
+LILA_UI_API bool hoverDrag(QPointF px, const ViewInfo& view);
 /** True while a hook owns a drag. */
 LILA_UI_API bool dragging();
 LILA_UI_API void moveDrag(QMouseEvent* e, const ViewInfo& view);

@@ -1,4 +1,5 @@
 #include "io/References.h"
+#include "core/Release.h"
 
 #include "ops/Command.h"
 #include "ops/Undo.h"
@@ -229,7 +230,7 @@ json readSceneFile(const fs::path& path, std::vector<std::string>* warnings)
         break;
     }
     // Gigabytes take long enough to free that it is done off this thread.
-    std::thread([b = std::move(bytes)] {}).detach();
+    release::later(std::move(bytes));
     return doc;
 }
 

@@ -712,11 +712,43 @@ void Mesh::clear()
     *this = Mesh();
 }
 
+bool Mesh::alreadyCompact() const
+{
+    LILA_ZONE();
+
+    if (mNumPoints != pointCapacity() || mNumEdges != edgeCapacity() || mNumFaces != faceCapacity() || mNumCorners != cornerCapacity())
+        return false;
+    if (pointAttrs().size() != size_t(pointCapacity()) || edgeAttrs().size() != size_t(edgeCapacity()) ||
+        faceAttrs().size() != size_t(faceCapacity()) || cornerAttrs().size() != size_t(cornerCapacity()))
+        return false;
+    // Compacting also lays each face's corners out in order around it.
+    return tbb::parallel_reduce(
+        tbb::blocked_range<Index>(0, faceCapacity(), Index(1) << 14), true,
+        [&](const tbb::blocked_range<Index>& range, bool ok) {
+            for (Index f = range.begin(); ok && f < range.end(); ++f)
+            {
+                Index want = mFaces[f].corner;
+                if (f > 0 && want != mFaces[f - 1].corner + mFaces[f - 1].size)
+                    return false;
+                if (f == 0 && want != 0)
+                    return false;
+                forEachFaceCorner(f, [&](Index c) { ok = ok && c == want++; });
+            }
+            return ok;
+        },
+        [](bool a, bool b) { return a && b; });
+}
+
 void Mesh::compact(MeshRemap* remap)
 {
     touchTopology();
     LILA_ZONE();
 
+    if (!remap && alreadyCompact())
+    {
+        mLastSplitEdge = kInvalid;
+        return;
+    }
     MeshRemap local;
     MeshRemap& r = remap ? *remap : local;
     auto build = [](Index cap, auto&& alive, std::vector<Index>& oldToNew, std::vector<Index>& newToOld) {

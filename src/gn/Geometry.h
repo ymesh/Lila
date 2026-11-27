@@ -6,6 +6,7 @@
 #include "curve/Tessellate.h"
 #include "geo/Heightfield.h"
 #include "geo/Mesh.h"
+#include "geo/Ops.h"
 
 #include <glm/glm.hpp>
 
@@ -121,6 +122,12 @@ struct LILA_SCENE_API Geometry
     std::shared_ptr<const Volume> volume;
     /** A label for the whole geometry (Set Geometry Name); joins keep the first named part's. */
     std::string name;
+    /**
+     * The instances stay instances at the modifier stack: the output mesh is only the mesh beside them and the viewport
+     * draws them instanced. For generated kits of many repeated pieces (Buildings' modules), where realizing them would
+     * hold a copy of every piece. Joins keep it when any part has it.
+     */
+    bool keepInstances = false;
 
     bool empty() const;
 };
@@ -137,7 +144,7 @@ LILA_SCENE_API GeometryPtr heightfieldGeometry(geo::Heightfield h);
  * signed distances are scaled by the transform's average scale and vectors turned by its linear part.
  */
 LILA_SCENE_API Geometry transformed(const Geometry& g, const glm::dmat4& xf);
-LILA_SCENE_API void transformMesh(geo::Mesh& m, const glm::dmat4& xf);
+using geo::transformMesh;
 LILA_SCENE_API void transformCurves(CurveSet& c, const glm::dmat4& xf);
 
 /**

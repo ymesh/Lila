@@ -1,9 +1,12 @@
 // Settlement: blocks between the streets, their types, lots cut from them, landmarks, land use and envelopes.
 
+#include "Generators.h"
 #include "Parcels.h"
 
 #include <lila/Profile.h>
 #include <lila/Tasks.h>
+
+#include <tbb/enumerable_thread_specific.h>
 
 #include <algorithm>
 #include <cmath>
@@ -56,6 +59,7 @@ std::string metres(double cm) { return std::to_string(int(std::lround(cm / 100.0
 /** A block for each face that makes one, appended; seen counts the keys already given, so two never share one. */
 void addBlocks(Layout& l, std::vector<Face> faces, std::map<uint64_t, int>& seen)
 {
+    LILA_ZONE();
     const Profile& p = l.profile;
     for (Face& f : faces)
     {
@@ -152,7 +156,8 @@ void typeBlocks(Layout& l, const Ground& g, const Site& site, const std::string&
     const bool pm = preModern(era);
     int market = -1;
     std::string marketWhy;
-    if (p.plaza)
+    // Imported streets bring their own squares: the data's parks and plazas, not one laid at the centre.
+    if (p.plaza && p.pattern != Pattern::Osm)
     {
         for (const Block& b : l.blocks)
             if (contains(b.outline.pts, l.center) && streetSides(b.outline) > 0)
@@ -763,6 +768,7 @@ void assignUses(Layout& l, const Ground& g, const std::string& era, const std::v
 
 void applyLotOverrides(Layout& l, const Site& site)
 {
+    LILA_ZONE();
     for (const LotOverride& o : site.lotOverrides)
     {
         auto it = std::ranges::find_if(l.lots, [&](const Lot& lot) { return lot.key == o.lot; });
@@ -820,6 +826,60 @@ void applyBuildingRoutes(Layout& l, const Site& site)
     }
 }
 
+namespace
+{
+/** Shortest paths from one source over the streets (Brandes): nodes in the order reached, and betweenness added into between. */
+void accessFrom(const StreetGraph& g, int src, std::vector<double>& dist, std::vector<double>& sigma, std::vector<double>& delta,
+                std::vector<std::vector<std::pair<int, int>>>& preds, std::vector<int>& order, std::vector<double>& between)
+{
+    std::fill(dist.begin(), dist.end(), std::numeric_limits<double>::infinity());
+    std::fill(sigma.begin(), sigma.end(), 0.0);
+    std::fill(delta.begin(), delta.end(), 0.0);
+    for (auto& p : preds)
+        p.clear();
+    order.clear();
+    using Item = std::pair<double, int>;
+    std::priority_queue<Item, std::vector<Item>, std::greater<>> queue;
+    dist[size_t(src)] = 0.0;
+    sigma[size_t(src)] = 1.0;
+    queue.push({0.0, src});
+    while (!queue.empty())
+    {
+        const auto [d, n] = queue.top();
+        queue.pop();
+        if (d > dist[size_t(n)])
+            continue;
+        order.push_back(n);
+        for (int e : g.incident(n))
+        {
+            if (!g.isStreet(e))
+                continue;
+            const int m = g.edges[size_t(e)].a == n ? g.edges[size_t(e)].b : g.edges[size_t(e)].a;
+            const double nd = d + g.length(e);
+            if (nd < dist[size_t(m)] - 1e-6)
+            {
+                dist[size_t(m)] = nd;
+                sigma[size_t(m)] = sigma[size_t(n)];
+                preds[size_t(m)] = {{n, e}};
+                queue.push({nd, m});
+            }
+            else if (std::abs(nd - dist[size_t(m)]) <= 1e-6)
+            {
+                sigma[size_t(m)] += sigma[size_t(n)];
+                preds[size_t(m)].push_back({n, e});
+            }
+        }
+    }
+    for (auto it = order.rbegin(); it != order.rend(); ++it)
+        for (const auto& [v, e] : preds[size_t(*it)])
+        {
+            const double c = sigma[size_t(v)] / std::max(sigma[size_t(*it)], 1e-12) * (1.0 + delta[size_t(*it)]);
+            between[size_t(e)] += c;
+            delta[size_t(v)] += c;
+        }
+}
+} // namespace
+
 std::vector<double> streetAccess(const StreetGraph& g)
 {
     LILA_ZONE();
@@ -833,64 +893,56 @@ std::vector<double> streetAccess(const StreetGraph& g)
     if (nodes.size() < 2)
         return out;
     const size_t stride = std::max<size_t>(1, nodes.size() / 256);
+    std::vector<int> sources;
+    for (size_t s = 0; s < nodes.size(); s += stride)
+        sources.push_back(nodes[s]);
     std::vector<double> sumDist(nNodes, 0.0), between(nEdges, 0.0);
     std::vector<int> reached(nNodes, 0);
-    std::vector<double> dist(nNodes), sigma(nNodes), delta(nNodes);
-    std::vector<std::vector<std::pair<int, int>>> preds(nNodes);
-    std::vector<int> order;
-    for (size_t s = 0; s < nodes.size(); s += stride)
+    // Sources run in parallel a batch at a time, each into its own buffers, summed in source order: the same graph gives
+    // the same values whatever the thread count.
+    struct Scratch
     {
-        std::fill(dist.begin(), dist.end(), std::numeric_limits<double>::infinity());
-        std::fill(sigma.begin(), sigma.end(), 0.0);
-        std::fill(delta.begin(), delta.end(), 0.0);
-        for (auto& p : preds)
-            p.clear();
-        order.clear();
-        using Item = std::pair<double, int>;
-        std::priority_queue<Item, std::vector<Item>, std::greater<>> queue;
-        const int src = nodes[s];
-        dist[size_t(src)] = 0.0;
-        sigma[size_t(src)] = 1.0;
-        queue.push({0.0, src});
-        while (!queue.empty())
-        {
-            const auto [d, n] = queue.top();
-            queue.pop();
-            if (d > dist[size_t(n)])
-                continue;
-            order.push_back(n);
-            for (int e : g.incident(n))
+        std::vector<double> dist, sigma, delta;
+        std::vector<std::vector<std::pair<int, int>>> preds;
+    };
+    struct Run
+    {
+        std::vector<int> order;
+        std::vector<double> dist, between;
+    };
+    tbb::enumerable_thread_specific<Scratch> scratch;
+    constexpr size_t kBatch = 32;
+    std::vector<Run> runs(kBatch);
+    for (size_t b0 = 0; b0 < sources.size(); b0 += kBatch)
+    {
+        const size_t nb = std::min(kBatch, sources.size() - b0);
+        tbb::parallel_for(size_t(0), nb, [&](size_t i) {
+            Scratch& w = scratch.local();
+            if (w.dist.size() != nNodes)
             {
-                if (!g.isStreet(e))
-                    continue;
-                const int m = g.edges[size_t(e)].a == n ? g.edges[size_t(e)].b : g.edges[size_t(e)].a;
-                const double nd = d + g.length(e);
-                if (nd < dist[size_t(m)] - 1e-6)
-                {
-                    dist[size_t(m)] = nd;
-                    sigma[size_t(m)] = sigma[size_t(n)];
-                    preds[size_t(m)] = {{n, e}};
-                    queue.push({nd, m});
-                }
-                else if (std::abs(nd - dist[size_t(m)]) <= 1e-6)
-                {
-                    sigma[size_t(m)] += sigma[size_t(n)];
-                    preds[size_t(m)].push_back({n, e});
-                }
+                w.dist.assign(nNodes, 0.0);
+                w.sigma.assign(nNodes, 0.0);
+                w.delta.assign(nNodes, 0.0);
+                w.preds.assign(nNodes, {});
             }
-        }
-        for (int n : order)
+            Run& r = runs[i];
+            r.between.assign(nEdges, 0.0);
+            accessFrom(g, sources[b0 + i], w.dist, w.sigma, w.delta, w.preds, r.order, r.between);
+            r.dist.resize(r.order.size());
+            for (size_t k = 0; k < r.order.size(); ++k)
+                r.dist[k] = w.dist[size_t(r.order[k])];
+        });
+        for (size_t i = 0; i < nb; ++i)
         {
-            sumDist[size_t(n)] += dist[size_t(n)];
-            ++reached[size_t(n)];
-        }
-        for (auto it = order.rbegin(); it != order.rend(); ++it)
-            for (const auto& [v, e] : preds[size_t(*it)])
+            const Run& r = runs[i];
+            for (size_t k = 0; k < r.order.size(); ++k)
             {
-                const double c = sigma[size_t(v)] / std::max(sigma[size_t(*it)], 1e-12) * (1.0 + delta[size_t(*it)]);
-                between[size_t(e)] += c;
-                delta[size_t(v)] += c;
+                sumDist[size_t(r.order[k])] += r.dist[k];
+                ++reached[size_t(r.order[k])];
             }
+            for (size_t e = 0; e < nEdges; ++e)
+                between[e] += r.between[e];
+        }
     }
     std::vector<double> close(nNodes, 0.0);
     double maxClose = 0.0, maxBetween = 0.0;
@@ -920,6 +972,7 @@ std::vector<double> streetAccess(const StreetGraph& g)
  */
 size_t dropOverlappingLots(Layout& l, size_t first, std::vector<char>* fresh)
 {
+    LILA_ZONE();
     if (first >= l.lots.size())
         return 0;
     auto bounds = [](const Polygon& p) {
@@ -992,35 +1045,41 @@ void planParcels(Layout& l, const Site& site, const Ground& g, const Options& o)
     makeBlocks(l);
     typeBlocks(l, g, site, era);
 
-    for (Block& b : l.blocks)
     {
-        if (streetSides(b.outline) == 0)
-            continue;
-        std::vector<Polygon> cut = cutBlock(b, l, o, &b.courtyards, &l.parcelWarnings);
-        std::sort(cut.begin(), cut.end(), [](const Polygon& x, const Polygon& y) {
-            const Vec2 cx = centroid(x), cy = centroid(y);
-            return cx.x != cy.x ? cx.x < cy.x : cx.y < cy.y;
-        });
-        for (size_t k = 0; k < cut.size(); ++k)
+        LILA_ZONE_N("settlement.cutBlocks");
+        for (Block& b : l.blocks)
         {
-            Lot lot;
-            lot.id = int(l.lots.size());
-            lot.block = b.id;
-            lot.key = stableKey(hash64(b.key * 0x9E3779B97F4A7C15ull + uint64_t(b.method) * 131 + k));
-            lot.area = area(cut[k]) / kM2;
-            lot.outline = std::move(cut[k]);
-            lot.random = float(unitRandom(hash64(lot.key) ^ hash64(o.seed)));
-            finishLot(lot, l);
-            l.lots.push_back(std::move(lot));
+            if (streetSides(b.outline) == 0)
+                continue;
+            std::vector<Polygon> cut = cutBlock(b, l, o, &b.courtyards, &l.parcelWarnings);
+            std::sort(cut.begin(), cut.end(), [](const Polygon& x, const Polygon& y) {
+                const Vec2 cx = centroid(x), cy = centroid(y);
+                return cx.x != cy.x ? cx.x < cy.x : cx.y < cy.y;
+            });
+            for (size_t k = 0; k < cut.size(); ++k)
+            {
+                Lot lot;
+                lot.id = int(l.lots.size());
+                lot.block = b.id;
+                lot.key = stableKey(hash64(b.key * 0x9E3779B97F4A7C15ull + uint64_t(b.method) * 131 + k));
+                lot.area = area(cut[k]) / kM2;
+                lot.outline = std::move(cut[k]);
+                lot.random = float(unitRandom(hash64(lot.key) ^ hash64(o.seed)));
+                finishLot(lot, l);
+                l.lots.push_back(std::move(lot));
+            }
         }
     }
 
     dropOverlappingLots(l, 0, nullptr);
     placeLandmarks(l, g, era);
     assignUses(l, g, era);
+    if (hasOsmBuildings(l))
+        placeOsmBuildings(l, site, g, o, 0, nullptr);
     applyLotOverrides(l, site);
     for (Lot& lot : l.lots)
     {
+        LILA_ZONE_N("settlement.lotRoute");
         lot.route = routeAt(site, centroid(lot.outline));
         for (int& t : lot.outline.tag)
             t = t >= 0 ? int(l.graph.edges[size_t(t)].cls) : -1;
@@ -1028,12 +1087,15 @@ void planParcels(Layout& l, const Site& site, const Ground& g, const Options& o)
 
     if (o.buildings)
     {
+        LILA_ZONE_N("settlement.envelopes");
         for (const Lot& lot : l.lots)
-            if (getsEnvelope(lot.use) && lot.frontages > 0)
+            if (!lot.osmId.empty() || (getsEnvelope(lot.use) && lot.frontages > 0))
             {
-                Envelope env = parcelEnvelope(lot, l.blocks[size_t(lot.block)], l, g, o, site);
-                if (!env.footprint.pts.empty())
-                    l.envelopes.push_back(std::move(env));
+                Envelope env = lot.osmId.empty() ? parcelEnvelope(lot, l.blocks[size_t(lot.block)], l, g, o, site) : osmEnvelope(lot, l, g, o, site);
+                if (env.footprint.pts.empty())
+                    continue;
+                finishProgram(env, lot, l);
+                l.envelopes.push_back(std::move(env));
             }
         matchPartyWalls(l.envelopes);
         for (const Envelope& env : l.envelopes)
@@ -1205,6 +1267,8 @@ int replanParcels(Layout& l, const Site& site, const Ground& g, const Options& o
             if (!fresh[k])
                 l.lots[k] = std::move(kept[k]);
     }
+    if (hasOsmBuildings(l))
+        placeOsmBuildings(l, site, g, o, firstFresh, &fresh);
     applyLotOverrides(l, site);
     for (size_t k = 0; k < l.lots.size(); ++k)
     {
@@ -1219,11 +1283,14 @@ int replanParcels(Layout& l, const Site& site, const Ground& g, const Options& o
     if (o.buildings)
     {
         for (size_t k = 0; k < l.lots.size(); ++k)
-            if (fresh[k] && getsEnvelope(l.lots[k].use) && l.lots[k].frontages > 0)
+            if (fresh[k] && (!l.lots[k].osmId.empty() || (getsEnvelope(l.lots[k].use) && l.lots[k].frontages > 0)))
             {
-                Envelope env = parcelEnvelope(l.lots[k], l.blocks[size_t(l.lots[k].block)], l, g, o, site);
-                if (!env.footprint.pts.empty())
-                    l.envelopes.push_back(std::move(env));
+                const Lot& lot = l.lots[k];
+                Envelope env = lot.osmId.empty() ? parcelEnvelope(lot, l.blocks[size_t(lot.block)], l, g, o, site) : osmEnvelope(lot, l, g, o, site);
+                if (env.footprint.pts.empty())
+                    continue;
+                finishProgram(env, lot, l);
+                l.envelopes.push_back(std::move(env));
             }
         std::sort(l.envelopes.begin(), l.envelopes.end(), [](const Envelope& a, const Envelope& b) { return a.lot < b.lot; });
         // Party walls change only where lots were cut afresh and next to them; the kept ones are matched already.
@@ -1286,4 +1353,6 @@ int replanParcels(Layout& l, const Site& site, const Ground& g, const Options& o
     }
     return cut;
 }
+
+void finishOsmLot(Lot& lot, const Layout& l) { finishLot(lot, l); }
 } // namespace settlement

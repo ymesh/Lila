@@ -1,5 +1,8 @@
 #include "LilaLinkSettlementTraffic.h"
 
+#include "LilaLinkProjectConfig.h"
+#include "LilaLinkSettlement.h"
+
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Editor.h"
 #include "Engine/DataAsset.h"
@@ -79,7 +82,7 @@ double ProfileWidth(const TSharedPtr<FJsonObject>& Params, const FString& Profil
 	return Width;
 }
 
-FVector ReadVector(const TSharedPtr<FJsonObject>& Object, const TCHAR* Field)
+FVector ReadTrafficVector(const TSharedPtr<FJsonObject>& Object, const TCHAR* Field)
 {
 	const TArray<TSharedPtr<FJsonValue>>* Xyz = nullptr;
 	if (!Object->TryGetArrayField(Field, Xyz) || Xyz->Num() != 3)
@@ -129,8 +132,8 @@ int32 WriteLights(UObject* Asset, UObject* Types, const TSharedPtr<FJsonObject>&
 			{
 				continue;
 			}
-			const FVector Position = ReadVector(End, TEXT("position"));
-			const FVector Forward = ReadVector(End, TEXT("forward")).GetSafeNormal2D();
+			const FVector Position = ReadTrafficVector(End, TEXT("position"));
+			const FVector Forward = ReadTrafficVector(End, TEXT("forward")).GetSafeNormal2D();
 			const FVector Right(-Forward.Y, Forward.X, 0.0);
 			void* Light = Lights.GetRawPtr(Lights.AddValue());
 			*MemberOf<FVector>(Inner, Light, TEXT("Position")) = Position + Right * (0.5 * ProfileWidth(Params, End->GetStringField(TEXT("profile"))));
@@ -194,8 +197,8 @@ int32 WriteParking(UObject* Asset, const TSharedPtr<FJsonObject>& Params, const 
 		{
 			continue;
 		}
-		const FVector Forward = ReadVector(Spot, TEXT("forward")).GetSafeNormal2D();
-		Spaces.Emplace(Forward.IsNearlyZero() ? FQuat::Identity : Forward.ToOrientationQuat(), ReadVector(Spot, TEXT("position")));
+		const FVector Forward = ReadTrafficVector(Spot, TEXT("forward")).GetSafeNormal2D();
+		Spaces.Emplace(Forward.IsNearlyZero() ? FQuat::Identity : Forward.ToOrientationQuat(), ReadTrafficVector(Spot, TEXT("position")));
 	}
 	*MemberOf<int32>(Inner, Entry, TEXT("NumParkingSpaces")) = Spaces.Num();
 	if (int32* Count = PropertyValue<int32>(Asset, TEXT("NumParkingSpaces")))
@@ -324,7 +327,11 @@ TSharedPtr<FJsonObject> LilaLinkSettlementTraffic::ConfigureSettings(TFunctionRe
 	}
 	if (!Configured.IsEmpty())
 	{
-		Settings->TryUpdateDefaultConfigFile();
+		const FString Backup = LilaLink::UpdateProjectIni(Settings);
+		if (!Backup.IsEmpty())
+		{
+			Out->SetStringField(TEXT("configBackup"), Backup);
+		}
 	}
 	Out->SetArrayField(TEXT("configured"), Configured);
 	Out->SetArrayField(TEXT("kept"), Kept);

@@ -32,7 +32,7 @@ struct HfLayer
 };
 
 static const uint kMaxLods = 24;
-static const uint kMaxLayers = 8;
+static const uint kMaxLayers = 16;
 static const uint kPatchQuads = 32;
 static const uint kHfOverlayRampGrey = 0;
 static const uint kHfFlagWire = 1;

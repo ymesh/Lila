@@ -1,0 +1,89 @@
+{
+  "id": "civic",
+  "label": "Civic",
+  "description": "Palacio municipal and courts: portales along the street, tall floors, iron balconies, heavy cornice and quoins.",
+  "tags": [
+    "civic",
+    "government",
+    "palacio"
+  ],
+  "floors": {
+    "min": 2,
+    "max": 3,
+    "groundHeight": 520,
+    "height": 450,
+    "plinth": 40
+  },
+  "bays": {
+    "width": 400,
+    "min": 300,
+    "cornerWidth": 70
+  },
+  "openings": {
+    "window": {
+      "width": 0.42,
+      "height": 0.62,
+      "sill": 0.2,
+      "kind": "window.residential"
+    },
+    "door": {
+      "width": 0.5,
+      "height": 0.8,
+      "kind": "door.house"
+    },
+    "shopfront": {
+      "width": 0.6,
+      "height": 0.8
+    },
+    "reveal": 35
+  },
+  "groundFloor": {
+    "street": "window",
+    "arcade": 1.0,
+    "arcadeDepth": 400,
+    "shopfronts": false
+  },
+  "modules": {
+    "balconies": 0.5,
+    "balconyKind": "iron",
+    "grilles": 0.5,
+    "acUnits": 0.05,
+    "pilasters": true,
+    "cornice": "heavy",
+    "bands": true,
+    "corner": "quoin",
+    "drainpipes": true
+  },
+  "roof": {
+    "kind": "flat",
+    "parapet": 110,
+    "waterTanks": 0.1,
+    "clutter": 0.2
+  },
+  "palette": {
+    "render": [
+      "#d8b384",
+      "#c9a66b",
+      "#efe1c6",
+      "#e3c08d"
+    ],
+    "trim": [
+      "#f8f4e3",
+      "#ffffff"
+    ],
+    "roof": [
+      "#7a6a5c"
+    ],
+    "base": [
+      "#6b5e55"
+    ],
+    "dirt": [
+      0.05,
+      0.3
+    ]
+  },
+  "moduleTones": {
+    "arcade": ["render", "trim"],
+    "window": [null, "trim"]
+  }
+}

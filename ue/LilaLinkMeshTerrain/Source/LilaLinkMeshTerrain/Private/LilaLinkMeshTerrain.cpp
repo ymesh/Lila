@@ -35,7 +35,10 @@
 #include "Components/SplineComponent.h"
 #include "Misc/PackageName.h"
 #include "Modifiers/MeshPartitionMeshProvider.h"
+// The spline modifier's inline helper calls an experimental USplineComponent API.
+PRAGMA_DISABLE_EXPERIMENTAL_WARNINGS
 #include "Modifiers/MeshPartitionSplineModifier.h"
+PRAGMA_ENABLE_EXPERIMENTAL_WARNINGS
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "ScopedTransaction.h"
 
@@ -396,7 +399,7 @@ UMaterial* MeshTerrainMaterial(const FString& Label, const AMeshPartition* Mesh,
 		return nullptr;
 	}
 	Material->Modify();
-	UMaterialEditingLibrary::DeleteAllMaterialExpressions(Material);
+	LilaLink::DeleteAllExpressions(Material);
 	int32 Row = 0;
 	auto Make = [&](TSubclassOf<UMaterialExpression> Class, int32 X) { return UMaterialEditingLibrary::CreateMaterialExpression(Material, Class, X, (Row++) * 140); };
 	auto* Zero = Cast<UMaterialExpressionConstant3Vector>(Make(UMaterialExpressionConstant3Vector::StaticClass(), -1500));

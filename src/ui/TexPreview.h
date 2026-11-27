@@ -61,6 +61,9 @@ LILA_UI_API Result render(const Request& request);
 using Renderer = std::function<image::Image(const tex::Plan& plan, const std::string& output, const tex::EvalOptions& options)>;
 LILA_UI_API void setRenderer(Renderer renderer);
 
+/** Whether a set's graph (or "Set/Group"'s) changes with time, so its views ask again when the time changes. */
+LILA_UI_API bool animated(const std::string& set);
+
 /** Drops every cached image (a node library reload, a changed image file). */
 LILA_UI_API void clear();
 

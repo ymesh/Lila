@@ -63,6 +63,8 @@ public:
     void removeAllViewports();
     void resize(ViewportId id, int width, int height);
     void submit(ViewportId id, FrameState state);
+    /** Gives state the vertex lists of the frame this viewport's last submit replaced, emptied (see reuseBuffers). */
+    void reuseBuffers(ViewportId id, FrameState& state);
     FrameStats stats(ViewportId id) const;
 
     /**

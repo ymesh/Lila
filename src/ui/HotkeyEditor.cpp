@@ -8,6 +8,7 @@
 #include "ui/Keymaps.h"
 #include "ui/MayaHotkeys.h"
 #include "ui/Theme.h"
+#include "ui/editor/CodeEditor.h"
 
 #include <QApplication>
 #include <QComboBox>
@@ -317,6 +318,67 @@ void importMayaHotkeysDialog(QWidget* parent)
     }
     box.exec();
 }
+
+namespace
+{
+/** Name and source for a Python hotkey; returns the {"python", "label"} target, or nothing when cancelled or empty. */
+std::optional<json> pythonTargetDialog(const json& initial, QWidget* parent)
+{
+    QDialog dlg(parent);
+    dlg.setWindowTitle("Python Hotkey");
+    dlg.setMinimumSize(520, 320);
+    auto* layout = new QVBoxLayout(&dlg);
+    auto* form = new QFormLayout;
+    auto* name = new QLineEdit(QString::fromStdString(initial.value("label", std::string())));
+    name->setPlaceholderText("Python");
+    name->setToolTip("Shown in the Hotkey Editor and the hotkey cheat sheet");
+    form->addRow("Name", name);
+    layout->addLayout(form);
+
+    auto* code = new CodeEditor(&dlg);
+    code->setUntitledName("Hotkey");
+    code->setEditorFont(monoFont());
+    code->setPlainText(QString::fromStdString(initial.value("python", std::string())));
+    code->setPlaceholderText("setAttr(\"persp.visibility\", False)");
+    code->hostKeyHandler = [&dlg](QKeyEvent* k) {
+        if ((k->key() == Qt::Key_Return || k->key() == Qt::Key_Enter) && (k->modifiers() & Qt::ControlModifier))
+        {
+            dlg.accept();
+            return true;
+        }
+        return false;
+    };
+    layout->addWidget(code, 1);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    QPushButton* ok = buttons->button(QDialogButtonBox::Ok);
+    ok->setText(initial.contains("python") ? "Save" : "Next...");
+    ok->setToolTip("Ctrl+Enter");
+    auto refresh = [code, ok] { ok->setEnabled(!code->toPlainText().trimmed().isEmpty()); };
+    QObject::connect(code, &QPlainTextEdit::textChanged, &dlg, refresh);
+    refresh();
+    layout->addWidget(buttons);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    code->setFocus();
+    if (dlg.exec() != QDialog::Accepted || code->toPlainText().trimmed().isEmpty())
+        return std::nullopt;
+    json target = {{"python", code->toPlainText().toStdString()}};
+    if (!name->text().trimmed().isEmpty())
+        target["label"] = name->text().trimmed().toStdString();
+    return target;
+}
+
+/** The first slot of b bound to Python, if any. */
+std::optional<hotkeys::Slot> pythonSlot(const Binding& b)
+{
+    for (hotkeys::Slot slot : {hotkeys::Slot::Press, hotkeys::Slot::Hold, hotkeys::Slot::Release, hotkeys::Slot::Lmb,
+                               hotkeys::Slot::Mmb, hotkeys::Slot::Rmb})
+        if (const json& t = hotkeys::slotTarget(b, slot); t.is_object() && t.contains("python"))
+            return slot;
+    return std::nullopt;
+}
+} // namespace
 
 void assignHotkeyDialog(const std::string& actionId, QWidget* parent)
 {
@@ -660,7 +722,10 @@ HotkeyEditor::HotkeyEditor(QWidget* parent) : QWidget(parent)
     mUnbind->setToolTip("Remove this binding (a default is overridden with null)");
     mReset = new QPushButton("Reset to Default");
     mReset->setToolTip("Drop your override for this key");
+    mPython = new QPushButton("Python...");
+    mPython->setToolTip("Bind a key to a Python script, or edit the selected Python hotkey");
     buttons->addWidget(mAssign);
+    buttons->addWidget(mPython);
     buttons->addWidget(mUnbind);
     buttons->addWidget(mReset);
     buttons->addStretch(1);
@@ -675,8 +740,14 @@ HotkeyEditor::HotkeyEditor(QWidget* parent) : QWidget(parent)
     connect(mSearch, &QLineEdit::textChanged, this, &HotkeyEditor::rebuild);
     connect(mContextFilter, &QComboBox::currentIndexChanged, this, &HotkeyEditor::rebuild);
     connect(mTree, &QTreeWidget::currentItemChanged, this, &HotkeyEditor::updateButtons);
-    connect(mTree, &QTreeWidget::itemDoubleClicked, this, [this] { assignSelected(); });
+    connect(mTree, &QTreeWidget::itemDoubleClicked, this, [this] {
+        if (const Binding* b = selectedBinding(); b && pythonSlot(*b))
+            pythonHotkey();
+        else
+            assignSelected();
+    });
     connect(mAssign, &QPushButton::clicked, this, &HotkeyEditor::assignSelected);
+    connect(mPython, &QPushButton::clicked, this, &HotkeyEditor::pythonHotkey);
     auto unbind = [this] {
         if (const Binding* b = selectedBinding())
             hotkeys::unbind(b->context, b->keyText);
@@ -1028,6 +1099,7 @@ void HotkeyEditor::updateButtons()
     mAssign->setEnabled(!action.empty() && actions::find(action));
     mUnbind->setEnabled(b != nullptr);
     mReset->setEnabled((b && b->origin != Binding::Origin::Default) || kind == UnboundDefaultRow);
+    mPython->setText(b && pythonSlot(*b) ? "Edit Python..." : "Python...");
 
     QString detail;
     if (const Action* a = actions::find(action))
@@ -1042,7 +1114,12 @@ void HotkeyEditor::updateButtons()
             detail += QString("<br><code>%1</code>").arg(QString::fromStdString(py).toHtmlEscaped());
     }
     else if (kind == BindingRow || kind == UnboundDefaultRow)
+    {
         detail = it->text(ColAction).toHtmlEscaped();
+        if (const std::optional<hotkeys::Slot> slot = b ? pythonSlot(*b) : std::nullopt)
+            detail += QString("<br><code>%1</code>")
+                          .arg(QString::fromStdString(hotkeys::slotTarget(*b, *slot)["python"].get<std::string>()).toHtmlEscaped().replace("\n", "<br>"));
+    }
     mDetail->setText(detail);
 }
 
@@ -1052,6 +1129,24 @@ void HotkeyEditor::assignSelected()
     if (action.empty() || !actions::find(action))
         return;
     ChordCaptureDialog dlg(action, selectedContext(), this);
+    if (dlg.exec() == QDialog::Accepted)
+        dlg.apply();
+}
+
+void HotkeyEditor::pythonHotkey()
+{
+    if (const Binding* b = selectedBinding())
+        if (const std::optional<hotkeys::Slot> slot = pythonSlot(*b))
+        {
+            const Binding keep = *b;
+            if (std::optional<json> target = pythonTargetDialog(hotkeys::slotTarget(keep, *slot), this))
+                hotkeys::assign(keep.context, keep.chord, *slot, *target);
+            return;
+        }
+    std::optional<json> target = pythonTargetDialog(json::object(), this);
+    if (!target)
+        return;
+    ChordCaptureDialog dlg(*target, selectedContext(), this);
     if (dlg.exec() == QDialog::Accepted)
         dlg.apply();
 }

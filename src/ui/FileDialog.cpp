@@ -1121,6 +1121,9 @@ void FileDialog::Impl::show(const QString& raw, bool record)
         historyPos = int(history.size()) - 1;
     }
     filter->clear();
+    // A folder name typed or picked before navigating names a child of the old folder, not of this one.
+    if (mode == Mode::Directory)
+        name->clear();
     fs->setRootPath(d);
     proxy->setRoot(d);
     view->setRootIndex(proxy->mapFromSource(fs->index(d)));

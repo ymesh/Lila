@@ -1778,9 +1778,16 @@ QColor getColor(const QColor& initial, QWidget* anchor, const QString& title, bo
     o.value.alpha = initial.isValid() ? initial.alphaF() : 1.0;
     o.alpha = alpha;
     o.title = title;
+    // The popup's event loop can delete the anchor (a panel rebuilt under it); callers then hold pointers into it.
+    const QPointer<QWidget> alive(anchor);
     if (changed)
-        o.changed = [changed = std::move(changed)](const Value& v) { changed(display(v.color, v.alpha)); };
+        o.changed = [changed = std::move(changed), alive, anchored = anchor != nullptr](const Value& v) {
+            if (!anchored || alive)
+                changed(display(v.color, v.alpha));
+        };
     const std::optional<Value> v = exec(placeFor(anchor), std::move(o));
+    if (anchor && !alive)
+        return QColor();
     return v ? display(v->color, alpha ? v->alpha : 1.0) : QColor();
 }
 

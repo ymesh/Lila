@@ -749,7 +749,18 @@ UvEditor::UvEditor(QWidget* parent) : QWidget(parent)
         mView->invalidate();
         if (mInfo->isChecked())
             mInfoRefresh->start();
-        refreshSets();
+        // Reading every shown mesh's sets per change made a world build's thousands of edits crawl.
+        if (!isVisible() || ops::currentArgs())
+            mSetsStale = true;
+        else
+            refreshSets();
+    });
+    mExecListener = ops::addExecuteListener([this](const ExecuteEvent& e) {
+        if (e.done && mSetsStale && isVisible())
+        {
+            mSetsStale = false;
+            refreshSets();
+        }
     });
     mComponentListener = scene::components::addListener([this, showMode] {
         showMode();
@@ -763,6 +774,7 @@ UvEditor::~UvEditor()
 {
     uvLive::setEditorShown(this, false);
     scene::Graph::current().removeListener(mGraphListener);
+    ops::removeExecuteListener(mExecListener);
     scene::components::removeListener(mComponentListener);
     uvLive::removeListener(mLiveListener);
     uvToolkit::registry().removeListener(mExtensionListener);
@@ -830,6 +842,8 @@ void UvEditor::showEvent(QShowEvent* e)
 {
     QWidget::showEvent(e);
     uvLive::setEditorShown(this, true);
+    if (std::exchange(mSetsStale, false))
+        refreshSets();
     if (mToolkitSized)
         return;
     placeToolkit();

@@ -11,6 +11,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <source_location>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -279,7 +280,7 @@ public:
      * immediate: called for every change even inside a Batch (model bookkeeping that later edits depend on). Others,
      * typically UI, get one Change::Reset when the outermost Batch ends instead.
      */
-    int addListener(Listener fn, bool immediate = false);
+    int addListener(Listener fn, bool immediate = false, std::source_location where = std::source_location::current());
     void removeListener(int id);
     /** Inside a listener's Change::Value or Change::Connection call: the plug that changed, when one did. Null otherwise. */
     const PlugRef* changedPlug() const { return mChangedPlug; }
@@ -386,6 +387,7 @@ private:
     {
         Listener fn;
         bool immediate = false;
+        std::source_location where; // who listens, for the profiler's slow-listener messages
     };
     std::map<int, ListenerEntry> mListeners;
     int mNextListener = 1;

@@ -129,6 +129,14 @@ TEST_CASE("file dialog: folder mode returns the current or typed folder and reco
         REQUIRE(dlg.tryAccept());
         CHECK(dlg.selectedFiles() == QStringList{fx.root + "/sub"});
     }
+    {
+        FileDialog dlg(nullptr, FileDialog::Mode::Directory, "Pick", fx.root, {});
+        dlg.setFileName("sub");
+        dlg.pickItem(fx.root + "/sub", false);
+        CHECK(dlg.fileName().isEmpty());
+        REQUIRE(dlg.tryAccept());
+        CHECK(dlg.selectedFiles() == QStringList{fx.root + "/sub"});
+    }
     const json recent = PrefStore::get().value("general", "/fileDialog/recent");
     REQUIRE(recent.is_array());
     CHECK(QString::fromStdString(recent[0].get<std::string>()) == fx.root + "/sub");

@@ -18,9 +18,10 @@ class QWidget;
  * Anonymous usage statistics, opt-in through Preferences > General > Telemetry.
  *
  * Each GUI session is kept in <userDir>/telemetry/sessions/<pid>.json while it runs and becomes a session_end event
- * when Lila exits; one left behind by a process that is gone becomes a crashed session_end at the next start. Events
- * wait in queue.json and go out as one batch, at startup and every half hour. Sending never blocks and fails
- * silently; an event is dropped after kMaxAttempts failed sends. Nothing is sent from lilabatch.
+ * when Lila exits. A crash is sent by the crash watchdog as it happens, from crash-events/<pid>.json; a session left
+ * behind otherwise (killed, or the watchdog couldn't send) becomes a crashed session_end at the next start. Events
+ * wait in queue.json and go out as one batch: at startup, every half hour, and on exit with a short wait. Sending
+ * fails silently; an event is dropped after kMaxAttempts failed sends. Nothing is sent from lilabatch.
  *
  * Collected: version, OS, GPU, RAM and display count, locale, install channel, command counts (built-in commands by
  * name, others as a total), active minutes, crashes, Unreal link use, and the optional onboarding answers. Never file
@@ -112,6 +113,9 @@ public:
     void clear();
 
     void writeSession(const Session& s);
+    /** The crashed session_end the crash watchdog sends if this process dies (see crash::upload::sendCrashedSession). */
+    void writeCrashEvent(int64_t pid, const std::string& url, const json& event);
+    /** Removes the session file and its crash event. */
     void removeSession(int64_t pid);
     /** Session files of processes no longer running, removed as they are returned. */
     std::vector<Session> takeStaleSessions(int64_t selfPid, const std::function<bool(int64_t pid, int64_t startedMs)>& alive);
@@ -126,7 +130,7 @@ private:
 
 /** Starts collecting for this GUI session when enabled, and follows the pref from then on. */
 LILA_UI_API void start();
-/** Ends the session on a clean exit. Writes the queue; sends nothing. */
+/** Ends the session on a clean exit and sends the queue, waiting up to a couple of seconds; what doesn't go stays queued. */
 LILA_UI_API void stop();
 /** Shows what is queued and what this session will send, as JSON. */
 LILA_UI_API void showPending(QWidget* parent);

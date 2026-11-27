@@ -20,6 +20,7 @@
 #include "ui/SpinScrub.h"
 #include "ui/Tools.h"
 #include "ui/UiCommon.h"
+#include "ui/ViewOverlays.h"
 #include "ui/ViewportDisplay.h"
 #include "ui/ViewportHud.h"
 #include "ui/ViewportWidget.h"
@@ -160,6 +161,8 @@ std::optional<bool> viewportActionState(const std::string& id, const ViewportWid
         return displayAids::actionState(id, view);
     if (view && id == "view.drone")
         return drone::active(view);
+    if (view && id.starts_with("viewport.overlay."))
+        return viewOverlays::shown(std::string_view(id).substr(17), view->viewName());
     if (const Action* a = actions::find(id); a && a->checked)
         return a->checked();
     if (!view)

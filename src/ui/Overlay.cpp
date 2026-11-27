@@ -232,7 +232,7 @@ std::shared_ptr<const render::OverlayAtlas> overlayAtlas()
     return currentAtlas()->pixels;
 }
 
-OverlayPainter::OverlayPainter(std::vector<render::OverlayVertex>& out, double dpr) : mOut(out), mDpr(dpr) {}
+OverlayPainter::OverlayPainter(std::vector<render::OverlayVertex>& out, double dpr) : mOut(out), mDpr(dpr), mStart(out.size()) {}
 
 OverlayPainter::~OverlayPainter() = default;
 
@@ -251,6 +251,14 @@ std::shared_ptr<const render::OverlayAtlas> OverlayPainter::atlas() const
 void OverlayPainter::vertex(QPointF p, glm::vec2 uv, const glm::vec4& color)
 {
     // Callers give sRGB like everything else in the UI; blending happens in linear.
+    if (mCapped && !mUncapped)
+        return;
+    // Checked only between triangles, so dropping everything from here on never leaves half of one.
+    if (!mUncapped && mOut.size() - mStart >= kMaxVertices && (mOut.size() - mStart) % 3 == 0)
+    {
+        mCapped = true;
+        return;
+    }
     glm::vec4 c = color;
     for (int i = 0; i < 3; ++i)
         c[i] = c[i] <= 0.04045f ? c[i] / 12.92f : std::pow((c[i] + 0.055f) / 1.055f, 2.4f);
@@ -277,8 +285,61 @@ void OverlayPainter::triangle(QPointF a, QPointF b, QPointF c, const glm::vec4& 
     vertex(c, {-1, 0}, color);
 }
 
+bool OverlayPainter::clipSpan(QPointF a, QPointF b, double len, double margin, double& t0, double& t1) const
+{
+    if (!std::isfinite(a.x()) || !std::isfinite(a.y()) || !std::isfinite(b.x()) || !std::isfinite(b.y()))
+        return false;
+    t0 = 0.0;
+    t1 = len;
+    if (mClip.isEmpty())
+        return true;
+    // Liang-Barsky against the grown clip, in distance along the segment.
+    const QRectF r = mClip.adjusted(-margin, -margin, margin, margin);
+    const QPointF d = len > 0.0 ? (b - a) / len : QPointF(0, 0);
+    const double p[4] = {-d.x(), d.x(), -d.y(), d.y()};
+    const double q[4] = {a.x() - r.left(), r.right() - a.x(), a.y() - r.top(), r.bottom() - a.y()};
+    for (int i = 0; i < 4; ++i)
+    {
+        if (std::abs(p[i]) < 1e-12)
+        {
+            if (q[i] < 0.0)
+                return false;
+            continue;
+        }
+        const double t = q[i] / p[i];
+        if (p[i] < 0.0)
+            t0 = std::max(t0, t);
+        else
+            t1 = std::min(t1, t);
+    }
+    return t0 <= t1;
+}
+
+void OverlayPainter::cappedNote(QPointF at)
+{
+    if (!mCapped)
+        return;
+    mUncapped = true;
+    label(at, "Overlay capped", {1.0f, 0.62f, 0.2f, 1.0f});
+    mUncapped = false;
+}
+
 void OverlayPainter::line(QPointF a, QPointF b, float width, const glm::vec4& color)
 {
+    if (!mClip.isEmpty())
+    {
+        const double len = std::hypot(b.x() - a.x(), b.y() - a.y());
+        double t0 = 0.0, t1 = 0.0;
+        if (!clipSpan(a, b, len, width + 4.0, t0, t1))
+            return;
+        if (t0 > 0.0 || t1 < len)
+        {
+            const QPointF d = (b - a) / len;
+            const QPointF a0 = a;
+            a = a0 + d * t0;
+            b = a0 + d * t1;
+        }
+    }
     if (mShadow)
     {
         mShadow = false;
@@ -297,10 +358,11 @@ void OverlayPainter::dashedLine(QPointF a, QPointF b, float width, float dash, c
 {
     QPointF d = b - a;
     double len = std::hypot(d.x(), d.y());
-    if (len < 1e-6)
+    double t0 = 0.0, t1 = 0.0;
+    if (len < 1e-6 || dash <= 0.0f || !clipSpan(a, b, len, width + 4.0, t0, t1))
         return;
     QPointF u = d / len;
-    for (double t = 0.0; t < len; t += dash * 2.0)
+    for (double t = std::floor(t0 / (dash * 2.0)) * dash * 2.0; t < t1; t += dash * 2.0)
         line(a + u * t, a + u * std::min(len, t + dash), width, color);
 }
 
@@ -337,14 +399,51 @@ void OverlayPainter::dashedPolyline(const std::vector<QPointF>& pts, float width
     std::vector<QPointF> run;
     bool on = true;
     double left = dash; // distance remaining in the current dash or gap
-    run.push_back(pts[0]);
+    // Off the view the dashes are counted, not drawn, so the pattern stays put as the view moves.
+    auto skip = [&](double dist) {
+        if (dist < left)
+        {
+            left -= dist;
+            return;
+        }
+        dist -= left;
+        on = !on;
+        const double whole = std::floor(dist / dash);
+        if (std::fmod(whole, 2.0) == 1.0)
+            on = !on;
+        left = dash - (dist - whole * dash);
+    };
+    auto flush = [&] {
+        if (on && run.size() > 1)
+            polyline(run, width, color);
+        run.clear();
+    };
     for (size_t i = 0; i < segs; ++i)
     {
         QPointF a = pts[i], b = pts[(i + 1) % n];
         QPointF d = b - a;
         double len = std::hypot(d.x(), d.y());
-        double t = 0.0;
-        while (len - t > left)
+        double t0 = 0.0, t1 = 0.0;
+        if (len < 1e-9)
+            continue;
+        if (!clipSpan(a, b, len, width + 4.0, t0, t1))
+        {
+            flush();
+            if (std::isfinite(len))
+                skip(len);
+            continue;
+        }
+        if (t0 > 0.0)
+        {
+            flush();
+            skip(t0);
+            if (on)
+                run.push_back(a + d * (t0 / len));
+        }
+        else if (on && run.empty())
+            run.push_back(a);
+        double t = t0;
+        while (t1 - t > left)
         {
             t += left;
             QPointF q = a + d * (t / len);
@@ -359,12 +458,18 @@ void OverlayPainter::dashedPolyline(const std::vector<QPointF>& pts, float width
             on = !on;
             left = dash;
         }
-        left -= len - t;
-        if (on)
+        left -= t1 - t;
+        if (t1 < len)
+        {
+            if (on)
+                run.push_back(a + d * (t1 / len));
+            flush();
+            skip(len - t1);
+        }
+        else if (on)
             run.push_back(b);
     }
-    if (on && run.size() > 1)
-        polyline(run, width, color);
+    flush();
 }
 
 void OverlayPainter::fill(const std::vector<QPointF>& pts, const glm::vec4& color)

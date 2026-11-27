@@ -152,13 +152,13 @@ bool appMonotone()
 
 bool monotoneForcedByApp()
 {
-    return PrefStore::get().value<bool>(kPrefs, kFollowAppMonotonePref, true) && appMonotone();
+    return PrefStore::get().value<bool>(kPrefs, kFollowAppMonotonePref, false) && appMonotone();
 }
 
 Look currentLook()
 {
     PrefStore& prefs = PrefStore::get();
-    return resolveLook(prefs.value<bool>(kPrefs, kMonotonePref, false), prefs.value<bool>(kPrefs, kFollowAppMonotonePref, true),
+    return resolveLook(prefs.value<bool>(kPrefs, kMonotonePref, false), prefs.value<bool>(kPrefs, kFollowAppMonotonePref, false),
                        appMonotone(), themes::current()->base == "light");
 }
 

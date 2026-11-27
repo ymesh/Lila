@@ -103,6 +103,8 @@ private:
 
 /** The analysis of h, kept for the last few revisions. */
 std::shared_ptr<const Analysis> analyse(std::shared_ptr<const Heightfield> h, const AnalysisParams& p = {});
+/** Forgets the analyses kept for the last heightfields asked about (each holds its heightfield). */
+void forgetAnalyses();
 
 /** Contour lines of a grid at a level, chained into polylines (closed ones repeat their first point), in grid units. */
 std::vector<std::vector<glm::dvec2>> contourLines(const std::vector<float>& grid, int nx, int nz, float level);

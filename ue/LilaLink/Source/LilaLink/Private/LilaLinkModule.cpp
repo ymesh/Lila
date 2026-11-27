@@ -38,6 +38,8 @@ public:
 		TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkModule::StartupModule);
 
 		LilaLink::RegisterExampleExporter();
+		// Read from the registry without loading, so a send can tell an asset already holds what it would import.
+		UObject::GetMetaDataTagsForAssetRegistry().Add(FName(LilaLink::ContentHashTag));
 		// Cooks and other commandlets never tick the core ticker, so requests would wait forever.
 		if (IsRunningCommandlet())
 		{

@@ -9,6 +9,8 @@
 #include <lila/LevelToolkit.h>
 #include <lila/Log.h>
 #include <lila/Menus.h>
+#include <lila/Names.h>
+#include <lila/OptionBox.h>
 #include <lila/ViewportTool.h>
 
 #include <QApplication>
@@ -69,11 +71,29 @@ void registerUi(ext::Context& ctx)
     for (const auto& [id, label, command, doc, python] :
          {std::tuple{"terrain.importDem", "Real Place", "terrainImportDem", "Make a terrain from real elevation, by area or place name.",
                      "terrainImportDem(place='Matterhorn', size=[1200000, 1200000])"},
-          std::tuple{"terrain.importOsm", "OSM Features", "terrainImportOsm", "Drape OpenStreetMap roads, rivers and lakes on a terrain and add land cover masks.",
+          std::tuple{"terrain.importOsm", "OSM Features", "terrainImportOsm",
+                     "Drape OpenStreetMap roads, rivers, lakes, harbour works, buildings and places on a terrain, with fictional names, "
+                     "and add land cover masks.",
                      "terrainImportOsm('area.osm', terrain='Terrain')"}})
     {
         const std::string cmd = command;
         actions::add(ctx, {.id = id, .label = label, .category = "Terrain", .run = [cmd] { actions::runWithOptions(cmd, nlohmann::json::object()); }, .doc = doc, .python = python});
+    }
+
+    {
+        // The import's naming culture: a fixed list with "from where the data lies" first.
+        ops::options::Override o;
+        if (const ops::options::Override* existing = ops::options::findOverride("terrainImportOsm"))
+            o = *existing;
+        o.order = {"terrain", "kinds", "culture", "origin", "fetch", "landcover", "curves", "perFeature", "lift", "step", "name"};
+        o.labels["culture"] = "Names";
+        o.shown = {"origin", "kinds"};
+        o.labels["origin"] = "Origin Lat, Lon";
+        std::vector<std::pair<std::string, std::string>> cultures = {{"", "From Location"}};
+        for (const std::string& c : names::cultures())
+            cultures.push_back({c, names::cultureLabel(c)});
+        o.choices["culture"] = cultures;
+        ops::options::setOverride("terrainImportOsm", o);
     }
 
     registerSculptTool(ctx);

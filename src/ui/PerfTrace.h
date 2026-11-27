@@ -23,6 +23,8 @@ LILA_UI_API void showDialog(QWidget* parent);
 
 /** Starts a recording of `seconds` once the capture connects. Returns the zip it will write; throws std::runtime_error. */
 LILA_UI_API std::filesystem::path record(int seconds);
+/** How long a recording asked for `seconds` runs: at least 1, at most 2 minutes from the dialog or 3 hours from a command. */
+LILA_UI_API int recordingSeconds(int seconds, bool fromCommand);
 
 /** state (idle, connecting, recording, saving, done, failed), secondsLeft, path, error, elevated, systemTracing. */
 LILA_UI_API nlohmann::json status();

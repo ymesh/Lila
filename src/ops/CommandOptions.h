@@ -95,6 +95,8 @@ struct Override
     std::vector<Fill> fills;
     /** Text under a flag's field, worked out each time the box opens (what the flag would act on right now). */
     std::map<std::string, std::function<std::string()>> notes;
+    /** Text under a flag's field worked out from the box's current values, again whenever a field changes. */
+    std::map<std::string, std::function<std::string(const json& values)>> liveNotes;
     /**
      * A warning above the fields while it returns text, for something outside the box that replaces some of its settings
      * (a scene override). Worked out when the box opens and again as the scene changes; the flags in warned are disabled
@@ -104,11 +106,16 @@ struct Override
     std::vector<std::string> warned;
     /** Docs page the option box's help button opens ("curves?id=text"); empty for none. */
     std::string docs;
-    /** Fields that only apply under some values of another: flag -> (that flag, its values). The field is disabled otherwise. */
+    /**
+     * Fields that only apply under some values of another: flag -> (that flag, its values). The field is disabled
+     * otherwise. A Bool flag's values are "true" and "false".
+     */
     std::map<std::string, std::pair<std::string, std::vector<std::string>>> enabledWhen;
 };
 
 LILA_FOUNDATION_API void setOverride(const std::string& command, Override o);
+/** Drops a command's override (its command went with the extension that made both). False when there was none. */
+LILA_FOUNDATION_API bool clearOverride(std::string_view command);
 LILA_FOUNDATION_API const Override* findOverride(std::string_view command);
 
 /** "maxDistance" reads "Max Distance", "uvSet" reads "UV Set". */

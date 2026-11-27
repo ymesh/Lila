@@ -133,6 +133,33 @@ LILA_SCENE_API json vertexAnimationParams(const seq::VatResult& bake, const json
 /** Where auto-sync writes exports: the "/cacheDir" pref, else <workspace>/.lila/cache/unreal, else the user dir. */
 LILA_SCENE_API fs::path cacheDir();
 
+/**
+ * The level open in the connected editor: its package, its package's persistent GUID (a new one whenever a level is
+ * made, so a level deleted and made again under the same path differs) and whether it is World Partition. level is
+ * empty when not connected or the plugin has no levelInfo; guid is empty from a plugin that predates it.
+ */
+struct LevelIdentity
+{
+    std::string level, guid;
+    bool partitioned = false;
+};
+
+/** levelInfo of the connected editor (see LevelIdentity). */
+LILA_SCENE_API LevelIdentity openLevelIdentity();
+
+/**
+ * Whether a record of what Lila sent to a level ({"level", "levelGuid", ...}, see stampLevelRecord) still describes the
+ * open one. Returns empty when it does, else why not: a different GUID (the level was deleted and made again, or
+ * replaced), another level, or a record without a GUID. Not connected, or a plugin without GUIDs, trusts the record.
+ */
+LILA_SCENE_API std::string levelRecordMismatch(const json& record, const LevelIdentity& open);
+
+/** Writes the open level's path and GUID into a record, for levelRecordMismatch. */
+LILA_SCENE_API void stampLevelRecord(json& record, const LevelIdentity& open);
+
+/** A file-name-safe form of a level package path, whole, so levels of the same name in different folders differ. */
+LILA_SCENE_API std::string levelFileKey(const std::string& level);
+
 /** The connection to one Unreal editor plus a worker thread for slow jobs (export + import). */
 class LILA_SCENE_API Link
 {
@@ -196,6 +223,18 @@ private:
  * .abc and imports it as a Geometry Cache.
  */
 LILA_SCENE_API void onSceneSaved();
+
+/**
+ * While one is alive, slot rule, override and pin changes don't send the last slot roots to Unreal again: a caller that
+ * rebuilds those roots (worldBuild) sends them itself once they are whole.
+ */
+struct LILA_SCENE_API SlotSyncPause
+{
+    SlotSyncPause();
+    ~SlotSyncPause();
+    SlotSyncPause(const SlotSyncPause&) = delete;
+    SlotSyncPause& operator=(const SlotSyncPause&) = delete;
+};
 
 /**
  * What onSceneSaved does, minus the pref check when `force`, then syncTextureSets. Returns how many mappings and sets were

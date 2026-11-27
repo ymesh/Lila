@@ -405,9 +405,33 @@ LaneGraph laneGraph(const Layout& l, const RoadNetwork& net)
         }
     };
 
+    // The ends that carry vehicle lanes; footpaths and paths meeting a street's end leave it a dead end for vehicles.
+    auto drivenOf = [&](const std::vector<EndRef>& ends) {
+        std::vector<EndRef> driven;
+        for (const EndRef& e : ends)
+            if (!per[size_t(e.line)].fwd.empty() || !per[size_t(e.line)].back.empty())
+                driven.push_back(e);
+        return driven;
+    };
+    // A dead end: vehicles turn round, and leave or arrive there when it is on the settlement's edge.
+    auto deadEnd = [&](const EndRef& e, Vec2 p, int junction) {
+        const std::vector<int> in = incoming(per[size_t(e.line)], e), out = outgoing(per[size_t(e.line)], e);
+        if (!in.empty() && !out.empty())
+            link(in.front(), out.front(), junction, Movement::UTurn);
+        if (!l.outline.pts.empty() && boundaryDistance(l.outline.pts, p) < std::max(2.0 * l.graph.snap(), 500.0))
+        {
+            for (int x : in)
+                g.lanes[size_t(x)].exit = true;
+            for (int x : out)
+                g.lanes[size_t(x)].entry = true;
+        }
+    };
+
     for (const auto& [ji, ends] : atJunction)
     {
         const Junction& j = net.junctions[size_t(ji)];
+        if (const std::vector<EndRef> driven = drivenOf(ends); driven.size() == 1)
+            deadEnd(driven[0], laneXZ(j.p), ji);
         for (const EndRef& a : ends)
         {
             const EndRef* straight = nullptr;
@@ -443,10 +467,15 @@ LaneGraph laneGraph(const Layout& l, const RoadNetwork& net)
     }
     for (const auto& [node, ends] : atNode)
     {
-        if (ends.size() == 1)
+        // A footpath or a path carrying on from a street's end leaves it a dead end for vehicles.
+        std::vector<EndRef> driven;
+        for (const EndRef& e : ends)
+            if (!per[size_t(e.line)].fwd.empty() || !per[size_t(e.line)].back.empty())
+                driven.push_back(e);
+        if (driven.size() == 1)
         {
             // A dead end: vehicles turn round, and leave or arrive there when it is on the settlement's edge.
-            const EndRef& e = ends[0];
+            const EndRef& e = driven[0];
             const std::vector<int> in = incoming(per[size_t(e.line)], e), out = outgoing(per[size_t(e.line)], e);
             if (!in.empty() && !out.empty())
                 link(in.front(), out.front(), -1, Movement::UTurn);

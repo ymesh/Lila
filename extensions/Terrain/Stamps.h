@@ -83,6 +83,8 @@ struct Stamp
     double offset = 0.0;
     /** Skirt width outside the footprint, blending back to the ground. */
     double falloff = 500.0;
+    /** Steepest the skirt may fall (rise over run, local units); the falloff widens up to four times to keep to it. 0: as given. */
+    double skirtGrade = 0.0;
     /** Blend mode: how far toward the target, 0 to 1. */
     double strength = 1.0;
     /** Regions: fall across the footprint, percent, along direction (downhill); the ground's own fall when direction is zero. */
@@ -127,6 +129,8 @@ struct StampResult
     /** Middle of the covered samples, where padHeight and the ground figures apply. */
     glm::dvec2 centroid{0.0};
     double padHeight = 0.0;
+    /** The skirt width used: the stamp's falloff, or wider for its skirtGrade; 0 when not widened. */
+    double falloff = 0.0;
     double groundMin = 0.0, groundMax = 0.0, groundMean = 0.0;
     /** Volumes moved, in cubic heightfield units. */
     double cut = 0.0, fill = 0.0;

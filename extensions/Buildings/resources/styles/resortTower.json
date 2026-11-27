@@ -1,0 +1,89 @@
+{
+  "id": "resortTower",
+  "label": "Resort Tower",
+  "description": "Hotel and condo towers on the beach strip: a podium of lobbies and shops, a tower of stacked balconies, white and glass.",
+  "tags": [
+    "resort",
+    "hotel",
+    "tower"
+  ],
+  "floors": {
+    "min": 6,
+    "max": 30,
+    "groundHeight": 500,
+    "height": 310,
+    "plinth": 15
+  },
+  "bays": {
+    "width": 380,
+    "min": 280,
+    "cornerWidth": 60
+  },
+  "openings": {
+    "window": {
+      "width": 0.62,
+      "height": 0.7,
+      "sill": 0.12,
+      "kind": "window.glazing"
+    },
+    "door": {
+      "width": 0.55,
+      "height": 0.75,
+      "kind": "door.shop"
+    },
+    "shopfront": {
+      "width": 0.9,
+      "height": 0.85
+    },
+    "reveal": 15
+  },
+  "groundFloor": {
+    "street": "shopfront",
+    "arcade": 0.0,
+    "shopfronts": true,
+    "awnings": 0.2
+  },
+  "modules": {
+    "balconies": 0.9,
+    "balconyKind": "stack",
+    "grilles": 0.0,
+    "acUnits": 0.1,
+    "cornice": "none",
+    "bands": false,
+    "drainpipes": false
+  },
+  "roof": {
+    "kind": "flat",
+    "parapet": 120,
+    "waterTanks": 0.0,
+    "clutter": 0.6
+  },
+  "palette": {
+    "render": [
+      "#f5f5f0",
+      "#e8e1d4",
+      "#d9e4ec",
+      "#f3eee4"
+    ],
+    "trim": [
+      "#c9d6df",
+      "#ffffff"
+    ],
+    "roof": [
+      "#7d7d7d"
+    ],
+    "base": [
+      "#bdb7ab"
+    ],
+    "dirt": [
+      0.02,
+      0.12
+    ]
+  },
+  "massing": {
+    "podium": 2,
+    "towerInset": 400,
+    "stepEvery": 0,
+    "stepInset": 0
+  }
+}

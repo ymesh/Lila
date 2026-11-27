@@ -549,7 +549,8 @@ void afterLots(Layout& l, const Site& site, const Ground& g, const Options& o)
         for (size_t d = 0; d < gen.districtOutlines.size(); ++d)
             if (contains(gen.districtOutlines[d].pts, c))
                 style = &gen.districtProfiles[d];
-        if (!style || style->name == o.profile.name)
+        // An imported building keeps the heights and roof its tags gave it.
+        if (!style || style->name == o.profile.name || !lot.osmId.empty())
         {
             env.era = era;
             kept.push_back(std::move(env));

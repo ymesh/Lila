@@ -6,13 +6,17 @@
 #include <lila/Actions.h>
 #include <lila/Command.h>
 #include <lila/Extension.h>
+#include <lila/FileDialog.h>
 #include <lila/Graph.h>
 #include <lila/LevelToolkit.h>
 #include <lila/Log.h>
 #include <lila/Menus.h>
+#include <lila/Names.h>
 #include <lila/Mesh.h>
 #include <lila/Node.h>
 #include <lila/OptionBox.h>
+
+#include <QApplication>
 
 using namespace lila;
 using namespace lila::ui;
@@ -178,18 +182,75 @@ void registerUi(ext::Context& ctx)
                        .python = "settlementRegion(ground='Terrain')",
                        .command = "settlementRegion",
                        .call = nlohmann::json::object()});
+    actions::add(ctx, {.id = "settlement.fromOsm",
+                       .label = "Town from OSM",
+                       .category = "Settlement",
+                       .run =
+                           [] {
+                               const QString file = fileDialog::getOpenFileName(QApplication::activeWindow(), "Town from OSM", {},
+                                                                                "OpenStreetMap (*.osm *.json *.pbf);;All files (*)");
+                               if (file.isEmpty())
+                                   return;
+                               nlohmann::json call = {{"args", {file.toStdString()}}};
+                               scene::Graph& g = scene::Graph::current();
+                               for (scene::NodeId id : g.selection())
+                                   if (const scene::Node* n = g.node(id); n && n->type().isA("mesh"))
+                                   {
+                                       call["ground"] = n->path();
+                                       break;
+                                   }
+                               actions::runWithOptions("settlementFromOsm", call);
+                           },
+                       .doc = "Lay out a town from an OpenStreetMap file on the selected terrain: its streets, every building as a lot "
+                              "and envelope, shops as businesses, areas as uses and landmarks, all with fictional names.",
+                       .python = "settlementFromOsm('town.osm', ground='Terrain')",
+                       .keywords = {"openstreetmap", "osm", "import", "buildings", "real place", "city", "map", "gta", "cityengine",
+                                    "blosm", "streets", "footprints"}});
     actions::add(ctx, {.id = "settlement.export", .label = "Export Settlement Layout", .category = "Settlement",
                        .doc = "Write the selected settlement's streets, lots and buildings as JSON.", .python = "settlementExport('Town', path='town.json')",
                        .command = "settlementExport", .call = nlohmann::json::object()});
 
+    {
+        ops::options::Override o;
+        o.order = {"file", "ground", "profile", "culture", "fill", "coverage", "origin", "margin", "name"};
+        o.labels["culture"] = "Names";
+        o.shown = {"origin"};
+        o.labels["origin"] = "Origin Lat, Lon";
+        o.choices["profile"] = {{"hamlet", "Hamlet"}, {"streetVillage", "Street Village"}, {"medievalTown", "Medieval Town"}, {"usTown", "US Town"},
+                                {"mexicanCity", "Mexican City"}, {"manhattan", "Manhattan"}, {"europeanCity", "European City"}, {"modernCity", "Modern City"},
+                                {"scifiMegacity", "Sci-fi Megacity"}};
+        std::vector<std::pair<std::string, std::string>> cultures = {{"", "From Location"}};
+        for (const std::string& c : names::cultures())
+            cultures.push_back({c, names::cultureLabel(c)});
+        o.choices["culture"] = cultures;
+        o.choices["fill"] = {{"sparse", "Sparse Blocks"}, {"all", "All Blocks"}, {"none", "None"}};
+        o.ranges["coverage"] = {0.0, 1.0, 0.05, ""};
+        o.ranges["margin"] = {0.0, 100000.0, 100.0, " cm"};
+        o.enabledWhen["coverage"] = {"fill", {"sparse"}};
+        o.docs = "settlement";
+        ops::options::setOverride("settlementFromOsm", o);
+        // The option box: the same settings with the file as a field, the selected mesh as the ground.
+        optionBox::addCustom(ctx, "settlement.fromOsm", [] {
+            nlohmann::json call = nlohmann::json::object();
+            scene::Graph& g = scene::Graph::current();
+            for (scene::NodeId id : g.selection())
+                if (const scene::Node* n = g.node(id); n && n->type().isA("mesh"))
+                {
+                    call["ground"] = n->path();
+                    break;
+                }
+            optionBox::openCommand("Town from OSM", "settlementFromOsm", call);
+        });
+    }
+
     levelToolkit::add(ctx, {.id = "settlement",
                             .title = "Settlement",
                             .items = {{"settlement.create", "building-community", "Create", "Town"}, {"settlement.region", "map-2", "Region", "Region"},
-                                      {"settlement.export", "file-export", "Export"}},
+                                      {"settlement.fromOsm", "map-pin", "From OSM", "Town"}, {"settlement.export", "file-export", "Export"}},
                             .order = 20, .docs = "settlement"});
     menus::addItem(ctx, {.id = "settlement.menu", .menu = levelToolkit::kMenu, .kind = menus::Kind::Submenu, .label = "Settlement",
                          .before = levelToolkit::kDressSection});
-    for (const char* a : {"settlement.create", "settlement.region", "settlement.export"})
+    for (const char* a : {"settlement.create", "settlement.region", "settlement.fromOsm", "settlement.export"})
         menus::addItem(ctx, {.id = std::string("settlement.menu.") + a, .menu = "Level/Settlement", .action = a});
 }
 } // namespace settlement

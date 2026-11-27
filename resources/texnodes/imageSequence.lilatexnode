@@ -44,19 +44,36 @@
       "doc": "Any frame of the sequence."
     },
     {
+      "id": "timing",
+      "type": "enum",
+      "default": "speed",
+      "options": [
+        "speed",
+        "frame"
+      ],
+      "doc": "speed: plays from Start Frame at Speed. frame: shows the sequence frame Frame names, and ignores Start Frame and Speed; key Frame (right-click > Make Keyable) to place the sequence over time."
+    },
+    {
+      "id": "frame",
+      "type": "float",
+      "default": 0,
+      "step": 1,
+      "doc": "With Timing on frame: the sequence frame shown, 0 for the first file. After End applies past the last one."
+    },
+    {
       "id": "start",
       "label": "Start Frame",
       "type": "float",
       "default": 1,
       "step": 1,
-      "doc": "The scene frame the sequence's first frame shows on."
+      "doc": "With Timing on speed: the scene frame the sequence's first frame shows on."
     },
     {
       "id": "offset",
       "type": "float",
       "default": 0,
       "step": 1,
-      "doc": "Frames into the sequence at Start Frame."
+      "doc": "Frames added to the sequence position: into the sequence at Start Frame, or onto Frame."
     },
     {
       "id": "frames",
@@ -71,7 +88,7 @@
       "default": 1,
       "softMin": 0,
       "softMax": 4,
-      "doc": "Sequence frames per scene frame: 0.5 plays at half speed, negative plays backwards. Keyed, the speed accumulates over the frames from Start Frame, so a change of speed never jumps."
+      "doc": "With Timing on speed: sequence frames per scene frame. 0.5 plays at half speed, negative plays backwards. Keyed, the speed accumulates over the frames from Start Frame, so a change of speed never jumps."
     },
     {
       "id": "loop",

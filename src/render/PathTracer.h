@@ -26,7 +26,7 @@ struct PtInstance
     glm::vec4 rows[3]{};   // world matrix rows, camera-relative
     uint32_t firstSection = 0;
     uint32_t sectionCount = 0;
-    uint32_t pad[2]{};
+    uint32_t tint[2]{}; // instance colour as four halves: linear rgb, amount (read under kInstanceColor)
 };
 static_assert(sizeof(PtInstance) == 80);
 

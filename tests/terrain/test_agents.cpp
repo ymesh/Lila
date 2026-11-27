@@ -317,6 +317,46 @@ TEST_CASE("agents: terrainCheck flags roads over their grade or over water unbri
     run("newScene");
 }
 
+TEST_CASE("agents: terrainCheck gives a pad's stream crossing, and a culvert laid along it carries the stream")
+{
+    loadTerrain();
+    run("newScene");
+    run("terrainCreate", {{"size", {200000.0, 200000.0}}, {"resolution", 257}, {"seed", 3}, {"name", "Yard"},
+                          {"amplitude", 4000.0}, {"featureSize", 60000.0}});
+    // A pad across the middle of a stream two others flow into (a reach of the second order or more).
+    const json water = run("terrainWaterInfo", {{"args", {"Yard"}}, {"riverArea", 1.0e5}});
+    std::map<int, int> inflows;
+    for (const json& r : water["rivers"])
+        if (r.value("downstream", -1) >= 0)
+            ++inflows[r["downstream"].get<int>()];
+    json at;
+    for (const json& r : water["rivers"])
+        if (inflows[r.value("id", -1)] >= 2 && r["points"].size() >= 6 && at.is_null())
+            at = r["points"][r["points"].size() / 2]["position"];
+    INFO(water["rivers"].size(), " rivers");
+    REQUIRE(at.is_array());
+    const double x = at[0].get<double>(), z = at[2].get<double>();
+    run("terrainStampPad", {{"args", {"Yard"}}, {"id", "yard"}, {"footprint", {{x - 3000.0, z - 3000.0}, {x + 3000.0, z - 3000.0}, {x + 3000.0, z + 3000.0}, {x - 3000.0, z + 3000.0}}},
+                            {"falloff", 500.0}});
+    json crossing;
+    const json first = run("terrainCheck", {{"args", {"Yard"}}, {"riverArea", 1.0e5}});
+    for (const json& i : first["issues"])
+        if (i["type"] == "blocksFlow" && i["about"] == "Stamps/yard")
+            crossing = i["crossing"];
+    INFO(first.dump().substr(0, 2000));
+    REQUIRE(crossing.is_array());
+    REQUIRE(crossing.size() >= 2);
+    json path = json::array();
+    for (const json& p : crossing)
+        path.push_back({p[0], p[2]});
+    run("terrainAddFeature", {{"args", {"Yard"}}, {"kind", "culvert"}, {"id", "yardCulvert"}, {"path", path}, {"width", 300.0}});
+    int left = 0;
+    for (const json& i : run("terrainCheck", {{"args", {"Yard"}}, {"riverArea", 1.0e5}})["issues"])
+        left += i["type"] == "blocksFlow" && i["about"] == "Stamps/yard";
+    CHECK(left == 0);
+    run("newScene");
+}
+
 namespace
 {
 /** A tools/call, resources/read or prompts/get through the MCP endpoint, answered on a worker while this thread runs it. */

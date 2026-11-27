@@ -1,6 +1,7 @@
 #include "LilaLinkTerrainRoads.h"
 
 #include "LilaLinkLog.h"
+#include "LilaLinkSplines.h"
 
 #include "Editor.h"
 #include "Engine/StaticMesh.h"
@@ -302,6 +303,24 @@ TSharedPtr<FJsonValue> SetTerrainRoads(const TSharedPtr<FJsonObject>& Params, FS
 	}
 
 	FScopedTransaction Transaction(NSLOCTEXT("LilaLink", "SetTerrainRoads", "Lila: Update Terrain Roads"));
+	const FString Prefix = RoadPrefix(Id);
+	int32 RegionsLoaded = 0;
+	if (World->GetWorldPartition())
+	{
+		// Only loaded landscape takes a redraw: load what the earlier and the new roads cover, before the Splines layer is
+		// added, so every region gets that layer too.
+		LilaLink::LoadSplineActors(World);
+		const ALandscapeSplineActor* Earlier = Cast<ALandscapeSplineActor>(FindRoadActor(World, RoadActorTag(Id)));
+		FBox Covered = Earlier ? LilaLink::SplineBounds(Earlier->GetSplinesComponent(), Prefix) : FBox(ForceInit);
+		for (const FLilaRoad& Road : Roads)
+		{
+			for (const FLilaRoadPoint& In : Road.Points)
+			{
+				Covered += FBox::BuildAABB(Location + In.Position, FVector(Road.HalfWidth + Road.SideFalloff + Road.EndFalloff));
+			}
+		}
+		RegionsLoaded = LilaLink::LoadLandscapeUnder(World, Covered);
+	}
 	FString OwnerPath;
 	ULandscapeSplinesComponent* Component = RoadSplines(World, Landscape, Id, Location, OwnerPath, OutError);
 	if (!Component)
@@ -313,7 +332,6 @@ TSharedPtr<FJsonValue> SetTerrainRoads(const TSharedPtr<FJsonObject>& Params, FS
 		Transaction.Cancel();
 		return nullptr;
 	}
-	const FString Prefix = RoadPrefix(Id);
 	ClearRoads(Component, Prefix);
 
 	TArray<FString> Warnings;
@@ -402,21 +420,18 @@ TSharedPtr<FJsonValue> SetTerrainRoads(const TSharedPtr<FJsonObject>& Params, FS
 	}
 	Component->MarkRenderStateDirty();
 	Component->MarkPackageDirty();
-	if (bDeforms)
-	{
-		// Splines only paint and deform through an edit layer reserved for them.
-		if (!Landscape->FindEditLayerOfTypeConst(ULandscapeEditLayerSplines::StaticClass()) &&
-			Landscape->CreateLayer(FName(TEXT("Splines")), ULandscapeEditLayerSplines::StaticClass()) == INDEX_NONE)
-		{
-			Warnings.Add(TEXT("could not add a Splines edit layer to the landscape, so the roads neither paint nor deform it"));
-		}
-		Landscape->RequestSplineLayerUpdate();
-	}
+	// Also when nothing deforms: a re-send that turns it off takes the earlier shape and paint out of the landscape.
+	TArray<FString> LayersRemoved;
+	LilaLink::RedrawSplineLayer(Landscape, bDeforms, Warnings, &LayersRemoved);
 
-	TArray<TSharedPtr<FJsonValue>> WarningValues;
+	TArray<TSharedPtr<FJsonValue>> WarningValues, RemovedValues;
 	for (const FString& W : Warnings)
 	{
 		WarningValues.Add(MakeShared<FJsonValueString>(W));
+	}
+	for (const FString& L : LayersRemoved)
+	{
+		RemovedValues.Add(MakeShared<FJsonValueString>(L));
 	}
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetStringField(TEXT("actor"), OwnerPath);
@@ -424,6 +439,8 @@ TSharedPtr<FJsonValue> SetTerrainRoads(const TSharedPtr<FJsonObject>& Params, FS
 	Out->SetNumberField(TEXT("roads"), Roads.Num());
 	Out->SetNumberField(TEXT("controlPoints"), PointCount);
 	Out->SetNumberField(TEXT("segments"), SegmentCount);
+	Out->SetNumberField(TEXT("regionsLoaded"), RegionsLoaded);
+	Out->SetArrayField(TEXT("paintLayersRemoved"), RemovedValues);
 	Out->SetArrayField(TEXT("warnings"), WarningValues);
 	UE_LOG(LogLilaLink, Log, TEXT("setTerrainRoads: %d road(s) on %s"), Roads.Num(), *Landscape->GetActorLabel());
 	return MakeShared<FJsonValueObject>(Out);
@@ -447,8 +464,21 @@ TSharedPtr<FJsonValue> RemoveTerrainRoads(const TSharedPtr<FJsonObject>& Params,
 	}
 	FScopedTransaction Transaction(NSLOCTEXT("LilaLink", "RemoveTerrainRoads", "Lila: Remove Terrain Roads"));
 	bool bRemoved = false;
+	int32 RegionsLoaded = 0;
+	TArray<ALandscape*> Reshaped;
+	LilaLink::LoadSplineActors(World);
 	if (AActor* Tagged = FindRoadActor(World, RoadActorTag(Id)))
 	{
+		if (const ALandscapeSplineActor* SplineActor = Cast<ALandscapeSplineActor>(Tagged))
+		{
+			// The redraw that takes the roads out reaches loaded landscape only.
+			RegionsLoaded = LilaLink::LoadLandscapeUnder(World, LilaLink::SplineBounds(SplineActor->GetSplinesComponent(), FString()));
+			const ULandscapeInfo* Info = SplineActor->GetLandscapeInfo();
+			if (ALandscape* Landscape = Info ? Info->LandscapeActor.Get() : nullptr)
+			{
+				Reshaped.Add(Landscape);
+			}
+		}
 		bRemoved = World->EditorDestroyActor(Tagged, true);
 	}
 	const FString Prefix = RoadPrefix(Id);
@@ -462,12 +492,29 @@ TSharedPtr<FJsonValue> RemoveTerrainRoads(const TSharedPtr<FJsonObject>& Params,
 			{
 				bRemoved = true;
 				Splines->MarkRenderStateDirty();
-				It->RequestSplineLayerUpdate();
+				Reshaped.AddUnique(*It);
 			}
 		}
 	}
+	TArray<FString> Warnings, LayersRemoved;
+	for (ALandscape* Landscape : Reshaped)
+	{
+		LilaLink::RedrawSplineLayer(Landscape, /*bAddLayer=*/false, Warnings, &LayersRemoved);
+	}
+	TArray<TSharedPtr<FJsonValue>> WarningValues, RemovedValues;
+	for (const FString& W : Warnings)
+	{
+		WarningValues.Add(MakeShared<FJsonValueString>(W));
+	}
+	for (const FString& L : LayersRemoved)
+	{
+		RemovedValues.Add(MakeShared<FJsonValueString>(L));
+	}
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetBoolField(TEXT("removed"), bRemoved);
+	Out->SetNumberField(TEXT("regionsLoaded"), RegionsLoaded);
+	Out->SetArrayField(TEXT("paintLayersRemoved"), RemovedValues);
+	Out->SetArrayField(TEXT("warnings"), WarningValues);
 	return MakeShared<FJsonValueObject>(Out);
 }
 } // namespace

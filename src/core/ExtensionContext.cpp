@@ -1,5 +1,7 @@
 #include "core/ExtensionContext.h"
 
+#include "ops/CommandOptions.h"
+
 #include <charconv>
 #include <map>
 
@@ -139,7 +141,11 @@ Context::Handle Context::registerCommand(CommandDef def)
     std::string own = owner();
     return track("command:" + name, [name, own] {
         if (const CommandDef* d = ops::find(name); d && d->owner == own)
+        {
             ops::unregisterCommand(name);
+            // Its option-box override can hold the extension's own code (fills), which is about to go.
+            ops::options::clearOverride(name);
+        }
     });
 }
 

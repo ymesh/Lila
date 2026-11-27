@@ -1103,7 +1103,7 @@ void addBuiltIns(Registry<prefPages::Page>& r)
         toggleField(script, "Vim keybindings", "/vim", false);
         toggleField(script, "Monotone", palette::kMonotonePref, false);
         const int monotoneRow = script.form->rowCount() - 1;
-        toggleField(script, "App Monotone overrides script editor", palette::kFollowAppMonotonePref, true);
+        toggleField(script, "App Monotone overrides script editor", palette::kFollowAppMonotonePref, false);
         disableRowWhen(script, monotoneRow, palette::monotoneForcedByApp,
                        "The app is Monotone and \"App Monotone overrides script editor\" is on, so the script editor stays grey");
 

@@ -29,6 +29,8 @@ void markDependencies(Plan& plan)
         step.dynamic = stateful || step.decl->type == "SceneTime" || step.decl->type == "IsViewport" || step.decl->type == "ActiveCamera" ||
                        // Nodes with side-panel actions record their inputs for them (gn/Bake.h), so they must run each time.
                        !step.decl->actions.empty() ||
+                       // Slots read the scene's rules and overrides, which no input hash sees.
+                       step.decl->type == "Slots" ||
                        (runsGroup(step.decl->type) && (plan.usesTime || plan.usesView)) ||
                        step.decl->type == "Viewer" || isGizmoType(step.decl->type) || int(s) == plan.outputStep;
         for (const std::vector<Plan::Source>& links : step.inputs)

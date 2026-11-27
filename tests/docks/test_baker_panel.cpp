@@ -234,7 +234,8 @@ TEST_CASE("baker panel: groups from names, drops, stacks, output preview, bake a
 
     SUBCASE("the name template previews live and commits through setBakeOutput; bake fills the thumbnails")
     {
-        const fs::path dir = fs::temp_directory_path() / "lila_baker_panel";
+        // Per process: the same suite running from another build dir would clear a shared folder mid-bake.
+        const fs::path dir = fs::temp_directory_path() / ("lila_baker_panel_" + std::to_string(QCoreApplication::applicationPid()));
         fs::remove_all(dir);
         ops::execute("setBakeOutput", {{"project", panel.project()}, {"folder", dir.generic_string()}, {"resolution", 24}, {"supersampling", 1}});
         ops::execute("bakeGroup", {{"args", {grp->path()}}, {"frontal", 3.0}, {"rear", 3.0}});
@@ -824,7 +825,7 @@ TEST_CASE("baker MCP tools: bake returns a contact sheet, bake_inspect reads tex
     UndoStack::get().clear();
     addPlane("tile_low", 0.0);
     addPlane("tile_high", 1.0);
-    const fs::path dir = fs::temp_directory_path() / "lila_baker_mcp";
+    const fs::path dir = fs::temp_directory_path() / ("lila_baker_mcp_" + std::to_string(QCoreApplication::applicationPid()));
     fs::remove_all(dir);
     ops::execute("createBakeProject", {{"name", "P"}, {"folder", dir.generic_string()}});
     ops::execute("setBakeOutput", {{"resolution", 16}, {"supersampling", 1}});

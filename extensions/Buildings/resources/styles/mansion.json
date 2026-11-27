@@ -1,0 +1,93 @@
+{
+  "id": "mansion",
+  "label": "Mansion",
+  "description": "Walled villas: columns and a pediment at the door, a dome, balustraded roofs, a gate in a high perimeter wall, a pool behind.",
+  "tags": [
+    "mansion",
+    "villa",
+    "luxury"
+  ],
+  "floors": {
+    "min": 1,
+    "max": 2,
+    "groundHeight": 450,
+    "height": 400,
+    "plinth": 60
+  },
+  "bays": {
+    "width": 420,
+    "min": 300,
+    "cornerWidth": 60
+  },
+  "openings": {
+    "window": {
+      "width": 0.45,
+      "height": 0.65,
+      "sill": 0.2,
+      "kind": "window.residential"
+    },
+    "door": {
+      "width": 0.55,
+      "height": 0.82,
+      "kind": "door.house"
+    },
+    "shopfront": {
+      "width": 0.8,
+      "height": 0.8
+    },
+    "reveal": 25
+  },
+  "groundFloor": {
+    "street": "window",
+    "shopfronts": false,
+    "awnings": 0.0
+  },
+  "modules": {
+    "balconies": 0.3,
+    "balconyKind": "glass",
+    "grilles": 0.3,
+    "acUnits": 0.2,
+    "pilasters": true,
+    "cornice": "heavy",
+    "bands": true,
+    "corner": "pilaster",
+    "drainpipes": false
+  },
+  "roof": {
+    "kind": "flat",
+    "parapet": 60,
+    "waterTanks": 0.2,
+    "clutter": 0.3
+  },
+  "palette": {
+    "render": [
+      "#f3e9dc",
+      "#e6ccb2",
+      "#ddb892",
+      "#fff8e7",
+      "#f0d9c0"
+    ],
+    "trim": [
+      "#ffffff",
+      "#d8cfc0"
+    ],
+    "roof": [
+      "#b5651d",
+      "#c08552"
+    ],
+    "base": [
+      "#a89f91"
+    ],
+    "dirt": [
+      0.0,
+      0.12
+    ]
+  },
+  "extras": {
+    "columns": 4,
+    "domes": 1,
+    "perimeterWall": 280,
+    "gate": true,
+    "pool": true
+  }
+}

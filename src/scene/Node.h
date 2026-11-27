@@ -123,6 +123,9 @@ public:
     template <class T> const T& as(int attr) const { return std::get<T>(mValues[attr]); }
     /** Graph::evaluationPass() when this node last computed; 0 before it ever has. */
     uint64_t evaluatedPass() const { return mEvaluatedPass; }
+    static constexpr uint32_t kUnknownCost = ~0u;
+    /** How long its last compute took, microseconds; kUnknownCost before the first. */
+    uint32_t lastComputeUs() const { return mComputeUs; }
 
     virtual void compute(const EvalContext& ctx) { (void)ctx; }
 
@@ -171,5 +174,6 @@ private:
     /** In the pass it last evaluated in, with cached playback on: 0 restored, 1 computed and kept, 2 computed, not kept. */
     uint8_t mPlayback = 0;
     uint64_t mEvaluatedPass = 0;
+    uint32_t mComputeUs = kUnknownCost;
 };
 } // namespace lila::scene

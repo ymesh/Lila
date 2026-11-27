@@ -1,0 +1,1062 @@
+{
+ "version": 0.6,
+ "generator": "make_w1_town.py",
+ "elements": [
+  {
+   "type": "node",
+   "id": 1,
+   "lat": 23.2012,
+   "lon": -106.4218
+  },
+  {
+   "type": "node",
+   "id": 2,
+   "lat": 23.2012,
+   "lon": -106.4182
+  },
+  {
+   "type": "node",
+   "id": 3,
+   "lat": 23.2,
+   "lon": -106.4218
+  },
+  {
+   "type": "node",
+   "id": 4,
+   "lat": 23.2,
+   "lon": -106.4182
+  },
+  {
+   "type": "node",
+   "id": 5,
+   "lat": 23.1988,
+   "lon": -106.4218
+  },
+  {
+   "type": "node",
+   "id": 6,
+   "lat": 23.1988,
+   "lon": -106.4182
+  },
+  {
+   "type": "node",
+   "id": 7,
+   "lat": 23.1982,
+   "lon": -106.4212
+  },
+  {
+   "type": "node",
+   "id": 8,
+   "lat": 23.2018,
+   "lon": -106.4212
+  },
+  {
+   "type": "node",
+   "id": 9,
+   "lat": 23.1982,
+   "lon": -106.42
+  },
+  {
+   "type": "node",
+   "id": 10,
+   "lat": 23.2018,
+   "lon": -106.42
+  },
+  {
+   "type": "node",
+   "id": 11,
+   "lat": 23.1982,
+   "lon": -106.4188
+  },
+  {
+   "type": "node",
+   "id": 12,
+   "lat": 23.2018,
+   "lon": -106.4188
+  },
+  {
+   "type": "node",
+   "id": 13,
+   "lat": 23.20015,
+   "lon": -106.41985
+  },
+  {
+   "type": "node",
+   "id": 14,
+   "lat": 23.20015,
+   "lon": -106.41955
+  },
+  {
+   "type": "node",
+   "id": 15,
+   "lat": 23.20045,
+   "lon": -106.41955
+  },
+  {
+   "type": "node",
+   "id": 16,
+   "lat": 23.20045,
+   "lon": -106.41985
+  },
+  {
+   "type": "node",
+   "id": 17,
+   "lat": 23.20015,
+   "lon": -106.4195
+  },
+  {
+   "type": "node",
+   "id": 18,
+   "lat": 23.20015,
+   "lon": -106.4192
+  },
+  {
+   "type": "node",
+   "id": 19,
+   "lat": 23.20045,
+   "lon": -106.4192
+  },
+  {
+   "type": "node",
+   "id": 20,
+   "lat": 23.20045,
+   "lon": -106.4195
+  },
+  {
+   "type": "node",
+   "id": 21,
+   "lat": 23.20015,
+   "lon": -106.41915
+  },
+  {
+   "type": "node",
+   "id": 22,
+   "lat": 23.20015,
+   "lon": -106.41885
+  },
+  {
+   "type": "node",
+   "id": 23,
+   "lat": 23.20045,
+   "lon": -106.41885
+  },
+  {
+   "type": "node",
+   "id": 24,
+   "lat": 23.20045,
+   "lon": -106.41915
+  },
+  {
+   "type": "node",
+   "id": 25,
+   "lat": 23.2005,
+   "lon": -106.41985
+  },
+  {
+   "type": "node",
+   "id": 26,
+   "lat": 23.2005,
+   "lon": -106.41955
+  },
+  {
+   "type": "node",
+   "id": 27,
+   "lat": 23.2008,
+   "lon": -106.41955
+  },
+  {
+   "type": "node",
+   "id": 28,
+   "lat": 23.2008,
+   "lon": -106.41985
+  },
+  {
+   "type": "node",
+   "id": 29,
+   "lat": 23.2005,
+   "lon": -106.4195
+  },
+  {
+   "type": "node",
+   "id": 30,
+   "lat": 23.2005,
+   "lon": -106.4192
+  },
+  {
+   "type": "node",
+   "id": 31,
+   "lat": 23.2008,
+   "lon": -106.4192
+  },
+  {
+   "type": "node",
+   "id": 32,
+   "lat": 23.2008,
+   "lon": -106.4195
+  },
+  {
+   "type": "node",
+   "id": 33,
+   "lat": 23.2005,
+   "lon": -106.41915
+  },
+  {
+   "type": "node",
+   "id": 34,
+   "lat": 23.2005,
+   "lon": -106.41885
+  },
+  {
+   "type": "node",
+   "id": 35,
+   "lat": 23.2008,
+   "lon": -106.41885
+  },
+  {
+   "type": "node",
+   "id": 36,
+   "lat": 23.2008,
+   "lon": -106.41915
+  },
+  {
+   "type": "node",
+   "id": 37,
+   "lat": 23.20085,
+   "lon": -106.41985
+  },
+  {
+   "type": "node",
+   "id": 38,
+   "lat": 23.20085,
+   "lon": -106.41955
+  },
+  {
+   "type": "node",
+   "id": 39,
+   "lat": 23.20115,
+   "lon": -106.41955
+  },
+  {
+   "type": "node",
+   "id": 40,
+   "lat": 23.20115,
+   "lon": -106.41985
+  },
+  {
+   "type": "node",
+   "id": 41,
+   "lat": 23.20085,
+   "lon": -106.4195
+  },
+  {
+   "type": "node",
+   "id": 42,
+   "lat": 23.20085,
+   "lon": -106.4192
+  },
+  {
+   "type": "node",
+   "id": 43,
+   "lat": 23.20115,
+   "lon": -106.4192
+  },
+  {
+   "type": "node",
+   "id": 44,
+   "lat": 23.20115,
+   "lon": -106.4195
+  },
+  {
+   "type": "node",
+   "id": 45,
+   "lat": 23.20085,
+   "lon": -106.41915
+  },
+  {
+   "type": "node",
+   "id": 46,
+   "lat": 23.20085,
+   "lon": -106.41885
+  },
+  {
+   "type": "node",
+   "id": 47,
+   "lat": 23.20115,
+   "lon": -106.41885
+  },
+  {
+   "type": "node",
+   "id": 48,
+   "lat": 23.20115,
+   "lon": -106.41915
+  },
+  {
+   "type": "node",
+   "id": 49,
+   "lat": 23.20065,
+   "lon": -106.4197,
+   "tags": {
+    "amenity": "pharmacy",
+    "name": "Farmacias Similares",
+    "brand": "Farmacias Similares"
+   }
+  },
+  {
+   "type": "node",
+   "id": 50,
+   "lat": 23.20065,
+   "lon": -106.41935,
+   "tags": {
+    "shop": "convenience",
+    "name": "OXXO",
+    "brand": "OXXO"
+   }
+  },
+  {
+   "type": "node",
+   "id": 51,
+   "lat": 23.201,
+   "lon": -106.419,
+   "tags": {
+    "shop": "convenience",
+    "name": "OXXO",
+    "brand": "OXXO"
+   }
+  },
+  {
+   "type": "node",
+   "id": 52,
+   "lat": 23.2003,
+   "lon": -106.4209
+  },
+  {
+   "type": "node",
+   "id": 53,
+   "lat": 23.2003,
+   "lon": -106.4205
+  },
+  {
+   "type": "node",
+   "id": 54,
+   "lat": 23.2006,
+   "lon": -106.4205
+  },
+  {
+   "type": "node",
+   "id": 55,
+   "lat": 23.2006,
+   "lon": -106.4209
+  },
+  {
+   "type": "node",
+   "id": 56,
+   "lat": 23.2003,
+   "lon": -106.4209
+  },
+  {
+   "type": "node",
+   "id": 57,
+   "lat": 23.2003,
+   "lon": -106.42075
+  },
+  {
+   "type": "node",
+   "id": 58,
+   "lat": 23.20045,
+   "lon": -106.42075
+  },
+  {
+   "type": "node",
+   "id": 59,
+   "lat": 23.20045,
+   "lon": -106.4209
+  },
+  {
+   "type": "node",
+   "id": 60,
+   "lat": 23.2003,
+   "lon": -106.42075
+  },
+  {
+   "type": "node",
+   "id": 61,
+   "lat": 23.2003,
+   "lon": -106.4205
+  },
+  {
+   "type": "node",
+   "id": 62,
+   "lat": 23.2006,
+   "lon": -106.4205
+  },
+  {
+   "type": "node",
+   "id": 63,
+   "lat": 23.2006,
+   "lon": -106.42075
+  },
+  {
+   "type": "node",
+   "id": 64,
+   "lat": 23.2007,
+   "lon": -106.42045
+  },
+  {
+   "type": "node",
+   "id": 65,
+   "lat": 23.2007,
+   "lon": -106.4201
+  },
+  {
+   "type": "node",
+   "id": 66,
+   "lat": 23.201,
+   "lon": -106.4201
+  },
+  {
+   "type": "node",
+   "id": 67,
+   "lat": 23.201,
+   "lon": -106.42045
+  },
+  {
+   "type": "node",
+   "id": 68,
+   "lat": 23.2008,
+   "lon": -106.42035
+  },
+  {
+   "type": "node",
+   "id": 69,
+   "lat": 23.2008,
+   "lon": -106.4202
+  },
+  {
+   "type": "node",
+   "id": 70,
+   "lat": 23.2009,
+   "lon": -106.4202
+  },
+  {
+   "type": "node",
+   "id": 71,
+   "lat": 23.2009,
+   "lon": -106.42035
+  },
+  {
+   "type": "node",
+   "id": 72,
+   "lat": 23.20015,
+   "lon": -106.4206,
+   "tags": {
+    "place": "neighbourhood",
+    "name": "Colonia Centro"
+   }
+  },
+  {
+   "type": "node",
+   "id": 73,
+   "lat": 23.1989,
+   "lon": -106.4211
+  },
+  {
+   "type": "node",
+   "id": 74,
+   "lat": 23.1989,
+   "lon": -106.4201
+  },
+  {
+   "type": "node",
+   "id": 75,
+   "lat": 23.1994,
+   "lon": -106.4201
+  },
+  {
+   "type": "node",
+   "id": 76,
+   "lat": 23.1994,
+   "lon": -106.4211
+  },
+  {
+   "type": "node",
+   "id": 77,
+   "lat": 23.1995,
+   "lon": -106.4211
+  },
+  {
+   "type": "node",
+   "id": 78,
+   "lat": 23.1995,
+   "lon": -106.4201
+  },
+  {
+   "type": "node",
+   "id": 79,
+   "lat": 23.1999,
+   "lon": -106.4201
+  },
+  {
+   "type": "node",
+   "id": 80,
+   "lat": 23.1999,
+   "lon": -106.4211
+  },
+  {
+   "type": "node",
+   "id": 81,
+   "lat": 23.1999,
+   "lon": -106.4194,
+   "tags": {
+    "amenity": "restaurant",
+    "cuisine": "mexican;tacos",
+    "name": "Taquería El Güero"
+   }
+  },
+  {
+   "type": "node",
+   "id": 82,
+   "lat": 23.1994,
+   "lon": -106.4194,
+   "tags": {
+    "place": "town",
+    "name": "Mazatlán"
+   }
+  },
+  {
+   "type": "node",
+   "id": 83,
+   "lat": 23.1984,
+   "lon": -106.4218
+  },
+  {
+   "type": "node",
+   "id": 84,
+   "lat": 23.19835,
+   "lon": -106.42
+  },
+  {
+   "type": "node",
+   "id": 85,
+   "lat": 23.1983,
+   "lon": -106.4182
+  },
+  {
+   "type": "node",
+   "id": 86,
+   "lat": 23.2015,
+   "lon": -106.4185
+  },
+  {
+   "type": "node",
+   "id": 87,
+   "lat": 23.2017,
+   "lon": -106.4183
+  },
+  {
+   "type": "node",
+   "id": 88,
+   "lat": 23.1985,
+   "lon": -106.4185
+  },
+  {
+   "type": "node",
+   "id": 89,
+   "lat": 23.1987,
+   "lon": -106.4183
+  },
+  {
+   "type": "node",
+   "id": 90,
+   "lat": 23.2013,
+   "lon": -106.4186
+  },
+  {
+   "type": "node",
+   "id": 91,
+   "lat": 23.2016,
+   "lon": -106.4186
+  },
+  {
+   "type": "node",
+   "id": 92,
+   "lat": 23.2015,
+   "lon": -106.4217
+  },
+  {
+   "type": "node",
+   "id": 93,
+   "lat": 23.2017,
+   "lon": -106.4215
+  },
+  {
+   "type": "node",
+   "id": 94,
+   "lat": 23.2002,
+   "lon": -106.4186
+  },
+  {
+   "type": "node",
+   "id": 95,
+   "lat": 23.2002,
+   "lon": -106.4183
+  },
+  {
+   "type": "node",
+   "id": 96,
+   "lat": 23.2008,
+   "lon": -106.4183
+  },
+  {
+   "type": "node",
+   "id": 97,
+   "lat": 23.2008,
+   "lon": -106.4186
+  },
+  {
+   "type": "node",
+   "id": 98,
+   "lat": 23.199,
+   "lon": -106.42175
+  },
+  {
+   "type": "node",
+   "id": 99,
+   "lat": 23.199,
+   "lon": -106.42145
+  },
+  {
+   "type": "node",
+   "id": 100,
+   "lat": 23.1996,
+   "lon": -106.42145
+  },
+  {
+   "type": "node",
+   "id": 101,
+   "lat": 23.1996,
+   "lon": -106.42175
+  },
+  {
+   "type": "way",
+   "id": 100,
+   "nodes": [
+    1,
+    2
+   ],
+   "tags": {
+    "highway": "residential",
+    "name": "Calle Benito Juárez"
+   }
+  },
+  {
+   "type": "way",
+   "id": 101,
+   "nodes": [
+    3,
+    4
+   ],
+   "tags": {
+    "highway": "primary",
+    "name": "Avenida Olas Altas",
+    "lanes": "4"
+   }
+  },
+  {
+   "type": "way",
+   "id": 102,
+   "nodes": [
+    5,
+    6
+   ],
+   "tags": {
+    "highway": "residential",
+    "name": "Calle Ángel Flores"
+   }
+  },
+  {
+   "type": "way",
+   "id": 103,
+   "nodes": [
+    7,
+    8
+   ],
+   "tags": {
+    "highway": "residential",
+    "name": "Calle Constitución"
+   }
+  },
+  {
+   "type": "way",
+   "id": 104,
+   "nodes": [
+    9,
+    10
+   ],
+   "tags": {
+    "highway": "secondary",
+    "name": "Avenida Miguel Alemán"
+   }
+  },
+  {
+   "type": "way",
+   "id": 105,
+   "nodes": [
+    11,
+    12
+   ],
+   "tags": {
+    "highway": "residential",
+    "name": "Calle Aquiles Serdán"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1001,
+   "nodes": [
+    13,
+    14,
+    15,
+    16,
+    13
+   ],
+   "tags": {
+    "building": "commercial",
+    "building:levels": "3",
+    "roof:shape": "hipped",
+    "building:colour": "#d4a373",
+    "name": "Edificio Belmar"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1002,
+   "nodes": [
+    17,
+    18,
+    19,
+    20,
+    17
+   ],
+   "tags": {
+    "building": "house",
+    "height": "7.5",
+    "roof:shape": "gabled",
+    "roof:colour": "#8b3a2b"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1003,
+   "nodes": [
+    21,
+    22,
+    23,
+    24,
+    21
+   ],
+   "tags": {
+    "building": "apartments",
+    "building:levels": "5",
+    "roof:shape": "flat",
+    "building:material": "concrete"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1004,
+   "nodes": [
+    25,
+    26,
+    27,
+    28,
+    25
+   ],
+   "tags": {
+    "building": "house"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1005,
+   "nodes": [
+    29,
+    30,
+    31,
+    32,
+    29
+   ],
+   "tags": {
+    "building": "house"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1006,
+   "nodes": [
+    33,
+    34,
+    35,
+    36,
+    33
+   ],
+   "tags": {
+    "building": "house"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1007,
+   "nodes": [
+    37,
+    38,
+    39,
+    40,
+    37
+   ],
+   "tags": {
+    "building": "house"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1008,
+   "nodes": [
+    41,
+    42,
+    43,
+    44,
+    41
+   ],
+   "tags": {
+    "building": "house"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1009,
+   "nodes": [
+    45,
+    46,
+    47,
+    48,
+    45
+   ],
+   "tags": {
+    "building": "house"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1010,
+   "nodes": [
+    52,
+    53,
+    54,
+    55,
+    52
+   ],
+   "tags": {
+    "building": "cathedral",
+    "amenity": "place_of_worship",
+    "name": "Catedral Basílica de la Inmaculada Concepción",
+    "start_date": "1856"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1011,
+   "nodes": [
+    56,
+    57,
+    58,
+    59,
+    56
+   ],
+   "tags": {
+    "building:part": "yes",
+    "height": "45",
+    "roof:shape": "dome"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1012,
+   "nodes": [
+    60,
+    61,
+    62,
+    63,
+    60
+   ],
+   "tags": {
+    "building:part": "yes",
+    "height": "18",
+    "min_height": "0",
+    "roof:shape": "gabled"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1013,
+   "nodes": [
+    64,
+    65,
+    66,
+    67,
+    64
+   ]
+  },
+  {
+   "type": "way",
+   "id": 1014,
+   "nodes": [
+    68,
+    69,
+    70,
+    71,
+    68
+   ]
+  },
+  {
+   "type": "way",
+   "id": 3001,
+   "nodes": [
+    73,
+    74,
+    75,
+    76,
+    73
+   ],
+   "tags": {
+    "landuse": "cemetery",
+    "name": "Panteón Municipal Número Uno"
+   }
+  },
+  {
+   "type": "way",
+   "id": 3002,
+   "nodes": [
+    77,
+    78,
+    79,
+    80,
+    77
+   ],
+   "tags": {
+    "amenity": "school",
+    "name": "Escuela Primaria Benito Juárez"
+   }
+  },
+  {
+   "type": "way",
+   "id": 110,
+   "nodes": [
+    83,
+    84,
+    85
+   ],
+   "tags": {
+    "waterway": "river",
+    "name": "Río Presidio"
+   }
+  },
+  {
+   "type": "way",
+   "id": 111,
+   "nodes": [
+    86,
+    87
+   ],
+   "tags": {
+    "man_made": "pier",
+    "name": "Muelle Fiscal"
+   }
+  },
+  {
+   "type": "way",
+   "id": 112,
+   "nodes": [
+    88,
+    89
+   ],
+   "tags": {
+    "man_made": "breakwater"
+   }
+  },
+  {
+   "type": "way",
+   "id": 113,
+   "nodes": [
+    90,
+    91
+   ],
+   "tags": {
+    "man_made": "quay"
+   }
+  },
+  {
+   "type": "way",
+   "id": 114,
+   "nodes": [
+    92,
+    93
+   ],
+   "tags": {
+    "waterway": "dam",
+    "name": "Presa Picachos"
+   }
+  },
+  {
+   "type": "way",
+   "id": 3003,
+   "nodes": [
+    94,
+    95,
+    96,
+    97,
+    94
+   ],
+   "tags": {
+    "natural": "beach",
+    "name": "Playa Olas Altas"
+   }
+  },
+  {
+   "type": "way",
+   "id": 3004,
+   "nodes": [
+    98,
+    99,
+    100,
+    101,
+    98
+   ],
+   "tags": {
+    "landuse": "reservoir",
+    "name": "Presa Sanalona"
+   }
+  },
+  {
+   "type": "relation",
+   "id": 2001,
+   "members": [
+    {
+     "type": "way",
+     "ref": 1013,
+     "role": "outer"
+    },
+    {
+     "type": "way",
+     "ref": 1014,
+     "role": "inner"
+    }
+   ],
+   "tags": {
+    "type": "multipolygon",
+    "building": "apartments",
+    "height": "12",
+    "name": "Casa del Marino"
+   }
+  }
+ ]
+}

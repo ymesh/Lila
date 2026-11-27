@@ -409,21 +409,6 @@ geo::Heightfield transformedGrid(const geo::Heightfield& h, const glm::dmat4& xf
 }
 } // namespace
 
-void transformMesh(geo::Mesh& m, const glm::dmat4& xf)
-{
-    LILA_ZONE();
-
-    std::span<glm::dvec3> pos = m.positions();
-    tbb::parallel_for(size_t(0), pos.size(), [&](size_t p) { pos[p] = glm::dvec3(xf * glm::dvec4(pos[p], 1.0)); });
-    glm::mat3 nm = glm::mat3(glm::transpose(glm::inverse(glm::dmat3(xf))));
-    for (auto& n : m.cornerAttrs().get<glm::vec3>(geo::attr::kNormal))
-        n = glm::normalize(nm * n);
-    if (glm::determinant(glm::dmat3(xf)) < 0.0)
-        for (geo::Index f = 0; f < m.faceCapacity(); ++f)
-            if (m.faceValid(f))
-                m.flipFace(f);
-}
-
 void transformCurves(CurveSet& c, const glm::dmat4& xf)
 {
     for (glm::dvec3& p : c.positions)
@@ -526,6 +511,7 @@ Geometry join(std::span<const GeometryPtr> parts)
             continue;
         if (out.name.empty())
             out.name = g->name;
+        out.keepInstances = out.keepInstances || g->keepInstances;
         if (g->volume)
         {
             if (!out.volume)
@@ -695,7 +681,10 @@ geo::Mesh toOutputMesh(const Geometry& g)
         geo::HeightfieldMeshOptions o;
         while (size_t((h.nx + o.step - 1) / o.step) * size_t((h.nz + o.step - 1) / o.step) > kMaxPoints)
             ++o.step;
-        m.append(geo::heightfieldToMesh(h, o));
+        if (r.mesh)
+            m.append(geo::heightfieldToMesh(h, o));
+        else
+            m = geo::heightfieldToMesh(h, o);
     }
     stripAnonymous(m);
     m.compact();

@@ -111,6 +111,32 @@ TEST_CASE("tex sequence: the set shows the frame of the scene time")
     CHECK(shown(dir) == doctest::Approx(0.5).epsilon(0.01));
 }
 
+TEST_CASE("tex sequence: frame timing shows the keyed frame, whatever the scene time")
+{
+    const fs::path dir = writeFrames("sequence_frame_timing");
+    buildSet(dir, {{"timing", "frame"}, {"frame", 2}, {"speed", 3.0}, {"start", 7}});
+    goTo(1.0);
+    CHECK(shown(dir) == doctest::Approx(0.5).epsilon(0.01));
+    goTo(9.0);
+    CHECK(shown(dir) == doctest::Approx(0.5).epsilon(0.01));
+
+    run("texDriveValue", {{"args", {"Fx", "Seq.frame"}}});
+    for (const auto& [at, frame] : {std::pair{1.0, 0.0}, {4.0, 3.0}})
+        run("setKeyframe", {{"args", {"Fx.Seq_frame"}}, {"time", scene::anim::secondsOf(at)}, {"value", frame}, {"inTangentType", "linear"},
+                            {"outTangentType", "linear"}});
+    goTo(1.0);
+    CHECK(shown(dir) == doctest::Approx(0.1).epsilon(0.01));
+    goTo(3.0);
+    CHECK(shown(dir) == doctest::Approx(0.5).epsilon(0.01));
+
+    // Past the last file, After End still applies.
+    run("texDriveValue", {{"args", {"Fx", "Seq.frame"}}, {"remove", true}});
+    run("texSetValue", {{"args", {"Fx", "Seq.frame", 5}}});
+    CHECK(shown(dir) == doctest::Approx(0.3).epsilon(0.01));
+    run("texSetValue", {{"args", {"Fx", "Seq.loop", "hold"}}});
+    CHECK(shown(dir) == doctest::Approx(0.7).epsilon(0.01));
+}
+
 TEST_CASE("tex sequence: the planner's own parameters stay out of the node's fields")
 {
     const fs::path dir = writeFrames("sequence_fields");

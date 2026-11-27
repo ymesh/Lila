@@ -729,6 +729,61 @@ fs::path cacheDir()
     return base / "cache" / "unreal";
 }
 
+LevelIdentity openLevelIdentity()
+{
+    LILA_ZONE();
+
+    LevelIdentity id;
+    Link& link = Link::get();
+    if (!link.connected())
+        return id;
+    const json features = link.status().value("features", json::array());
+    if (!features.is_array() || std::find(features.begin(), features.end(), json("levelInfo")) == features.end())
+        return id;
+    std::shared_ptr<RpcClient> c = link.client();
+    if (!c)
+        return id;
+    const RpcResult r = c->call("levelInfo", json::object(), 30000);
+    if (!r.ok || !r.result.is_object())
+        return id;
+    id.level = r.result.value("level", std::string());
+    id.guid = r.result.value("guid", std::string());
+    id.partitioned = r.result.value("partitioned", false);
+    return id;
+}
+
+std::string levelRecordMismatch(const json& record, const LevelIdentity& open)
+{
+    if (!record.is_object() || record.empty() || open.level.empty() || open.guid.empty())
+        return {};
+    const std::string level = record.value("level", std::string());
+    if (!level.empty() && level != open.level)
+        return "it was written for " + level + ", not the open " + open.level;
+    const std::string guid = record.value("levelGuid", std::string());
+    if (guid.empty())
+        return "it doesn't say which level " + open.level + " it was written for";
+    if (guid != open.guid)
+        return "the level " + open.level + " is not the one it was written for (deleted and made again, or replaced)";
+    return {};
+}
+
+void stampLevelRecord(json& record, const LevelIdentity& open)
+{
+    if (open.level.empty())
+        return;
+    record["level"] = open.level;
+    if (!open.guid.empty())
+        record["levelGuid"] = open.guid;
+}
+
+std::string levelFileKey(const std::string& level)
+{
+    std::string out;
+    for (char c : level.starts_with("/") ? level.substr(1) : level)
+        out += std::isalnum(static_cast<unsigned char>(c)) ? c : '_';
+    return out;
+}
+
 Link& Link::get()
 {
     static Link link;

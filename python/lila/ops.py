@@ -11,6 +11,17 @@ from ._stubgen import command_doc
 __all__ = []
 
 
+class Report(dict):
+    """A command result whose readable form a command chose (often already in Script Output): the prompt shows that text, not the dict."""
+
+    def __init__(self, data, echo):
+        super().__init__(data)
+        self._echo = echo
+
+    def __repr__(self):
+        return self._echo
+
+
 def _make(spec):
     name = spec["name"]
 
@@ -18,7 +29,12 @@ def _make(spec):
         call = dict(flags)
         if args:
             call["args"] = list(args)
-        return _lila.execute(name, call)
+        result = _lila.execute(name, call)
+        # A command puts the text to show at the prompt under "_echo"; scripts get the dict without it.
+        if isinstance(result, dict) and isinstance(result.get("_echo"), str):
+            echo = result.pop("_echo")
+            return Report(result, echo)
+        return result
 
     command.__name__ = name
     command.__qualname__ = name

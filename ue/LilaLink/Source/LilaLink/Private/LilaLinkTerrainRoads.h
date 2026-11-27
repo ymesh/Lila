@@ -13,9 +13,11 @@ namespace LilaLink
  * space, with the tangents, up and roll of setSpline's points), half-width and falloffs from the road, segments painting
  * layer and raising or lowering the landscape as asked (never inside bridge or tunnel spans), carrying mesh {asset,
  * forwardAxis, scaleToWidth} as their spline mesh. In a partitioned world the roads go on one landscape spline actor tagged
- * for id. Sending again replaces what the last send made. Replies {actor, roads, controlPoints, segments, warnings}.
+ * for id. Sending again replaces what the last send made. The landscape redraws its splines layer at once and the regions it
+ * changed are marked dirty for Save All; in a World Partition level the regions the earlier and new roads reach are loaded
+ * first. Replies {actor, roads, controlPoints, segments, regionsLoaded, paintLayersRemoved, warnings}.
  *
- * removeTerrainRoads {id} deletes them. Replies {removed}.
+ * removeTerrainRoads {id} deletes them, the same way. Replies {removed, regionsLoaded, paintLayersRemoved, warnings}.
  */
 void AddTerrainRoadMethods(TMap<FString, FLilaLinkMethod>& Methods);
 } // namespace LilaLink

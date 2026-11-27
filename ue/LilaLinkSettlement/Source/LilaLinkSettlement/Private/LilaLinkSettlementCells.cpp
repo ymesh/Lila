@@ -1,5 +1,6 @@
 #include "LilaLinkSettlement.h"
 
+#include "LilaLinkAssets.h"
 #include "LilaLinkMethodRegistry.h"
 
 #include "Components/BoxComponent.h"
@@ -8,12 +9,16 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "PCGComponent.h"
+#include "PCGDataAsset.h"
 #include "PCGGraph.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "ScopedTransaction.h"
 #include "Misc/PackageName.h"
-#include "ObjectTools.h"
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
+#include "Engine/Level.h"
+#include "WorldPartition/WorldPartitionActorDesc.h"
+#include "WorldPartition/WorldPartitionActorDescUtils.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
 #include "StructUtils/PropertyBag.h"
@@ -240,6 +245,37 @@ TSharedPtr<FJsonValue> SetSettlementCell(const TSharedPtr<FJsonObject>& Params, 
 	return MakeShared<FJsonValueObject>(Out);
 }
 
+/**
+ * The cell data assets settlement cells of other World Partition levels show, read from their actor descriptors in the
+ * asset registry (the cell actors carry the asset path as a tag), so nothing is loaded.
+ */
+TSet<FString> CellAssetsOfOtherLevels(UWorld* World)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkSettlementCells::CellAssetsOfOtherLevels);
+
+	const TArray<FString> Own = ULevel::GetExternalActorsPaths(World->GetPackage()->GetName());
+	TArray<FAssetData> Actors;
+	IAssetRegistry::GetChecked().GetAssetsByPath(TEXT("/Game/__ExternalActors__"), Actors, /*bRecursive=*/true);
+	TSet<FString> Out;
+	for (const FAssetData& Data : Actors)
+	{
+		const FString Package = Data.PackageName.ToString();
+		if (Own.ContainsByPredicate([&Package](const FString& P) { return Package.StartsWith(P + TEXT("/")); }))
+		{
+			continue;
+		}
+		const TUniquePtr<FWorldPartitionActorDesc> Desc = FWorldPartitionActorDescUtils::GetActorDescriptorFromAssetData(Data);
+		for (const FName& Tag : Desc ? Desc->GetTags() : TArray<FName>())
+		{
+			if (const FString T = Tag.ToString(); T.StartsWith(CellAssetPrefix))
+			{
+				Out.Add(T.RightChop(CellAssetPrefix.Len()));
+			}
+		}
+	}
+	return Out;
+}
+
 TSharedPtr<FJsonValue> RemoveSettlementCells(const TSharedPtr<FJsonObject>& Params, FString& OutError)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkSettlementCells::RemoveSettlementCells);
@@ -297,11 +333,44 @@ TSharedPtr<FJsonValue> RemoveSettlementCells(const TSharedPtr<FJsonObject>& Para
 	{
 		Removed += World->EditorDestroyActor(Actor, true) ? 1 : 0;
 	}
-	// The data assets go with their cells; nothing else in the level reads them.
+	// folder (every cell of the settlement going): data assets there that no cell actor names (cells sent with no actor)
+	// go too.
+	FString Folder;
+	if (bAll && Params->TryGetStringField(TEXT("folder"), Folder) && !Folder.IsEmpty())
+	{
+		TSet<FString> Named;
+		for (TActorIterator<AActor> It(World); It; ++It)
+		{
+			for (const FName& Tag : It->Tags)
+			{
+				if (const FString T = Tag.ToString(); T.StartsWith(CellAssetPrefix) && !Doomed.Contains(*It))
+				{
+					Named.Add(T.RightChop(CellAssetPrefix.Len()));
+				}
+			}
+		}
+		TArray<FAssetData> InFolder;
+		IAssetRegistry::GetChecked().GetAssetsByPath(FName(*Folder), InFolder, /*bRecursive=*/false);
+		for (const FAssetData& Data : InFolder)
+		{
+			if (const FString Path = Data.PackageName.ToString(); Data.AssetClassPath == UPCGDataAsset::StaticClass()->GetClassPathName() && !Named.Contains(Path))
+			{
+				AssetPaths.Add(Path);
+			}
+		}
+	}
+	// The data assets go with their cells, unless another level's cells read them: sends to several levels share them.
+	const TSet<FString> Elsewhere = CellAssetsOfOtherLevels(World);
 	TArray<UObject*> Assets;
 	TArray<TSharedPtr<FJsonValue>> Deleted;
+	int32 Kept = 0;
 	for (const FString& Path : AssetPaths)
 	{
+		if (Elsewhere.Contains(Path))
+		{
+			++Kept;
+			continue;
+		}
 		const FString ObjectPath = Path + TEXT(".") + FPackageName::GetShortName(Path);
 		if (UObject* Asset = LoadObject<UObject>(nullptr, *ObjectPath, nullptr, LOAD_NoWarn | LOAD_Quiet))
 		{
@@ -309,11 +378,15 @@ TSharedPtr<FJsonValue> RemoveSettlementCells(const TSharedPtr<FJsonObject>& Para
 			Deleted.Add(MakeShared<FJsonValueString>(Path));
 		}
 	}
-	const int32 AssetsDeleted = Assets.Num() > 0 ? ObjectTools::ForceDeleteObjects(Assets, false) : 0;
+	const int32 AssetsDeleted = Assets.Num() > 0 ? LilaLink::ForceDeleteAssets(Assets) : 0;
 	UE_LOG(LogLilaLinkSettlementCells, Log, TEXT("removeSettlementCells: %s: %d cells, %d data assets"), *Id, Removed, AssetsDeleted);
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetNumberField(TEXT("removed"), Removed);
 	Out->SetNumberField(TEXT("assetsDeleted"), AssetsDeleted);
+	if (Kept > 0)
+	{
+		Out->SetNumberField(TEXT("assetsKept"), Kept);
+	}
 	Out->SetArrayField(TEXT("assets"), Deleted);
 	return MakeShared<FJsonValueObject>(Out);
 }

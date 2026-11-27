@@ -20,13 +20,13 @@ LILA_FOUNDATION_API void writeFileBytes(const std::filesystem::path& path, std::
  */
 LILA_FOUNDATION_API std::error_code renameRetrying(const std::filesystem::path& from, const std::filesystem::path& to);
 
-/** Frees a big buffer on another thread: gigabytes take long enough to free to be noticed. */
+/** Frees a big buffer on the releaser thread (core/Release.h): gigabytes take long enough to free to be noticed. */
 template <class T> void freeInBackground(T&& big);
 } // namespace lila
 
-#include <thread>
+#include "core/Release.h"
 
 template <class T> void lila::freeInBackground(T&& big)
 {
-    std::thread([b = std::forward<T>(big)] {}).detach();
+    release::later(std::forward<T>(big));
 }

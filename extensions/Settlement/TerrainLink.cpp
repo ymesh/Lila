@@ -4,12 +4,14 @@
 
 #include "Export.h"
 #include "Settlement.h"
+#include "Generators.h"
 #include "SettlementTerrain.h"
 
 #include <lila/Command.h>
 #include <lila/Deformer.h>
 #include <lila/Extension.h>
 #include <lila/Graph.h>
+#include <lila/Names.h>
 #include <lila/Node.h>
 #include <lila/Profile.h>
 
@@ -1263,6 +1265,51 @@ json followTerrain(Graph& g, const std::string& settlement, const std::string& g
     return out;
 }
 
+json realNameIssues(const Layout& l, const lila::names::RealNames& real)
+{
+    using lila::names::Text;
+    // Names from the naming culture are held to the imported real names; business and building names to the blocklist too.
+    std::vector<Text> cultural, owned;
+    std::map<std::string, Vec2> where;
+    for (const auto& [id, name] : l.streetNames)
+        cultural.push_back({"street:" + std::to_string(id), name});
+    for (const District& d : l.districts)
+    {
+        cultural.push_back({"district:" + std::to_string(d.id), d.name});
+        where["district:" + std::to_string(d.id)] = d.center;
+    }
+    for (const Lot& lot : l.lots)
+    {
+        const std::string id = "lot:" + std::to_string(lot.id);
+        where[id] = centroid(lot.outline);
+        owned.push_back({id, lot.name});
+        for (const Business& b : lot.businesses)
+            owned.push_back({id, b.name});
+    }
+    if (l.gen)
+        for (const OsmSite& s : l.gen->osmSites)
+        {
+            owned.push_back({"site:" + s.id, s.name});
+            where["site:" + s.id] = s.at;
+        }
+    std::vector<lila::names::Leak> leaks = lila::names::findRealNames(cultural, real, false);
+    for (lila::names::Leak& x : lila::names::findRealNames(owned, real, true))
+        leaks.push_back(std::move(x));
+    json out = json::array();
+    for (const lila::names::Leak& x : leaks)
+    {
+        json at = nullptr;
+        if (auto it = where.find(x.where); it != where.end())
+            at = json::array({it->second.x, it->second.y});
+        out.push_back({{"check", "realName"},
+                       {"severity", "error"},
+                       {"id", x.where},
+                       {"message", std::format("\"{}\" matches the real name \"{}\" ({})", x.text, x.real, x.source)},
+                       {"at", at}});
+    }
+    return out;
+}
+
 void registerTerrainCommands(ext::Context& ctx)
 {
     ctx.registerCommand({
@@ -1374,7 +1421,8 @@ void registerTerrainCommands(ext::Context& ctx)
                "(lots sharing ground), grade (a street steeper than its class allows, bridges excepted), water (a street "
                "through water without a bridge), envelope (outside its lot's setbacks), foundation (a building's base above "
                "the ground under it), lanes (a mode's lane graph not strongly connected), phases (signal phases letting "
-               "crossing approaches go together). report=True also lists them in the Validation panel on the settlement's "
+               "crossing approaches go together), realName (a street, district, building, business or place name that matches "
+               "a real name an import replaced, or for businesses a real brand). report=True also lists them in the Validation panel on the settlement's "
                "mesh. Returns ok, counts per check, the issues, warnings (checks that could not run) and the plan state.",
         .positionalDoc = "settlement mesh or its modifier",
         .flags = {{"report", "rp", LinkT::Bool, false, "Also report the issues in the Validation panel (replacing this check's earlier ones)."}},
@@ -1395,6 +1443,11 @@ void registerTerrainCommands(ext::Context& ctx)
             if (hasGraded)
                 graded = gradedStreets(terrain, r.mesh.empty() ? r.modifier : r.mesh, t.value("roadLayer", std::string("CityRoads")), cmd);
             json out = checkLayout(r.layout, r.ground, r.options, hasGraded ? &graded : nullptr);
+            const json leaks = realNameIssues(r.layout, lila::names::sceneRealNames(Graph::current()));
+            for (const json& i : leaks)
+                out["issues"].push_back(i);
+            out["counts"]["realName"] = leaks.size();
+            out["ok"] = out["issues"].empty();
             out["plan"] = r.layout.plan;
             if (a.get<bool>("report", false))
             {

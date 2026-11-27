@@ -9,6 +9,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/packing.hpp>
 
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -246,4 +247,108 @@ TEST_CASE("extended shading: coat and sheen change the path-traced and the shade
     s.meshes.edit()[0].materials[0].style.model = ShadingModel::DefaultLit;
     REQUIRE_MESSAGE(Renderer::get().renderOffscreen(s, 64, 64, shadedPlain, &err), err);
     CHECK(shadedExt != shadedPlain);
+}
+
+namespace pathtest
+{
+/** Three spheres left, middle and right as one instanced draw, coloured red, not at all and blue when colors is set. */
+FrameState threeSpheres(const std::string& env, const std::shared_ptr<std::vector<glm::vec4>>& colors)
+{
+    FrameState s = sphereFrame(env, 5, 16);
+    MeshDraw& d = s.meshes.edit()[0];
+    d.mesh = sphere(30.0f, 24, 48);
+    auto list = std::make_shared<std::vector<glm::mat4>>();
+    for (float x : {-70.0f, 0.0f, 70.0f})
+        list->push_back(glm::translate(glm::mat4(1.0f), glm::vec3(x, 0.0f, 0.0f)));
+    d.instances = list;
+    d.instanceColors = colors;
+    return s;
+}
+
+/** Mean rgb of a 6 x 6 window around each sphere's centre, left to right. */
+std::array<glm::dvec3, 3> sphereMeans(const std::vector<float>& hdr, int size = 64)
+{
+    std::array<glm::dvec3, 3> out{};
+    const int cx[3] = {12, 32, 52};
+    for (int k = 0; k < 3; ++k)
+    {
+        for (int y = size / 2 - 3; y < size / 2 + 3; ++y)
+            for (int x = cx[k] - 3; x < cx[k] + 3; ++x)
+            {
+                const float* p = &hdr[(size_t(y) * size + x) * 4];
+                out[k] += glm::dvec3(p[0], p[1], p[2]);
+            }
+        out[k] /= 36.0;
+    }
+    return out;
+}
+
+std::vector<float> raster(FrameState s, int size = 64)
+{
+    s.pathTrace.on = false;
+    Renderer::OffscreenResult out;
+    std::string err;
+    REQUIRE_MESSAGE(Renderer::get().renderOffscreenFrames({s}, size, size, 1, true, out, &err), err);
+    REQUIRE(out.hdr.size() == size_t(size) * size * 4);
+    return out.hdr;
+}
+} // namespace pathtest
+
+TEST_CASE("the path tracer shows instance colours as the rasterised view does")
+{
+    if (!tracing())
+        return;
+    const std::string env = uniformHdr(1.0f);
+    const glm::vec4 red(0.8f, 0.05f, 0.05f, 1.0f), blue(0.05f, 0.05f, 0.8f, 1.0f);
+    auto colors = std::make_shared<std::vector<glm::vec4>>(std::vector<glm::vec4>{red, glm::vec4(0.0f), blue});
+    const FrameState plain = threeSpheres(env, nullptr), colored = threeSpheres(env, colors);
+
+    // Each channel's coloured over plain light is the colour for a replaced base, the same traced and rasterised.
+    auto ratios = [](const std::array<glm::dvec3, 3>& c, const std::array<glm::dvec3, 3>& p) {
+        std::array<glm::dvec3, 3> r{};
+        for (int k = 0; k < 3; ++k)
+            r[k] = c[k] / glm::max(p[k], glm::dvec3(1e-6));
+        return r;
+    };
+    const auto traced = ratios(sphereMeans(trace(colored, 16)), sphereMeans(trace(plain, 16)));
+    const auto rastered = ratios(sphereMeans(raster(colored)), sphereMeans(raster(plain)));
+    const glm::dvec3 expected[3] = {glm::dvec3(red), glm::dvec3(1.0), glm::dvec3(blue)};
+    for (int k = 0; k < 3; ++k)
+        for (int c = 0; c < 3; ++c)
+        {
+            INFO("sphere " << k << " channel " << c);
+            CHECK(traced[k][c] == doctest::Approx(expected[k][c]).epsilon(0.08).scale(1.0));
+            CHECK(rastered[k][c] == doctest::Approx(expected[k][c]).epsilon(0.08).scale(1.0));
+            CHECK(traced[k][c] == doctest::Approx(rastered[k][c]).epsilon(0.08).scale(1.0));
+        }
+
+    // Half an amount lands halfway.
+    auto half = std::make_shared<std::vector<glm::vec4>>(*colors);
+    (*half)[0].a = 0.5f;
+    const auto halfTraced = ratios(sphereMeans(trace(threeSpheres(env, half), 16)), sphereMeans(trace(plain, 16)));
+    CHECK(halfTraced[0].g == doctest::Approx(0.525).epsilon(0.08));
+
+    // A base colour map takes the colour multiplied in: the map's 0.5 grey stays in, where a replaced base would double.
+    auto img = std::make_shared<TextureImage>();
+    img->width = img->height = 4;
+    img->srgb = false;
+    img->rgba.assign(4 * 4 * 4, 128);
+    auto textured = [&](FrameState s) {
+        Material& m = s.meshes.edit()[0].materials[0];
+        m.baseColorMap = img;
+        m.flags |= MatBaseColorMap;
+        return s;
+    };
+    const auto texTraced = ratios(sphereMeans(trace(textured(colored), 16)), sphereMeans(trace(textured(plain), 16)));
+    const auto texRastered = ratios(sphereMeans(raster(textured(colored))), sphereMeans(raster(textured(plain))));
+    CHECK(texTraced[0].r == doctest::Approx(0.8).epsilon(0.08));
+    CHECK(texTraced[2].b == doctest::Approx(0.8).epsilon(0.08));
+    CHECK(texTraced[0].r == doctest::Approx(texRastered[0].r).epsilon(0.08));
+
+    // A material that keeps its own colour traces exactly as without colours.
+    auto kept = [](FrameState s) {
+        s.meshes.edit()[0].materials[0].flags |= MatNoInstanceColor;
+        return s;
+    };
+    CHECK(trace(kept(colored), 4) == trace(kept(plain), 4));
 }

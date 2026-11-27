@@ -4,6 +4,7 @@
 #include "Parcels.h"
 
 #include <lila/Curves.h>
+#include <lila/MeshOps.h>
 #include <lila/Profile.h>
 #include <lila/Skeleton.h>
 
@@ -44,6 +45,73 @@ Polygon insetBy(const Polygon& p, double d)
 {
     const std::vector<double> ds(p.size(), d);
     return inset(p, ds);
+}
+
+/**
+ * One counter-clockwise outline with the courtyards bridged in (each hole joined to the outline by a cut to its nearest
+ * visible corner), for ear clipping a face with holes. Holes come out clockwise. Empty when a hole can't be bridged.
+ */
+std::vector<Vec2> bridgedOutline(const Polygon& outer, const std::vector<const Polygon*>& holes)
+{
+    std::vector<Vec2> ring = outer.pts;
+    if (signedArea(ring) < 0.0)
+        std::reverse(ring.begin(), ring.end());
+    std::vector<std::vector<Vec2>> hs;
+    for (const Polygon* h : holes)
+    {
+        std::vector<Vec2> r = h->pts;
+        if (signedArea(r) > 0.0)
+            std::reverse(r.begin(), r.end());
+        hs.push_back(std::move(r));
+    }
+    // Rightmost holes first, so each cut runs to the outline or to an already bridged hole.
+    std::sort(hs.begin(), hs.end(), [](const auto& a, const auto& b) {
+        double ma = -1e300, mb = -1e300;
+        for (const Vec2& q : a)
+            ma = std::max(ma, q.x);
+        for (const Vec2& q : b)
+            mb = std::max(mb, q.x);
+        return ma > mb;
+    });
+    auto crosses = [](Vec2 a, Vec2 b, Vec2 c, Vec2 d) {
+        const double d1 = cross(b - a, c - a), d2 = cross(b - a, d - a), d3 = cross(d - c, a - c), d4 = cross(d - c, b - c);
+        return ((d1 > 1e-9 && d2 < -1e-9) || (d1 < -1e-9 && d2 > 1e-9)) && ((d3 > 1e-9 && d4 < -1e-9) || (d3 < -1e-9 && d4 > 1e-9));
+    };
+    for (size_t k = 0; k < hs.size(); ++k)
+    {
+        const std::vector<Vec2>& h = hs[k];
+        size_t m = 0;
+        for (size_t i = 1; i < h.size(); ++i)
+            if (h[i].x > h[m].x)
+                m = i;
+        size_t best = SIZE_MAX;
+        double bestD = 1e300;
+        for (size_t i = 0; i < ring.size(); ++i)
+        {
+            const double d = glm::length(ring[i] - h[m]);
+            if (d >= bestD)
+                continue;
+            bool clear = true;
+            auto test = [&](const std::vector<Vec2>& r) {
+                for (size_t j = 0; j < r.size() && clear; ++j)
+                    clear = !crosses(h[m], ring[i], r[j], r[(j + 1) % r.size()]);
+            };
+            test(ring);
+            for (size_t j = k; j < hs.size() && clear; ++j)
+                test(hs[j]);
+            if (clear)
+                best = i, bestD = d;
+        }
+        if (best == SIZE_MAX)
+            return {};
+        std::vector<Vec2> merged(ring.begin(), ring.begin() + std::ptrdiff_t(best) + 1);
+        for (size_t i = 0; i <= h.size(); ++i)
+            merged.push_back(h[(m + i) % h.size()]);
+        merged.push_back(ring[best]);
+        merged.insert(merged.end(), ring.begin() + std::ptrdiff_t(best) + 1, ring.end());
+        ring = std::move(merged);
+    }
+    return ring;
 }
 
 /** Ground under the footprint: its corners and a grid inside it no coarser than the ground's cells. */
@@ -98,10 +166,14 @@ Polygon chamfer(const Polygon& fp, double size)
 }
 
 const char* sideName2(int tag) { return tag == 0 ? "street" : tag == 1 ? "party" : "open"; }
+
+/** cm: the widest footprint a pitched roof spans. */
+constexpr double kWidestPitched = 4000.0;
 } // namespace
 
 Envelope parcelEnvelope(const Lot& lot, const Block& block, const Layout& l, const Ground& g, const Options& o, const Site& site)
 {
+    LILA_ZONE();
     const Profile& p = o.profile; // an era or district restyle passes its own profile here
     const std::string era = eraOf(p);
     const bool pm = preModern(era);
@@ -127,7 +199,16 @@ Envelope parcelEnvelope(const Lot& lot, const Block& block, const Layout& l, con
         side = std::max(side, 300.0);
         depth = 1.6 * p.buildDepth;
     }
-    Options local = o;
+    // Everything but the generators: they hold the imported streets and buildings as JSON, megabytes for a city.
+    Options local;
+    local.seed = o.seed;
+    local.growth = o.growth;
+    local.heightScale = o.heightScale;
+    local.widthScale = o.widthScale;
+    local.lotScale = o.lotScale;
+    local.blocks = o.blocks;
+    local.buildings = o.buildings;
+    local.walk = o.walk;
     local.profile = p;
     local.profile.frontSetback = front;
     local.profile.sideSetback = side;
@@ -158,8 +239,11 @@ Envelope parcelEnvelope(const Lot& lot, const Block& block, const Layout& l, con
 
     int floors = env.floors;
     double storey = p.floorHeight;
+    // A piece of a larger town ranks its streets only against each other, so its busiest would rise like the town's
+    // busiest: its heights take average access instead.
+    const double access = p.townRadius > 0.0 ? 0.5 : lot.access;
     if (!pm && lot.use != Use::Religious)
-        floors = std::max(1, int(std::lround(floors * (0.7 + 0.6 * lot.access))));
+        floors = std::max(1, int(std::lround(floors * (0.7 + 0.6 * access))));
     switch (lot.use)
     {
     case Use::Religious: floors = std::max(floors, 2), storey *= 1.6; break;
@@ -229,6 +313,9 @@ Envelope parcelEnvelope(const Lot& lot, const Block& block, const Layout& l, con
         env.ridge = along;
     double across = 0.0, ridgeLen = 0.0;
     spans(tierFp, env.ridge, across, ridgeLen);
+    // A pitched roof over a footprint wider than a house would stand as a hill: wide buildings have flat roofs.
+    if ((env.roof == "gable" || env.roof == "hip" || env.roof == "mansard") && across > kWidestPitched)
+        env.roof = "flat";
     if (env.roof == "gable" || env.roof == "hip")
         env.roofHeight = 0.5 * across * std::tan(pitch * kPi / 180.0);
     else if (env.roof == "mansard")
@@ -401,6 +488,38 @@ bool appendMassing(const Envelope& env, const Layout& l, geo::Mesh& into, const 
         std::reverse(top.begin(), top.end());
         face(top, part);
     };
+    /** A horizontal face with courtyards cut out, as triangles; up faces up, else down. False when it can't be cut. */
+    auto holedFace = [&](const Polygon& fp, const std::vector<const Polygon*>& holes, double y, bool up, int part) {
+        const std::vector<Vec2> outline = bridgedOutline(fp, holes);
+        if (outline.size() < 3)
+            return false;
+        std::vector<geo::Index> tris;
+        geo::earClip(std::span<const glm::dvec2>(outline), tris);
+        if (tris.size() != 3 * (outline.size() - 2))
+            return false;
+        std::vector<geo::Index> ids;
+        for (const Vec2& q : outline)
+            ids.push_back(into.addPoint({q.x, y, q.y}));
+        for (size_t t = 0; t + 2 < tris.size(); t += 3)
+        {
+            const geo::Index a = ids[tris[t]], b = ids[tris[t + 1]], c = ids[tris[t + 2]];
+            face(up ? std::vector<geo::Index>{a, c, b} : std::vector<geo::Index>{a, b, c}, part);
+        }
+        return true;
+    };
+    // Courtyards cut through the tiers whose footprint holds them.
+    auto holesIn = [&](const Polygon& fp) {
+        std::vector<const Polygon*> out;
+        for (const Polygon& h : env.holes)
+        {
+            bool in = h.size() >= 3;
+            for (const Vec2& q : h.pts)
+                in = in && contains(fp.pts, q);
+            if (in)
+                out.push_back(&h);
+        }
+        return out;
+    };
     /** Sides between two rings with the same corner count, lo below hi. */
     auto loft = [&](const Polygon& a, double ya, const Polygon& b, double yb, int part) {
         const std::vector<geo::Index> lo = ring(a, ya), hi = ring(b, yb);
@@ -411,27 +530,45 @@ bool appendMassing(const Envelope& env, const Layout& l, geo::Mesh& into, const 
         }
     };
     const std::vector<Envelope::Tier>& tiers = env.tiers;
+    bool built = true;
+    std::vector<std::vector<const Polygon*>> tierHoles;
     for (size_t t = 0; t < tiers.size(); ++t)
     {
         const Envelope::Tier& tier = tiers[t];
+        tierHoles.push_back(holesIn(tier.footprint));
         loft(tier.footprint, tier.bottom, tier.footprint, tier.top, 0);
-        face(ring(tier.footprint, tier.bottom), 2);
-        if (t + 1 < tiers.size())
-            cap(tier.footprint, tier.top, 1);
+        for (const Polygon* h : tierHoles.back())
+        {
+            // Courtyard walls face into the courtyard: the hole's ring runs the other way round.
+            Polygon inward = *h;
+            if ((signedArea(inward.pts) > 0.0) == (signedArea(tier.footprint.pts) > 0.0))
+            {
+                std::reverse(inward.pts.begin(), inward.pts.end());
+                std::reverse(inward.tag.begin(), inward.tag.end());
+            }
+            loft(inward, tier.bottom, inward, tier.top, 0);
+        }
+        if (tierHoles.back().empty() || !holedFace(tier.footprint, tierHoles.back(), tier.bottom, false, 2))
+        {
+            face(ring(tier.footprint, tier.bottom), 2);
+            built = built && tierHoles.back().empty();
+        }
     }
     if (tiers.empty())
         return true;
-    bool built = true;
-    const Polygon& top = tiers.back().footprint;
-    const double y = tiers.back().top;
-    double across = 0.0, along = 0.0;
-    spans(top, env.ridge, across, along);
-    auto skeletonRoof = [&](const Polygon& fp, double at, double pitch, bool gables) {
-        lila::curve::Spline s;
-        s.kind = lila::curve::Kind::Poly;
-        s.closed = true;
-        for (const Vec2& q : fp.pts)
-            s.points.push_back({q.x, at, q.y});
+    auto skeletonRoof = [&](const Polygon& fp, const std::vector<const Polygon*>& holes, double at, double pitch, bool gables, Vec2 ridge) {
+        lila::curve::Splines loops;
+        auto loop = [&](const Polygon& p) {
+            lila::curve::Spline s;
+            s.kind = lila::curve::Kind::Poly;
+            s.closed = true;
+            for (const Vec2& q : p.pts)
+                s.points.push_back({q.x, at, q.y});
+            loops.push_back(std::move(s));
+        };
+        loop(fp);
+        for (const Polygon* h : holes)
+            loop(*h);
         lila::curve::RoofOptions ro;
         ro.pitch = pitch;
         ro.normal = {0.0, 1.0, 0.0};
@@ -439,10 +576,10 @@ bool appendMassing(const Envelope& env, const Layout& l, geo::Mesh& into, const 
             for (size_t k = 0; k < fp.size(); ++k)
             {
                 const Vec2 d = fp.pts[(k + 1) % fp.size()] - fp.pts[k];
-                if (glm::length(d) > 1e-6 && std::abs(glm::dot(glm::normalize(d), env.ridge)) < 0.35)
+                if (glm::length(d) > 1e-6 && std::abs(glm::dot(glm::normalize(d), ridge)) < 0.35)
                     ro.gables.push_back(int(k));
             }
-        const lila::curve::RoofResult r = lila::curve::roof({s}, ro);
+        const lila::curve::RoofResult r = lila::curve::roof(loops, ro);
         if (r.mesh.numFaces() == 0)
             return false;
         std::vector<geo::Index> remap(r.mesh.pointCapacity(), geo::kInvalid);
@@ -459,59 +596,87 @@ bool appendMassing(const Envelope& env, const Layout& l, geo::Mesh& into, const 
             }
         return true;
     };
-    const double pitch = across > 1e-6 ? std::atan(2.0 * env.roofHeight / across) * 180.0 / kPi : 30.0;
-    if (env.roof == "gable" || env.roof == "hip")
-    {
-        if (!skeletonRoof(top, y, pitch, env.roof == "gable"))
-        {
-            cap(top, y, 1);
-            built = false;
-        }
-    }
-    else if (env.roof == "mansard")
-    {
-        const Polygon upper = insetBy(top, std::clamp(0.2 * across, 60.0, 250.0));
-        const double y1 = y + 0.9 * l.profile.floorHeight;
-        if (upper.size() == top.size())
-        {
-            loft(top, y, upper, y1, 1);
-            if (!skeletonRoof(upper, y1, 20.0, false))
-            {
-                cap(upper, y1, 1);
-                built = false;
-            }
-        }
-        else
-        {
-            cap(top, y, 1);
-            built = false;
-        }
-    }
-    else if (env.roof == "dome")
-    {
-        const double r = std::max(env.roofHeight, 1.0);
-        Polygon prev = top;
-        double prevY = y;
-        bool closed = false;
-        for (int k = 1; k <= 6; ++k)
-        {
-            const double a = k * kPi / 12.0;
-            const Polygon next = insetBy(top, r * (1.0 - std::cos(a)));
-            if (next.size() != prev.size() || area(next) < 1.0)
-            {
-                cap(prev, prevY, 1);
-                closed = true;
-                break;
-            }
-            loft(prev, prevY, next, y + r * std::sin(a), 1);
-            prev = next;
-            prevY = y + r * std::sin(a);
-        }
-        if (!closed)
-            cap(prev, prevY, 1);
-    }
-    else
+    /** A flat top, courtyards cut out; false when they couldn't be and a solid cap stands in. */
+    auto flatTop = [&](const Polygon& top, const std::vector<const Polygon*>& holes, double y) {
+        if (!holes.empty() && holedFace(top, holes, y, true, 1))
+            return true;
         cap(top, y, 1);
+        return holes.empty();
+    };
+    /** The named roof on a footprint at wall top y; false when a flat cap stood in for it. */
+    auto drawRoof = [&](const Polygon& top, const std::vector<const Polygon*>& holes, double y, const std::string& shape, double roofHeight,
+                        Vec2 ridge) {
+        double across = 0.0, along = 0.0;
+        spans(top, ridge, across, along);
+        const double pitch = across > 1e-6 ? std::atan(2.0 * roofHeight / across) * 180.0 / kPi : 30.0;
+        if (shape == "gable" || shape == "hip")
+        {
+            if (skeletonRoof(top, holes, y, pitch, shape == "gable", ridge))
+                return true;
+            flatTop(top, holes, y);
+            return false;
+        }
+        if ((shape == "mansard" || shape == "dome") && !holes.empty())
+        {
+            // Insets don't carry courtyards: a flat top with them stands in, reported.
+            flatTop(top, holes, y);
+            return false;
+        }
+        if (shape == "mansard")
+        {
+            const Polygon upper = insetBy(top, std::clamp(0.2 * across, 60.0, 250.0));
+            const double y1 = y + 0.9 * l.profile.floorHeight;
+            if (upper.size() != top.size())
+            {
+                cap(top, y, 1);
+                return false;
+            }
+            loft(top, y, upper, y1, 1);
+            if (skeletonRoof(upper, {}, y1, 20.0, false, ridge))
+                return true;
+            cap(upper, y1, 1);
+            return false;
+        }
+        if (shape == "dome")
+        {
+            const double r = std::max(roofHeight, 1.0);
+            Polygon prev = top;
+            double prevY = y;
+            for (int k = 1; k <= 6; ++k)
+            {
+                const double a = k * kPi / 12.0;
+                const Polygon next = insetBy(top, r * (1.0 - std::cos(a)));
+                if (next.size() != prev.size() || area(next) < 1.0)
+                {
+                    cap(prev, prevY, 1);
+                    return true;
+                }
+                loft(prev, prevY, next, y + r * std::sin(a), 1);
+                prev = next;
+                prevY = y + r * std::sin(a);
+            }
+            cap(prev, prevY, 1);
+            return true;
+        }
+        return flatTop(top, holes, y);
+    };
+    // Tiers with a roof of their own (imported building:parts) draw it; the others are capped, the last with the envelope's roof.
+    for (size_t t = 0; t < tiers.size(); ++t)
+    {
+        const Envelope::Tier& tier = tiers[t];
+        const bool last = t + 1 == tiers.size();
+        if (!tier.roof.empty())
+        {
+            Vec2 c{0.0}, u{1.0, 0.0}, v{0.0, 1.0};
+            double hu = 0.0, hv = 0.0;
+            boxOf(tier.footprint, c, u, v, hu, hv);
+            built = drawRoof(tier.footprint, tierHoles[t], tier.top, tier.roof, tier.roofHeight, u) && built;
+        }
+        else if (last)
+            built = drawRoof(tier.footprint, tierHoles[t], tier.top, env.roof, env.roofHeight, env.ridge) && built;
+        else
+            built = flatTop(tier.footprint, tierHoles[t], tier.top) && built;
+    }
     return built;
 }
 
@@ -531,15 +696,30 @@ json blockJson(const Block& b)
             {"reasons", b.reasons}};
 }
 
+json businessesJson(const std::vector<Business>& list)
+{
+    json out = json::array();
+    for (const Business& b : list)
+        out.push_back({{"name", b.name}, {"program", b.program}, {"osmId", b.osmId}, {"at", xzOf(b.at)}});
+    return out;
+}
+
 json lotExtras(const Lot& lot)
 {
     static const char* kWealth[] = {"low", "middle", "high"};
-    return {{"lotId", lot.key},
-            {"wealth", kWealth[std::clamp(lot.wealth, 0, 2)]},
-            {"access", lot.access},
-            {"landmark", lot.landmark},
-            {"reasons", lot.reasons},
-            {"route", routeName(lot.route)}};
+    json j = {{"lotId", lot.key},
+              {"wealth", kWealth[std::clamp(lot.wealth, 0, 2)]},
+              {"access", lot.access},
+              {"landmark", lot.landmark},
+              {"reasons", lot.reasons},
+              {"route", routeName(lot.route)},
+              {"name", lot.name},
+              {"program", lot.program}};
+    if (!lot.osmId.empty())
+        j["osmId"] = lot.osmId;
+    if (!lot.businesses.empty())
+        j["businesses"] = businessesJson(lot.businesses);
+    return j;
 }
 
 json envelopeExtras(const Envelope& env)
@@ -548,10 +728,14 @@ json envelopeExtras(const Envelope& env)
     for (int t : env.footprint.tag)
         sides.push_back(sideName2(t));
     for (const Envelope::Tier& t : env.tiers)
+    {
         tiers.push_back({{"footprint", ringOf(t.footprint)}, {"bottom", t.bottom}, {"top", t.top}});
+        if (!t.roof.empty())
+            tiers.back().update({{"roof", t.roof}, {"roofHeight", t.roofHeight}});
+    }
     for (const Vec2& d : env.entrances)
         doors.push_back(xzOf(d));
-    return {{"lotId", env.key},
+    json j = {{"lotId", env.key},
             {"sides", sides},
             {"partyWith", env.partyWith},
             {"frontSetback", env.frontSetback},
@@ -567,7 +751,28 @@ json envelopeExtras(const Envelope& env)
             {"landmark", env.landmark},
             {"eraName", env.eraName},
             {"wealth", env.wealth},
-            {"route", routeName(env.route)}};
+            {"route", routeName(env.route)},
+            {"name", env.name},
+            {"program", env.program},
+            {"style", env.style},
+            {"styleFrom", env.styleFrom},
+            {"businesses", businessesJson(env.businesses)}};
+    if (!env.osmId.empty())
+    {
+        json holes = json::array();
+        for (const Polygon& h : env.holes)
+            holes.push_back(ringOf(h));
+        j.update({{"osmId", env.osmId},
+                  {"heightSource", env.heightSource},
+                  {"roofSource", env.roofSource},
+                  {"roofShape", env.roofShape},
+                  {"colour", env.colour},
+                  {"roofColour", env.roofColour},
+                  {"material", env.material},
+                  {"roofMaterial", env.roofMaterial},
+                  {"holes", holes}});
+    }
+    return j;
 }
 
 json parcelStats(const Layout& l)

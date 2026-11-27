@@ -1,0 +1,364 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<osm version="0.6" generator="make_w1_town.py">
+  <node id="1" lat="23.2012000" lon="-106.4218000"/>
+  <node id="2" lat="23.2012000" lon="-106.4182000"/>
+  <node id="3" lat="23.2000000" lon="-106.4218000"/>
+  <node id="4" lat="23.2000000" lon="-106.4182000"/>
+  <node id="5" lat="23.1988000" lon="-106.4218000"/>
+  <node id="6" lat="23.1988000" lon="-106.4182000"/>
+  <node id="7" lat="23.1982000" lon="-106.4212000"/>
+  <node id="8" lat="23.2018000" lon="-106.4212000"/>
+  <node id="9" lat="23.1982000" lon="-106.4200000"/>
+  <node id="10" lat="23.2018000" lon="-106.4200000"/>
+  <node id="11" lat="23.1982000" lon="-106.4188000"/>
+  <node id="12" lat="23.2018000" lon="-106.4188000"/>
+  <node id="13" lat="23.2001500" lon="-106.4198500"/>
+  <node id="14" lat="23.2001500" lon="-106.4195500"/>
+  <node id="15" lat="23.2004500" lon="-106.4195500"/>
+  <node id="16" lat="23.2004500" lon="-106.4198500"/>
+  <node id="17" lat="23.2001500" lon="-106.4195000"/>
+  <node id="18" lat="23.2001500" lon="-106.4192000"/>
+  <node id="19" lat="23.2004500" lon="-106.4192000"/>
+  <node id="20" lat="23.2004500" lon="-106.4195000"/>
+  <node id="21" lat="23.2001500" lon="-106.4191500"/>
+  <node id="22" lat="23.2001500" lon="-106.4188500"/>
+  <node id="23" lat="23.2004500" lon="-106.4188500"/>
+  <node id="24" lat="23.2004500" lon="-106.4191500"/>
+  <node id="25" lat="23.2005000" lon="-106.4198500"/>
+  <node id="26" lat="23.2005000" lon="-106.4195500"/>
+  <node id="27" lat="23.2008000" lon="-106.4195500"/>
+  <node id="28" lat="23.2008000" lon="-106.4198500"/>
+  <node id="29" lat="23.2005000" lon="-106.4195000"/>
+  <node id="30" lat="23.2005000" lon="-106.4192000"/>
+  <node id="31" lat="23.2008000" lon="-106.4192000"/>
+  <node id="32" lat="23.2008000" lon="-106.4195000"/>
+  <node id="33" lat="23.2005000" lon="-106.4191500"/>
+  <node id="34" lat="23.2005000" lon="-106.4188500"/>
+  <node id="35" lat="23.2008000" lon="-106.4188500"/>
+  <node id="36" lat="23.2008000" lon="-106.4191500"/>
+  <node id="37" lat="23.2008500" lon="-106.4198500"/>
+  <node id="38" lat="23.2008500" lon="-106.4195500"/>
+  <node id="39" lat="23.2011500" lon="-106.4195500"/>
+  <node id="40" lat="23.2011500" lon="-106.4198500"/>
+  <node id="41" lat="23.2008500" lon="-106.4195000"/>
+  <node id="42" lat="23.2008500" lon="-106.4192000"/>
+  <node id="43" lat="23.2011500" lon="-106.4192000"/>
+  <node id="44" lat="23.2011500" lon="-106.4195000"/>
+  <node id="45" lat="23.2008500" lon="-106.4191500"/>
+  <node id="46" lat="23.2008500" lon="-106.4188500"/>
+  <node id="47" lat="23.2011500" lon="-106.4188500"/>
+  <node id="48" lat="23.2011500" lon="-106.4191500"/>
+  <node id="49" lat="23.2006500" lon="-106.4197000">
+    <tag k="amenity" v="pharmacy"/>
+    <tag k="name" v="Farmacias Similares"/>
+    <tag k="brand" v="Farmacias Similares"/>
+  </node>
+  <node id="50" lat="23.2006500" lon="-106.4193500">
+    <tag k="shop" v="convenience"/>
+    <tag k="name" v="OXXO"/>
+    <tag k="brand" v="OXXO"/>
+  </node>
+  <node id="51" lat="23.2010000" lon="-106.4190000">
+    <tag k="shop" v="convenience"/>
+    <tag k="name" v="OXXO"/>
+    <tag k="brand" v="OXXO"/>
+  </node>
+  <node id="52" lat="23.2003000" lon="-106.4209000"/>
+  <node id="53" lat="23.2003000" lon="-106.4205000"/>
+  <node id="54" lat="23.2006000" lon="-106.4205000"/>
+  <node id="55" lat="23.2006000" lon="-106.4209000"/>
+  <node id="56" lat="23.2003000" lon="-106.4209000"/>
+  <node id="57" lat="23.2003000" lon="-106.4207500"/>
+  <node id="58" lat="23.2004500" lon="-106.4207500"/>
+  <node id="59" lat="23.2004500" lon="-106.4209000"/>
+  <node id="60" lat="23.2003000" lon="-106.4207500"/>
+  <node id="61" lat="23.2003000" lon="-106.4205000"/>
+  <node id="62" lat="23.2006000" lon="-106.4205000"/>
+  <node id="63" lat="23.2006000" lon="-106.4207500"/>
+  <node id="64" lat="23.2007000" lon="-106.4204500"/>
+  <node id="65" lat="23.2007000" lon="-106.4201000"/>
+  <node id="66" lat="23.2010000" lon="-106.4201000"/>
+  <node id="67" lat="23.2010000" lon="-106.4204500"/>
+  <node id="68" lat="23.2008000" lon="-106.4203500"/>
+  <node id="69" lat="23.2008000" lon="-106.4202000"/>
+  <node id="70" lat="23.2009000" lon="-106.4202000"/>
+  <node id="71" lat="23.2009000" lon="-106.4203500"/>
+  <node id="72" lat="23.2001500" lon="-106.4206000">
+    <tag k="place" v="neighbourhood"/>
+    <tag k="name" v="Colonia Centro"/>
+  </node>
+  <node id="73" lat="23.1989000" lon="-106.4211000"/>
+  <node id="74" lat="23.1989000" lon="-106.4201000"/>
+  <node id="75" lat="23.1994000" lon="-106.4201000"/>
+  <node id="76" lat="23.1994000" lon="-106.4211000"/>
+  <node id="77" lat="23.1995000" lon="-106.4211000"/>
+  <node id="78" lat="23.1995000" lon="-106.4201000"/>
+  <node id="79" lat="23.1999000" lon="-106.4201000"/>
+  <node id="80" lat="23.1999000" lon="-106.4211000"/>
+  <node id="81" lat="23.1999000" lon="-106.4194000">
+    <tag k="amenity" v="restaurant"/>
+    <tag k="cuisine" v="mexican;tacos"/>
+    <tag k="name" v="Taquería El Güero"/>
+  </node>
+  <node id="82" lat="23.1994000" lon="-106.4194000">
+    <tag k="place" v="town"/>
+    <tag k="name" v="Mazatlán"/>
+  </node>
+  <node id="83" lat="23.1984000" lon="-106.4218000"/>
+  <node id="84" lat="23.1983500" lon="-106.4200000"/>
+  <node id="85" lat="23.1983000" lon="-106.4182000"/>
+  <node id="86" lat="23.2015000" lon="-106.4185000"/>
+  <node id="87" lat="23.2017000" lon="-106.4183000"/>
+  <node id="88" lat="23.1985000" lon="-106.4185000"/>
+  <node id="89" lat="23.1987000" lon="-106.4183000"/>
+  <node id="90" lat="23.2013000" lon="-106.4186000"/>
+  <node id="91" lat="23.2016000" lon="-106.4186000"/>
+  <node id="92" lat="23.2015000" lon="-106.4217000"/>
+  <node id="93" lat="23.2017000" lon="-106.4215000"/>
+  <node id="94" lat="23.2002000" lon="-106.4186000"/>
+  <node id="95" lat="23.2002000" lon="-106.4183000"/>
+  <node id="96" lat="23.2008000" lon="-106.4183000"/>
+  <node id="97" lat="23.2008000" lon="-106.4186000"/>
+  <node id="98" lat="23.1990000" lon="-106.4217500"/>
+  <node id="99" lat="23.1990000" lon="-106.4214500"/>
+  <node id="100" lat="23.1996000" lon="-106.4214500"/>
+  <node id="101" lat="23.1996000" lon="-106.4217500"/>
+  <way id="100">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Calle Benito Juárez"/>
+  </way>
+  <way id="101">
+    <nd ref="3"/>
+    <nd ref="4"/>
+    <tag k="highway" v="primary"/>
+    <tag k="name" v="Avenida Olas Altas"/>
+    <tag k="lanes" v="4"/>
+  </way>
+  <way id="102">
+    <nd ref="5"/>
+    <nd ref="6"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Calle Ángel Flores"/>
+  </way>
+  <way id="103">
+    <nd ref="7"/>
+    <nd ref="8"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Calle Constitución"/>
+  </way>
+  <way id="104">
+    <nd ref="9"/>
+    <nd ref="10"/>
+    <tag k="highway" v="secondary"/>
+    <tag k="name" v="Avenida Miguel Alemán"/>
+  </way>
+  <way id="105">
+    <nd ref="11"/>
+    <nd ref="12"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Calle Aquiles Serdán"/>
+  </way>
+  <way id="1001">
+    <nd ref="13"/>
+    <nd ref="14"/>
+    <nd ref="15"/>
+    <nd ref="16"/>
+    <nd ref="13"/>
+    <tag k="building" v="commercial"/>
+    <tag k="building:levels" v="3"/>
+    <tag k="roof:shape" v="hipped"/>
+    <tag k="building:colour" v="#d4a373"/>
+    <tag k="name" v="Edificio Belmar"/>
+  </way>
+  <way id="1002">
+    <nd ref="17"/>
+    <nd ref="18"/>
+    <nd ref="19"/>
+    <nd ref="20"/>
+    <nd ref="17"/>
+    <tag k="building" v="house"/>
+    <tag k="height" v="7.5"/>
+    <tag k="roof:shape" v="gabled"/>
+    <tag k="roof:colour" v="#8b3a2b"/>
+  </way>
+  <way id="1003">
+    <nd ref="21"/>
+    <nd ref="22"/>
+    <nd ref="23"/>
+    <nd ref="24"/>
+    <nd ref="21"/>
+    <tag k="building" v="apartments"/>
+    <tag k="building:levels" v="5"/>
+    <tag k="roof:shape" v="flat"/>
+    <tag k="building:material" v="concrete"/>
+  </way>
+  <way id="1004">
+    <nd ref="25"/>
+    <nd ref="26"/>
+    <nd ref="27"/>
+    <nd ref="28"/>
+    <nd ref="25"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="1005">
+    <nd ref="29"/>
+    <nd ref="30"/>
+    <nd ref="31"/>
+    <nd ref="32"/>
+    <nd ref="29"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="1006">
+    <nd ref="33"/>
+    <nd ref="34"/>
+    <nd ref="35"/>
+    <nd ref="36"/>
+    <nd ref="33"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="1007">
+    <nd ref="37"/>
+    <nd ref="38"/>
+    <nd ref="39"/>
+    <nd ref="40"/>
+    <nd ref="37"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="1008">
+    <nd ref="41"/>
+    <nd ref="42"/>
+    <nd ref="43"/>
+    <nd ref="44"/>
+    <nd ref="41"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="1009">
+    <nd ref="45"/>
+    <nd ref="46"/>
+    <nd ref="47"/>
+    <nd ref="48"/>
+    <nd ref="45"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="1010">
+    <nd ref="52"/>
+    <nd ref="53"/>
+    <nd ref="54"/>
+    <nd ref="55"/>
+    <nd ref="52"/>
+    <tag k="building" v="cathedral"/>
+    <tag k="amenity" v="place_of_worship"/>
+    <tag k="name" v="Catedral Basílica de la Inmaculada Concepción"/>
+    <tag k="start_date" v="1856"/>
+  </way>
+  <way id="1011">
+    <nd ref="56"/>
+    <nd ref="57"/>
+    <nd ref="58"/>
+    <nd ref="59"/>
+    <nd ref="56"/>
+    <tag k="building:part" v="yes"/>
+    <tag k="height" v="45"/>
+    <tag k="roof:shape" v="dome"/>
+  </way>
+  <way id="1012">
+    <nd ref="60"/>
+    <nd ref="61"/>
+    <nd ref="62"/>
+    <nd ref="63"/>
+    <nd ref="60"/>
+    <tag k="building:part" v="yes"/>
+    <tag k="height" v="18"/>
+    <tag k="min_height" v="0"/>
+    <tag k="roof:shape" v="gabled"/>
+  </way>
+  <way id="1013">
+    <nd ref="64"/>
+    <nd ref="65"/>
+    <nd ref="66"/>
+    <nd ref="67"/>
+    <nd ref="64"/>
+  </way>
+  <way id="1014">
+    <nd ref="68"/>
+    <nd ref="69"/>
+    <nd ref="70"/>
+    <nd ref="71"/>
+    <nd ref="68"/>
+  </way>
+  <way id="3001">
+    <nd ref="73"/>
+    <nd ref="74"/>
+    <nd ref="75"/>
+    <nd ref="76"/>
+    <nd ref="73"/>
+    <tag k="landuse" v="cemetery"/>
+    <tag k="name" v="Panteón Municipal Número Uno"/>
+  </way>
+  <way id="3002">
+    <nd ref="77"/>
+    <nd ref="78"/>
+    <nd ref="79"/>
+    <nd ref="80"/>
+    <nd ref="77"/>
+    <tag k="amenity" v="school"/>
+    <tag k="name" v="Escuela Primaria Benito Juárez"/>
+  </way>
+  <way id="110">
+    <nd ref="83"/>
+    <nd ref="84"/>
+    <nd ref="85"/>
+    <tag k="waterway" v="river"/>
+    <tag k="name" v="Río Presidio"/>
+  </way>
+  <way id="111">
+    <nd ref="86"/>
+    <nd ref="87"/>
+    <tag k="man_made" v="pier"/>
+    <tag k="name" v="Muelle Fiscal"/>
+  </way>
+  <way id="112">
+    <nd ref="88"/>
+    <nd ref="89"/>
+    <tag k="man_made" v="breakwater"/>
+  </way>
+  <way id="113">
+    <nd ref="90"/>
+    <nd ref="91"/>
+    <tag k="man_made" v="quay"/>
+  </way>
+  <way id="114">
+    <nd ref="92"/>
+    <nd ref="93"/>
+    <tag k="waterway" v="dam"/>
+    <tag k="name" v="Presa Picachos"/>
+  </way>
+  <way id="3003">
+    <nd ref="94"/>
+    <nd ref="95"/>
+    <nd ref="96"/>
+    <nd ref="97"/>
+    <nd ref="94"/>
+    <tag k="natural" v="beach"/>
+    <tag k="name" v="Playa Olas Altas"/>
+  </way>
+  <way id="3004">
+    <nd ref="98"/>
+    <nd ref="99"/>
+    <nd ref="100"/>
+    <nd ref="101"/>
+    <nd ref="98"/>
+    <tag k="landuse" v="reservoir"/>
+    <tag k="name" v="Presa Sanalona"/>
+  </way>
+  <relation id="2001">
+    <member type="way" ref="1013" role="outer"/>
+    <member type="way" ref="1014" role="inner"/>
+    <tag k="type" v="multipolygon"/>
+    <tag k="building" v="apartments"/>
+    <tag k="height" v="12"/>
+    <tag k="name" v="Casa del Marino"/>
+  </relation>
+</osm>

@@ -364,7 +364,9 @@ std::string toPython(std::string_view name, const json& call)
         {
             if (k == "args")
                 continue;
-            s += (first ? "" : ", ") + k + "=" + pyLiteral(v);
+            // API keys never reach the echo, Copy Python or a macro.
+            const bool secret = k == "apiKey" && v.is_string() && !v.get<std::string>().empty();
+            s += (first ? "" : ", ") + k + "=" + (secret ? std::string("'***'") : pyLiteral(v));
             first = false;
         }
     }

@@ -227,10 +227,13 @@ bool followTime(Graph& g, scene::Graph& scene, const scene::Node& set, double se
             put(n, "mix", 0.0);
             continue;
         }
-        const double frame = scene::anim::frameOf(seconds);
-        const double start = number(valueOf(n, "start"), 1.0);
-        const double played = drivers.contains("speed") ? playedBetween(scene, set, drivers["speed"], start, frame)
-                                                        : number(valueOf(n, "speed"), 1.0) * (frame - start);
+        double played = number(valueOf(n, "frame"), 0.0);
+        if (valueOf(n, "timing") != "frame")
+        {
+            const double frame = scene::anim::frameOf(seconds);
+            const double start = number(valueOf(n, "start"), 1.0);
+            played = drivers.contains("speed") ? playedBetween(scene, set, drivers["speed"], start, frame) : number(valueOf(n, "speed"), 1.0) * (frame - start);
+        }
         const double position = number(valueOf(n, "offset"), 0.0) + played;
         const json loop = valueOf(n, "loop");
         const json interp = valueOf(n, "interpolation");

@@ -437,9 +437,17 @@ Geometry buildGeometry(const geo::Mesh& m, const glm::dmat4& toFile, const Expor
         g.uvs.push_back(std::move(layer));
     }
 
-    for (const std::string& set : geo::colors::sets(m))
+    // A plain "color" layer (generators that write one instead of a color set) goes out as a set of that name.
+    std::optional<geo::Mesh> adopted;
+    if (geo::colors::sets(m).empty() && (m.cornerAttrs().has(geo::attr::kColor) || m.pointAttrs().has(geo::attr::kColor)))
     {
-        std::span<const glm::vec4> col = geo::colors::values(m, set);
+        adopted.emplace(m);
+        geo::colors::adopt(*adopted);
+    }
+    const geo::Mesh& cm = adopted ? *adopted : m;
+    for (const std::string& set : geo::colors::sets(cm))
+    {
+        std::span<const glm::vec4> col = geo::colors::values(cm, set);
         if (col.size() != m.cornerCapacity())
             continue;
         Geometry::Uv layer{set, {}, {}};

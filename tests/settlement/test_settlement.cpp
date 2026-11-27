@@ -200,7 +200,7 @@ TEST_CASE("settlement: every built-in profile lays out streets, lots and buildin
 {
     const std::pair<const char*, double> sizes[] = {{"hamlet", 30000},     {"streetVillage", 40000}, {"medievalTown", 50000},
                                                     {"usTown", 80000},     {"manhattan", 100000},    {"europeanCity", 150000},
-                                                    {"modernCity", 150000}, {"scifiMegacity", 500000}};
+                                                    {"modernCity", 150000}, {"scifiMegacity", 500000}, {"mexicanCity", 100000}};
     for (const auto& [name, size] : sizes)
     {
         const std::string profileName = name;

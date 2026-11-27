@@ -79,6 +79,13 @@ struct LILALINK_API FFunctionGraph
 	void Finish();
 };
 
+/**
+ * Deletes every expression in the graph. UMaterialEditingLibrary::DeleteAllMaterialExpressions removes while iterating the
+ * same array, so it leaves every other expression behind.
+ */
+LILALINK_API void DeleteAllExpressions(UMaterial* Material);
+LILALINK_API void DeleteAllExpressions(UMaterialFunction* Function);
+
 /** Clears Material's graph and places a call of Function in it. */
 LILALINK_API UMaterialExpressionMaterialFunctionCall* ResetToFunctionCall(UMaterial* Material, UMaterialFunctionInterface* Function);
 

@@ -66,6 +66,18 @@ float atmRaySphere(float3 o, float3 d, float R)
     return t0 >= 0.0 ? t0 : (t1 >= 0.0 ? t1 : -1.0);
 }
 
+/**
+ * How far along a view ray the aerial perspective volume starts (km): 0 from inside the atmosphere, where the ray enters
+ * it from above, negative when the ray misses it. From orbit a volume starting at the camera would hold only empty space.
+ */
+float atmAerialOrigin(GpuAtmosphere* a, float3 dir)
+{
+    float3 cam = a->camera.xyz;
+    if (length(cam) <= a->radii.y)
+        return 0.0;
+    return atmRaySphere(cam, dir, a->radii.y);
+}
+
 /** Where a ray from inside a sphere about the planet's centre leaves it: always the far root. */
 float atmRayExit(float3 o, float3 d, float R)
 {

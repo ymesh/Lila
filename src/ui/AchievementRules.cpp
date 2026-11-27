@@ -48,6 +48,7 @@ const std::unordered_map<std::string_view, const char*>& firstRuns()
         {"hamlet", "URBAN_PLANNER"},
         {"manhattan", "URBAN_PLANNER"},
         {"modernCity", "URBAN_PLANNER"},
+        {"mexicanCity", "URBAN_PLANNER"},
         {"scifiMegacity", "URBAN_PLANNER"},
         {"streetVillage", "URBAN_PLANNER"},
         {"usTown", "URBAN_PLANNER"},

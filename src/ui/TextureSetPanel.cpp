@@ -2345,7 +2345,8 @@ struct TextureSetPanel::Impl
                         b->addItem("None", "none");
                         for (const tex::MeshRole& role : tex::meshRoles())
                             b->addItem("Mesh " + qs(role.name), qs(role.name));
-                        for (auto& [anchorName, owner] : view.value("anchors", json::object()).items())
+                        const json anchors = view.value("anchors", json::object());
+                        for (auto& [anchorName, owner] : anchors.items())
                             for (const tex::Channel& c : settings.channels)
                                 b->addItem("Anchor " + qs(anchorName) + "." + qs(c.name), qs("anchor:" + anchorName + "." + c.name));
                         b->setCurrentIndex(std::max(0, b->findData(qs(bindings.value(in.id, "")))));
@@ -2366,7 +2367,8 @@ struct TextureSetPanel::Impl
             auto* form = new QFormLayout();
             auto* a = new QComboBox(w);
             a->setObjectName("maskAnchor");
-            for (auto& [anchorName, owner] : view.value("anchors", json::object()).items())
+            const json anchors = view.value("anchors", json::object());
+            for (auto& [anchorName, owner] : anchors.items())
                 a->addItem(qs(anchorName), qs(anchorName));
             a->setCurrentIndex(std::max(0, a->findData(qs(m.value("anchor", "")))));
             QObject::connect(a, &QComboBox::activated, w, [this, a](int) { propsMask({{"anchor", a->currentData().toString().toStdString()}}); });

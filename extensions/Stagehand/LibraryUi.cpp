@@ -43,6 +43,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <set>
 
 using namespace lila;
 using namespace lila::ui;
@@ -166,6 +167,16 @@ private:
     std::unique_ptr<QProcess> mProcess;
     std::vector<std::function<void()>> mDone;
 };
+
+/**
+ * Presets a finished run still left without a thumbnail (registered only in this session by an extension, or with
+ * nothing to show): later panels don't start another run for them.
+ */
+std::set<std::string>& undrawablePresets()
+{
+    static std::set<std::string> names;
+    return names;
+}
 
 /** Every thumbnail the library shows that is still missing. */
 const char* kAllThumbnails = "libraryStarter()\nlibraryThumbnails(tier='placeholder')\narrangementThumbnails()\n";
@@ -447,11 +458,20 @@ private:
             return (a.tier == "starter" || a.tier == "placeholder") && a.thumbnail.empty();
         });
         const json presets = runUi("arrangementPresets", json::object());
-        const bool presetsMissing = std::ranges::any_of(presets.is_array() ? presets : json::array(), [](const json& p) { return !p.contains("thumbnail"); });
+        const bool presetsMissing = std::ranges::any_of(presets.is_array() ? presets : json::array(), [](const json& p) {
+            return !p.contains("thumbnail") && !undrawablePresets().contains(p.value("name", std::string()));
+        });
         if (!props && !presetsMissing)
             return;
         QPointer<LibraryPanel> self(this);
         ThumbnailBatch::get().start(kAllThumbnails, [self] {
+            const json after = runUi("arrangementPresets", json::object());
+            std::string left;
+            for (const json& p : after.is_array() ? after : json::array())
+                if (!p.contains("thumbnail") && undrawablePresets().insert(p.value("name", std::string())).second)
+                    left += (left.empty() ? "" : ", ") + p.value("name", std::string());
+            if (!left.empty())
+                log::write(LogLevel::Info, "Library: no thumbnail could be drawn for " + left + "; they show a plain icon");
             if (!self)
                 return;
             self->fill();
